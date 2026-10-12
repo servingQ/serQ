@@ -246,7 +246,7 @@ backend's, as p4c's Tofino backend knows Tofino. What P4 keeps out of the
 compiler is the architecture itself: `v1model.p4` and `tna.p4` are P4
 source, written by the target's provider, and the compiler only matches a
 program against what they declare. serQ's step 5 is the same: an
-architecture is declared in serQ (for vLLM, beside `lib/vllm.sq`), and one
+architecture is declared in serQ (for vLLM, in a library beside its programs), and one
 mechanism in the language checks a program against it. 4a and 4b are what
 that declaration has to say for vLLM: the refusals in `src/target.rs`, and
 the Serve block's signature (`decoding`, `admission`).

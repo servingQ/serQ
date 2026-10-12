@@ -5557,6 +5557,43 @@ impl Parser {
         }
     }
 
+    /// `floor(x, step)`: `x` rounded down to a multiple of `step`, sugar for
+    /// `floor(x / step) * step`. `step` is written twice, so it may not draw:
+    /// two draws would be two steps.
+    fn floor_to(&self, at: usize, span: Span, args: Vec<Arg>) -> PResult<Expr> {
+        // a bare name reads as a reference until a call says what it takes
+        let value = |a: Arg| match a {
+            Arg::Expr(x) => Some(x),
+            Arg::Ref(Ref {
+                span,
+                name,
+                index: None,
+            }) => Some(match span {
+                Some(s) => Expr::Located(s, Box::new(Expr::Var(name))),
+                None => Expr::Var(name),
+            }),
+            Arg::Ref(_) => None,
+        };
+        let [x, step] = <[Arg; 2]>::try_from(args)
+            .expect("two arguments")
+            .map(value);
+        let (Some(x), Some(step)) = (x, step) else {
+            return self.err_at(at, "`floor(x, step)` takes two numbers, not a resource");
+        };
+        if step.draws() {
+            return self.err_at(
+                at,
+                "the step of `floor(x, step)` may not draw: the rounding `floor(x / step) * step` reads it twice",
+            );
+        }
+        let ratio = Expr::Binary(BinOp::Div, Box::new(x), Box::new(step.clone()));
+        let down = Expr::Call("floor".into(), vec![Arg::Expr(ratio)]);
+        Ok(Expr::Located(
+            span,
+            Box::new(Expr::Binary(BinOp::Mul, Box::new(down), Box::new(step))),
+        ))
+    }
+
     fn pow(&mut self) -> PResult<Expr> {
         let base = self.atom()?;
         if *self.peek() == Tok::Caret {
@@ -5654,6 +5691,9 @@ impl Parser {
                                 }
                             }
                         }
+                    }
+                    if name == "floor" && args.len() == 2 {
+                        return self.floor_to(at, span, args);
                     }
                     Ok(Expr::Located(span, Box::new(Expr::Call(name, args))))
                 } else if LISTS.contains(&name.as_str()) && *self.peek() == Tok::Dot {
@@ -6137,6 +6177,24 @@ mod tests {
         server {{ hold kv (cost(kv, 4)) {{ run llm prefill (cost(llm, 4)) growing kv; }} }}"
             ),
         );
+    }
+
+    #[test]
+    fn floor_with_a_step_rounds_down_to_a_multiple_of_it() {
+        let bs = "let bs = 16; workload { init { set k = 40; } session { turn; end; } }";
+        same(
+            &format!("{ENGINE} {bs} server {{ set c = floor(k - 1, bs); }}"),
+            &format!("{ENGINE} {bs} server {{ set c = floor((k - 1) / bs) * bs; }}"),
+        );
+        let err = |src: &str| {
+            parse(&main_source(&format!(
+                "{ENGINE} workload {{ init {{ set k = 40; }} session {{ turn; end; }} }} {src}"
+            )))
+            .unwrap_err()
+            .msg
+        };
+        assert!(err("server { set c = floor(k, ~exp(1)); }").contains("may not draw"));
+        assert!(err("server { set c = floor(k, kv[0]); }").contains("not a resource"));
     }
 
     #[test]

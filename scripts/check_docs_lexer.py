@@ -6,7 +6,7 @@
 A character no rule of `docs/hooks/serq_lexer.py` matches becomes a Pygments
 `Error` token, which the page draws boxed in red: `E[j].decode` did, 38 times,
 until `.` was punctuation. This lexes every `.sq` file the site can include
-(`examples/`, `lib/`, `docs/`) and every ```serq fence under `docs/` and in
+(`examples/`, `docs/`) and every ```serq fence under `docs/` and in
 the README. `tests/docs_lexer.rs` checks the words; this checks the
 characters.
 """
@@ -25,7 +25,7 @@ FENCE = re.compile(r"^([ \t]*)```serq[^\n]*\n(.*?)^\1```", re.M | re.S)
 
 
 def sources():
-    for d in ("examples", "lib", "docs"):
+    for d in ("examples", "docs"):
         for p in sorted((ROOT / d).rglob("*.sq")):
             yield p, p.read_text()
     for p in [ROOT / "README.md", *sorted((ROOT / "docs").rglob("*.md"))]:

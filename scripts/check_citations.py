@@ -78,7 +78,7 @@ PATHS = {
     "nixl_integration/toy_proxy_server.py": "tests/v1/kv_connector/nixl_integration/toy_proxy_server.py",
 }
 
-SOURCES = ["docs/**/*.md", "src/**/*.rs", "tests/**/*.rs", "examples/*/*.sq", "lib/*.sq", "README.md"]
+SOURCES = ["docs/**/*.md", "src/**/*.rs", "tests/**/*.rs", "examples/*/*.sq", "README.md"]
 
 # `scheduler.py:742-813, 869, 1539-1582` -- one file, then a list of ranges.
 CITE = re.compile(r"\b((?:[\w.]+/)?[\w.]+\.py):((?:\s*\d+(?:-\d+)?\s*,)*\s*\d+(?:-\d+)?)")

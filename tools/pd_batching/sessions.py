@@ -61,7 +61,7 @@ CLOSED = [20, 40, 60]     # users
 
 
 def edits_of(mode, workload, x):
-    edits = [*MODES[mode][0], P_TOKENS, ('use "../../lib/vllm.sq";', f'use "{ROOT / "lib/vllm.sq"}";')]
+    edits = [*MODES[mode][0], P_TOKENS]
     if workload == "closed":
         edits.append(("arrive poisson(Lambda);", f"arrive closed({x});"))
     return edits
@@ -127,9 +127,9 @@ def row(mode, workload, x, seed, rep):
         "prefill_busy": mean([s["prefill_only"] + s["mixed"] for s in pods if (s["name"] == "D") != split]),
         "preemptions_per_s": sum(p["preemptions"] for p in rep["pools"]) / span,
         "stuck": sum(p["stuck"] for p in rep["pools"]),
-        # the edits that make the deployment compared (not the observe and
-        # the library's path, which every run has)
-        "edits": json.dumps([e for e in edits_of(mode, workload, x) if e[0] != P_TOKENS[0] and not e[0].startswith("use ")]),
+        # the edits that make the deployment compared (not the observe,
+        # which every run has)
+        "edits": json.dumps([e for e in edits_of(mode, workload, x) if e[0] != P_TOKENS[0]]),
     }
 
 

@@ -595,7 +595,7 @@ fn a_growth_left_waiting_is_noted() {
 
 /// The note is a line of text, not a lint error, because one shipped program
 /// earns it by design: `vllm_single_turn.sq` never reads its cache back, so
-/// its `hit` (from `lib/vllm.sq`) is 0 all run long. Every other example and
+/// its `hit` is 0 all run long. Every other example and
 /// tutorial program runs without a note; a new one that earns it shows up
 /// here, to be judged.
 #[test]

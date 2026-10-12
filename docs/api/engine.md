@@ -277,10 +277,10 @@ engine vllm on gpu {
     set kept = prompt;
     at admission {
       known = max(kept, computed + 1);
-      reused = min(cachedin(kv), reusable(known, blocksize(kv)));
+      reused = min(cachedin(kv), floor(known - 1, blocksize(kv)));
     }
     set kept = known;
-    set c = min(cached, reusable(known, blocksize(kv)));
+    set c = min(cached, floor(known - 1, blocksize(kv)));
     observe hit = c > 0;
     observe prefill_tokens = known - c;
     prefill (known - c) growing kv;

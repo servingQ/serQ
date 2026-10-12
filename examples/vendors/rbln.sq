@@ -4,7 +4,6 @@
 // looks up its hit and the step's blocks are cached once it is final, and a
 // failed allocation preempts the last running request under FCFS
 // (docs/use-cases/rbln.md links the lines at tag v0.11.3a21).
-use "../../lib/vllm.sq";
 fn main() {
   device npu { kv cap 8192; }
   engine llm on npu {
@@ -28,9 +27,9 @@ fn main() {
     hold reqs (cost(reqs, 1)), kv (cost(kv, min(known, reused + min(128, left)))) reserve (cost(kv, known))
          at admission (known = max(kept, computed + 1),
                        left = budget_left(llm),
-                       reused = min(cachedin(kv), reusable(known, blocksize(kv)))) {
+                       reused = min(cachedin(kv), floor(known - 1, blocksize(kv)))) {
       set kept = known;
-      set c = min(cached, reusable(known, blocksize(kv)));
+      set c = min(cached, floor(known - 1, blocksize(kv)));
       run llm prefill (cost(llm, known - c)) growing kv;
       run llm decode (cost(llm, out - (known - prompt))) growing kv;
     } cache (cost(reqs, kv, prompt + out));

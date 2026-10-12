@@ -386,7 +386,7 @@ queue P[NP] : prefill {
   pool kv on gpu { block bs; evict lru; preempt lifo; }
   prefill (prompt) {
     hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, reused + budget_left(P)))) reserve (cost(kv, prompt))
-         at admission (reused = min(cachedin(kv), reusable(prompt, bs))) {
+         at admission (reused = min(cachedin(kv), floor(prompt - 1, bs))) {
       set c = cached;
       run P prefill (cost(P, prompt - c)) growing kv;
     } cache (cost(reqs, kv, prompt)) lease kv (inf);
@@ -969,10 +969,10 @@ engine vllm on gpu {
     set kept = prompt;
     at admission {
       known = max(kept, computed + 1);
-      reused = min(cachedin(kv), reusable(known, blocksize(kv)));
+      reused = min(cachedin(kv), floor(known - 1, blocksize(kv)));
     }
     set kept = known;
-    set c = min(cached, reusable(known, blocksize(kv)));
+    set c = min(cached, floor(known - 1, blocksize(kv)));
     observe hit = c > 0;
     observe prefill_tokens = known - c;
     prefill (known - c) growing kv;
@@ -1028,7 +1028,7 @@ header a place to name what it is written in terms of, as the request of
 ```
 hold reqs (cost(reqs, 1)), kv (cost(kv, min(known, reused + budget_left(vllm)))) reserve (cost(kv, known))
      at admission (known = max(kept, computed + 1),
-                   reused = min(cachedin(kv), reusable(known, blocksize(kv)))) { … }
+                   reused = min(cachedin(kv), floor(known - 1, blocksize(kv)))) { … }
 ```
 
 The bindings are substituted into the header's expressions by the parser, so

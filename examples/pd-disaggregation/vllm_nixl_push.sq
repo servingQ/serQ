@@ -27,8 +27,6 @@
 // fitted on lone requests through the pull proxy: a prefill step costs
 // aP * prefilled + bP * attention, a decode step cD, a copy x0 + tokens / Bw,
 // and the proxy's hops and the API server h per request).
-use "../../lib/vllm.sq";
-
 let concurrent = 1;    // 1: both requests at once (the push proxy); 0: the decode request after the prefill's answer
 let spacing = 3.0;     // seconds between session arrivals
 let N = 96;            // sessions replayed (957 requests)
@@ -83,7 +81,7 @@ fn main() {
     nic ps(Bw);                           // the pod's NIC: the writes out of it share it
     prefill (prompt) {
       hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, reused + budget_left(P)))) reserve (cost(kv, prompt))
-           at admission (reused = min(cachedin(kv), reusable(prompt, bs))) {
+           at admission (reused = min(cachedin(kv), floor(prompt - 1, bs))) {
         set c = cached;
         observe p_cached = c;
         run P prefill (cost(P, prompt - c)) growing kv;      // chunked; one token is sampled and discarded
@@ -115,7 +113,7 @@ fn main() {
       set transferred = 0;   // one KV transfer per request
       set kept = prompt;     // the most tokens an attempt had: a preemption keeps the outputs
       hold kv (cost(kv, known)) reserve (cost(kv, known)), reqs (cost(reqs, 0)) reserve (cost(reqs, 1))
-           reuse (cost(kv, reqs, reusable(known, bs)))
+           reuse (cost(kv, reqs, floor(known - 1, bs)))
            at admission (known = max(kept, computed + 1)) {
         set kept = known;
         set c = cached;

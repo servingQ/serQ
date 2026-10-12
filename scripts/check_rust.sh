@@ -17,7 +17,7 @@ cargo test --release --locked
 # invariant and conservation at every instant (src/engine/interp.rs, #277)
 cargo test --locked --quiet
 cargo build --release --locked --quiet
-./target/release/serq fmt --check examples/*/*.sq lib/*.sq docs/tutorial/programs/*.sq tests/lean-regress/*.sq
+./target/release/serq fmt --check examples/*/*.sq docs/tutorial/programs/*.sq tests/lean-regress/*.sq
 # the interpreter's answers the Lean regressions state (lean/Serq/Regress.lean)
 python3 scripts/lean_regress.py
 n=0

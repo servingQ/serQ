@@ -2,8 +2,6 @@
 // prompt, an answer, gone. The engine (the constants down to `c0`, the
 // pools, the stage and the `server` block) is `examples/multi-turn/vllm.sq`'s line
 // for line; only the workload differs (docs/use-cases/workloads.md).
-use "../../lib/vllm.sq";
-
 use "std/args";
 
 let B = 8192;          // max_num_batched_tokens
@@ -33,15 +31,16 @@ fn main() {
     // token sampled there, and never fewer than it had before (`kept`: vLLM
     // keeps the generated tokens and drops only their KV,
     // scheduler.py:1560-1561). `reused` is how many of them the prefix cache
-    // holds in full blocks; `observe hit` says whether any.
+    // holds in full blocks, never the last token, which is computed for its
+    // logits (kv_cache_manager.py:289-300); `observe hit` says whether any.
     request (prompt, output) {
       set kept = prompt;
       at admission {
         known = max(kept, computed + 1);
-        reused = min(cachedin(kv), reusable(known, blocksize(kv)));
+        reused = min(cachedin(kv), floor(known - 1, blocksize(kv)));
       }
       set kept = known;
-      set c = min(cached, reusable(known, blocksize(kv)));
+      set c = min(cached, floor(known - 1, blocksize(kv)));
       observe hit = c > 0;                    // any reused block, again after a preemption
       observe prefill_tokens = known - c;
       prefill (known - c) growing kv;
