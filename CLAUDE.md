@@ -30,6 +30,7 @@ make check        # fmt, clippy, tests, every program links and draws, oracles a
 make oracle-ir    # regenerate tools/oracle/*.ir.json
 make draw-golden  # regenerate docs/assets/*.deployment.svg
 make lean         # the Lean model: oracle theorems current, lake build, no sorry, axiom audit
+make metrics      # regenerate tools/metrics.json (the language's size)
 ```
 
 `make check` is the gate. Generated files (`tools/oracle/*.ir.json`,
@@ -49,7 +50,9 @@ product. Argued in #8, in the order they bite:
 2. **Policy is written in the program, not in the language.** The test: for every
    construct, can a program state the opposite? The language may supply a
    *mechanism* a program selects and parameterises, not a *rule* it would
-   otherwise write.
+   otherwise write. Two shipped constructs still fail this (#65
+   head-of-line blocking, #67 `price()`): apply it to them before using it
+   against something new.
 3. **Checkability.** A claim the program makes should be mechanically checkable.
    This is what earns an IR change.
 
@@ -59,7 +62,8 @@ but it is not free: it costs the frontend, which nothing verifies.
 
 ## Keeping the frontend small
 
-From v0.1.4 to #521 the IR did not grow and `src/frontend` grew by a third,
+From v0.1.4 to #521 the IR's statements and expressions held (one stage
+kind went) and `src/frontend` grew by a third,
 with 24 `fix(frontend)` commits, most of them one name read two ways. The
 Lean theorems are about the IR; every line between the text and the IR is
 trusted, not proved. Three rules:
@@ -67,13 +71,14 @@ trusted, not proved. Three rules:
 - **One meaning, one spelling.** A new form that lowers to the IR of a form
   the language already has says which one it replaces, or why both stay (the
   serving vocabulary of `docs/language.md` stays for criterion 1). Check it:
-  write both, diff `serq ir`. Writing a default (`queue fifo;`) and leaving it
-  out are two spellings too.
+  write both, diff `serq ir`. A new clause whose default can be written or
+  left out (`queue fifo;`) is two spellings too.
 - **One list, one place.** A name the language supplies (a context
   variable, a function, a distribution, a built-in attribute, a keyword) is
   spelt once, in its table, and every other site reads the table:
   `CONTEXT_VARS`, `Fun`, `DistKind`, `BUILTIN_ATTRS` and `SCHEDULER_ATTRS`,
-  `KEYWORDS`. No `"cached"` in a check. A copy that cannot read the table
+  `KEYWORDS`. A check over a class of them reads the table, not a list of
+  string literals. A copy that cannot read the table
   (`docs/hooks/serq_lexer.py`) is held equal to it by a test, both ways. The
   entry check's copy of the context variables lacked six (#528), and a `def`
   parameter could be named like a distribution because four checks of "a
@@ -111,9 +116,10 @@ or in the comment that reports the fix:
    recognise before the run: in the linker or `Program::validate`, from what
    an expression reads at its moment (`docs/ir.md`, Moments). If so, add the
    check with its own test and its reason in the error message. A program
-   that can only stall, loop or read a value it cannot see should not link
-   (a serve key or a hold's header may not draw, #259; `only` may not read
-   `now` or `work(…)`, #263). If no static check can tell, the run must
+   that can only stall, loop or read a value it cannot see should not link:
+   a serve key may not draw, nor since #259 a hold's header; `only` may not
+   read `now` or `work(…)` (#263); a `Loop` that can pass without letting
+   time pass is refused (11). If no static check can tell, the run must
    still fail loudly (a run-time error, a report note, a `stuck` counter),
    never silently. If the program was right and the interpreter wrong, say
    that no check applies and why.
@@ -155,6 +161,7 @@ aborts.
 `gh pr edit` and `gh issue edit` fail on this repository (`GraphQL:
 Projects (classic) is being deprecated`). Use the REST API: `gh api -X PATCH
 repos/servingQ/serQ/pulls/N --input -` with a JSON body, or `.../issues/N`.
+Creating works; only editing is affected.
 
 PR titles are Conventional Commits, `type(scope): subject`, with the subject
 in English; CI checks the form (`.github/workflows/pr-title.yml`).
