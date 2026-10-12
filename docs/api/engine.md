@@ -21,8 +21,9 @@ and a chunk to a prefilling one, then admits waiting requests while the
 budget lasts, and lasts what `execute` says. A `growing` run first grows
 its hold to the position it will reach. An attempt that schedules no token
 and preempts nobody waits for the next event without running a timed
-iteration. A [`run E prefill` or `run E decode`](statements.md#run) puts
-work on engine `E`; the work is in tokens.
+iteration. Its [`request`](../language.md#an-engines-request) puts work on
+it, `prefill (e);` and `decode (e);` in tokens, and the server calls it;
+a queue's entry runs its queue's engine as `run Q prefill (cost(Q, e))`.
 
 An engine cannot be named `engine`: it is named for what it models (`vllm`,
 `sglang`, `tgi`) or `llm`. Inside a [`queue`](../language.md#queues), `device

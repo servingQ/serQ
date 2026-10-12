@@ -3412,7 +3412,7 @@ impl Parser {
                 return self.err_at(
                     at,
                     "a pool on a device or an engine is a family as its owner is: write no \
-                     `[N]` (for N queues one engine admits, write `NAME[N] cap c;` in the engine)",
+                     `[N]` (a family of engines is a queue family, `queue Q[N]`)",
                 );
             }
             self.advance();

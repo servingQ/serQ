@@ -1038,8 +1038,11 @@ prefill or decode, nor hold a pool an engine admits (`pool P on E`, `pool
 kv on E.gpu`, an engine's capacity); each is refused with the `request`
 and the `taking` to write instead (#539). A pool no engine admits (a
 top-level pool, one `on DEVICE`) is held anywhere, around the call too, as
-`examples/single-turn/fastertransformer.sq` holds its `reqs`. A queue's
-entries run the queue's own engine.
+`examples/single-turn/fastertransformer.sq` holds its `reqs`; a pool `on
+DEVICE` that the request also takes is then held twice, which the program
+says by writing both. A queue's entries and an engine's request run their
+own engine and no other, and a request writes its run `prefill (e);`, not
+`run E prefill (cost(E, e))`.
 
 | Request | Kernel at the call |
 |---|---|

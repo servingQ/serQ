@@ -320,15 +320,41 @@ fn the_cache_is_the_request_s_last_item() {
 /// `} cache (…)` clause should be.
 #[test]
 fn the_cache_follows_a_block() {
+    // the request's cache is the joint cost over the pools taken, `reqs`
+    // and `kv`, wherever the statement before it ends
+    let joint = |src: &str| {
+        let ir = compiled(src).to_json();
+        ir.matches("\"Joint\"").count()
+    };
+    let plain = joint(&program());
+    assert_eq!(plain, 1, "the plain request's cache is joint");
+    for block in [
+        "    branch (prompt > 1) { decode (output - 1 - (known - prompt)) growing kv; }\n",
+        "    branch (prompt > 1) { decode (output - 1 - (known - prompt)) growing kv; } \
+         else { decode (output - 1) growing kv; }\n",
+    ] {
+        let src = replaced(
+            &program(),
+            &[(
+                "    decode (output - 1 - (known - prompt)) growing kv;\n",
+                block,
+            )],
+        );
+        assert_eq!(joint(&src), plain, "{block}");
+    }
+    // a nested hold's `} cache (…)` stays the hold's: two caches, the
+    // request's joint and the hold's on `reqs` alone
     let src = replaced(
         &program(),
         &[(
             "    decode (output - 1 - (known - prompt)) growing kv;\n",
-            "    branch (prompt > 1) { decode (output - 1 - (known - prompt)) growing kv; }\n",
+            "    hold reqs (cost(reqs, 1)) { decode (output - 1 - (known - prompt)) growing kv; } \
+             cache (cost(reqs, 1));\n",
         )],
     );
-    let p = compiled(&src);
-    assert!(p.to_json().contains("\"Branch\""));
+    let ir = compiled(&src).to_json();
+    assert_eq!(ir.matches("\"Joint\"").count(), 1, "{ir}");
+    assert_eq!(ir.matches("\"cache\": {").count(), 2, "{ir}");
 }
 
 #[test]
@@ -547,8 +573,9 @@ fn the_server_runs_an_engine_only_through_its_request() {
     );
     refused(
         &run,
-        "the server runs engine `llm`'s decode (`run llm decode (…)`): an engine's prefill and \
-         decode are written in its `request (…) { … }`, which the server calls as `llm (…);`",
+        "the server runs engine `llm`'s decode (`run llm decode (…)`): an engine runs only in its \
+         own request or queue; write it in `llm`'s `request (…) { … }`, which the server calls as \
+         `llm (…);`",
     );
     let held = replaced(
         &program(),
@@ -597,6 +624,49 @@ fn a_session_does_not_call_an_engine() {
         )],
     );
     refused(&src, "calls engine `llm`'s request, which a `server` does");
+    // a request runs its own engine as `prefill (e)`, not in the kernel's
+    // spelling, and no other engine (#539, #552)
+    refused(
+        &replaced(
+            &program(),
+            &[(
+                "    decode (output - 1 - (known - prompt)) growing kv;\n",
+                "    run llm decode (cost(llm, output - 1 - (known - prompt))) growing kv;\n",
+            )],
+        ),
+        "engine `llm`'s request runs its own decode as `run llm decode (cost(llm, …))`: in a \
+         request it is written `decode (…);`",
+    );
+    let other = |body: &str| {
+        replaced(
+            &program(),
+            &[(
+                "pool reqs on llm { queue fifo; }\n",
+                &format!(
+                    "pool reqs on llm {{ queue fifo; }}\ndevice npu {{ }}\n\
+                     engine small on npu {{ tokens cap 8; request () {{ {body} }} \
+                     schedule {{ advance running; admit waiting; }} execute (1); }}\n"
+                ),
+            )],
+        )
+    };
+    refused(
+        &other("run llm prefill (cost(llm, 1));"),
+        "engine `small`'s request runs engine `llm`'s prefill",
+    );
+    // a queue's entry runs its own engine, and no other
+    refused(
+        &replaced(
+            &program(),
+            &[(
+                "pool reqs on llm { queue fifo; }\n",
+                "pool reqs on llm { queue fifo; }\n\
+                 queue Q : prefill { pool slots { cap 2; } serve fifo; \
+                 prefill (p) { hold slots (cost(slots, 1)) { run llm prefill (cost(llm, p)); } } }\n",
+            )],
+        ),
+        "`Q.prefill` runs engine `llm`'s prefill",
+    );
 }
 
 // Where a request may not be.

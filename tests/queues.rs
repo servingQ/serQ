@@ -27,10 +27,11 @@ fn same_ir(queues: &str, flat: &str, renames: &[(&str, &str)]) {
 }
 
 /// The queue program's IR with `renames` applied to its JSON is the flat
-/// program's, kept in `tests/golden/queues/NAME.ir.json`: the flat program
-/// ran an engine family from the server, which #539 refused in favour of
-/// the queue family, so its IR is the one it compiled to on 3d23f4a.
-/// `SERQ_BLESS` rewrites it from the queue side.
+/// program's. The flat program, `tests/golden/queues/NAME.sq`, ran an engine
+/// family from the server, which #539 refused for the queue family, so it
+/// no longer links: `NAME.ir.json` is the IR it compiled to on 3d23f4a
+/// (`main_source`, horizon 100), kept as the reference. Nothing regenerates
+/// it from the queue side, which would compare the sugar with itself.
 fn same_ir_as_flat(queues: &str, name: &str, renames: &[(&str, &str)]) {
     let mut q = compile_source(&common::main_source(queues), &common::horizon(100.0))
         .unwrap_or_else(|e| panic!("queues: {e}\n{queues}"))
@@ -41,9 +42,6 @@ fn same_ir_as_flat(queues: &str, name: &str, renames: &[(&str, &str)]) {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/golden/queues")
         .join(format!("{name}.ir.json"));
-    if std::env::var_os("SERQ_BLESS").is_some() {
-        std::fs::write(&path, &q).unwrap();
-    }
     let flat = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     assert_eq!(q, flat);
 }

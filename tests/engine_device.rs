@@ -1109,6 +1109,11 @@ server {{ vllm[j].decode (prompt); }}"
         ),
         "is a family, and its `waiting.count`",
     );
+    // nor its `tokens cap`
+    refused(
+        &queue(ok, "vllm.gpu").replace("tokens cap 8;", "tokens cap 8 + waiting.count;"),
+        "which no member's engine may",
+    );
 }
 
 /// `on ENGINE.DEVICE` names the engine on the device, declared above the

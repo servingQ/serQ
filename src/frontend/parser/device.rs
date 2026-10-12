@@ -23,9 +23,6 @@ pub(super) struct Capacity {
     pub name: String,
     pub cap: Expr,
     pub at: usize,
-    /// `NAME[N] cap c;` in an engine: a family of N pools, each a queue the
-    /// one engine admits.
-    pub family: Option<usize>,
 }
 
 /// `engine NAME [N] on DEVICE { … }`, read as the step stage `stages[stage]`.
@@ -222,7 +219,6 @@ impl Parser {
                     name: r,
                     cap,
                     at: r_at,
-                    family: None,
                 });
             }
         }
@@ -479,45 +475,27 @@ impl Parser {
                 if KEYWORDS.contains(&r.as_str()) {
                     return self.err_at(k_at, format!("`{r}` is a word of the language"));
                 }
-                let family = self.array_count()?;
-                // a family of capacities is admitted by no `taking`, which
-                // names one pool, and the server may not hold them (#539)
-                if let (Some(n), None) = (family, device.split_once('.')) {
-                    return self.err_at(
-                        k_at,
-                        format!(
+                // an engine's capacity is one pool: a request's `taking`
+                // names one, and a queue's entry names its own without an
+                // index (#539)
+                if let Some(n) = self.array_count()? {
+                    let message = match device.split_once('.') {
+                        None => format!(
                             "`{r}[{n}]` in engine `{name}`: an engine admits through its \
                              request's `taking`, which names one `{r}`; write `{r} cap c;`, or \
                              a queue family `queue Q[{n}]` for {n} engines"
                         ),
-                    );
-                }
-                if let Some(n) = family
-                    && dev_array
-                    && dev_count != 1
-                {
-                    return self.err_at(
-                        k_at,
-                        format!(
-                            "`{r}[{n}]` in engine family `{name}[{dev_count}]`: each member \
-                             would admit {n} queues; `{r} cap c;` already gives each member \
-                             its own `{r}`"
-                        ),
-                    );
-                }
-                if let (Some(n), Some((q, _))) = (family, device.split_once('.')) {
-                    return self.err_at(
-                        k_at,
-                        format!(
+                        Some((q, _)) => format!(
                             "`{r}[{n}]` in queue `{q}`'s engine: an entry of the queue names \
                              its own pool without an index, so no entry could pick a member; \
                              a queue's engine admits one `{r}`, written `{r} cap c;`"
                         ),
-                    );
+                    };
+                    return self.err_at(k_at, message);
                 }
                 if !self.eat_kw("cap") {
                     return self.err(format!(
-                        "an engine holds capacities (`{r} cap expr;`, `{r}[N] cap expr;`), `tokens cap`, `granule`, \
+                        "an engine holds capacities (`{r} cap expr;`), `tokens cap`, `granule`, \
                          `state`, `schedule` and `execute`; found {}",
                         self.peek()
                     ));
@@ -531,7 +509,6 @@ impl Parser {
                     name: r,
                     cap,
                     at: k_at,
-                    family,
                 });
             }
         }
@@ -1164,12 +1141,6 @@ impl Parser {
                 .find(|d| d.name == e.device)
                 .map_or((1, false), |d| (d.count, d.array));
             return match e.caps.iter().find(|c| c.name == name) {
-                // `NAME[N] cap c;`: N pools, which the one engine admits
-                Some(Capacity {
-                    cap,
-                    family: Some(n),
-                    ..
-                }) => Ok((cap.clone(), *n, true)),
                 Some(c) => Ok((c.cap.clone(), count, array)),
                 None => self.err_at(at, format!("`{owner}` has no capacity `{name}`")),
             };
