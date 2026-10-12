@@ -87,17 +87,23 @@ fn another_policy_is_refused_with_its_construct() {
             "{path}: {e}"
         );
     }
-    let src = "device gpu { kv cap 160; } pool kv on gpu { block 16; evict lru; preempt lifo; } pool reqs { cap 4; }
+    let src = "device gpu { kv cap 160; } pool kv on gpu { block 16; evict lru; preempt lifo; }
         engine llm on gpu {
+          reqs cap 4;
           tokens cap 64;
-          schedule { advance running by (remaining); admit waiting while (running.preempted == 0); }
+          request (n) { prefill (n) growing kv; }
+          schedule {
+            advance running by (remaining);
+            admit waiting while (running.preempted == 0) taking reqs (1), kv (n);
+          }
           execute (1);
         }
+        pool reqs on llm { }
         workload { arrive batch(1); init { set n = 8; }
           session { turn; end;
           }
         }
-        server { hold reqs (cost(reqs, 1)), kv (cost(kv, n)) { run llm prefill (cost(llm, n)) growing kv; }
+        server { llm (n);
         } ";
     let p = serq::compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap();
     let e = serq::target::vllm(&p).unwrap_err();
@@ -112,17 +118,23 @@ fn another_policy_is_refused_with_its_construct() {
 /// `tools/serq_vllm.py`, as the IR writes them.
 #[test]
 fn observable_serve_keys_name_the_programmable_scheduler() {
-    let src = "device gpu { kv cap 160; } pool kv on gpu { block 16; evict lru; preempt lifo; } pool reqs { cap 4; }
+    let src = "device gpu { kv cap 160; } pool kv on gpu { block 16; evict lru; preempt lifo; }
         engine llm on gpu {
+          reqs cap 4;
           tokens cap 64;
-          schedule { advance running by (decoding ? 0 : 1, -admission); admit waiting while (running.preempted == 0); }
+          request (n) { prefill (n) growing kv; }
+          schedule {
+            advance running by (decoding ? 0 : 1, -admission);
+            admit waiting while (running.preempted == 0) taking reqs (1), kv (n);
+          }
           execute (1);
         }
+        pool reqs on llm { }
         workload { arrive batch(1); init { set n = 8; }
           session { turn; end;
           }
         }
-        server { hold reqs (cost(reqs, 1)), kv (cost(kv, n)) { run llm prefill (cost(llm, n)) growing kv; }
+        server { llm (n);
         } ";
     let p = serq::compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap();
     let t = serq::target::vllm(&p).unwrap();
@@ -246,17 +258,25 @@ fn the_adaptive_chunk_cap_is_taken_and_another_share_refused() {
 #[test]
 fn the_newer_constructs_are_refused_and_vllms_schedule_taken() {
     let base = "device gpu { kv cap 160; }
-        engine llm on gpu { reqs cap 4; tokens cap 64; STATE schedule { SCHEDULE } execute (1); }
+        engine llm on gpu {
+          reqs cap 4;
+          tokens cap 64;
+          request (n) { prefill (n) growing kv; }
+          STATE
+          schedule { SCHEDULE }
+          execute (1);
+        }
         pool kv on gpu { block 16; evict lru; preempt lifo; }
         pool reqs on llm { RESERVE }
         workload { arrive batch(1); init { set n = 8; }
-          session { turn; HOLD end;
+          session { turn; end;
           }
         }
-        server {
+        server { HOLD
         } ";
-    let hold = "hold reqs (cost(reqs, 1)), kv (cost(kv, n)) { run llm prefill (cost(llm, n)) growing kv; }";
-    let vllm = "advance running; admit waiting while (running.preempted == 0);";
+    let hold = "llm (n);";
+    let vllm =
+        "advance running; admit waiting while (running.preempted == 0) taking reqs (1), kv (n);";
     let compile = |reserve: &str, state: &str, schedule: &str, h: &str| {
         let src = base
             .replace("RESERVE", reserve)
@@ -266,12 +286,12 @@ fn the_newer_constructs_are_refused_and_vllms_schedule_taken() {
         serq::compile_source(&common::main_source(&src), &common::horizon(10.0)).unwrap()
     };
     serq::target::vllm(&compile("", "", vllm, hold)).unwrap();
-    let legs = "fork { hold reqs (cost(reqs, 1)), kv (cost(kv, n)) { run llm prefill (cost(llm, n)) growing kv; } } join;";
+    let legs = "fork { llm (n); } join;";
     for (reserve, state, schedule, h, why) in [
         (
             "",
             "",
-            "advance running; admit waiting;",
+            "advance running; admit waiting taking reqs (1), kv (n);",
             hold,
             "has its own schedule",
         ),
@@ -279,7 +299,7 @@ fn the_newer_constructs_are_refused_and_vllms_schedule_taken() {
         (
             "",
             "state k = 0;",
-            "advance running; admit waiting while (running.preempted == 0); set k = k + 1;",
+            "advance running; admit waiting while (running.preempted == 0) taking reqs (1), kv (n); set k = k + 1;",
             hold,
             "has its own schedule",
         ),

@@ -2037,6 +2037,7 @@ impl Parser {
         }
         served.shared = shared;
         self.check_request_names(&prog)?;
+        self.check_engine_runs(&prog)?;
         self.assemble(&mut prog, &mut served)?;
         self.link_engines(&mut prog)?;
         self.check_binding_names(&prog)?;
@@ -3411,7 +3412,7 @@ impl Parser {
                 return self.err_at(
                     at,
                     "a pool on a device or an engine is a family as its owner is: write no \
-                     `[N]` (for N queues one engine admits, write `NAME[N] cap c;` in the engine)",
+                     `[N]` (a family of engines is a queue family, `queue Q[N]`)",
                 );
             }
             self.advance();
@@ -3491,7 +3492,7 @@ impl Parser {
                 return self.err_at(
                     self.pos - 1,
                     "who admits a pool is said in its `on`: declare the capacity on the engine \
-                     (`NAME cap c;` in `engine E { … }`, or `NAME[N] cap c;` for N pools) and \
+                     (`NAME cap c;` in `engine E { … }`) and \
                      write `pool NAME on E { … }`, or `pool NAME on E.DEVICE` for the device's; \
                      `on DEVICE` is admitted as soon as it fits",
                 );
@@ -6040,7 +6041,7 @@ mod tests {
         }} }}
         server {{
           hold kv (cost(kv, known)) at admission (known = computed < p ? p : computed + 1) {{
-            run llm prefill (cost(llm, known - cached)) growing kv;
+            run tool (cost(tool, known - cached));
           }}
         }}"
             ),
@@ -6052,7 +6053,7 @@ mod tests {
         server {{
           hold kv (cost(kv, computed < p ? p : computed + 1)) {{
             set known = computed < p ? p : computed + 1;
-            run llm prefill (cost(llm, known - cached)) growing kv;
+            run tool (cost(tool, known - cached));
           }}
         }}"
             ),
@@ -6224,36 +6225,35 @@ mod tests {
           run T[j] (cost(T, 3));
         }",
         );
-        // statements, with references for pools and stages
+        // statements, with references for pools and stages (a station
+        // family: an engine runs only through its request)
         same(
-            "pool kv[2] { cap 100; } device gpu[2] { }
-        engine E[2] on gpu { tokens cap inf; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); }
-        def put(p, s, n) { hold p (cost(p, n)) { run s prefill (cost(s, n)) growing p; } cache (cost(p, n)); }
+            "pool kv[2] { cap 100; } stage S[2] : fifo;
+        def put(p, s, n) { hold p (cost(p, n)) { run s (cost(s, n)); } cache (cost(p, n)); }
         workload { session { turn; end;
         } }
-        server { choose j in 2 by (used(kv[j])); put(kv[j], E[j], k + 1);
+        server { choose j in 2 by (used(kv[j])); put(kv[j], S[j], k + 1);
         }",
-            "pool kv[2] { cap 100; } device gpu[2] { }
-        engine E[2] on gpu { tokens cap inf; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); }
+            "pool kv[2] { cap 100; } stage S[2] : fifo;
         workload { session { turn;
             end;
 
         } }
         server {
           choose j in 2 by (used(kv[j]));
-          hold kv[j] (cost(kv[j], (k + 1))) { run E[j] prefill (cost(E[j], (k + 1))) growing kv[j]; } cache (cost(kv[j], (k + 1)));
+          hold kv[j] (cost(kv[j], (k + 1))) { run S[j] (cost(S[j], (k + 1))); } cache (cost(kv[j], (k + 1)));
         }",
         );
         // the side is the use's: a `hold` in a server
         same(
             &format!(
-                "{ENGINE} def take(n) {{ hold kv (cost(kv, n)) {{ run llm prefill (cost(llm, n)) growing kv; }} }}
+                "{ENGINE} def take(n) {{ hold kv (cost(kv, n)) {{ run tool (cost(tool, n)); }} }}
         workload {{ session {{ turn; end; }} }}
         server {{ take(4); }}"
             ),
             &format!(
                 "{ENGINE} workload {{ session {{ turn; end; }} }}
-        server {{ hold kv (cost(kv, 4)) {{ run llm prefill (cost(llm, 4)) growing kv; }} }}"
+        server {{ hold kv (cost(kv, 4)) {{ run tool (cost(tool, 4)); }} }}"
             ),
         );
     }
@@ -6576,12 +6576,23 @@ mod tests {
     const DEPLOYMENT: &str = r#"
         device gpu { kv cap 1000; }
         engine llm on gpu {
+          reqs cap 4;
           tokens cap 64;
-          schedule { advance running; admit waiting while (running.preempted == 0); }
+          request (prompt, output) {
+            at admission { hit = min(cachedin(kv), prompt - 1); }
+            prefill (prompt - cached) growing kv;
+            decode (output - 1) growing kv;
+            cache (prompt + output);
+          }
+          schedule {
+            advance running;
+            admit waiting while (running.preempted == 0)
+              taking reqs (1), kv (min(prompt, hit + budget_left(llm)));
+          }
           execute (1);
         }
         pool kv on gpu { block 16; evict lru; }
-        pool reqs { cap 4; }
+        pool reqs on llm { }
         stage tool : delay;
     "#;
 
@@ -6606,11 +6617,7 @@ mod tests {
         }}
         server {{
           set prompt = K + n;
-          hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, hit + budget_left(llm))))
-          at admission (hit = min(cachedin(kv), prompt - 1)) {{
-            run llm prefill (cost(llm, prompt - cached)) growing kv;
-            run llm decode (cost(llm, o - 1)) growing kv;
-          }} cache (cost(reqs, kv, prompt + o));
+          llm (prompt, o);
         }}"
             ),
             &format!(
@@ -6625,11 +6632,7 @@ mod tests {
         }}
         server {{
           set prompt = K + n;
-          hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, hit + budget_left(llm))))
-          at admission (hit = min(cachedin(kv), prompt - 1)) {{
-            run llm prefill (cost(llm, prompt - cached)) growing kv;
-            run llm decode (cost(llm, o - 1)) growing kv;
-          }} cache (cost(reqs, kv, prompt + o));
+          llm (prompt, o);
           set K = prompt + o;
         }}"
             ),

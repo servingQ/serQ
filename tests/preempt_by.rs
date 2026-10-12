@@ -22,7 +22,16 @@ fn three(preempt: &str) -> String {
         engine llm on gpu {{
           reqs cap 3;
           tokens cap 64;
-          schedule {{ advance running; admit waiting while (running.preempted == 0); }}
+          request (prompt, id) {{
+            branch (computed > 0) {{ observe victim = id; }}
+            prefill (prompt) growing kv;
+            decode (12) growing kv;
+            cache (0);
+          }}
+          schedule {{
+            advance running;
+            admit waiting while (running.preempted == 0) taking reqs (1), kv (prompt);
+          }}
           execute (1);
         }}
         pool reqs on llm {{ }}
@@ -35,11 +44,7 @@ fn three(preempt: &str) -> String {
         }}
         server {{
           set prompt = serial == 0 ? 4 : serial == 1 ? 10 : 6;
-          hold reqs (cost(reqs, 1)), kv (cost(kv, prompt)) {{
-            branch (computed > 0) {{ observe victim = serial; }}
-            run llm prefill (cost(llm, prompt)) growing kv;
-            run llm decode (cost(llm, 12)) growing kv;
-          }} cache (cost(reqs, kv, 0));
+          llm (prompt, serial);
         }}
 
 "#
@@ -95,7 +100,16 @@ fn a_victim_requeues_at_the_head_or_the_tail() {
         engine llm on gpu {{
           reqs cap 2;
           tokens cap 64;
-          schedule {{ advance running; admit waiting while (running.preempted == 0); }}
+          request (id) {{
+            observe admitted_at = id;
+            prefill (4) growing kv;
+            decode (10) growing kv;
+            cache (0);
+          }}
+          schedule {{
+            advance running;
+            admit waiting while (running.preempted == 0) taking reqs (1), kv (4);
+          }}
           execute (1);
         }}
         pool reqs on llm {{ }}
@@ -106,13 +120,7 @@ fn a_victim_requeues_at_the_head_or_the_tail() {
 
           }}
         }}
-        server {{
-          hold reqs (cost(reqs, 1)), kv (cost(kv, 4)) {{
-            observe admitted_at = serial;
-            run llm prefill (cost(llm, 4)) growing kv;
-            run llm decode (cost(llm, 10)) growing kv;
-          }} cache (cost(reqs, kv, 0));
-        }}
+        server {{ llm (serial); }}
 
 "#
         );
@@ -143,7 +151,15 @@ fn a_preempt_key_reads_the_candidate_and_nothing_it_cannot_see() {
         engine llm on gpu {{
           reqs cap 3;
           tokens cap 64;
-          schedule {{ advance running; admit waiting while (running.preempted == 0); }}
+          request (prompt, output) {{
+            prefill (prompt) growing kv;
+            decode (output) growing kv;
+            cache (0);
+          }}
+          schedule {{
+            advance running;
+            admit waiting while (running.preempted == 0) taking reqs (1), kv (prompt);
+          }}
           execute (1);
         }}
         pool reqs on llm {{ }}
@@ -157,10 +173,7 @@ fn a_preempt_key_reads_the_candidate_and_nothing_it_cannot_see() {
         server {{
           set prompt = 4;
           set o = 12;
-          hold reqs (cost(reqs, 1)), kv (cost(kv, prompt)) {{
-            run llm prefill (cost(llm, prompt)) growing kv;
-            run llm decode (cost(llm, o)) growing kv;
-          }} cache (cost(reqs, kv, 0));
+          llm (prompt, o);
         }}
 
 "#
@@ -266,7 +279,16 @@ fn a_tail_victim_is_ordered_by_the_queue_keys() {
         engine llm on gpu {
           reqs cap 2;
           tokens cap 64;
-          schedule { advance running; admit waiting while (running.preempted == 0); }
+          request (id) {
+            observe admitted_at = id;
+            prefill (4) growing kv;
+            decode (10) growing kv;
+            cache (0);
+          }
+          schedule {
+            advance running;
+            admit waiting while (running.preempted == 0) taking reqs (1), kv (4);
+          }
           execute (1);
         }
         pool reqs on llm { queue by (rank); }
@@ -279,11 +301,7 @@ fn a_tail_victim_is_ordered_by_the_queue_keys() {
         }
         server {
           set rank = serial == 2 ? 9 : serial;
-          hold reqs (cost(reqs, 1)), kv (cost(kv, 4)) {
-            observe admitted_at = serial;
-            run llm prefill (cost(llm, 4)) growing kv;
-            run llm decode (cost(llm, 10)) growing kv;
-          } cache (cost(reqs, kv, 0));
+          llm (serial);
         }
 
 "#;

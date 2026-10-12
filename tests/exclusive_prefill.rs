@@ -11,17 +11,31 @@ use std::process::Command;
 
 /// The schedule that takes a waiting prefill alone, in chunks of 4: the
 /// stage's `serve exclusive prefill`.
-const EXCLUSIVE: &str = "exclusive prefill each at most (4); admit waiting while (running.preempted == 0) each at most (4);";
+const EXCLUSIVE: &str = "exclusive prefill each at most (4); admit waiting while (running.preempted == 0) each at most (4) taking reqs (1), kv (min(prompt, left)) reserve (prompt);";
 
 /// The default schedule, in chunks of 4.
-const MIXED: &str = "advance running each at most (4); admit waiting while (running.preempted == 0) each at most (4);";
+const MIXED: &str = "advance running each at most (4); admit waiting while (running.preempted == 0) each at most (4) taking reqs (1), kv (min(prompt, left)) reserve (prompt);";
 
 fn source(schedule: &str, slot_cap: usize, kv_cap: usize) -> String {
     format!(
         r#"
         stage gate : delay;
         device gpu {{ kv cap {kv_cap}; }}
-        engine llm on gpu {{ reqs cap {slot_cap}; tokens cap 4; schedule {{ {schedule} }} execute (1); }}
+        engine llm on gpu {{
+          reqs cap {slot_cap};
+          tokens cap 4;
+          request (prompt, id) {{
+            at admission {{ left = budget_left(llm); }}
+            observe allocation = used(kv);
+            prefill (prompt) growing kv;
+            observe prefill_done = now;
+            observe prefill_who = id;
+            branch (id == 0) {{ decode (2) growing kv; }}
+            cache (100);
+          }}
+          schedule {{ {schedule} }}
+          execute (1);
+        }}
         pool reqs on llm {{ }}
         pool kv on gpu {{ }}
         workload {{ arrive batch(2); init {{ set prompt = serial == 0 ? 2 : 4; }}
@@ -32,14 +46,7 @@ fn source(schedule: &str, slot_cap: usize, kv_cap: usize) -> String {
         }}
         server {{
           run gate (cost(gate, serial));
-          hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, left))) reserve (cost(kv, prompt))
-          at admission (left = budget_left(llm)) {{
-            observe allocation = used(kv);
-            run llm prefill (cost(llm, prompt)) growing kv;
-            observe prefill_done = now;
-            observe prefill_who = serial;
-            branch (serial == 0) {{ run llm decode (cost(llm, 2)) growing kv; }}
-          }} cache (cost(reqs, kv, 100));
+          llm (prompt, serial);
           observe final_cached = cachedin(kv);
           observe done = now;
           observe who = serial;
@@ -150,9 +157,15 @@ fn resident_prefill_chunks_do_not_admit_another_waiting_request() {
         engine llm on gpu {
           reqs cap 3;
           tokens cap 4;
+          request () {
+            observe admitted_at = now;
+            prefill (6) growing kv;
+            decode (1) growing kv;
+          }
           schedule {
             exclusive prefill each at most (4);
-            admit waiting while (running.preempted == 0) each at most (4);
+            admit waiting while (running.preempted == 0) each at most (4)
+              taking reqs (1), kv (4) reserve (6);
           }
           execute (1);
         }
@@ -164,13 +177,7 @@ fn resident_prefill_chunks_do_not_admit_another_waiting_request() {
 
           }
         }
-        server {
-          hold reqs (cost(reqs, 1)), kv (cost(kv, 4)) reserve (cost(kv, 6)) {
-            observe admitted_at = now;
-            run llm prefill (cost(llm, 6)) growing kv;
-            run llm decode (cost(llm, 1)) growing kv;
-          }
-        }
+        server { llm (); }
 
 "#;
     let r = run_source(&common::main_source(src), &common::horizon(20.0), None).unwrap();
@@ -190,7 +197,15 @@ fn an_exhausted_decode_budget_defers_waiting_prefill() {
         engine llm on gpu {
           reqs cap 3;
           tokens cap 2;
-          schedule { exclusive prefill; admit waiting while (running.preempted == 0); }
+          request (id) {
+            observe admitted_at = now;
+            branch (id < 2) {
+              decode (2);
+            } else {
+              prefill (4);
+            }
+          }
+          schedule { exclusive prefill; admit waiting while (running.preempted == 0) taking reqs (1); }
           execute (1);
         }
         pool reqs on llm { }
@@ -201,14 +216,7 @@ fn an_exhausted_decode_budget_defers_waiting_prefill() {
           }
         }
         server {
-          hold reqs (cost(reqs, 1)) {
-            observe admitted_at = now;
-            branch (serial < 2) {
-              run llm decode (cost(llm, 2));
-            } else {
-              run llm prefill (cost(llm, 4));
-            }
-          }
+          llm (serial);
           observe done = now;
         }
 
@@ -234,9 +242,23 @@ fn preemption_keeps_only_committed_progress_and_defers_readmission() {
         engine llm on gpu {
           reqs cap 2;
           tokens cap 4;
+          request (id) {
+            at admission {
+              known = max(2, computed);
+              left = budget_left(llm);
+            }
+            branch (id == 1) {
+              observe admitted_b = now;
+              observe restored_b = known;
+            }
+            prefill (known) growing kv;
+            decode (3 - (known - 2)) growing kv;
+            cache (100);
+          }
           schedule {
             exclusive prefill each at most (2);
-            admit waiting while (running.preempted == 0) each at most (2);
+            admit waiting while (running.preempted == 0) each at most (2)
+              taking reqs (1), kv (min(known, left)) reserve (known) reuse (0);
           }
           execute (1);
         }
@@ -249,15 +271,7 @@ fn preemption_keeps_only_committed_progress_and_defers_readmission() {
           }
         }
         server {
-          hold reqs (cost(reqs, 1)), kv (cost(kv, min(known, left))) reserve (cost(kv, known)) reuse (cost(reqs, kv, 0))
-          at admission (known = max(2, computed), left = budget_left(llm)) {
-            branch (serial == 1) {
-              observe admitted_b = now;
-              observe restored_b = known;
-            }
-            run llm prefill (cost(llm, known)) growing kv;
-            run llm decode (cost(llm, 3 - (known - 2))) growing kv;
-          } cache (cost(reqs, kv, 100));
+          llm (serial);
           observe cached_extent = cachedin(kv);
           observe done = now;
         }

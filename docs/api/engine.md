@@ -2,9 +2,8 @@
 
 ```serq
 device NAME [ '[' N ']' ] { RESOURCE (PARAM, …) = expr; CAP cap expr; … }
-engine NAME [ '[' N ']' ] on DEVICE {
+engine NAME on DEVICE {
   CAP cap expr;              // a capacity the engine holds, as a pool `on NAME`
-  CAP[N] cap expr;           // N of them: N queues the one engine admits
   tokens cap expr;           // required: the tokens one iteration computes (inf: no cap)
   granule c;                 // a prefill gets all it has left or a multiple of c
   state NAME = c;            // a register the schedule sets
@@ -22,8 +21,9 @@ and a chunk to a prefilling one, then admits waiting requests while the
 budget lasts, and lasts what `execute` says. A `growing` run first grows
 its hold to the position it will reach. An attempt that schedules no token
 and preempts nobody waits for the next event without running a timed
-iteration. A [`run E prefill` or `run E decode`](statements.md#run) puts
-work on engine `E`; the work is in tokens.
+iteration. Its [`request`](../language.md#an-engines-request) puts work on
+it, `prefill (e);` and `decode (e);` in tokens, and the server calls it;
+a queue's entry runs its queue's engine as `run Q prefill (cost(Q, e))`.
 
 An engine cannot be named `engine`: it is named for what it models (`vllm`,
 `sglang`, `tgi`) or `llm`. Inside a [`queue`](../language.md#queues), `device
@@ -45,8 +45,7 @@ the [IR](../ir.md) and the Lean model see only that.
 
 | Item | Type | Read | Description |
 |---|---|---|---|
-| `CAP cap` | `expr` | | A capacity the engine holds (`reqs cap max_seqs`, vLLM's `max_num_seqs`), declared with `pool CAP on ENGINE`. |
-| `CAP[N] cap` | `expr`, `N` a constant | | N capacities of one kind, each `cap expr`: `pool CAP on ENGINE` is the N pools `CAP[0]`…`CAP[N-1]`, each a queue the engine admits, tried in index order. An engine family (`engine E[M]`, M > 1) holds none: each member would admit N queues, and `CAP cap` is already one per member; a family of one is one engine. A queue's engine holds none: its entries name their own pool without an index. |
+| `CAP cap` | `expr` | | A capacity the engine holds (`reqs cap max_seqs`, vLLM's `max_num_seqs`), declared with `pool CAP on ENGINE`. One per capacity: a family of engines, or of an engine's capacities, is a queue family (#539). |
 | `tokens cap` | `expr` | as the iteration starts | Tokens per iteration (vLLM's `max_num_batched_tokens`). Reads `running.count`, `running.decoding`, `running.kv_decode`, `running.kv_prefill` and `waiting.count`, not `batch.…`. |
 | `granule` | `const`, positive | | Prefill chunk alignment; see below. |
 | `state NAME = c` | `const` | | A register; see below. |
@@ -71,10 +70,8 @@ for it is said where the pool is:
 | `pool kv on llm.gpu` | by engine `llm`, which runs on `gpu` |
 | `pool kv on gpu` | as soon as it fits |
 
-A pool on an engine is a family as the engine is, or as its `CAP[N]` is:
-`reqs[2] cap 4;` in `engine llm` and `pool reqs on llm { }` give `reqs[0]`
-and `reqs[1]`, both admitted by `llm`, and a hold picks one with a computed
-index (`hold reqs[t] (…)`).
+A pool on an engine is a family only in a queue family, one per member;
+a top-level engine's is one pool, which its request's `taking` names.
 
 The pool option `admit via ENGINE;` is refused: who admits a pool is said
 where the pool is, in its `on`.
@@ -305,6 +302,10 @@ fn main() {
   device gpu { }
   engine llm on gpu {
     tokens cap 8;
+    request () {
+      prefill (8);
+      decode (2);
+    }
     schedule { advance running; admit waiting while (running.preempted == 0); }
     execute (1);
   }
@@ -312,8 +313,7 @@ fn main() {
     arrive batch(2);
   }
   server {
-    run llm prefill (cost(llm, 8));
-    run llm decode (cost(llm, 2));
+    llm ();
     observe finished = now;
   }
 }

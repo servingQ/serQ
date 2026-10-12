@@ -397,6 +397,28 @@ asked for it, the time to first token, is the client's (#509).
 that moves a statement to the client, since `sides` records who owns it. The report is what a program
 claims; the IR may move where a step says it does.
 
+**Kept the server's spelling beside the request (#539).** The server could
+go on writing `hold P (…) { run E prefill (…) }` for what a request says.
+Two spellings of one admission, and the reader of a server must know which
+pools an engine admits to read it (criterion 0). Rejected: the server, a
+gateway's `route` and the session call the request; a queue's entry and a
+request run their own engine and no other; a request writes its run
+`prefill (e)`. What that leaves unsayable, with no program here or in
+`serving-queue-theory/programs` that says it:
+
+- an engine family run from the server, `engine E[N]` with `run E[j] …`:
+  a family has no request, so it is a queue family, `queue E[N]`;
+- an engine admitting N queues of one kind, `reqs[N] cap c;`: a `taking`
+  names one pool and every `admit waiting` writes the same one, so the
+  request cannot pick a member, and a queue family is N engines, not one;
+- a hold of an engine's pool together with a top-level pool family
+  (`hold kv, aux[i]`), and a request that grows, leases or releases a
+  pool it did not take: both are a queue entry's, on the queue's pools.
+
+A request with an index (`E[j] (…)`, `taking reqs[t] (…)`) would give the
+first two back, at the cost of a second admission form in `admit waiting`;
+not done while nothing needs it.
+
 ## Open decisions
 
 1. **P/D.** Per-entry `taking` on `admit waiting` or `taking` in the entry;

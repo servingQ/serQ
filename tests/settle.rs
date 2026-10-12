@@ -132,13 +132,18 @@ fn a_self_preempting_grow_is_a_run_time_error() {
 fn an_iteration_with_tokens_and_zero_cost_is_an_error() {
     let e = run(
         "device gpu { kv cap 1000; }
-        engine llm on gpu { tokens cap 512; schedule { advance running; admit waiting while (running.preempted == 0); } execute (0); }
+        engine llm on gpu {
+          tokens cap 512;
+          request () { prefill (100) growing kv; }
+          schedule { advance running; admit waiting while (running.preempted == 0) taking kv (100); }
+          execute (0);
+        }
         pool kv on gpu { block 16; evict lru; }
         workload { arrive batch(1);
           session { turn; end;
           }
         }
-        server { hold kv (cost(kv, 100)) { run llm prefill (cost(llm, 100)) growing kv; }
+        server { llm ();
         }
         ",
         &common::horizon(10.0),
@@ -156,7 +161,14 @@ fn a_preempt_only_step_may_cost_zero() {
         engine llm on gpu {
           reqs cap 4;
           tokens cap 1000;
-          schedule { advance running; admit waiting while (running.preempted == 0); }
+          request () {
+            prefill (100) growing kv;
+            decode (100) growing kv;
+          }
+          schedule {
+            advance running;
+            admit waiting while (running.preempted == 0) taking reqs (1), kv (100) reserve (100);
+          }
           execute (batch.tokens);
         }
         pool reqs on llm { }
@@ -167,12 +179,7 @@ fn a_preempt_only_step_may_cost_zero() {
 
           }
         }
-        server {
-          hold reqs (cost(reqs, 1)), kv (cost(kv, 100)) reserve (cost(kv, 100)) {
-            run llm prefill (cost(llm, 100)) growing kv;
-            run llm decode (cost(llm, 100)) growing kv;
-          }
-        }
+        server { llm (); }
         ",
         &common::horizon(400.0),
     )
@@ -193,7 +200,15 @@ fn the_marks_of_a_session_turn_do_not_depend_on_the_machine() {
         engine llm on gpu {{
           reqs cap 16;
           tokens cap B;
-          schedule {{ advance running; admit waiting while (running.preempted == 0); }}
+          request (prompt, output) {{
+            prefill (prompt) growing kv;
+            decode (output - 1) growing kv;
+            cache (prompt + output);
+          }}
+          schedule {{
+            advance running;
+            admit waiting while (running.preempted == 0) taking reqs (1), kv (prompt);
+          }}
           execute (1e-4 + 1e-5 * batch.tokens);
         }}
         pool kv on gpu {{ block 16; evict lru; preempt lifo; }}
@@ -216,10 +231,7 @@ fn the_marks_of_a_session_turn_do_not_depend_on_the_machine() {
         }}
         server {{
           set prompt = K + n;
-          hold reqs (cost(reqs, 1)), kv (cost(kv, prompt)) {{
-            run llm prefill (cost(llm, prompt)) growing kv;
-            run llm decode (cost(llm, o - 1)) growing kv;
-          }} cache (cost(reqs, kv, prompt + o));
+          llm (prompt, o);
         }}
         "
         )
@@ -279,7 +291,8 @@ fn the_machine_still_matters() {
         device gpu {{ kv cap 1e6; }}
         engine llm on gpu {{
           tokens cap B;
-          schedule {{ advance running; admit waiting while (running.preempted == 0); }}
+          request (n) {{ prefill (n) growing kv; }}
+          schedule {{ advance running; admit waiting while (running.preempted == 0) taking kv (n); }}
           execute (1e-4 + 1e-5 * batch.tokens);
         }}
         pool kv on gpu {{ block 16; evict lru; }}
@@ -287,7 +300,7 @@ fn the_machine_still_matters() {
           session {{  turn; end;
           }}
         }}
-        server {{ set t0 = now; hold kv (cost(kv, n)) {{ run llm prefill (cost(llm, n)) growing kv; }}
+        server {{ set t0 = now; llm (n);
           observe ttft = now - t0;
         }}
         "

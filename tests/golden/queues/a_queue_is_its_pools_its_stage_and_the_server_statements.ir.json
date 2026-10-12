@@ -1,0 +1,350 @@
+{
+  "version": 13,
+  "attrs": [
+    "cached",
+    "serial",
+    "turn_no",
+    "new",
+    "out",
+    "think",
+    "more",
+    "forced",
+    "computed",
+    "prompt",
+    "o",
+    "j"
+  ],
+  "attr_types": [
+    "Value",
+    "Size",
+    "Size",
+    "Size",
+    "Size",
+    "Size",
+    "Size",
+    "Size",
+    "Value",
+    "Size",
+    "Size",
+    "Size"
+  ],
+  "sides": [
+    [
+      "Workload",
+      "Workload",
+      "Workload"
+    ],
+    [],
+    [
+      "Workload",
+      "Server",
+      "Server",
+      "Workload"
+    ],
+    [
+      "Server",
+      "Server"
+    ]
+  ],
+  "observes": [
+    "done"
+  ],
+  "pools": [
+    {
+      "name": "kv",
+      "index": 0,
+      "cap": 100.0,
+      "block": 16.0,
+      "evict": "Lru",
+      "preempt": "None",
+      "queue": null,
+      "spill": null,
+      "admit_via": null
+    },
+    {
+      "name": "kv",
+      "index": 1,
+      "cap": 100.0,
+      "block": 16.0,
+      "evict": "Lru",
+      "preempt": "None",
+      "queue": null,
+      "spill": null,
+      "admit_via": null
+    }
+  ],
+  "stages": [
+    {
+      "name": "E",
+      "index": 0,
+      "kind": {
+        "Step": {
+          "budget": {
+            "Num": "inf"
+          },
+          "cost": {
+            "Num": 1.0
+          },
+          "chunk": {
+            "Num": 0.0
+          },
+          "serve": {
+            "By": []
+          },
+          "memory": 0
+        }
+      }
+    },
+    {
+      "name": "E",
+      "index": 1,
+      "kind": {
+        "Step": {
+          "budget": {
+            "Num": "inf"
+          },
+          "cost": {
+            "Num": 1.0
+          },
+          "chunk": {
+            "Num": 0.0
+          },
+          "serve": {
+            "By": []
+          },
+          "memory": 1
+        }
+      }
+    }
+  ],
+  "arrival": {
+    "Batch": 1
+  },
+  "trace": null,
+  "trace_ordered": false,
+  "init": 0,
+  "turn": 1,
+  "session": 2,
+  "blocks": [
+    [
+      {
+        "Set": [
+          9,
+          {
+            "Num": 32.0
+          }
+        ]
+      },
+      {
+        "Set": [
+          10,
+          {
+            "Num": 4.0
+          }
+        ]
+      },
+      {
+        "Set": [
+          11,
+          {
+            "Num": 0.0
+          }
+        ]
+      }
+    ],
+    [],
+    [
+      "Turn",
+      {
+        "Hold": {
+          "pools": [
+            [
+              {
+                "base": 0,
+                "count": 2,
+                "index": {
+                  "Attr": 11
+                }
+              },
+              {
+                "Cost": [
+                  {
+                    "Pool": {
+                      "base": 0,
+                      "count": 2
+                    }
+                  },
+                  {
+                    "Call": [
+                      "Min",
+                      [
+                        {
+                          "Expr": {
+                            "Attr": 9
+                          }
+                        },
+                        {
+                          "Expr": {
+                            "Call": [
+                              "BudgetLeft",
+                              [
+                                {
+                                  "Stage": {
+                                    "base": 0,
+                                    "count": 2,
+                                    "index": {
+                                      "Attr": 11
+                                    }
+                                  }
+                                }
+                              ]
+                            ]
+                          }
+                        }
+                      ]
+                    ]
+                  }
+                ]
+              },
+              {
+                "Cost": [
+                  {
+                    "Pool": {
+                      "base": 0,
+                      "count": 2
+                    }
+                  },
+                  {
+                    "Attr": 9
+                  }
+                ]
+              }
+            ]
+          ],
+          "reuse": null,
+          "body": 3,
+          "cache": {
+            "Cost": [
+              {
+                "Pool": {
+                  "base": 0,
+                  "count": 2
+                }
+              },
+              {
+                "Binary": [
+                  "Add",
+                  {
+                    "Attr": 9
+                  },
+                  {
+                    "Attr": 10
+                  }
+                ]
+              }
+            ]
+          },
+          "lease": null
+        }
+      },
+      {
+        "Observe": [
+          0,
+          {
+            "Ctx": "Now"
+          }
+        ]
+      },
+      "End"
+    ],
+    [
+      {
+        "Run": {
+          "stage": {
+            "base": 0,
+            "count": 2,
+            "index": {
+              "Attr": 11
+            }
+          },
+          "mode": "Prefill",
+          "work": {
+            "Cost": [
+              {
+                "Stage": {
+                  "base": 0,
+                  "count": 2
+                }
+              },
+              {
+                "Attr": 9
+              }
+            ]
+          },
+          "growing": {
+            "base": 0,
+            "count": 2,
+            "index": {
+              "Attr": 11
+            }
+          }
+        }
+      },
+      {
+        "Run": {
+          "stage": {
+            "base": 0,
+            "count": 2,
+            "index": {
+              "Attr": 11
+            }
+          },
+          "mode": "Decode",
+          "work": {
+            "Cost": [
+              {
+                "Stage": {
+                  "base": 0,
+                  "count": 2
+                }
+              },
+              {
+                "Binary": [
+                  "Sub",
+                  {
+                    "Attr": 10
+                  },
+                  {
+                    "Num": 1.0
+                  }
+                ]
+              }
+            ]
+          },
+          "growing": {
+            "base": 0,
+            "count": 2,
+            "index": {
+              "Attr": 11
+            }
+          }
+        }
+      }
+    ]
+  ],
+  "horizon": 100.0,
+  "warmup": 0.0,
+  "seed": 1,
+  "slot_cached": 0,
+  "slot_serial": 1,
+  "slot_turn": 2,
+  "slot_new": 3,
+  "slot_out": 4,
+  "slot_think": 5,
+  "slot_more": 6,
+  "slot_forced": 7,
+  "slot_computed": 8,
+  "hidden": [
+    10
+  ]
+}

@@ -52,7 +52,7 @@ An iterating engine (continuous batching) is an `engine` on a `device`:
 ```serq
 device gpu { kv cap K; }          // what the hardware offers
 engine llm on gpu {
-  reqs cap S;                     // running slots (max_num_seqs); reqs[N] cap S: N queues it admits
+  reqs cap S;                     // running slots (max_num_seqs)
   tokens cap B;                   // tokens per iteration (max_num_batched_tokens)
   granule G;                      // a prefill gets all it has left or a multiple of G (inf: whole or nothing)
   schedule {

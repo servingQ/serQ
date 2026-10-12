@@ -546,8 +546,7 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
         };
         let admit_via = p.admit_via.as_ref().map(|n| lk.stage_span(n)).transpose()?;
         for i in 0..p.count {
-            // `pool q on S` with `engine S[N]`: q[i] is served
-            // by S[i]; with one engine and its `q[N] cap c;`, every q[i] by it
+            // a queue family's `pool q on S`: q[i] is served by S[i]
             let admit_via = admit_via
                 .map(|(b, c)| member(b, c, i, p.count, &p.name, "on"))
                 .transpose()?;
@@ -1074,8 +1073,8 @@ fn hidden_in_server(
             _ => None,
         };
         LinkError::new(format!(
-            "{why}, but the server's {what} reads it before a run reveals it\nhelp: the server \
-             may run work by a hidden attribute (`run E decode (cost(E, o))`: the model ends the run), cache by \
+            "{why}, but the server's {what} reads it before a run reveals it\nhelp: an engine's \
+             request may run work by a hidden attribute (`decode (o);`: the model ends the run), cache by \
              it at release and observe it, and decide on it once that run has ended; before, a \
              decision on it is the scheduler reading what it cannot see"
         ))

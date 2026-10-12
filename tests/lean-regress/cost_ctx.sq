@@ -10,7 +10,17 @@ fn main() {
   engine llm on gpu {
     slots cap 4;
     tokens cap 48;
-    schedule { advance running; admit waiting while (running.preempted == 0); }
+    request (prompt, output, t0) {
+      prefill (prompt) growing kv;
+      observe ttft = now - t0;
+      decode (output) growing kv;
+      observe done = now;
+    }
+    schedule {
+      advance running;
+      admit waiting while (running.preempted == 0)
+        taking slots (1), kv (min(prompt, budget_left(llm))) reserve (prompt);
+    }
     execute (3 + batch.tokens + 2 * batch.prefilled + batch.decoding + batch.kv_decode + 2 * batch.attention);
   }
   pool kv on gpu { block 16; evict lru; preempt lifo; }
@@ -24,11 +34,6 @@ fn main() {
 
   server {
     run gate (cost(gate, t0));
-    hold slots (cost(slots, 1)), kv (cost(kv, min(n, budget_left(llm)))) reserve (cost(kv, n)) {
-      run llm prefill (cost(llm, n)) growing kv;
-      observe ttft = now - t0;
-      run llm decode (cost(llm, o)) growing kv;
-      observe done = now;
-    }
+    llm (n, o, t0);
   }
 }
