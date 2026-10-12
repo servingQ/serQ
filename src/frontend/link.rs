@@ -205,8 +205,9 @@ struct Linker<'a> {
     declarations: Vec<(usize, DeclaredType)>,
     side: crate::ir::Side,
     /// Per block, per statement: where the statement is in the text, as
-    /// far as a reference or an expression in it says (#279).
-    spans: Vec<Vec<Option<Span>>>,
+    /// far as a reference or an expression in it says (#279), and where its
+    /// own expressions read each name (#531).
+    spans: Spans,
     prog: &'a Program,
     /// The step stages' registers (`state`), and their indices by name.
     registers: Vec<crate::ir::Register>,
@@ -371,8 +372,32 @@ pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
     link_located(prog, ov).map(|(p, _)| p)
 }
 
+/// Where a linked statement is in the text: the statement, and each name
+/// its own expressions read (its header's, not its body's), at its first
+/// reading, so that an error about one of them points at it (#531).
+#[derive(Clone, Debug, Default)]
+pub struct StmtSpan {
+    pub at: Option<Span>,
+    pub names: Vec<(String, Span)>,
+}
+
+impl StmtSpan {
+    /// Where an error about this statement points: the name its message
+    /// quotes first, when the statement reads it, else the statement. It
+    /// reads `Program::validate`'s wording, which quotes the offending name
+    /// first; a message that quotes something else falls back to the
+    /// statement.
+    pub fn of(&self, message: &str) -> Option<Span> {
+        let quoted = message.split('`').nth(1);
+        quoted
+            .and_then(|q| self.names.iter().find(|(n, _)| n == q))
+            .map(|(_, s)| *s)
+            .or(self.at)
+    }
+}
+
 /// Where each linked statement is in the text: per block, per statement.
-pub type Spans = Vec<Vec<Option<Span>>>;
+pub type Spans = Vec<Vec<StmtSpan>>;
 
 /// `link`, and where each statement of the IR came from, so that an error
 /// `Program::validate` finds in a statement can point at the text.
@@ -891,6 +916,75 @@ fn stmt_span(s: &Stmt) -> Option<Span> {
         Stmt::Choose { count, .. } => expr_span(count),
         _ => None,
     }
+}
+
+/// The names a statement's own expressions read, each at its first
+/// reading: a hold's header (units, `reserve`, `reuse`, `cache`, `lease`),
+/// a run's work, a `set`'s value, a condition; not a body's statements,
+/// which have their own.
+fn stmt_names(s: &Stmt) -> Vec<(String, Span)> {
+    fn walk(e: &Expr, out: &mut Vec<(String, Span)>) {
+        match e {
+            // a name where it is written: a parameter an entry substituted
+            // keeps its own place around the caller's argument, which is
+            // the outermost
+            Expr::Located(span, inner) => {
+                let mut read = inner.as_ref();
+                while let Expr::Located(_, i) = read {
+                    read = i;
+                }
+                if let Expr::Var(n) = read
+                    && !out.iter().any(|(m, _)| m == n)
+                {
+                    out.push((n.clone(), *span));
+                }
+                walk(inner, out);
+            }
+            Expr::Num(_) | Expr::Var(_) => {}
+            Expr::Unary(_, a) => walk(a, out),
+            Expr::Binary(_, a, b) | Expr::Over(_, _, a, b) => {
+                walk(a, out);
+                walk(b, out);
+            }
+            Expr::Cond(c, a, b) => {
+                walk(c, out);
+                walk(a, out);
+                walk(b, out);
+            }
+            Expr::Sample(_, xs) => xs.iter().for_each(|x| walk(x, out)),
+            Expr::Unread(_, x) => walk(x, out),
+            Expr::Call(_, args) => args.iter().for_each(|a| {
+                if let Arg::Expr(x) = a {
+                    walk(x, out);
+                }
+            }),
+        }
+    }
+    let mut out = vec![];
+    let exprs: Vec<&Expr> = match s {
+        Stmt::Hold {
+            pools,
+            reuse,
+            cache,
+            lease,
+            ..
+        } => pools
+            .iter()
+            .flat_map(|(_, u, r)| std::iter::once(u).chain(r))
+            .chain(reuse)
+            .chain(cache)
+            .chain(lease.as_ref().map(|(_, t)| t))
+            .collect(),
+        Stmt::Grow(_, e) | Stmt::Load(_, e) | Stmt::Set(_, e) | Stmt::Observe(_, e) => vec![e],
+        Stmt::Branch(e, _, _) | Stmt::While(e, _) => vec![e],
+        Stmt::Run { work, .. } => vec![work],
+        Stmt::Choose { count, key, .. } => std::iter::once(count).chain(key).collect(),
+        _ => vec![],
+    };
+    for e in exprs {
+        walk(e, &mut out);
+    }
+    out
 }
 
 /// A step stage's serving order. `admission` has no keys: every resident
@@ -1994,7 +2088,10 @@ impl Linker<'_> {
                 }
                 continue;
             }
-            self.spans[id].push(stmt_span(s));
+            self.spans[id].push(StmtSpan {
+                at: stmt_span(s),
+                names: stmt_names(s),
+            });
             self.sides[id].push(self.side);
             let cs = match s {
                 Stmt::Set(n, e) => CStmt::Set(self.attr_index[n], self.expr(e)?),

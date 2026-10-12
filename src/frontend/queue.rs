@@ -304,6 +304,17 @@ impl Ctx<'_> {
         }
     }
 
+    /// A bare name passed as a reference, read as `var` reads it, kept
+    /// where the entry wrote it: an error about what a parameter stands
+    /// for points at the parameter, not at the caller's argument (#531).
+    fn ref_var(&self, r: &Ref) -> Result<Expr, ExpandError> {
+        let e = self.var(&r.name)?;
+        Ok(match r.span {
+            Some(span) => Expr::Located(span, Box::new(e)),
+            None => e,
+        })
+    }
+
     fn expr(&self, e: &Expr) -> Result<Expr, ExpandError> {
         Ok(match e {
             Expr::Located(span, inner) => Expr::Located(*span, Box::new(self.expr(inner)?)),
@@ -326,7 +337,7 @@ impl Ctx<'_> {
                     } else {
                         match arg {
                             Arg::Expr(e) => Arg::Expr(self.expr(e)?),
-                            Arg::Ref(r) => Arg::Expr(self.var(&r.name)?),
+                            Arg::Ref(r) => Arg::Expr(self.ref_var(r)?),
                         }
                     };
                     converted.push(arg);
@@ -381,7 +392,7 @@ impl Ctx<'_> {
             // or a pool or stage
             Arg::Ref(r) if r.index.is_none() => {
                 if self.entry_name(&r.name).is_some() {
-                    Arg::Expr(self.var(&r.name)?)
+                    Arg::Expr(self.ref_var(r)?)
                 } else {
                     Arg::Ref(self.reference(r)?)
                 }
