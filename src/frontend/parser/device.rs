@@ -351,27 +351,15 @@ impl Parser {
             );
         };
         let (dev_count, dev_array) = (self.devices[dev].count, self.devices[dev].array);
-        match (array, dev_array) {
-            (Some(n), true) if n == dev_count => {}
-            (None, false) => {}
-            _ => {
-                return self.err_at(
-                    at,
-                    format!(
-                        "an engine is one per device: `{device}` is {}, so write `engine {name}{}`",
-                        if dev_array {
-                            format!("a family of {dev_count}")
-                        } else {
-                            "one device".into()
-                        },
-                        if dev_array {
-                            format!("[{dev_count}] on {device}")
-                        } else {
-                            format!(" on {device}")
-                        }
-                    ),
-                );
-            }
+        if dev_array {
+            return self.err_at(
+                at,
+                format!(
+                    "an engine is one per device, and `{device}` is a family of {dev_count}: \
+                     engines on a family of devices are a queue family, `queue {name}[{dev_count}] \
+                     : ROLE {{ device …; engine on DEVICE {{ … }} … }}` (#539)"
+                ),
+            );
         }
         self.engine_body(prog, span, at, name, dev)
     }
@@ -422,7 +410,7 @@ impl Parser {
                         "`request` twice: an engine says once what it does with one",
                     );
                 }
-                request = Some(self.request_src(&name, &device, dev_array)?);
+                request = Some(self.request_src(&device)?);
             } else if self.eat_kw("tokens") {
                 if tokens {
                     return self.err_at(k_at, "`tokens cap` twice: an iteration has one budget");

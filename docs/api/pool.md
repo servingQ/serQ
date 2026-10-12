@@ -172,8 +172,8 @@ that grows beyond its reservation follows the pool's `preempt` rule.
 
 The pool option `admit via ENGINE;` is refused. Who admits a pool is said in
 its `on`: declare the capacity on the engine and write `pool NAME on ENGINE`,
-`pool NAME on ENGINE.DEVICE` for the device's, or `NAME[N] cap c;` in the
-engine for N queues it admits ([Engine](engine.md#pools-on-a-device-or-an-engine)).
+`pool NAME on ENGINE.DEVICE` for the device's
+([Engine](engine.md#pools-on-a-device-or-an-engine)).
 A pool on an engine is served in each iteration's `admit waiting`, after the
 running requests have taken their tokens, while budget is left; without one,
 admission is attempted whenever the simulation settles an event.

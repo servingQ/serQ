@@ -1013,10 +1013,14 @@ engine e2 on gpu {{ tokens cap 4; schedule {{ advance running; }} execute (t(bat
         &engine("exclusive prefill; branch (running.count == 0) { admit waiting; }"),
         "takes back decodes already chosen",
     );
-    // one engine per device, as many as its devices
+    // one engine per device, and a family of them a queue family (#539)
     refused(
         &engine(ok).replace("engine vllm on gpu", "engine vllm[2] on gpu"),
-        "an engine is one per device",
+        "engine family `vllm[2]`: a family of engines is a queue family",
+    );
+    refused(
+        &engine(ok).replace("device gpu {", "device gpu[2] {"),
+        "an engine is one per device, and `gpu` is a family of 2",
     );
     refused(
         &engine(ok).replace("on gpu {\n  reqs", "on cpu {\n  reqs"),
@@ -1060,60 +1064,50 @@ fn an_engine_reads_the_programs_own_names() {
     );
 }
 
-/// A family of devices: `pool kv on vllm.gpu` is `kv[N]`, an engine `E[N]`
-/// reads `kv[i]` from `E[i]` as its memory and admits its queue; `pool kv
-/// on gpu` is the same memory, admitted as soon as it fits. A family has no
-/// request and a server runs no engine, so nothing here runs a member; a
-/// queue family is how a server reaches one (`a_queue_holds_its_engine`).
+/// A family of engines is a queue family (#539): `engine E[N]` is refused
+/// with the queue to write. In the queue family each member's engine reads
+/// its own device's `kv` as its memory and admits it (`on vllm.gpu`), or
+/// admits nothing (`on gpu`); a member's schedule cannot count every
+/// member's queues.
 #[test]
-fn a_family_follows_its_device() {
-    let ov = common::horizon(20.0);
-    let work = "
-stage gate : delay;
-workload { arrive batch(4); init { set prompt = 2; } }
-server { run gate (cost(gate, prompt)); }
-";
-    let new = format!(
-        "device gpu[2] {{ step_time (t) = 1; kv cap 100; }}
-engine vllm[2] on gpu {{
-  tokens cap 8;
-  schedule {{ advance running; admit waiting while (running.preempted == 0); }}
-  execute (step_time(batch.tokens));
-}}
-pool kv on vllm.gpu {{ }}
-{work}"
+fn a_family_of_engines_is_a_queue_family() {
+    refused(
+        "device gpu[2] { kv cap 100; } pool kv on gpu { }
+engine vllm[2] on gpu { tokens cap 8; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); }
+workload { arrive batch(4); init { set prompt = 2; } }",
+        "engine family `vllm[2]`: a family of engines is a queue family, `queue vllm[2] : ROLE",
     );
-    for (src, admitted) in [
-        (new.clone(), true),
-        (new.replace("on vllm.gpu", "on gpu"), false),
-    ] {
+    let ov = common::horizon(20.0);
+    let queue = |schedule: &str, on: &str| {
+        format!(
+            "queue vllm[2] : decode {{
+  device gpu {{ kv cap 100; }}
+  engine on gpu {{ tokens cap 8; schedule {{ {schedule} }} execute (1); }}
+  pool kv on {on} {{ }}
+  decode (prompt) {{ hold kv (cost(kv, prompt)) {{ run vllm prefill (cost(vllm, prompt)) growing kv; }} }}
+}}
+workload {{ arrive batch(4); init {{ set prompt = 2; set j = serial < 2 ? 0 : 1; }} }}
+server {{ vllm[j].decode (prompt); }}"
+        )
+    };
+    let ok = "advance running; admit waiting while (running.preempted == 0);";
+    for (on, admitted) in [("vllm.gpu", true), ("gpu", false)] {
+        let src = queue(ok, on);
         let p = compiled(&src, &ov);
         for i in [0, 1] {
-            let (e, kv) = (stage(&p, "vllm", Some(i)), pool(&p, "kv", Some(i)));
+            let (e, kv) = (stage(&p, "vllm", Some(i)), pool(&p, "vllm.kv", Some(i)));
             assert_eq!(step_at(&p, e).memory, Some(kv), "{src}");
             assert_eq!(p.pools[kv].cap, 100.0);
             assert_eq!(p.pools[kv].admit_via, admitted.then_some(e), "{src}");
         }
     }
-    // a member's schedule cannot count every member's queues
     refused(
-        &new.replace(
-            "schedule { advance running; admit waiting while (running.preempted == 0); }",
-            "schedule { let c = waiting.count > 0 ? 2 : inf; advance running each at most (c); \
-             admit waiting while (running.preempted == 0) each at most (c); }",
+        &queue(
+            "let c = waiting.count > 0 ? 2 : inf; advance running each at most (c); \
+             admit waiting while (running.preempted == 0) each at most (c);",
+            "vllm.gpu",
         ),
         "is a family, and its `waiting.count`",
-    );
-    // nor its `tokens cap`
-    let tokens_cap = new
-        .lines()
-        .find(|l| l.trim_start().starts_with("tokens cap"))
-        .expect("the engine's tokens cap")
-        .trim()
-        .to_string();
-    refused(
-        &new.replace(&tokens_cap, "tokens cap 8 + waiting.count;"),
-        "which no member's engine may",
     );
 }
 
@@ -1148,10 +1142,10 @@ fn a_pool_names_the_engine_that_admits_it() {
     );
 }
 
-/// N queues one engine admits: `reqs[2] cap 4;` in the engine and
-/// `pool reqs on llm` are two pools, each admitted by `llm`, as
-/// `pool reqs[2] { cap 4; admit via llm; }` wrote before #439. A hold picks
-/// its member with a computed index, and `waiting.count` counts both.
+/// A family of capacities in one engine (`reqs[2] cap 4;`) would be N
+/// queues it admits, and the request's `taking` names one pool: it is
+/// refused, with the capacity and the queue family to write instead. The
+/// text below is the one the later tests start from.
 const QUEUES: &str = "device gpu { kv cap 1000; }
 engine llm on gpu {
   reqs[2] cap 4;
@@ -1165,39 +1159,11 @@ workload { arrive poisson(1); init { set n = 10; set t = ~bernoulli(0.5); } sess
 server { hold reqs[t] (cost(reqs[t], 1)), kv (cost(kv, n)) { run llm prefill (cost(llm, n)) growing kv; } }";
 
 #[test]
-fn an_engine_admits_a_family_of_queues() {
-    let ov = common::horizon(100.0);
-    let p = compiled(QUEUES, &ov);
-    let llm = stage(&p, "llm", None);
-    for i in 0..2 {
-        let q = &p.pools[pool(&p, "reqs", Some(i))];
-        assert_eq!(q.admit_via, Some(llm), "reqs[{i}]");
-        assert_eq!(q.cap, 4.0, "reqs[{i}]");
-    }
-    assert_eq!(p.pools[pool(&p, "kv", None)].admit_via, None);
-    let r = serq::run_source(&common::main_source(QUEUES), &ov, None).unwrap();
-    for i in 0..2 {
-        let row = r
-            .text()
-            .lines()
-            .find(|l| l.starts_with(&format!("reqs[{i}] ")))
-            .map(str::to_string)
-            .unwrap_or_else(|| panic!("no reqs[{i}] in\n{}", r.text()));
-        let admits: f64 = row.split_whitespace().nth(6).unwrap().parse().unwrap();
-        assert!(admits > 0.0, "reqs[{i}] admitted nothing: {row}");
-    }
-}
-
-/// An engine family already makes `reqs cap c;` one pool per member; a
-/// capacity family next to it would be N pools for M engines, which the
-/// counts' rule (one for one, one for all) does not join.
-#[test]
-fn a_family_engine_holds_no_family_capacity() {
+fn an_engine_admits_no_family_of_capacities() {
     refused(
-        &QUEUES
-            .replace("device gpu {", "device gpu[2] {")
-            .replace("engine llm on gpu", "engine llm[2] on gpu"),
-        "`reqs[2]` in engine family `llm[2]`: each member would admit 2 queues",
+        QUEUES,
+        "`reqs[2]` in engine `llm`: an engine admits through its request's `taking`, which names \
+         one `reqs`; write `reqs cap c;`, or a queue family `queue Q[2]` for 2 engines",
     );
 }
 
@@ -1237,7 +1203,6 @@ fn admit_via_is_refused_and_says_what_to_write() {
     for part in [
         "who admits a pool is said in its `on`",
         "`NAME cap c;` in `engine E { … }`",
-        "`NAME[N] cap c;` for N pools",
         "`pool NAME on E { … }`",
         "`pool NAME on E.DEVICE`",
     ] {
@@ -1520,8 +1485,8 @@ fn an_arithmetic_function_takes_numbers_alone() {
 /// (#469): `min(prompt[7], 1000)` linked as `min(prompt, 1000)`. A value
 /// has no index, and a pool or stage, whole or a member, is no number;
 /// the same holds in a constant, through a definition's parameter, and
-/// for an argument the definition does not read. The hold's body is empty: a
-/// server runs no engine, and a family has no request.
+/// for an argument the definition does not read. The hold's body is empty,
+/// and `E` is a family of stations: an engine family is a queue family.
 #[test]
 fn a_name_passed_as_a_number_is_read_as_written() {
     let src = |size: &str| {
@@ -1529,7 +1494,7 @@ fn a_name_passed_as_a_number_is_read_as_written() {
             "def g(x) {{ min(x, 1) }}
 def h(x) {{ 1 }}
 device gpu[2] {{ kv cap 100; }} pool kv on gpu {{ }}
-engine E[2] on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
+stage E[2] : fifo;
 workload {{ arrive batch(1); init {{ set prompt = 32; set j = 0; }} }}
 server {{ hold kv[j] (cost(kv, {size})) {{ }} }}"
         )
@@ -1539,7 +1504,7 @@ server {{ hold kv[j] (cost(kv, {size})) {{ }} }}"
     // a value may not share a stage's name, so a bare `E` is the stage (#470)
     let shared = error(&src("min(E, 1)").replace("set j = 0;", "set j = 0; set E = 3;"));
     assert!(
-        shared.contains("an engine named `E` would make the one word mean two things"),
+        shared.contains("a stage named `E` would make the one word mean two things"),
         "{shared}"
     );
     let pool = "as a number, but a pool is none: read";

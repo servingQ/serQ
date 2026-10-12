@@ -183,16 +183,11 @@ fn paren(mut e: Vec<Token>, like: &Token) -> Vec<Token> {
 }
 
 impl Parser {
-    /// At `request` in engine `engine`: its parameters and body, kept as
-    /// tokens until the engine's `taking` is read too. A queue's engine
-    /// and an engine family have none: a queue's request is its entries,
-    /// and a family's member would need an index at the call.
-    pub(super) fn request_src(
-        &mut self,
-        engine: &str,
-        device: &str,
-        family: bool,
-    ) -> PResult<RequestSrc> {
+    /// At `request` in the engine on `device`: its parameters and body,
+    /// kept as tokens until the engine's `taking` is read too. A queue's
+    /// engine has none: a queue's request is its entries (an engine family,
+    /// refused where it is declared, is a queue family).
+    pub(super) fn request_src(&mut self, device: &str) -> PResult<RequestSrc> {
         let at = self.pos;
         self.advance();
         if let Some((q, _)) = device.split_once('.') {
@@ -201,15 +196,6 @@ impl Parser {
                 format!(
                     "a `request` in queue `{q}`'s engine: a queue says what it does with a \
                      request in its entries"
-                ),
-            );
-        }
-        if family {
-            return self.err_at(
-                at,
-                format!(
-                    "a `request` in engine family `{engine}`: a call would have to pick a \
-                     member, which a request does not take; declare one engine per device"
                 ),
             );
         }

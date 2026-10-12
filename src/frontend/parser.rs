@@ -3492,7 +3492,7 @@ impl Parser {
                 return self.err_at(
                     self.pos - 1,
                     "who admits a pool is said in its `on`: declare the capacity on the engine \
-                     (`NAME cap c;` in `engine E { … }`, or `NAME[N] cap c;` for N pools) and \
+                     (`NAME cap c;` in `engine E { … }`) and \
                      write `pool NAME on E { … }`, or `pool NAME on E.DEVICE` for the device's; \
                      `on DEVICE` is admitted as soon as it fits",
                 );

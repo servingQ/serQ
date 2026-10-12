@@ -621,6 +621,8 @@ server { P.prefill (n); }
     refused(src, "a `request` in queue `P`'s engine");
 }
 
+/// An engine family is refused before its request is read: a family of
+/// engines is a queue family, whose entries are its requests (#539).
 #[test]
 fn an_engine_family_has_no_request() {
     let src = "
@@ -634,5 +636,8 @@ engine llm[2] on gpu {
 workload { arrive batch(1); turn { set n = 6; } }
 server { run llm[0] prefill (cost(llm, n)); }
 ";
-    refused(src, "a `request` in engine family `llm`");
+    refused(
+        src,
+        "engine family `llm[2]`: a family of engines is a queue family",
+    );
 }
