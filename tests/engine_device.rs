@@ -359,20 +359,42 @@ fn sglang_and_tgi_as_engines_are_bodies() {
 /// memory `kv` on its device.
 const WORKLOAD: &str = "
 workload { arrive batch(3); init { set prompt = 2; } }
-server {
-  hold reqs (cost(reqs, 1)), kv (cost(kv, prompt)) {
-    run vllm prefill (cost(vllm, prompt)) growing kv;
-    run vllm decode (cost(vllm, 2)) growing kv;
-  }
-}
+server { vllm (prompt); }
 ";
 
+/// `schedule` with the request's admission on each `admit waiting`: a slot
+/// of `reqs` and the prompt's blocks of `kv`, which its runs grow.
+fn taking(schedule: &str) -> String {
+    let mut out = String::new();
+    let mut rest = schedule;
+    while let Some(i) = rest.find("admit waiting") {
+        let end = rest[i..].find(';').map_or(rest.len(), |e| i + e);
+        out.push_str(&rest[..end]);
+        out.push_str(" taking reqs (1), kv (prompt)");
+        rest = &rest[end..];
+    }
+    out + rest
+}
+
+/// vLLM's engine on one device, its request a prefill and two decodes. A
+/// schedule the refusals write without `admit waiting` takes nothing, so
+/// its request grows nothing.
 fn engine(schedule: &str) -> String {
+    let growing = if schedule.contains("admit waiting") {
+        " growing kv"
+    } else {
+        ""
+    };
+    let schedule = taking(schedule);
     format!(
         "device gpu {{ step_time (t) = 1; kv cap 100; }}
 engine vllm on gpu {{
   reqs cap 8;
   tokens cap 8;
+  request (prompt) {{
+    prefill (prompt){growing};
+    decode (2){growing};
+  }}
   schedule {{ {schedule} }}
   execute (step_time(batch.tokens));
 }}
@@ -1001,9 +1023,9 @@ engine e2 on gpu {{ tokens cap 4; schedule {{ advance running; }} execute (t(bat
         "no device `cpu`",
     );
     // a pool on a name nothing declares is pointed at that name, the owner
-    // (line 9, `pool kv on gpuu`, column 12), not the pool's
+    // (line 13, `pool kv on gpuu`, column 12), not the pool's
     let e = error(&engine(ok).replace("pool kv on gpu", "pool kv on gpuu"));
-    assert!(e.starts_with("9:12: no device or engine `gpuu`"), "{e}");
+    assert!(e.starts_with("13:12: no device or engine `gpuu`"), "{e}");
     assert!(e.contains("did you mean `gpu`?"), "{e}");
     // a context variable's old name is answered with the engine's name
     let e = error(&engine(ok).replace("execute (step_time(batch.tokens))", "execute (ntok)"));
@@ -1040,18 +1062,16 @@ fn an_engine_reads_the_programs_own_names() {
 
 /// A family of devices: `pool kv on vllm.gpu` is `kv[N]`, an engine `E[N]`
 /// reads `kv[i]` from `E[i]` as its memory and admits its queue; `pool kv
-/// on gpu` is the same memory, admitted as soon as it fits.
+/// on gpu` is the same memory, admitted as soon as it fits. A family has no
+/// request and a server runs no engine, so nothing here runs a member; a
+/// queue family is how a server reaches one (`a_queue_holds_its_engine`).
 #[test]
 fn a_family_follows_its_device() {
     let ov = common::horizon(20.0);
     let work = "
+stage gate : delay;
 workload { arrive batch(4); init { set prompt = 2; } }
-server {
-  choose j in 2 by (holders(kv[j]));
-  hold kv[j] (cost(kv, prompt)) {
-    run vllm[j] prefill (cost(vllm, prompt)) growing kv[j];
-  }
-}
+server { run gate (cost(gate, prompt)); }
 ";
     let new = format!(
         "device gpu[2] {{ step_time (t) = 1; kv cap 100; }}
@@ -1500,7 +1520,8 @@ fn an_arithmetic_function_takes_numbers_alone() {
 /// (#469): `min(prompt[7], 1000)` linked as `min(prompt, 1000)`. A value
 /// has no index, and a pool or stage, whole or a member, is no number;
 /// the same holds in a constant, through a definition's parameter, and
-/// for an argument the definition does not read.
+/// for an argument the definition does not read. The hold's body is empty: a
+/// server runs no engine, and a family has no request.
 #[test]
 fn a_name_passed_as_a_number_is_read_as_written() {
     let src = |size: &str| {
@@ -1510,7 +1531,7 @@ def h(x) {{ 1 }}
 device gpu[2] {{ kv cap 100; }} pool kv on gpu {{ }}
 engine E[2] on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
 workload {{ arrive batch(1); init {{ set prompt = 32; set j = 0; }} }}
-server {{ hold kv[j] (cost(kv, {size})) {{ run E[j] prefill (cost(E, 1)) growing kv[j]; }} }}"
+server {{ hold kv[j] (cost(kv, {size})) {{ }} }}"
         )
     };
     let ov = common::horizon(10.0);
@@ -1571,9 +1592,9 @@ fn a_name_is_a_number_only_where_its_function_takes_one() {
         format!(
             "{pre}
 device gpu {{ kv cap 100; }} pool kv on gpu {{ }}
-engine E on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
+engine E on gpu {{ tokens cap inf; request () {{ prefill (1); }} schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
 workload {{ arrive batch(1); init {{ set prompt = 32; }} }}
-server {{ hold kv (cost(kv, {size})) {{ run E prefill (cost(E, 1)) growing kv; }} }}"
+server {{ hold kv (cost(kv, {size})) {{ E (); }} }}"
         )
     };
     refused(

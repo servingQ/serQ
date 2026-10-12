@@ -24,7 +24,12 @@ fn source(schedule: &str) -> String {
         pool reqs {{ cap 4; }}
         stage gate : delay;
         device gpu {{ }}
-        engine llm on gpu {{ tokens cap 8; schedule {{ {schedule} }} execute (1); }}
+        engine llm on gpu {{
+          tokens cap 8;
+          request () {{ prefill (3); decode (2); }}
+          schedule {{ {schedule} }}
+          execute (1);
+        }}
         workload {{ arrive batch(2);
           session {{ turn;
             end;
@@ -33,10 +38,7 @@ fn source(schedule: &str) -> String {
         }}
         server {{
           run gate (cost(gate, serial));
-          hold reqs (cost(reqs, 1)) {{
-            run llm prefill (cost(llm, 3));
-            run llm decode (cost(llm, 2));
-          }}
+          hold reqs (cost(reqs, 1)) {{ llm (); }}
           observe done = now;
         }}
 
@@ -121,6 +123,7 @@ fn only_selects_and_by_orders() {
         device gpu { }
         engine llm on gpu {
           tokens cap 2;
+          request (prompt) { prefill (prompt); decode (1); }
           schedule {
             advance running only (running.decoding > 0 ? decoding : !decoding) by (remaining);
             admit waiting only (running.decoding > 0 ? decoding : !decoding) while (running.preempted == 0);
@@ -134,7 +137,7 @@ fn only_selects_and_by_orders() {
           }
         }
         server {
-          hold reqs (cost(reqs, 1)) { run llm prefill (cost(llm, prompt)); run llm decode (cost(llm, 1)); }
+          hold reqs (cost(reqs, 1)) { llm (prompt); }
         }
 
 "#;
@@ -151,13 +154,28 @@ fn only_selects_and_by_orders() {
 }
 
 /// A prefills 1 and decodes 2 from t=0; B and C wait from t=1 in a queue
-/// the engine admits, and do the same.
+/// the engine admits, and do the same. The engine's admission takes the
+/// request's slot of `reqs`.
 fn admitted(schedule: &str) -> String {
+    let schedule = schedule.replace(
+        "while (running.preempted == 0);",
+        "while (running.preempted == 0) taking reqs (1);",
+    );
     format!(
         r#"
         stage gate : delay;
         device gpu {{ }}
-        engine llm on gpu {{ reqs cap 4; tokens cap 8; schedule {{ {schedule} }} execute (1); }}
+        engine llm on gpu {{
+          reqs cap 4;
+          tokens cap 8;
+          request () {{
+            observe admitted_at = now;
+            prefill (1);
+            decode (2);
+          }}
+          schedule {{ {schedule} }}
+          execute (1);
+        }}
         pool reqs on llm {{ }}
         workload {{ arrive batch(3);
           session {{ turn;
@@ -167,11 +185,7 @@ fn admitted(schedule: &str) -> String {
         }}
         server {{
           run gate (cost(gate, serial > 0 ? 1 : 0));
-          hold reqs (cost(reqs, 1)) {{
-            observe admitted_at = now;
-            run llm prefill (cost(llm, 1));
-            run llm decode (cost(llm, 2));
-          }}
+          llm ();
         }}
 
 "#
@@ -262,6 +276,7 @@ fn an_engine_that_excludes_every_resident_waits_for_the_residents_to_change() {
         device gpu { }
         engine llm on gpu {
           tokens cap 8;
+          request () { prefill (1); decode (1); }
           schedule {
             advance running only (running.count > 1);
             admit waiting only (running.count > 1) while (running.preempted == 0);
@@ -276,7 +291,7 @@ fn an_engine_that_excludes_every_resident_waits_for_the_residents_to_change() {
         }
         server {
           run gate (cost(gate, 2 * serial));
-          hold reqs (cost(reqs, 1)) { run llm prefill (cost(llm, 1)); run llm decode (cost(llm, 1)); }
+          hold reqs (cost(reqs, 1)) { llm (); }
         }
 
 "#;

@@ -1,16 +1,30 @@
 //! A hidden attribute is the target's, not the scheduler's: the server may
 //! run work by it, cache by it at release and observe it, and nothing else
 //! (`docs/design/serving-specification-language.md` §2). The server's
-//! session statements are checked as the parser expanded them.
+//! session statements are checked as the parser expanded them, the engine's
+//! request at its call among them.
 
 mod common;
 
 use serq::compile_source;
 
-fn program(server: &str) -> String {
+/// The engine's request when its work is a prefill alone.
+const PREFILL: &str = "request (p) { prefill (p) growing kv; }";
+
+/// The engine's request when its work is a prefill and a decode by the
+/// hidden `o`, leaving the whole sequence cached.
+const BOTH: &str =
+    "request (p, o) { prefill (p) growing kv; decode (o - 1) growing kv; cache (p + o); }";
+
+/// The engine runs its request by `request` and takes `take` units of `kv`
+/// when it admits one (`p`, the prompt, in most tests); the server calls
+/// it.
+fn program_with(request: &str, take: &str, server: &str) -> String {
     format!(
         "device gpu {{ kv cap 1000; }}
-        engine E on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
+        engine E on gpu {{ tokens cap inf; {request}
+          schedule {{ advance running; admit waiting while (running.preempted == 0) taking kv ({take}); }}
+          execute (1); }}
         pool kv on gpu {{ block 16; }}
         workload {{ arrive batch(1); hidden o;
           init {{ set prompt = 32; set o = 4; }}
@@ -21,34 +35,45 @@ fn program(server: &str) -> String {
 }
 
 fn refused(server: &str, fragments: &[&str]) {
+    refused_with(PREFILL, "p", server, fragments)
+}
+
+fn refused_with(request: &str, take: &str, server: &str, fragments: &[&str]) {
     let err = compile_source(
-        &common::main_source(&program(server)),
+        &common::main_source(&program_with(request, take, server)),
         &common::horizon(100.0),
     )
     .unwrap_err();
     for f in fragments {
-        assert!(err.contains(f), "{server}\n  missing {f:?} in {err}");
+        assert!(
+            err.contains(f),
+            "{request}\n{server}\n  missing {f:?} in {err}"
+        );
     }
 }
 
 #[test]
 fn the_server_may_run_cache_and_observe_by_a_hidden_attribute() {
-    let ok = "hold kv (cost(kv, prompt)) { run E prefill (cost(E, prompt)) growing kv; run E decode (cost(E, o - 1)) growing kv; } cache (cost(kv, prompt + o));
+    let ok = "E (prompt, o);
               observe length = o;";
-    compile_source(&common::main_source(&program(ok)), &common::horizon(100.0)).unwrap();
+    compile_source(
+        &common::main_source(&program_with(BOTH, "p", ok)),
+        &common::horizon(100.0),
+    )
+    .unwrap();
 }
 
 #[test]
 fn the_server_may_not_decide_on_a_hidden_attribute() {
     refused(
-        "branch (o > 2) { hold kv (cost(kv, prompt)) { run E prefill (cost(E, prompt)) growing kv; } } else { observe skipped = 1; }",
+        "branch (o > 2) { E (prompt); } else { observe skipped = 1; }",
         &[
             "`o` is hidden from the scheduler, but the server's branch reads it",
             "run E decode (cost(E, o))",
         ],
     );
     refused(
-        "choose j in 2 by (o); hold kv (cost(kv, prompt)) { run E prefill (cost(E, prompt)) growing kv; }",
+        "choose j in 2 by (o); E (prompt);",
         &["server's choice reads it"],
     );
 }
@@ -58,29 +83,34 @@ fn the_server_may_not_decide_on_a_hidden_attribute() {
 #[test]
 fn the_server_may_not_decide_on_a_hidden_attribute_passed_to_a_function() {
     refused(
-        "branch (min(o, 1) > 0) { hold kv (cost(kv, prompt)) { run E prefill (cost(E, prompt)) growing kv; } } else { observe skipped = 1; }",
+        "branch (min(o, 1) > 0) { E (prompt); } else { observe skipped = 1; }",
         &["`o` is hidden from the scheduler, but the server's branch reads it"],
     );
     refused(
-        "choose j in 2 by (min(o, 1)); hold kv (cost(kv, prompt)) { run E prefill (cost(E, prompt)) growing kv; }",
+        "choose j in 2 by (min(o, 1)); E (prompt);",
         &["server's choice reads it"],
     );
     refused(
-        "set y = min(o, 1); branch (y > 0) { hold kv (cost(kv, prompt)) { run E prefill (cost(E, prompt)) growing kv; } } else { observe skipped = 1; }",
+        "set y = min(o, 1); branch (y > 0) { E (prompt); } else { observe skipped = 1; }",
         &["`y` is set from the hidden `o`", "branch"],
     );
 }
 
 /// What the server sets from a hidden attribute is hidden as well:
-/// `Program::validate` sees only `long`, an attribute it may read.
+/// `Program::validate` sees only `long`, an attribute it may read, in the
+/// admission the engine's `taking` lowers to and in the request's `grow`.
 #[test]
 fn what_the_server_sets_from_a_hidden_attribute_is_hidden() {
-    refused(
-        "set long = o > 2; hold kv (cost(kv, long ? prompt : 16)) { run E prefill (cost(E, prompt)) growing kv; }",
+    refused_with(
+        "request (p, long) { prefill (p) growing kv; }",
+        "long ? p : 16",
+        "set long = o > 2; E (prompt, long);",
         &["`long` is set from the hidden `o` in the server, but the server's admission reads it"],
     );
-    refused(
-        "set a = o; set b = a + 1; hold kv (cost(kv, prompt)) { run E prefill (cost(E, prompt)) growing kv; grow kv (cost(kv, b)); }",
+    refused_with(
+        "request (p, b) { prefill (p) growing kv; grow kv (cost(kv, b)); }",
+        "p",
+        "set a = o; set b = a + 1; E (prompt, b);",
         &["`b` is set from the hidden `o`", "allocation"],
     );
 }
@@ -91,7 +121,7 @@ fn a_loop_carries_what_it_sets_round_to_its_start() {
     refused(
         "set n = 0;
          loop { branch (n > 3) { observe long = 1; } else { }
-                hold kv (cost(kv, prompt)) { run E prefill (cost(E, prompt)) growing kv; }
+                E (prompt);
                 set n = o; }",
         &["`n` is set from the hidden `o`", "branch"],
     );
@@ -101,15 +131,17 @@ fn a_loop_carries_what_it_sets_round_to_its_start() {
 #[test]
 fn a_top_level_session_cannot_bypass_the_server_check() {
     let src = "device gpu { kv cap 1000; }
-               engine E on gpu { tokens cap inf; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); }
+               engine E on gpu { tokens cap inf; request (p) { prefill (p) growing kv; }
+                 schedule { advance running; admit waiting while (running.preempted == 0) taking kv (p); }
+                 execute (1); }
                pool kv on gpu { block 16; }
                workload { arrive batch(1); hidden o; init { set prompt = 32; set o = 4; } }
-               session { branch (o > 2) { hold kv (cost(kv, prompt)) { run E prefill (cost(E, prompt)) growing kv; } } else { } end; }
+               session { branch (o > 2) { E (prompt); } else { } end; }
                ";
     let err = compile_source(&common::main_source(src), &common::horizon(100.0)).unwrap_err();
     assert!(err.contains("`session` belongs inside `workload`"), "{err}");
     refused(
-        "branch (o > 2) { hold kv (cost(kv, prompt)) { run E prefill (cost(E, prompt)) growing kv; } } else { }",
+        "branch (o > 2) { E (prompt); } else { }",
         &["hidden from the scheduler"],
     );
 }
@@ -120,18 +152,21 @@ fn a_top_level_session_cannot_bypass_the_server_check() {
 #[test]
 fn a_run_reveals_what_its_work_reads() {
     let after = "set long = o > 2;
-                 hold kv (cost(kv, prompt)) { run E prefill (cost(E, prompt)) growing kv; run E decode (cost(E, o - 1)) growing kv; } cache (cost(kv, prompt + o));
+                 E (prompt, o);
                  branch (long) { observe was_long = 1; } else { observe was_long = 0; }
                  branch (o > 3) { observe longer = 1; } else { }";
     compile_source(
-        &common::main_source(&program(after)),
+        &common::main_source(&program_with(BOTH, "p", after)),
         &common::horizon(100.0),
     )
     .unwrap();
-    // before the run ends, inside the hold, it is still hidden
-    refused(
-        "hold kv (cost(kv, prompt)) { run E prefill (cost(E, prompt)) growing kv;
-                            branch (o > 2) { run E decode (cost(E, o - 1)) growing kv; } else { run E decode (cost(E, 1)) growing kv; } }",
+    // before the run ends, inside the admission, it is still hidden: the
+    // engine's request, which runs in the server, may not decide on it
+    refused_with(
+        "request (p) { prefill (p) growing kv;
+                       branch (o > 2) { decode (o - 1) growing kv; } else { decode (1) growing kv; } }",
+        "p",
+        "E (prompt);",
         &["`o` is hidden from the scheduler, but the server's branch reads it before a run reveals it"],
     );
 }
@@ -139,11 +174,11 @@ fn a_run_reveals_what_its_work_reads() {
 /// Paths join conservatively: revealed on one arm only is not revealed.
 #[test]
 fn a_reveal_on_one_arm_only_does_not_reveal() {
-    refused(
-        "hold kv (cost(kv, prompt)) {
-           run E prefill (cost(E, prompt)) growing kv;
-           branch (prompt > 10) { run E decode (cost(E, o - 1)) growing kv; } else { run E decode (cost(E, 1)) growing kv; }
-         }
+    refused_with(
+        "request (p, d) { prefill (p) growing kv;
+                          branch (p > 10) { decode (d) growing kv; } else { decode (1) growing kv; } }",
+        "p",
+        "E (prompt, o - 1);
          branch (o > 2) { observe long = 1; } else { }",
         &["`o` is hidden from the scheduler", "branch"],
     );
@@ -167,6 +202,8 @@ fn hidden_values_propagate_through_every_loop_pass() {
     );
     assert!(error.contains("server's while reads it"), "{error}");
 
+    // the work prefills and decodes `d` tokens: `o` to reveal it, 1 not to
+    let request = "request (p, d) { prefill (p) growing kv; decode (d) growing kv; }";
     for depth in [3, 8] {
         let init = (0..depth)
             .map(|i| format!("set x{i} = 0; "))
@@ -175,12 +212,16 @@ fn hidden_values_propagate_through_every_loop_pass() {
             .map(|i| format!("set x{i} = x{}; ", i + 1))
             .collect::<String>();
         chain.push_str(&format!("set x{} = o;", depth - 1));
-        let work = "hold kv (cost(kv, prompt)) { run E prefill (cost(E, prompt)) growing kv; }";
-        refused(
+        let work = "E (prompt, 1);";
+        refused_with(
+            request,
+            "p",
             &format!("{init} while (x0 == 0) {{ {work} {chain} }}"),
             &["`x0` is set from the hidden `o`", "server's while reads it"],
         );
-        refused(
+        refused_with(
+            request,
+            "p",
             &format!("{init} loop {{ branch (x0 == 0) {{ observe flag = 1; }} {work} {chain} }}"),
             &[
                 "`x0` is set from the hidden `o`",
@@ -189,11 +230,11 @@ fn hidden_values_propagate_through_every_loop_pass() {
         );
         // A run revealing o before the decision makes the same chain legal.
         let safe = format!(
-            "hold kv (cost(kv, prompt)) {{ run E prefill (cost(E, prompt)) growing kv; run E decode (cost(E, o)) growing kv; }}
+            "E (prompt, o);
           {init} while (x0 == 0) {{ {work} {chain} }}"
         );
         compile_source(
-            &common::main_source(&program(&safe)),
+            &common::main_source(&program_with(request, "p", &safe)),
             &common::horizon(100.0),
         )
         .unwrap();
@@ -276,12 +317,14 @@ fn a_stage_passed_bare_does_not_reveal_an_attribute_of_its_name() {
         format!(
             "fn main() {{
         device gpu {{ kv cap 1000; }}
-        engine E on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
+        engine E on gpu {{ tokens cap inf; request (p, w) {{ prefill (w) growing kv; }}
+          schedule {{ advance running; admit waiting while (running.preempted == 0) taking kv (p); }}
+          execute (1); }}
         pool kv on gpu {{ block 16; }}
         workload {{ arrive batch(1); hidden {attribute};
           init {{ set prompt = 32; set {attribute} = 4; }}
           session {{ turn; end; }} }}
-        server {{ hold kv (cost(kv, prompt)) {{ run E prefill (cost(E, {work})) growing kv; }}
+        server {{ E (prompt, {work});
           branch ({attribute} > 2) {{ observe big = 1; }} else {{ observe small = 1; }} }}
         }}"
         )
