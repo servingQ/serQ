@@ -46,7 +46,7 @@ fn main() {
     // the prefix cache holds of it in full blocks, never the last token
     // (kv_cache_manager.py:289-300).
     request (prompt, output, product, system, session) {
-      prefix (product: system, session: inf);
+      prefix (product: floor(system, bs), session: inf);   // vLLM shares full blocks
       set kept = prompt;
       at admission {
         known = max(kept, computed + 1);

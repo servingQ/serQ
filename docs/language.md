@@ -1524,7 +1524,10 @@ the A100 cost fit, calibration, comparison runs and their limitations.
   releases it, not while it is being computed: vLLM caches a request's
   blocks as it schedules them (`kv_cache_manager.py:602-606`), so a request
   admitted after another has scheduled the same system prompt reads it,
-  and serQ's computes it again. A chain cannot be spilled to a tier yet.
+  and serQ's computes it again, and holds its own copy while it does. A
+  segment is shared in whole blocks only where the program says so, as
+  `floor(n, bs)`: vLLM's block that mixes the system prompt with a
+  session's text is the session's. A chain cannot be spilled to a tier yet.
   The Lean model's cache is per session: a program with `prefix` is outside
   its fragment.
 * A leg's lease does not expire when its session is slow to ask for it:
