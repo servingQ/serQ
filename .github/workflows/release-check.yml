@@ -1,0 +1,27 @@
+name: Release check
+
+# dist's plan job (release.yml), which every build waits for: the full CI,
+# and the tag is the version Cargo.toml and pyserq share
+# (scripts/version.py). release.yml also runs `dist plan` on a pull request,
+# where this does nothing: ci.yml runs there on its own.
+
+on:
+  workflow_call:
+    inputs:
+      plan:
+        description: "dist's manifest (unused; dist passes none to a plan job)"
+        type: string
+        required: false
+
+jobs:
+  ci:
+    if: startsWith(github.ref, 'refs/tags/')
+    uses: ./.github/workflows/ci.yml
+
+  version:
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tag matches Cargo.toml, and serq and pyserq are one version
+        run: python3 scripts/version.py check --tag "$GITHUB_REF_NAME"

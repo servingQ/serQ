@@ -1,0 +1,36 @@
+name: Release wheels
+
+# dist's build job (release.yml): pyserq's wheels at the tag, uploaded as an
+# `artifacts-*` artifact so that dist attaches them to the GitHub release
+# beside the CLI archives, and publish-pypi.yml finds them.
+
+on:
+  workflow_call:
+    inputs:
+      plan:
+        description: "dist's manifest (unused)"
+        type: string
+        required: true
+
+jobs:
+  wheels:
+    uses: ./.github/workflows/wheels.yml
+    with:
+      ref: ${{ github.ref_name }}
+
+  collect:
+    needs: wheels
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wheel-*
+          path: dist
+          merge-multiple: true
+      - name: The wheels are the tag's version
+        run: python3 scripts/version.py wheels dist "${GITHUB_REF_NAME#v}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: artifacts-pyserq-wheels
+          path: dist/*.whl

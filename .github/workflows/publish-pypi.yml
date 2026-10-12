@@ -1,0 +1,31 @@
+name: Publish pyserq
+
+# dist's publish job (release.yml): the wheels release-wheels.yml built go
+# to PyPI as pyserq X.Y.Z. Trusted publishing: pyserq's publisher names this
+# repository, this file (publish-pypi.yml, not release.yml: PyPI matches the
+# token's job_workflow_ref, which names the called workflow) and the
+# environment `pypi`. Only the wheels go, not an sdist. A re-run skips a
+# version PyPI already has.
+
+on:
+  workflow_call:
+    inputs:
+      plan:
+        description: "dist's manifest (unused)"
+        type: string
+        required: true
+
+jobs:
+  pypi:
+    runs-on: ubuntu-22.04
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: artifacts-pyserq-wheels
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          skip-existing: true
