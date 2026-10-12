@@ -50,45 +50,55 @@ serving `M` products this way.
   clock, a draw or the `cached` and `computed` admission sets. They are
   read when the hold asks and again when it is admitted (a waiting order
   may read `cachedin`), and the trie they index must not move under them.
-  The linker refuses one that does.
+  The linker refuses one that does. A segment of length 0 is left out of
+  the chain: `(tools: 0, serial: inf)`, a session without tools, is its own
+  chain.
+- A chain is cached in blocks: on a pool without `block` (a slot pool,
+  whose `cache` keeps a slot) the hold's chain is the session's own, and a
+  hold with `prefix` that takes no pool with `block` does not link. One
+  slot cached along a shared chain would be read by every hold as
+  allocated already, and the slots' cap would hold no more.
 - A node of the trie is a run of one segment, `[off, off + len)`. A
   segment's runs follow one another; the next segment hangs off the run
   that ends where its segment ends, under its key.
+- A session's *entry* is what hangs under the key of its serial: the whole
+  chain without `prefix`, the `serial` segment of `(system: S, serial:
+  inf)`. Everything else is shared, whoever computed it.
 - Admission with `cache` reads the cached prefix of the chain, at most
-  `reuse` of it and at most what it allocates (what it reads is part of
-  its allocation), and locks the nodes it read: they are allocated while the
+  `reuse` of it, and locks the nodes it read: they are allocated while the
   hold lasts, counted once in the pool however many holds read them
   (vLLM's `ref_cnt`, `block_pool.py:754-768`), and an admission does not
-  ask again for what another hold already reads. The run of a node the
-  match stops inside is split, unless a hold reads it, in which case it
-  is locked whole.
+  ask again for what another hold already reads. A hold with `prefix`
+  reads at most what it allocates (what it reads is part of its
+  allocation, and a prefix another hold reads cannot shrink to fit it); a
+  hold without consumes its entry whole, as `Exec.lean`'s `admitPool`
+  does, and what its allocation does not hold of it is gone. The run of a
+  node the match stops inside is split, unless a hold reads it, in which
+  case it is locked whole.
 - Release lets the nodes go, and `min(ℓ, computed)` units stay cached
-  along the chain, aged now. With `ℓ > 0` the chain past it that only this
-  session wrote, and no hold reads, goes: the session's entry is replaced.
-  With `ℓ = 0` the nodes the hold read go, unless another hold reads them
-  or another session wrote them.
-- A node's owner is the session that wrote it first: its entry, or the
-  session that computed a shared segment.
-- A node the session owns, with nothing of another session's below it,
-  that only the session's holds read is the session's consumed entry: its
-  other holds do not see it (#230: a hold nested in one that consumed the
-  prefix finds none), and a write of the session's chain there displaces
-  it, unreachable, until its hold lets it go. A shared node is seen by
-  whoever reads it.
-- `reuse` bounding the match cuts what the session's own entry held past
-  the bound off, cached and unusable, as a dead node with its age and the
-  attributes it is cut with, unless a live hold reads it or another
-  session's sequence passes through it: a bound on one hold's read says
-  nothing of another session's cache.
+  along the chain, aged now. With `ℓ > 0` the session's entry past it,
+  which no hold reads, goes: the entry is replaced. With `ℓ = 0` the nodes
+  of its entry the hold read go. A shared segment stays.
+- A node of the session's entry that only the session's holds read is
+  its consumed entry: its other holds do not see it (#230: a hold nested
+  in one that consumed the prefix finds none), and a write of the
+  session's chain there displaces it, unreachable, until its hold lets it
+  go. A shared segment is seen by whoever reads it, two legs of one
+  session included.
+- `reuse` bounding the match cuts what the session's entry held past the
+  bound off, cached and unusable, as a dead node with its age and the
+  attributes it is cut with, unless a live hold reads it. Past a bound in
+  a shared segment nothing is cut: a bound on one hold's read says
+  nothing of the cache.
 - Eviction takes cached leaves, so no cached suffix outlives its prefix
   (SGLang's radix leaf eviction, TGI's LRU over leaves), one block at a
   time from the leaf's tail; `evict lru` and `evict by (…)` order the
   leaves, and a node a live hold reads is not evictable (SGLang's
   `lock_ref`).
-- `drop P` drops the cached leaves the session owns, leaves first: its
-  entry, and a shared segment it computed once nothing hangs off it.
-- `evict by (…)` reads a node's owner while it lives, else the snapshot
-  of the last write.
+- `drop P` drops the cached leaves of the session's entry, leaves first,
+  and no shared segment.
+- `evict by (…)` reads the session that wrote a node first while it lives,
+  else the snapshot of the last write.
 - `cachedin(P)` is the cached prefix of the session's waiting hold's
   chain, else of its innermost hold's, else of its own, in whole blocks.
 
@@ -98,7 +108,11 @@ serving `M` products this way.
   `vllm_system_prompt.sq` (seed 1, horizon 3000 s, warm-up 300 s), one
   product's sessions prefill 710 tokens a turn on average and wait 16 ms
   for the first token; a thousand products' (no sharing to speak of)
-  prefill 1529 and wait 44 ms.
+  prefill 1529 and wait 44 ms. About half of the difference is the system
+  prompt a first turn no longer computes; the other half is memory: a
+  thousand copies of it evict live sessions' contexts, which their next
+  turns compute again. Over seeds 1–5 the one product prefills 690–840
+  tokens and the thousand 1529–2601, the latter sensitive to bursts.
 - SGLang's LPM waiting order: `queue by (-cachedin(kv))` is the longest
   prefix match in the shared tree, as SGLang sorts it
   ([`schedule_policy.py` L487-L495](https://github.com/sgl-project/sglang/blob/b792228b35b21565067520857319dfc05e4d134e/python/sglang/srt/managers/schedule_policy.py#L487-L495)),
@@ -121,7 +135,9 @@ serving `M` products this way.
 - Lean: `Exec.lean`'s cache is a list of per-session entries. Until a trie
   is written there, a program with a `prefix` is outside the fragment, and
   `gen_lean_oracle.py` raises `Fragment` on one. Programs without one keep
-  their theorems: the per-session case is the same list.
+  their theorems: the per-session case is the same list, consumed whole
+  at admission. Every example's report is the same, byte for byte, as
+  before.
 - Frontend: one clause on `hold`, one keyword (`prefix`).
 
 ## Order
@@ -170,22 +186,38 @@ serving `M` products this way.
   sequence shorter than 10¹² units. Refusing every length a run cannot
   reach would read the run; the literal default is the second spelling a
   reader writes.
-- **The last writer as owner.** A shared system prompt's owner moved with
-  every session that wrote it, so whether `drop` took it, and whose
-  attributes `evict by` read, depended on which session came last. The
-  owner is the first writer.
+- **A writer as owner.** With the last writer as a node's owner, whether
+  `drop` took a shared system prompt, and whose attributes `evict by`
+  read, depended on which session came last; with the first writer, the
+  session that computed the prompt first could cut, trim or drop it for
+  everyone, which no other session could. An entry is what hangs under a
+  session's serial; a writer is only whose attributes an eviction key
+  reads.
 - **A `reuse` bound cuts the subtree past it.** One session's `reuse
   (800)` inside a shared system prompt took the prompt's tail off the
   trie, and every other session's context under it. A bound limits the
   hold's read; it cuts only the session's own entry.
 - **A hold reads its whole match.** A hold allocating less than the cached
   prefix it matched read all of it, and the pool's `used` went negative
-  when another hold read the same prefix. A read is part of the
-  allocation.
+  when another hold read the same prefix. A read on a shared chain is
+  part of the allocation.
+- **Every hold reads at most what it allocates.** Bounding a hold without
+  `prefix` too would be vLLM's rule (the blocks past a hit stay in the free
+  queue), but it changes what a program without the clause does, and
+  `Exec.lean`'s `admitPool`, which consumes the entry whole, would no
+  longer be the interpreter's. Left for a change that moves both.
 - **Consumed means locked by the session alone.** A shared node read at
   one moment by one session's holds alone was taken for that session's
-  entry: its nested hold displaced it, and the other sessions' contexts
-  below it went with it. A consumed entry is the session's own subtree.
+  entry: its nested hold displaced it, the other sessions' contexts below
+  it went with it, and a second leg of the session did not see it. A
+  consumed entry is part of the session's entry.
+- **A chain on every pool of the hold.** A slot pool's `cache` keeps a
+  slot; shared along a chain, every hold read it as allocated, and five
+  holds held two slots. Until `cache P (ℓ)` names the pool (#366), a
+  chain is cached on pools with `block`.
+- **An empty segment as a key.** No node of length 0 is made, so a walk
+  stopped at one, the session's context under it was never read, and a
+  new entry was made every turn. It is left out.
 - **A run split where any hold's match stops.** Splitting a run a hold
   reads would leave that hold's nodes stale. Such a run is locked whole by
   the second reader; its units are allocated once either way.

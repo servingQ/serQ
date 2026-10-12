@@ -624,19 +624,26 @@ fit blocks the rest (head-of-line blocking). The `cache` clause is what
 makes a hold take part in the prefix cache. With it, on admission the
 session reads at most `ρ` units of the cached prefix of its hold's chain
 (`cached :=` what it read) and keeps them allocated while the hold lasts;
-what the chain held past them stays in the cache as a *dead* entry with
-the same age, unusable, until evicted. A hold's chain is its `prefix (k₁:
-n₁, …)`: the sequence as segments, each a key and a length, and two
-chains share the cached units of their equal leading keys, so a system
-prompt every session sends is computed once. A key is what it reads (an
-attribute, or the expression) and its value. A hold reads at most what it
-allocates. A key names content: it and
-its length read attributes and numbers, not the state, the clock, a draw
-or `cached` (the linker refuses one). Without the clause the chain is
-`(serial: ∞)`, the session's own; written out, that chain does not link. A prefix several holds read is
-allocated once, and an admission does not ask again for what another hold
-already reads; a prefix the session's own hold reads, and no other
-session's, is consumed: the session's other holds do not see it. Without
+what the session's entry held past them stays in the cache as a *dead*
+entry with the same age, unusable, until evicted. A hold's chain is its
+`prefix (k₁: n₁, …)`: the sequence as segments, each a key and a length,
+and two chains share the cached units of their equal leading keys, so a
+system prompt every session sends is computed once. A key is what it
+reads (an attribute, or the expression) and its value; a segment of
+length 0 is left out. A key names content: it and its length read
+attributes and numbers, not the state, the clock, a draw or `cached`
+(the linker refuses one). Without the clause the chain is `(serial: ∞)`,
+the session's own; written out, that chain does not link. A session's
+*entry* is what hangs under its serial's key; the rest is shared, and no
+session's `reuse`, `cache`, `drop` or consumption takes it. A hold with
+`prefix` reads at most what it allocates; a hold without consumes its
+entry whole, and what its allocation does not hold of it is gone. A
+chain is cached on pools with `block`; on a slot pool the hold's chain is
+the session's own, and a hold with `prefix` and no pool with `block`
+does not link. A prefix several holds read is allocated once, and an
+admission does not ask again for what another hold already reads; the
+session's entry its own hold reads is consumed: the session's other holds
+do not see it. Without
 `cache` the hold is
 memory alone: it leaves the session's cached blocks where they are,
 evictable as before, and `cached` is 0 in its body (the linker rejects a

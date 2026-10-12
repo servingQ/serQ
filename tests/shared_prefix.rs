@@ -329,3 +329,239 @@ fn a_key_is_its_attribute_and_its_value() {
     let r = run(&src, &options(100.0));
     assert_eq!(r.observe("got").unwrap().samples, [0.0], "{}", r.text());
 }
+
+/// `N` sessions with `sys = 7` on one engine and a pool of `cap` (block 16),
+/// the server's statements `server`.
+fn deployment(cap: u32, n: u32, pools: &str, server: &str) -> String {
+    format!(
+        r#"
+        device gpu {{ kv cap {cap}; }}
+        engine llm on gpu {{
+          tokens cap 8192;
+          schedule {{ advance running; admit waiting while (running.preempted == 0); }}
+          execute (batch.tokens * 1e-5 + 1e-4);
+        }}
+        pool kv on gpu {{ block 16; evict lru; preempt lifo; }}
+        {pools}
+        stage user : delay;
+        workload {{ arrive batch({n}); init {{ set sys = 7; }} session {{ turn; }} }}
+        server {{ {server} }}
+"#
+    )
+}
+
+/// The session that computed the system prompt first has no more say over
+/// it than any other. Session 0 writes it; session 1 reads it; session 0
+/// then sends a short request on the same chain (320 units, or 1600 kept as
+/// 320): the shared prompt used to be cut, or trimmed, to 320, as the first
+/// writer's own entry, and session 2 read 320 (the second review of #374).
+/// A session's entry is what hangs under its own serial's key.
+#[test]
+fn the_first_writer_does_not_own_the_shared_prompt() {
+    for (units, keep) in [(320, 320), (1600, 320)] {
+        let src = deployment(
+            100_000,
+            3,
+            "",
+            &format!(
+                "run user (cost(user, serial * 10));
+                 hold kv (cost(kv, serial == 1 ? 1200 : 1600)) {CHAIN} {{
+                   branch (serial == 2) {{ observe late = cached; }}
+                   run llm prefill (cost(llm, max(0, (serial == 1 ? 1200 : 1600) - cached))) growing kv;
+                 }} cache (cost(kv, 1600));
+                 branch (serial == 0) {{
+                   run user (cost(user, 15));
+                   hold kv (cost(kv, {units})) {CHAIN} {{
+                     observe short = cached;
+                   }} cache (cost(kv, {keep}));
+                 }}"
+            ),
+        );
+        let r = run(&src, &options(100.0));
+        assert_eq!(
+            r.observe("late").unwrap().samples,
+            [1200.0],
+            "units {units}, cache {keep}: {}",
+            r.text()
+        );
+    }
+}
+
+/// `drop kv` takes the session's own entry, not a system prompt it
+/// happened to compute first: session 1 used to read 0 after session 0's
+/// drop (the second review of #374).
+#[test]
+fn drop_takes_the_session_s_entry_alone() {
+    let src = deployment(
+        100_000,
+        3,
+        "",
+        &format!(
+            "run user (cost(user, serial * 10));
+             hold kv (cost(kv, 1600)) {CHAIN} {{
+               branch (serial == 1) {{ observe mid = cached; }}
+               run llm prefill (cost(llm, 1600 - cached)) growing kv;
+             }} cache (cost(kv, 1600));
+             run user (cost(user, 1));
+             branch (serial == 0) {{ drop kv; }}"
+        ),
+    );
+    let r = run(&src, &options(100.0));
+    assert_eq!(r.observe("mid").unwrap().samples, [1200.0], "{}", r.text());
+}
+
+/// Two legs of one session read one system prompt at once, as two vLLM
+/// requests do (`ref_cnt`): the second leg used to find none while the
+/// first held it, unless another session's context hung off it (the second
+/// review of #374). The session's own context, which the first leg reads,
+/// is its consumed entry (#230); the prompt is not.
+#[test]
+fn two_legs_read_one_prompt() {
+    let src = deployment(
+        100_000,
+        1,
+        "",
+        &format!(
+            "hold kv (cost(kv, 1600)) {CHAIN} {{
+               run llm prefill (cost(llm, 1600 - cached)) growing kv;
+             }} cache (cost(kv, 1600));
+             fork {{
+               hold kv (cost(kv, 2000)) {CHAIN} {{
+                 observe a = cached;
+                 run user (cost(user, 5));
+               }} cache (cost(kv, 2000));
+             }}
+             fork {{
+               run user (cost(user, 1));
+               hold kv (cost(kv, 2000)) {CHAIN} {{
+                 observe b = cached;
+                 run llm prefill (cost(llm, 2000 - cached)) growing kv;
+               }} cache (cost(kv, 2000));
+             }}
+             join;"
+        ),
+    );
+    let r = run(&src, &options(100.0));
+    assert_eq!(r.observe("a").unwrap().samples, [1600.0], "{}", r.text());
+    assert_eq!(r.observe("b").unwrap().samples, [1200.0], "{}", r.text());
+}
+
+/// A segment of length 0 holds nothing: `prefix (sys: 0, serial: inf)` is
+/// the session's own chain, and a request reads its context back. The walk
+/// used to stop at the empty segment, so nothing was ever read and the
+/// session's entries piled up (the second review of #374).
+#[test]
+fn an_empty_segment_is_left_out() {
+    let src = deployment(
+        100_000,
+        1,
+        "",
+        "set ctx = 0;
+         loop {
+           set ctx = ctx + 400;
+           hold kv (cost(kv, ctx)) prefix (sys: 0, serial: inf) {
+             observe got = cached;
+             run llm prefill (cost(llm, ctx - cached)) growing kv;
+           } cache (cost(kv, ctx));
+           run user (cost(user, 1));
+         }",
+    );
+    let r = run(&src, &options(4.5));
+    assert_eq!(
+        r.observe("got").unwrap().samples,
+        [0.0, 400.0, 800.0, 1200.0, 1600.0],
+        "{}",
+        r.text()
+    );
+}
+
+/// A slot pool held with a chain keeps its slots: its `cache` holds a slot,
+/// per session, not a shared segment every hold would read as allocated
+/// already. Five sessions on two slots used to hold them all at once (the
+/// second review of #374).
+#[test]
+fn a_chain_leaves_a_slot_pool_its_cap() {
+    let src = deployment(
+        100_000,
+        6,
+        "pool slots { cap 2; }",
+        &format!(
+            "run user (cost(user, serial == 0 ? 0 : 10));
+             hold slots (cost(slots, 1)), kv (cost(kv, 1600)) {CHAIN} {{
+               observe together = holders(slots);
+               run user (cost(user, 5));
+             }} cache (cost(slots, kv, 1600));"
+        ),
+    );
+    let r = run(&src, &options(100.0));
+    let together = &r.observe("together").unwrap().samples;
+    assert!(
+        together.iter().all(|&t| t <= 2.0),
+        "{together:?}\n{}",
+        r.text()
+    );
+    let error = run_source(
+        &common::main_source(&src.replace(
+            &format!("slots (cost(slots, 1)), kv (cost(kv, 1600)) {CHAIN}"),
+            &format!("slots (cost(slots, 1)) {CHAIN}"),
+        )),
+        &options(10.0),
+        None,
+    )
+    .unwrap_err();
+    assert!(error.contains("no pool with `block`"), "{error}");
+}
+
+/// Without `prefix` a hold consumes its session's entry whole, though it
+/// allocates less, and what its allocation does not hold is gone, as the
+/// Lean model's `admitPool` says; the bound of a read by the allocation is
+/// the shared chain's (the second review of #374 found it applied to every
+/// hold).
+#[test]
+fn the_own_chain_is_consumed_whole() {
+    let src = deployment(
+        3000,
+        1,
+        "",
+        "hold kv (cost(kv, 1600)) {
+           run llm prefill (cost(llm, 1600)) growing kv;
+         } cache (cost(kv, 1600));
+         run user (cost(user, 1));
+         hold kv (cost(kv, 320)) {
+           observe got = cached;
+         } cache (cost(kv, 320));",
+    );
+    let r = run(&src, &options(100.0));
+    assert_eq!(r.observe("got").unwrap().samples, [1600.0], "{}", r.text());
+}
+
+/// Holds reading a shared prompt are preempted and admitted again: four
+/// sessions decode past what the pool holds, the newest is preempted
+/// (`preempt lifo`), and each reads the prompt again when it is admitted.
+/// The run's conservation check (debug builds) holds through it.
+#[test]
+fn a_preempted_reader_reads_the_prompt_again() {
+    let src = deployment(
+        4000,
+        5,
+        "",
+        &format!(
+            "run user (cost(user, serial == 0 ? 0 : 10));
+             hold kv (cost(kv, 1600)) {CHAIN} {{
+               observe got = cached;
+               run llm prefill (cost(llm, 1600 - cached)) growing kv;
+               run llm decode (cost(llm, 600)) growing kv;
+             }} cache (cost(kv, 2200));"
+        ),
+    );
+    let r = run(&src, &options(200.0));
+    let kv = r.pools.iter().find(|p| p.name == "kv").unwrap();
+    assert!(kv.preemptions > 0, "{}", r.text());
+    let got = &r.observe("got").unwrap().samples;
+    assert_eq!(got[0], 0.0, "{}", r.text());
+    assert!(
+        got[1..].iter().all(|&g| g >= 1200.0),
+        "every later admission reads the prompt: {got:?}\n{}",
+        r.text()
+    );
+}

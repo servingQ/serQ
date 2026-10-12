@@ -824,7 +824,7 @@ impl<'p> Interp<'p> {
                 used: 0.0,
                 cached: 0.0,
                 holders: vec![],
-                cache: Trie::default(),
+                cache: Trie::new(p.slot_serial as u64),
                 queue: VecDeque::new(),
                 growers: VecDeque::new(),
                 used_avg: TimeAverage::new(0.0, 0.0),
@@ -2369,14 +2369,10 @@ impl<'p> Interp<'p> {
             let reuse = self.reuse_now(&pending, sid);
             let serial = self.sessions[sid].serial;
             for w in &mut pending.pools {
-                let chain = &pending.chain;
-                let (limit, _) = self.read_limit(
-                    w.pool,
-                    chain,
-                    (reuse, self.round_up(w.pool, w.units)),
-                    serial,
-                );
-                w.shared = self.pools[w.pool].cache.locked_along(chain, limit, serial);
+                let chain = self.pool_chain(w.pool, &pending.chain, serial);
+                let alloc = self.round_up(w.pool, w.units);
+                let (limit, _) = self.read_limit(w.pool, &chain, (reuse, alloc), serial);
+                w.shared = self.pools[w.pool].cache.locked_along(&chain, limit, serial);
             }
         }
         pending
@@ -2390,9 +2386,13 @@ impl<'p> Interp<'p> {
     }
 
     /// What a hold with a `cache` clause reads of its chain's cached prefix
-    /// on `q` when admitted: the whole blocks of it, at most `reuse`, and at
-    /// most what it allocates there (what it reads is part of its
-    /// allocation). Returns (that, the whole blocks cached).
+    /// on `q` when admitted: the whole blocks of it, at most `reuse`. On a
+    /// chain of shared segments, also at most what it allocates there: what
+    /// it reads is part of its allocation, and a prefix another hold reads
+    /// cannot shrink to fit it. On the session's own chain it consumes its
+    /// whole entry, as the Lean model's `admitPool` does (`Exec.lean`), and
+    /// what its allocation does not hold of it is gone. Returns (that, the
+    /// whole blocks cached).
     fn read_limit(
         &self,
         q: usize,
@@ -2401,8 +2401,31 @@ impl<'p> Interp<'p> {
         serial: u64,
     ) -> (f64, f64) {
         let full = self.round_down(q, self.pools[q].cache.matched(chain, serial));
+        let alloc = if self.is_own_chain(chain, serial) {
+            f64::INFINITY
+        } else {
+            alloc
+        };
         let bound = reuse.map_or(alloc, |r| r.min(alloc));
         (full.min(self.round_down(q, bound)), full)
+    }
+
+    /// The session's own chain, `(serial: ∞)`: a hold without `prefix`.
+    fn is_own_chain(&self, chain: &[Seg], serial: u64) -> bool {
+        matches!(chain, [(ns, k, n)]
+            if *ns == self.p.slot_serial as u64 && *k == serial as f64 && n.is_infinite())
+    }
+
+    /// The chain a hold reads on pool `q`: its own on a pool without blocks
+    /// (a slot pool, whose `cache` holds a slot, not a sequence: shared, one
+    /// slot cached along a chain would be read by every hold as allocated
+    /// already, and the slots' cap would hold no more), else the hold's.
+    fn pool_chain(&self, q: usize, chain: &Chain, serial: u64) -> Chain {
+        if self.pools[q].block.is_none() && !self.is_own_chain(chain, serial) {
+            own_chain(self.p, serial)
+        } else {
+            chain.clone()
+        }
     }
 
     /// Admit the selected waiting hold while every pool of its hold
@@ -2487,7 +2510,11 @@ impl<'p> Interp<'p> {
                      not negative"
                 ));
             }
-            chain.push((key_space(k), key, len.max(0.0)));
+            // an empty segment holds nothing to share: `(tools: 0, …)`, a
+            // session without tools, is the chain without it
+            if len > 0.0 {
+                chain.push((key_space(k), key, len));
+            }
         }
         Rc::from(chain)
     }
@@ -2505,8 +2532,8 @@ impl<'p> Interp<'p> {
 
     /// The cached prefix of the session's chain in `pl`, in whole blocks.
     fn own_entry_size(&self, pl: usize, sid: usize) -> f64 {
-        let chain = self.session_chain(sid);
         let serial = self.sessions[sid].serial;
+        let chain = self.pool_chain(pl, &self.session_chain(sid), serial);
         self.round_down(pl, self.pools[pl].cache.matched(&chain, serial))
     }
 
@@ -2532,26 +2559,29 @@ impl<'p> Interp<'p> {
             // The prefix it reads is locked: allocated while it lasts, and
             // counted once however many holds read it (vLLM's `ref_cnt`).
             let (own, moved, path) = if pending.cache.is_some() {
-                let chain = &pending.chain;
-                let (limit, full) = self.read_limit(q, chain, (reuse, need), serial);
-                let (own, moved, path) = self.pools[q].cache.lock(chain, limit, serial);
+                let chain = self.pool_chain(q, &pending.chain, serial);
+                let (limit, full) = self.read_limit(q, &chain, (reuse, need), serial);
+                let (own, moved, path) = self.pools[q].cache.lock(&chain, limit, serial);
                 if limit < full - EPS {
                     let tag = DEAD_ENTRY + self.next_dead;
                     self.next_dead += 1;
                     let snap = self.sessions[sid].attrs.clone();
-                    self.pools[q].cache.cut(chain, own, tag, serial, &snap);
+                    self.pools[q].cache.cut(&chain, own, tag, serial, &snap);
                 }
                 (own, moved, path)
             } else {
                 (0.0, 0.0, vec![])
             };
+            // what another hold already reads is allocated already; the rest
+            // of what this one reads moves from the cache to the allocation
+            // with the units it takes
+            let read_already = own - moved;
             self.pools[q].cached -= moved;
-            self.pools[q].used += moved;
             // `cached`: the consumed prefix (the largest, if several pools
             // of the hold had one)
             cached_first = Some(cached_first.map_or(own, |c: f64| c.max(own)));
-            self.make_room(q, need - own);
-            self.pools[q].used += need - own;
+            self.make_room(q, need - read_already);
+            self.pools[q].used += need - read_already;
             self.pools[q].holders.push(sid);
             self.pools[q].admissions += 1;
             held.push(Held {
@@ -2848,17 +2878,18 @@ impl<'p> Interp<'p> {
         (chain, shared, path): (&[Seg], f64, &[usize]),
     ) {
         let serial = self.sessions[sid].serial;
+        let chain = self.pool_chain(q, &Rc::from(chain), serial);
         // what no other hold reads any more is cached again, until the
         // clause below says what of it stays (a node the session's own write
-        // displaced goes)
+        // displaced goes); what another hold still reads stays allocated
         let (back, gone) = self.pools[q].cache.unlock(path, serial);
-        self.pools[q].used -= alloc - shared + back + gone;
-        self.pools[q].cached += back;
+        self.pools[q].used -= alloc - (shared - back - gone);
         // one entry per admission: a hold nested in another on the same pool
         // leaves the outer one's when it ends
         if let Some(i) = self.pools[q].holders.iter().position(|&s| s == sid) {
             self.pools[q].holders.remove(i);
         }
+        let mut delta = 0.0;
         if let Some(c) = cache {
             let want = self.eval(c, &Ctx::session(sid), Which::Session).max(0.0);
             let keep = self.round_down(q, want.min(computed));
@@ -2868,11 +2899,13 @@ impl<'p> Interp<'p> {
                 self.next_release += 1;
             }
             let now = self.now;
-            let delta = self.pools[q]
+            delta = self.pools[q]
                 .cache
-                .write(chain, keep, path, serial, &snap, now, rseq);
-            self.pools[q].cached += delta;
+                .write(&chain, keep, path, serial, &snap, now, rseq);
         }
+        // one addition: on the session's own entry, `back + delta` is what
+        // it keeps
+        self.pools[q].cached += back + delta;
     }
 
     /// `release P`: the innermost hold on `pl` gives its allocation there

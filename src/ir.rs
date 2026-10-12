@@ -2679,6 +2679,22 @@ impl Validator<'_> {
                             .into(),
                     );
                 }
+                // a chain is a sequence of blocks: a pool without them (a slot
+                // pool) caches per session, and a hold with nothing else
+                // would share nothing it says it does
+                if prefix.is_some()
+                    && !pools.iter().any(|(r, _, _)| {
+                        self.p.pools[r.base..r.base + r.count]
+                            .iter()
+                            .all(|q| q.block.is_some())
+                    })
+                {
+                    return Err(
+                        "a hold with `prefix` takes no pool with `block`: a chain is \
+                                cached in blocks, and a pool without them caches per session"
+                            .into(),
+                    );
+                }
                 // a spilled block goes to the tier under its session's
                 // serial, which a chain of shared segments does not have
                 if prefix.is_some()

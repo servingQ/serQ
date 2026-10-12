@@ -16,11 +16,12 @@
 //! hold keeps the ids of the nodes it locked: a locked node is never split,
 //! extended, trimmed, cut off or evicted, so the ids stay its own.
 //!
-//! A prefix a session has locked, and no other session reads, is the
-//! session's consumed entry: its other holds do not see it (a hold nested
-//! in one that consumed the prefix finds none, #230), and a write of the
-//! session's chain there displaces it, unreachable, until its hold lets it
-//! go.
+//! A session's *entry* is what hangs under the key of its serial; the rest
+//! is shared, and no session's cut, trim, `drop` or consumption takes it.
+//! A node of its entry that only its holds read is the session's consumed
+//! entry: its other holds do not see it (a hold nested in one that consumed
+//! the prefix finds none, #230), and a write of the session's chain there
+//! displaces it, unreachable, until its hold lets it go.
 
 use std::collections::HashMap;
 
@@ -62,9 +63,13 @@ pub(super) struct Node {
     pub last: f64,
     pub seq: u64,
     pub snap: Vec<f64>,
-    /// The serial of the session that wrote it first: its session's entry,
-    /// or the session that computed a shared segment.
+    /// The serial of the session that wrote it first: whose attributes an
+    /// eviction key reads while it lives.
     pub owner: u64,
+    /// The session whose entry it is: it hangs under the key of that
+    /// session's serial. `None`: a segment any session may share, which no
+    /// session's cut, trim, `drop` or consumption takes.
+    own: Option<u64>,
     /// Cut off by a `reuse` bound: no chain reaches it, and it stays cached,
     /// unusable, until it is evicted. Its tag names it to a spill tier.
     pub dead: Option<u64>,
@@ -87,6 +92,7 @@ impl Node {
             seq,
             snap: snap.to_vec(),
             owner,
+            own: None,
             dead: None,
             displaced: false,
             live: true,
@@ -120,44 +126,31 @@ pub(super) struct Trie {
     free: Vec<usize>,
     /// The dead node a spill of a dead node of another pool extends.
     dead_spills: HashMap<u64, usize>,
+    /// What a key on `serial` names (`key_space` of the attribute): a node
+    /// under such a key is that session's entry.
+    serial_ns: u64,
 }
 
-impl Default for Trie {
-    fn default() -> Self {
+impl Trie {
+    pub fn new(serial_ns: u64) -> Self {
         Trie {
             nodes: vec![Node::fresh(usize::MAX, 0.0, 0.0, 0, &[], 0.0, 0)],
             free: vec![],
             dead_spills: HashMap::new(),
+            serial_ns,
         }
     }
-}
 
-impl Trie {
     pub fn node(&self, id: usize) -> &Node {
         &self.nodes[id]
     }
 
-    /// Whether every node from `id` down is `owner`'s: its own entry, which
-    /// no other session's sequence passes through.
-    fn own_subtree(&self, id: usize, owner: u64) -> bool {
-        let mut stack = vec![id];
-        while let Some(n) = stack.pop() {
-            if self.nodes[n].owner != owner {
-                return false;
-            }
-            stack.extend(self.nodes[n].children.iter().map(|&(_, c)| c));
-        }
-        true
-    }
-
     /// The session's consumed entry, which it does not see: a node of its
-    /// own, with nothing of another session's below, that its holds alone
-    /// read. A shared node is seen whoever reads it.
+    /// own entry that its holds alone read. A shared segment is seen by
+    /// whoever reads it.
     fn hidden(&self, id: usize, viewer: Option<u64>) -> bool {
         let n = &self.nodes[id];
-        viewer.is_some_and(|v| {
-            n.locked() && n.lockers.iter().all(|&s| s == v) && self.own_subtree(id, v)
-        })
+        viewer.is_some_and(|v| n.own == Some(v) && n.locked() && n.lockers.iter().all(|&s| s == v))
     }
 
     fn child(&self, n: usize, e: Edge) -> Option<usize> {
@@ -182,8 +175,14 @@ impl Trie {
     }
 
     fn add_child(&mut self, parent: usize, e: Edge, node: Node) -> usize {
+        // under the key of a session's serial, the session's entry
+        let own = match e {
+            Edge::Key(ns, bits) if ns == self.serial_ns => Some(f64::from_bits(bits) as u64),
+            _ => self.nodes[parent].own,
+        };
         let id = self.alloc(Node {
             parent: Some(parent),
+            own,
             ..node
         });
         self.nodes[parent].children.push((e, id));
@@ -373,14 +372,14 @@ impl Trie {
     /// `reuse` bounded `owner`'s match at `m`: what its own entry held past
     /// it is not its sequence any more. Cut it off, cached and unusable, as
     /// a dead node with its age and the attributes `snap` it is cut with;
-    /// unless a live hold reads it, or another session's sequence passes
-    /// through it: a bound on one hold's read is no word on another's cache.
+    /// unless a live hold reads it, or it is shared, not the session's
+    /// entry: a bound on one hold's read is no word on the cache.
     pub fn cut(&mut self, chain: &[Seg], m: f64, tag: u64, owner: u64, snap: &[f64]) {
         let w = self.walk(chain, m, None);
         let Some(next) = self.next_on(chain, &w) else {
             return;
         };
-        if self.nodes[next].locked() || !self.own_subtree(next, owner) {
+        if self.nodes[next].locked() || self.nodes[next].own != Some(owner) {
             return;
         }
         self.unlink(next);
@@ -393,11 +392,11 @@ impl Trie {
     }
 
     /// A hold of `owner` ends with `keep` units of `chain` computed: they are
-    /// cached along the chain, aged now. With `keep > 0` the chain past
-    /// `keep` that only `owner` wrote, and no hold reads, goes (the
-    /// session's entry is replaced); with `keep = 0` the nodes the hold read
-    /// (`path`) go, and nothing else (a hold that keeps nothing consumed its
-    /// prefix). Returns the change in cached units.
+    /// cached along the chain, aged now. With `keep > 0` the session's entry
+    /// past `keep`, which no hold reads, goes (the entry is replaced); with
+    /// `keep = 0` the nodes of its entry the hold read (`path`) go, and
+    /// nothing else (a hold that keeps nothing consumed its prefix). A
+    /// shared segment stays. Returns the change in cached units.
     #[allow(clippy::too_many_arguments)]
     pub fn write(
         &mut self,
@@ -410,7 +409,8 @@ impl Trie {
         seq: u64,
     ) -> f64 {
         let mut delta = 0.0;
-        let gone = |n: &Node| n.live && !n.locked() && n.children.is_empty() && n.owner == owner;
+        let gone =
+            |n: &Node| n.live && !n.locked() && n.children.is_empty() && n.own == Some(owner);
         if keep <= EPS {
             for &id in path.iter().rev() {
                 let n = &self.nodes[id];
@@ -544,7 +544,7 @@ impl Trie {
                 .filter(|&i| {
                     let n = &self.nodes[i];
                     n.live
-                        && n.owner == owner
+                        && n.own == Some(owner)
                         && n.dead.is_none()
                         && !n.displaced
                         && !n.locked()
