@@ -352,6 +352,12 @@ pub const BUILTIN_ATTRS: [&str; 9] = [
     "cached", "serial", "turn_no", "new", "out", "think", "more", "forced", "computed",
 ];
 
+/// The built-in attributes the scheduler keeps of a request, which a
+/// hold's admission sets: its cache hit and the tokens it has computed. A
+/// queue entry reads them without `hidden`; the session's own (`out`,
+/// `more`, …) it reads only if hidden.
+pub const SCHEDULER_ATTRS: [&str; 2] = ["cached", "computed"];
+
 pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
     link_located(prog, ov).map(|(p, _)| p)
 }

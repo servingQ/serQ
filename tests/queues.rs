@@ -1076,17 +1076,27 @@ fn a_session_attribute_reaches_an_entry_only_if_hidden() {
     );
 }
 
-/// Every context variable an entry reads is the language's, refused where
-/// it does not exist, never an unknown name: the entry's list was a copy
-/// that left out `position`, `demand`, `served`, `arrived`, `admitted` and
-/// `preempted`, and an entry that read one was told nothing sets it.
+/// What the scheduler keeps of a request is a built-in attribute, which
+/// an entry reads without `hidden`.
+#[test]
+fn the_scheduler_attributes_are_built_in() {
+    use serq::frontend::link::{BUILTIN_ATTRS, SCHEDULER_ATTRS};
+    for a in SCHEDULER_ATTRS {
+        assert!(BUILTIN_ATTRS.contains(&a), "{a}");
+    }
+}
+
+/// Every context variable an entry reads, in its body or its hold's
+/// header, is the language's, refused where it does not exist and never an
+/// unknown name. The entry reads them from `CONTEXT_VARS`, which the test
+/// walks, so a variable added there is checked here too.
 #[test]
 fn an_entry_reads_every_context_variable_as_the_languages() {
-    let program = |v: &str| {
+    let program = |body: &str, header: &str| {
         format!(
             "queue gw : gateway {{ route {{ E.decode (prompt); }} }}
              queue E : decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
-               decode (p) {{ set zz = {v}; hold kv (cost(kv, p)) {{ run E prefill (cost(E, p)) growing kv; run E decode (cost(E, 1)) growing kv; }} }} }}
+               decode (p) {{ {body} hold kv (cost(kv, p{header})) {{ run E prefill (cost(E, p)) growing kv; run E decode (cost(E, 1)) growing kv; }} }} }}
              workload {{ arrive batch(1); init {{ set prompt = 3; }} session {{ turn; end; }} }} server {{ gw.route(); }}
              "
         )
@@ -1095,14 +1105,20 @@ fn an_entry_reads_every_context_variable_as_the_languages() {
         if v == "now" {
             continue;
         }
-        // the moment is `Program::validate`'s, after the link
-        let e = compile_source(&common::main_source(&program(v)), &common::horizon(100.0))
-            .expect_err(v)
-            .to_string();
-        assert!(
-            e.contains(&format!("`{v}` is read in a session statement")),
-            "{v}: {e}"
-        );
+        let cases = [
+            (
+                program(&format!("set zz = {v};"), ""),
+                "a session statement",
+            ),
+            (program("", &format!(" + {v}")), "a hold's header"),
+        ];
+        for (src, place) in cases {
+            // the moment is `Program::validate`'s, after the link
+            let e = compile_source(&common::main_source(&src), &common::horizon(100.0))
+                .expect_err(v)
+                .to_string();
+            assert!(e.contains(&format!("`{v}` is read in {place}")), "{v}: {e}");
+        }
     }
 }
 

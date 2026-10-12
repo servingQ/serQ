@@ -70,7 +70,7 @@ use crate::frontend::ast::*;
 use crate::frontend::lexer::{LexError, Tok, Token, lex};
 use crate::frontend::link::{
     AGGREGATES, BUILTIN_ATTRS, CONTEXT_VARS, Constants, FOLDED, FUNCTIONS, LISTS, LResult,
-    LinkError, RENAMED, takes_supplied,
+    LinkError, RENAMED, SCHEDULER_ATTRS, takes_supplied,
 };
 use crate::frontend::queue::{self, QueueDecl};
 
@@ -665,8 +665,8 @@ fn capture_message(p: &str, n: &str, by: &str) -> String {
 }
 
 /// The names a body's tokens assign: `set n =`, `choose n`, a binding
-/// `n =` (not an observation's name, which is no attribute), and `cached`
-/// and `computed` if it holds, which its admission sets.
+/// `n =` (not an observation's name, which is no attribute), and the
+/// `SCHEDULER_ATTRS` if it holds, which its admission sets.
 fn assigned_tokens(b: &[Token]) -> Vec<String> {
     let mut out: Vec<String> = (0..b.len())
         .filter_map(|k| {
@@ -684,7 +684,7 @@ fn assigned_tokens(b: &[Token]) -> Vec<String> {
         .iter()
         .any(|t| matches!(&t.tok, Tok::Ident(k) if k == "hold"));
     if holds {
-        out.extend(["cached".to_string(), "computed".to_string()]);
+        out.extend(SCHEDULER_ATTRS.map(String::from));
     }
     out
 }
@@ -1302,17 +1302,12 @@ fn names_in(e: &Expr, vars: &mut Vec<String>, indexed: &mut Vec<String>, refs: &
     }
 }
 
-/// Whether an entry reads `n` as the language's: a context variable but
-/// `now` (a header may not read the clock, so the caller decides), or what
-/// the scheduler keeps of a request, its cache hit and the tokens it has
-/// computed. The session's own (`out`, `think`, `more`, `forced`, `new`,
-/// `turn_no`, `serial`) an entry reads only if `hidden`. Read from
-/// `CONTEXT_VARS`, not copied: a copy left six variables out, and an entry
-/// that read one was told nothing sets it.
+/// Whether an entry reads `n` as the language's: a context variable other
+/// than `now` (a header may not read the clock, so the caller decides), or
+/// one of the `SCHEDULER_ATTRS`. Read from those tables, so a name added
+/// there is the language's here too.
 fn in_context(n: &str) -> bool {
-    n != "now" && CONTEXT_VARS.iter().any(|(name, _)| *name == n)
-        || n == "cached"
-        || n == "computed"
+    n != "now" && is_context_var(n) || SCHEDULER_ATTRS.contains(&n)
 }
 
 /// An entry's body: what it `set`s or `choose`s, what it `mark`s, and the
@@ -2049,9 +2044,9 @@ impl Parser {
             });
         }
         // a request runs the server or a named gateway's `route`, whose
-        // admissions set `cached` and `computed`, and the entries it calls
+        // admissions set the `SCHEDULER_ATTRS`, and the entries it calls
         // set and mark (`D.first_token`)
-        let mut shared: Vec<String> = vec!["cached".into(), "computed".into()];
+        let mut shared: Vec<String> = SCHEDULER_ATTRS.map(String::from).to_vec();
         let mut served = Served::default();
         if let Some((_, server)) = &self.server {
             assigned_in(server, &mut served.server);
