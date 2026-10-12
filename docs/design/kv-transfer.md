@@ -105,11 +105,13 @@ outside the engine for every engine that talks to it. At `ref/vllm`
 0c87a197, LMCache's multi-process connector:
 
 - is asked, when the scheduler admits a request, how much of the prompt it
-  holds past the GPU's prefix hit (`scheduler.py:940-952`), and answers in
+  holds past the GPU's prefix hit (`scheduler.py:941-954`), and answers in
   whole chunks, and nothing for a preempted request
   (`lmcache_mp_connector.py:758`, `:775`, `:788`);
-- copies that KV in while the request keeps its blocks and waits outside
-  the batch (`scheduler.py:1069-1072`, `:1267`);
+- gives the request blocks for that KV and none for new work, frees its
+  slot while the KV is copied in, then admits it again
+  (`scheduler.py:1069-1072`, `:1267`, `:3081-3091`), and recomputes the
+  last prompt token after a full copy (`scheduler.py:3075-3076`);
 - stores each step's full chunks as they are computed
   (`lmcache_mp_connector.py:296-366`).
 
@@ -127,8 +129,8 @@ the pool it fills ``).
 `examples/multi-turn/vllm_lmcache.sq`:
 
 ```serq
-  queue lmc : cache {
-    device host { kv cap l2; }
+  queue lmc : l2 {
+    device host { kv cap l2_cap; }
     pool kv on host { block chunk; evict lru; }
     serve ps(1);
   }
@@ -140,18 +142,18 @@ the pool it fills ``).
 
 | Surface | Kernel |
 |---|---|
-| `queue C : cache { pool kv …; serve …; }` | the pool `C.kv` and the stage `C` |
+| `queue C : l2 { pool kv …; serve …; }` | the pool `C.kv` and the stage `C` |
 | `kvt.l2_load (C, P, n, per_token = r);` | `run C (cost(C, n * r)); load P (cost(P, n));` |
 | `kvt.l2_store (P, C, n, per_token = r);` | `hold C.kv (cost(C.kv, cachedin(C.kv))) { grow C.kv (cost(C.kv, m)); run C (cost(C, m * r)); load C.kv (cost(C.kv, m)); } cache (cost(C.kv, n));`, `m = max(0, n - cached)` |
 | `…, on = S)` | `run S, C (cost(S, C, …))` |
 
 The language gains the role and one reach across the queue boundary: an
-entry or an engine's request reads a cache queue's pool and copies through
+entry or an engine's request reads an L2 queue's pool and copies through
 its stage. The library gains the two copies. No IR changes: both lower to
 `hold`, `grow`, `run`, `load` and `cache`, so the Lean generator sees
 nothing new.
 
-**A cache is a queue.** It is a station with memory and bandwidth of its
+**An L2 is a queue.** It is a station with memory and bandwidth of its
 own, as LMCache's server is a process of its own, so it is declared as
 one, not as a pool beside the engine's. The `serve` is its bandwidth, and
 `ps` makes loads and stores divide it.
@@ -173,22 +175,28 @@ constants), at the instant the body starts, which is the admission's.
 
 - a store is one copy when the request ends, where LMCache stores each
   step's chunks; the request keeps its slot and blocks while it copies;
+- a request copying in keeps its slot and goes on to its prefill, where
+  vLLM frees the slot and admits it again (`scheduler.py:877-878`);
 - the copies do not slow the iteration they overlap (HBM is not shared);
 - a lookup is never deferred to a later step;
 - the cache's entry is the session's, as a pool's is: a prompt shared by
   sessions is not found (#374);
-- the cache is one queue; Mooncake's shards are one pool and one
-  bandwidth.
+- the L2 is one queue; Mooncake's shards are one pool and one bandwidth.
 
 **The numbers.** `vllm_lmcache.sq` at `--horizon 600` with 2000 GPU
-blocks: 740 prompt tokens computed per turn, against 4334 in `vllm.sq`
-with the same blocks; the time to first token is 0.153 s against 0.131 s,
-since a request keeps its slot while it stores and a load divides the
-server's bandwidth with the stores.
+blocks computes 735 prompt tokens per turn, against 4334 in `vllm.sq` with
+the same blocks, and its time to first token is 0.034 s against 0.131 s:
+a hit of about 3300 tokens copies in at `r = 5e-6` s per token in about
+0.017 s, where computing it takes about 0.07 s. Over seeds 1 to 5 the
+prompt tokens are 714 to 766 against 3497 to 5889, and the time to first
+token 0.028 to 0.046 s against 0.103 to 0.243 s. One session in each run
+asks for more than the GPU holds and ends at `kv`, the same in both.
 
-**Checks.** A cache queue with an engine, a `nic`, an entry, another role,
+**Checks.** An L2 queue with an engine, a `nic`, an entry, another role,
 more than one pool or no `serve`, or as a family; a `kvt.l2_…` naming
-something that is not a cache queue declared above; no `per_token`; an
+something that is not an L2 queue declared above; a store whose `n` or
+`per_token` reads `cached` or `computed`, which inside its copy are the
+cache's; no `per_token`; an
 argument the statement does not take, or one twice.
 
 ## Self-critique
@@ -247,3 +255,8 @@ queue is.
 **A family of caches.** Mooncake shards a store across nodes. The program
 would pick the shard of a session, a key the store chooses; one pool is
 what the scheduler sees.
+
+**The role named `cache`.** The first version. A request's body already
+says `cache (prompt + output)`, `cached` and `cachedin` of the GPU's
+prefix cache, and a reader would have to tell by the place which cache a
+word meant; `l2` names the tier, as `kvt.l2_load` does.

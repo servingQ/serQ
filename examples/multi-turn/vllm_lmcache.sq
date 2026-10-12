@@ -3,18 +3,21 @@
 // lmcache_mp_connector.py`): `multi-turn/vllm.sq` with a second, larger
 // cache outside the GPU. When the scheduler admits a request it asks the
 // connector how much of the prompt the L2 holds past what the GPU's prefix
-// cache holds (scheduler.py:940-952), and the connector answers in whole
+// cache holds (scheduler.py:941-954), and the connector answers in whole
 // LMCache chunks, nothing for a preempted request
-// (lmcache_mp_connector.py:758, 775, 788). The request keeps its blocks and
-// waits outside the batch while that KV is copied in (scheduler.py:1069-1072,
-// 1267), then computes the rest. Its computed KV goes back to the L2.
+// (lmcache_mp_connector.py:758, 775, 788). The request is given blocks for
+// that KV and none for new work (scheduler.py:1069-1072), waits while it is
+// copied in, recomputes the last prompt token (scheduler.py:3075-3076), and
+// computes the rest. Its computed KV goes back to the L2.
 //
 // What the model leaves out: LMCache stores each step's full chunks as they
 // are computed (lmcache_mp_connector.py:296-366), and the program stores a
 // request's once, when it ends, keeping its slot and blocks while it does;
-// the copies do not slow the iteration they overlap; a lookup is never
-// deferred to a later step; and the L2 entry is the session's, where LMCache
-// keys a chunk by its tokens (docs/design/kv-transfer.md).
+// a request copying in keeps its slot and goes on to its prefill, where
+// vLLM frees the slot and admits it again (scheduler.py:877-878,
+// 3081-3091); the copies do not slow the iteration they overlap; a lookup
+// is never deferred to a later step; and the L2 entry is the session's,
+// where LMCache keys a chunk by its tokens (docs/design/kv-transfer.md).
 use "std/args";
 use "std/kvt";
 
@@ -31,7 +34,8 @@ let r = 5e-6;          // seconds per token at the server's bandwidth (128 KiB/t
 fn main() {
   let max_seqs = args.number("max_seqs", 16);     // max_num_seqs
   let blocks = args.number("blocks", 2000);     // num_gpu_blocks: small, so that the GPU evicts
-  let l2 = args.number("l2", 1e6);              // tokens the LMCache server holds
+  let chunk_cap = args.number("chunk_cap", inf);   // long_prefill_token_threshold (inf: none)
+  let l2_cap = args.number("l2_cap", 1e6);      // tokens the LMCache server holds
   let Lambda = args.number("Lambda", 0.3);      // sessions per second
   let Z = args.number("Z", 3.0);           // tool time (s)
 
@@ -44,16 +48,17 @@ fn main() {
 
   // The LMCache server: its memory, and the bandwidth the copies in and out
   // of it divide.
-  queue lmc : cache {
-    device host { kv cap l2; }
+  queue lmc : l2 {
+    device host { kv cap l2_cap; }
     pool kv on host { block chunk; evict lru; }
     serve ps(1);
   }
 
-  // The whole chunks the L2 holds of `known` tokens past the `hit` the GPU
-  // holds; nothing for a request once preempted (`fresh` is 0).
+  // The whole chunks of `known` tokens the L2 holds past the `hit` the GPU
+  // holds, all but the last token, which vLLM computes again after a full
+  // copy; nothing for a request once preempted (`fresh` is 0).
   def beyond(known, hit, fresh) {
-    fresh ? max(0, min(floor(cachedin(lmc.kv), chunk), floor(known - 1, bs)) - hit) : 0
+    fresh ? max(0, min(floor(cachedin(lmc.kv), chunk), known - 1) - hit) : 0
   }
 
   engine vllm on gpu {
@@ -85,9 +90,13 @@ fn main() {
       cache (prompt + output);
     }
     schedule {
-      advance running;
-      admit waiting while (running.preempted == 0)
-        taking reqs (1), kv (min(known, reused + loaded + budget_left(vllm))) reserve (known);
+      // long_prefill_token_threshold, as in `multi-turn/vllm.sq`
+      let threshold = running.count + waiting.count > 1 ? chunk_cap : inf;
+      advance running each at most (threshold);
+      // a request that copies in takes blocks for the copy and none for
+      // new work (scheduler.py:1069-1072)
+      admit waiting while (running.preempted == 0) each at most (threshold)
+        taking reqs (1), kv (min(known, reused + (loaded > 0 ? loaded : budget_left(vllm)))) reserve (known);
     }
     execute (c0 + max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
   }

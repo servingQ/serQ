@@ -1,4 +1,4 @@
-//! std/kvt's L2: a queue that plays `cache` is one pool and a `serve`, and
+//! std/kvt's L2: a queue that plays `l2` is one pool and a `serve`, and
 //! `kvt.l2_load` and `kvt.l2_store` copy KV in and out of it at its
 //! bandwidth, leaving what it holds there (#522).
 
@@ -22,7 +22,7 @@ fn samples(r: &serq::Report, name: &str) -> Vec<f64> {
     r.observe(name).unwrap().samples.clone()
 }
 
-const CACHE: &str = "use \"std/kvt\"; queue lmc : cache { pool kv { cap 1000; } serve ps(1); }";
+const CACHE: &str = "use \"std/kvt\"; queue lmc : l2 { pool kv { cap 1000; } serve ps(1); }";
 const SESSION: &str = "workload { arrive batch(1); init { set K = 0; } turn { } session { turn; set K = 1; turn; end; } }";
 
 /// The two copies are the kernel's statements: a load is a run at the
@@ -159,10 +159,10 @@ fn an_engine_reads_the_cache_it_copies_from() {
     refused(&engine("other.kv"), "which is not a pool or stage of `e`");
 }
 
-/// A cache is one pool and a `serve`, and std/kvt's statements say what
+/// An L2 is one pool and a `serve`, and std/kvt's statements say what
 /// they copy.
 #[test]
-fn a_cache_and_its_copies_say_what_they_are() {
+fn an_l2_and_its_copies_say_what_they_are() {
     let with = |cache: &str, body: &str| {
         format!(
             "use \"std/kvt\"; {cache}
@@ -173,27 +173,27 @@ fn a_cache_and_its_copies_say_what_they_are() {
     };
     let load = "kvt.l2_load (lmc, kv, 20, per_token = 0.5);";
     refused(
-        &with("queue lmc : cache { pool kv { cap 10; } }", load),
-        "plays `cache`: it is one pool and a `serve`",
+        &with("queue lmc : l2 { pool kv { cap 10; } }", load),
+        "plays `l2`: it is one pool and a `serve`",
     );
     refused(
         &with(
-            "queue lmc : cache { pool kv { cap 10; } pool kw { cap 10; } serve ps(1); }",
+            "queue lmc : l2 { pool kv { cap 10; } pool kw { cap 10; } serve ps(1); }",
             load,
         ),
-        "plays `cache`: it is one pool and a `serve`",
+        "plays `l2`: it is one pool and a `serve`",
     );
     refused(
         &with(
-            "queue lmc[2] : cache { pool kv { cap 10; } serve ps(1); }",
+            "queue lmc[2] : l2 { pool kv { cap 10; } serve ps(1); }",
             load,
         ),
-        "plays `cache` and is a family",
+        "plays `l2` and is a family",
     );
-    let cache = "queue lmc : cache { pool kv { cap 1000; } serve ps(1); }";
+    let cache = "queue lmc : l2 { pool kv { cap 1000; } serve ps(1); }";
     refused(
         &with(cache, "kvt.l2_load (kv, kv, 20, per_token = 0.5);"),
-        "`kvt.l2_load`: `kv` is not a queue that plays `cache` declared above",
+        "`kvt.l2_load`: `kv` is not a queue that plays `l2` declared above",
     );
     refused(
         &with(cache, "kvt.l2_load (lmc, kv, 20);"),
@@ -202,6 +202,15 @@ fn a_cache_and_its_copies_say_what_they_are() {
     refused(
         &with(cache, "kvt.l2_load (lmc, kv, 20, rate = 1);"),
         "`kvt.l2_load` takes `per_token = …` and `on = …`, found `rate`",
+    );
+    // the store's copy is a hold of its own, where `cached` is the cache's:
+    // `cached + 100` would read the entry, not the enclosing hold (#522 review)
+    refused(
+        &with(
+            cache,
+            "kvt.l2_store (kv, lmc, cached + 100, per_token = 0.01);",
+        ),
+        "`kvt.l2_store` reads `cached`, which inside the copy would be the cache's entry",
     );
     refused(
         &with(cache, "kvt.l2_move (lmc, kv, 20, per_token = 1);"),
@@ -243,4 +252,53 @@ fn an_l2_copy_names_its_path() {
         .replace("\"lmc.kv\"", "\"l2\"")
         .replace("\"lmc\"", "\"bw\"");
     assert_eq!(got, compile(&flat));
+}
+
+/// An engine's request copies in its L2 at the cache's bandwidth: 50 tokens
+/// at 0.01 s take 0.5 s.
+#[test]
+fn an_engines_l2_load_takes_its_copy_time() {
+    let r = run(
+        &format!(
+            "{CACHE}
+             device gpu {{ kv cap 1000; }}
+             pool kv on gpu {{ }}
+             engine e on gpu {{
+               tokens cap inf;
+               request (p) {{
+                 set t0 = now;
+                 set got = min(cachedin(lmc.kv), 50);
+                 kvt.l2_load (lmc, kv, got, per_token = 0.01);
+                 observe load_time = now - t0;
+                 prefill (p - got) growing kv;
+                 kvt.l2_store (kv, lmc, p, per_token = 0.01);
+               }}
+               schedule {{ advance running; admit waiting while (running.preempted == 0) taking kv (p); }}
+               execute (1);
+             }}
+             workload {{ arrive batch(1); turn {{ }} session {{ turn; tool (50); turn; end; }} }}
+             server {{ e (100); }}"
+        ),
+        &common::horizon(1000.0),
+    );
+    let t = samples(&r, "load_time");
+    assert!(t[0].abs() < 1e-9 && (t[1] - 0.5).abs() < 1e-9, "{t:?}");
+}
+
+/// The bug as it was found (#522 review): in `vllm_lmcache.sq` at a low
+/// rate a load of 16 tokens (8e-5 s) took 532 s. The cache is declared
+/// before the engine, and the copy starts when the engine's iteration admits
+/// the request, after the instant's one pass in stage order had gone past
+/// the cache's stage; nothing rescheduled it until the next session
+/// arrived. The pass now starts the iterations first and reschedules the
+/// `ps` stages after them.
+#[test]
+fn an_l2_load_at_a_low_rate_is_not_left_waiting() {
+    let src = std::fs::read_to_string("examples/multi-turn/vllm_lmcache.sq").unwrap();
+    let mut o = common::horizon(6000.0);
+    o.set("Lambda", "0.005").unwrap();
+    let r = run_source(&src, &o, None).unwrap_or_else(|e| panic!("{e}"));
+    let ttft = &r.client("ttft").unwrap().samples;
+    let worst = ttft.iter().cloned().fold(0.0, f64::max);
+    assert!(worst < 1.0, "the slowest first token took {worst} s");
 }

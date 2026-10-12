@@ -16,7 +16,7 @@ use crate::frontend::ast::{Arg, Expr, Ref, Span, Stmt};
 /// A role of the serving vocabulary: its entries share one verb and its
 /// number of parameters, and are written without `from`, with it, or both.
 /// A queue of the role has at least one of them; a link may have none and
-/// be its `serve`, and a cache has none: its pool and its `serve` are what
+/// be its `serve`, and an L2 has none: its pool and its `serve` are what
 /// std/kvt's `l2_load` and `l2_store` copy through.
 pub struct RoleSig {
     pub name: &'static str,
@@ -26,14 +26,14 @@ pub struct RoleSig {
 }
 
 /// The roles of the serving vocabulary: name, verb, parameters, and
-/// whether its entries are written without `from` or with it. A cache has
-/// no entry.
+/// whether its entries are written without `from` or with it. An L2 has
+/// no entry: its empty verb is never one `role_of_verb` finds.
 pub const ROLES: &[RoleSig] = &[
     RoleSig::new("gateway", "route", 0, &[false]),
     RoleSig::new("prefill", "prefill", 1, &[false]),
     RoleSig::new("decode", "decode", 1, &[false, true]),
     RoleSig::new("link", "transfer", 1, &[false]),
-    RoleSig::new("cache", "", 0, &[]),
+    RoleSig::new("l2", "", 0, &[]),
 ];
 
 impl RoleSig {

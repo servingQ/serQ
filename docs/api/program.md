@@ -138,7 +138,7 @@ named `kvt`. See
 [Queues](../language.md#queues).
 
 In a body, std/kvt copies through an L2 KV cache, a queue that plays
-`cache` (one pool and a `serve`):
+`l2` (one pool and a `serve`):
 
 ```serq
 kvt.l2_load (CACHE, POOL, n, per_token = r);

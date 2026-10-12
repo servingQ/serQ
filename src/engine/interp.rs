@@ -1269,19 +1269,26 @@ impl<'p> Interp<'p> {
         // been handled (a scheduler step sees all the arrivals up to it).
         let pending_now = self.heap.peek().is_some_and(|e| e.time <= self.now);
         for s in 0..self.stages.len() {
-            match &self.stages[s].kind {
-                Kind::Step {
-                    iter: None,
-                    residents,
-                    ..
-                } if (!residents.is_empty() || self.bound_waiting(s)) && !pending_now => {
-                    self.start_iteration(s);
-                    if self.error.is_some() {
-                        return;
-                    }
+            if let Kind::Step {
+                iter: None,
+                residents,
+                ..
+            } = &self.stages[s].kind
+                && (!residents.is_empty() || self.bound_waiting(s))
+                && !pending_now
+            {
+                self.start_iteration(s);
+                if self.error.is_some() {
+                    return;
                 }
-                Kind::Ps { dirty: true, .. } => self.ps_reschedule(s),
-                _ => {}
+            }
+        }
+        // after every iteration has started: an admission's request may
+        // start a job on a `ps` stage declared before its engine (an L2
+        // copy, #522), which a single pass in stage order had gone past
+        for s in 0..self.stages.len() {
+            if let Kind::Ps { dirty: true, .. } = &self.stages[s].kind {
+                self.ps_reschedule(s);
             }
         }
         if self.flows_dirty {

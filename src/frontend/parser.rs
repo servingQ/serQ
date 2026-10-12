@@ -2561,12 +2561,12 @@ impl Parser {
         self.copy_relation(prog, at, push, (source, a_at), (reader, b_at), latency)
     }
 
-    /// The cache queue `n` names, as its stage (`lmc`) or its pool
-    /// (`lmc.kv`): its name and its pool's full name.
+    /// The L2 queue `n` names, as its stage (`lmc`) or its pool (`lmc.kv`):
+    /// its name and its pool's full name.
     fn cache_of(&self, n: &str) -> Option<(String, String)> {
         self.queues
             .iter()
-            .filter(|c| c.roles.iter().any(|r| r == "cache"))
+            .filter(|c| c.roles.iter().any(|r| r == "l2"))
             .find_map(|c| {
                 let pool = format!("{}.{}", c.name, c.pools.first()?);
                 (n == c.name || n == pool).then(|| (c.name.clone(), pool))
@@ -2574,7 +2574,7 @@ impl Parser {
     }
 
     /// `kvt.l2_load (C, P, n, per_token = r [, on = S]);`: the KV of `n`
-    /// tokens the cache queue `C` holds is copied into the enclosing hold
+    /// tokens the L2 queue `C` holds is copied into the enclosing hold
     /// on `P`, at `C`'s bandwidth, and stays in `C`: `run [S,] C (cost(…,
     /// n·r)); load P (cost(P, n));`. `kvt.l2_store (P, C, n, per_token = r
     /// [, on = S]);`: the session's entry in `C` comes to hold `n` tokens,
@@ -2617,7 +2617,7 @@ impl Parser {
                 Some(found) => Ok(found),
                 None => p.err_at(
                     c_at,
-                    format!("{written}: `{c}` is not a queue that plays `cache` declared above"),
+                    format!("{written}: `{c}` is not a queue that plays `l2` declared above"),
                 ),
             }
         };
@@ -2631,23 +2631,24 @@ impl Parser {
             (cache(self)?, pool)
         };
         let pool = pool?;
-        let (stage, kv) = c;
+        let (cache_stage, cache_pool) = c;
         self.expect(&Tok::Comma)?;
+        let n_at = self.pos;
         let n = self.expr()?;
         let mut rate = None;
-        let mut on = vec![];
+        let mut on: Option<Ref> = None;
         while self.eat(&Tok::Comma) {
             let n_at = self.pos;
             let name = self.ident()?;
             self.expect(&Tok::Assign)?;
             // a function's argument names, not keywords
-            let twice = (name == "per_token" && rate.is_some()) || (name == "on" && !on.is_empty());
+            let twice = (name == "per_token" && rate.is_some()) || (name == "on" && on.is_some());
             if twice {
                 return self.err_at(n_at, format!("`{name}` is given twice"));
             } else if name == "per_token" {
                 rate = Some(self.expr()?);
             } else if name == "on" {
-                on.push(self.declared_stage(&written)?);
+                on = Some(self.declared_stage(&written)?);
             } else {
                 return self.err_at(
                     n_at,
@@ -2661,7 +2662,7 @@ impl Parser {
             return self.err_at(
                 at,
                 format!(
-                    "{written} names the time a token takes at `{stage}`'s bandwidth: \
+                    "{written} names the time a token takes at `{cache_stage}`'s bandwidth: \
                      `per_token = …`"
                 ),
             );
@@ -2672,9 +2673,9 @@ impl Parser {
             index: None,
         };
         // the path: the named stage, then the cache's own, held at once
-        let (first, also) = match on.pop() {
-            Some(s) => (s, vec![r(&stage)]),
-            None => (r(&stage), vec![]),
+        let (first, also) = match on {
+            Some(s) => (s, vec![r(&cache_stage)]),
+            None => (r(&cache_stage), vec![]),
         };
         let mut resources = vec![first.clone()];
         resources.extend(also.iter().cloned());
@@ -2691,6 +2692,19 @@ impl Parser {
                 Stmt::Load(pool.clone(), Expr::cost(&[pool], n)),
             ]);
         }
+        // the store's hold is a scope of its own: `cached` and `computed`
+        // there are the cache's, not the enclosing hold's the program meant
+        for w in ["cached", "computed"] {
+            if expr_reads(&n, w) || expr_reads(&rate, w) {
+                return self.err_at(
+                    n_at,
+                    format!(
+                        "{written} reads `{w}`, which inside the copy would be the cache's \
+                         entry, not the enclosing hold's: name it above, `set c = {w};`"
+                    ),
+                );
+            }
+        }
         let new = Expr::Call(
             "max".into(),
             vec![
@@ -2702,12 +2716,20 @@ impl Parser {
                 )),
             ],
         );
-        let held = Expr::Call("cachedin".into(), vec![Arg::Ref(r(&kv))]);
+        let kv = r(&cache_pool);
+        let held = Expr::Call("cachedin".into(), vec![Arg::Ref(kv.clone())]);
         Ok(vec![Stmt::Hold {
-            pools: vec![(r(&kv), Expr::cost(&[r(&kv)], held), None)],
+            pools: vec![(
+                kv.clone(),
+                Expr::cost(std::slice::from_ref(&kv), held),
+                None,
+            )],
             reuse: None,
             body: vec![
-                Stmt::Grow(r(&kv), Expr::cost(&[r(&kv)], new.clone())),
+                Stmt::Grow(
+                    kv.clone(),
+                    Expr::cost(std::slice::from_ref(&kv), new.clone()),
+                ),
                 Stmt::Run {
                     stage: first,
                     mode: RunMode::Plain,
@@ -2715,9 +2737,9 @@ impl Parser {
                     growing: None,
                     also,
                 },
-                Stmt::Load(r(&kv), Expr::cost(&[r(&kv)], new)),
+                Stmt::Load(kv.clone(), Expr::cost(std::slice::from_ref(&kv), new)),
             ],
-            cache: Some(Expr::cost(&[r(&kv)], n)),
+            cache: Some(Expr::cost(&[kv], n)),
             lease: None,
         }])
     }
@@ -3742,7 +3764,7 @@ impl Parser {
                     return self.err_at(
                         r_at,
                         format!(
-                            "unknown role `{r}`: a queue plays gateway, prefill, decode, link or cache"
+                            "unknown role `{r}`: a queue plays gateway, prefill, decode, link or l2"
                         ),
                     );
                 }
@@ -4013,13 +4035,13 @@ impl Parser {
             if sig.from.iter().any(|&f| q.entry(sig.verb, f).is_some()) {
                 continue;
             }
-            // a cache is its pool and its `serve`: std/kvt copies through them
-            if sig.name == "cache" {
+            // an L2 is its pool and its `serve`: std/kvt copies through them
+            if sig.name == "l2" {
                 if roles.len() > 1 || q.engine || q.nic || q.pools.len() != 1 || !q.has_stage {
                     return self.err_at(
                         at,
                         format!(
-                            "queue `{name}` plays `cache`: it is one pool and a `serve`, the KV \
+                            "queue `{name}` plays `l2`: it is one pool and a `serve`, the KV \
                              it holds and the bandwidth it copies at, with no engine, `nic`, \
                              entry or other role"
                         ),
@@ -4029,7 +4051,7 @@ impl Parser {
                     return self.err_at(
                         at,
                         format!(
-                            "queue `{name}` plays `cache` and is a family: a cache is one \
+                            "queue `{name}` plays `l2` and is a family: an L2 is one \
                              queue; write its capacity and bandwidth as the pool's and the \
                              `serve`'s"
                         ),
@@ -4252,7 +4274,7 @@ impl Parser {
                 || (!header && n == "now")
                 || seen.iter().any(|l| l == n)
         };
-        // a cache queue's pool and stage are every entry's to read and copy
+        // an L2 queue's pool and stage are every entry's to read and copy
         // through (std/kvt's `l2_load`, `l2_store`)
         let cache_ref = |n: &str| self.cache_of(n).is_some();
         let own_ref = |r: &Ref| -> bool {
