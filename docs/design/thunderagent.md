@@ -34,6 +34,7 @@ the paper's to the PDF in its `assets/paper/`.
 | The program's tokens are counted while it reasons and while it calls a tool, at `acting_token_weight` 1.0, the default ([`backend/state.py#L104-L107`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/backend/state.py#L104-L107), [`__main__.py#L30`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/__main__.py#L30)) | `lease prog[home] (inf)`: the allocation outlives the hold |
 | A running program's next request is let through without a capacity check; its count becomes the new prompt's estimate ([`scheduler/router.py#L384-L389`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L384-L389), [`#L450-L458`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L450-L458)) | `grow prog[home] (cost(prog, prompt + buffer - allocated(prog[home])))`, on the lease |
 | After the response, the count is the response's usage, the answer included ([`scheduler/router.py#L493-L494`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L493-L494)) | `grow prog[home] (cost(prog, o))` after the engine's request |
+| An ACTING program counts `acting_token_weight` of its tokens ([`backend/state.py#L104-L107`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/backend/state.py#L104-L107)) | `shrink prog[home] (cost(prog, (1 - w) * allocated(prog[home])))` after the response, grown back at the next request |
 | Over capacity, pause the ACTING programs, the smallest first, then the REASONING ones ([`scheduler/router.py#L773-L805`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L773-L805)) | `preempt leases by (reasoning, prompt);` on `prog`: the growth ends idle programs' leases first, the smaller first |
 | A paused program's next request waits to be let in again, on any replica with room ([`scheduler/router.py#L411-L424`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L411-L424), [`#L807-L932`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L807-L932)) | `allocated(prog[home])` is 0: the program is placed as a new one, and may move |
 | A program that has waited 30 minutes is let in whatever the capacity; otherwise, programs with a pending request, then new ones, each group smallest first ([`#L934-L956`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L934-L956), [`scheduler/router.py#L851-L866`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L851-L866)) | `queue by (waited < 1800, turn_no == 0, prompt)` on `prog` |
@@ -286,6 +287,8 @@ paper`), one factor at a time:
 | `g` 1.1e-9 | 1.88, 1.91, 1.91 | 0.90-0.91 | 0.23-0.26 |
 | `Z` 1 s | 3.33, 3.31, 3.28 | 0.90 | 0.23-0.24 |
 | `Z` 10 s | 2.00, 2.13, 2.12 | 0.89 | 0.23-0.30 |
+| `w` 0.5 | 2.04, 2.04, 2.02 | 0.69-0.72 | 0.23-0.24 |
+| `w` 0 | 2.01, 2.08, 2.05 | 0.71-0.74 | 0.23-0.29 |
 
 The preset in full:
 
@@ -382,11 +385,19 @@ What the program does not reproduce:
    and counts the answer as it streams. The program counts the exact
    prompt, and the answer when the response has arrived, since its length
    is `hidden` until then.
-7. **Acting weight and decay.** A weight below 1 is a second, smaller
-   lease. A decay `2^-t` is an allocation that shrinks with time, which no
-   allocation is. The paper's ablation of the decay base moves throughput
-   by under 13 % (Fig. 6b: 373, 382, 360, 333 steps/min for x = 2, 4, 6,
-   8).
+7. **Decay.** `--acting-token-weight` is written: `w` below 1 gives back
+   (1 − w) of a program's lease when its response arrives (`shrink`), and
+   its next request grows it back. The `2^-t` decay the paper's
+   experiments use weighs an acting program by the time it has called its
+   tool, and only when the router resumes others
+   ([`backend/state.py#L196-L214`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/backend/state.py#L196-L214)):
+   an allocation that shrinks with time, which no allocation is. Its limit
+   after a few seconds is `w` 0, which the table above runs: counting idle
+   programs for less lets more in, and their next requests pause others,
+   so a paused program sends half the turns (0.49-0.55 against 0.15) and
+   the ratio falls to 2.0. The code's default, 1, is the best of the three
+   here. The paper's ablation of the decay base moves throughput by under
+   13 % (Fig. 6b: 373, 382, 360, 333 steps/min for x = 2, 4, 6, 8).
 8. **The force-resume.** ThunderAgent lets a program in after 30 minutes
    of waiting whatever the capacity, onto its replica or the least loaded
    ([`scheduler/router.py#L934-L956`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L934-L956)).

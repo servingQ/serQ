@@ -518,6 +518,8 @@ pub enum Stmt {
         lease: Option<(Ref, Expr)>,
     },
     Grow(Ref, Expr),
+    /// `shrink P (e);`: give back `e` units of the hold's allocation, or of the lease
+    Shrink(Ref, Expr),
     Drop(Ref),
     /// `release P;`: the innermost enclosing hold gives its allocation on
     /// `P` back now, caching per its clause.
@@ -622,7 +624,7 @@ where
                 }
                 each_part_mut(body, parts);
             }
-            Stmt::Grow(r, e) | Stmt::Load(r, e) => {
+            Stmt::Grow(r, e) | Stmt::Shrink(r, e) | Stmt::Load(r, e) => {
                 (parts.reference)(r);
                 (parts.expr)(e);
             }

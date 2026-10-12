@@ -2110,6 +2110,12 @@ impl<'p> Interp<'p> {
                         return;
                     }
                 }
+                CStmt::Shrink(r, e) => {
+                    let pl = self.session_index(r, sid);
+                    let units = self.amount(e, sid, &format!("shrink {}", self.p.pools[pl].name));
+                    self.shrink(sid, pl, units);
+                    self.try_admit_all();
+                }
                 CStmt::Drop(r) => {
                     let pl = self.session_index(r, sid);
                     let serial = self.sessions[sid].serial;
@@ -3000,6 +3006,41 @@ impl<'p> Interp<'p> {
             Grown::Hold(hi, k) => self.sessions[sid].holds[hi].pools[k].alloc += need,
             Grown::Lease(i) => self.sessions[sid].leases[i].alloc += need,
         }
+    }
+
+    /// `shrink P (n)`: give back `n` units of the innermost hold of `sid`
+    /// on `pl`, or of its lease of `pl` outside every hold, rounded down to
+    /// blocks. A hold keeps at least what it has computed; a lease or a
+    /// hold given back to nothing stays, at nothing. Nothing held or leased
+    /// there fails the run, as `grow` does.
+    fn shrink(&mut self, sid: usize, pl: usize, units: f64) {
+        let name = &self.p.pools[pl].name;
+        let Some(g) = self.grown(sid, pl) else {
+            self.error = Some(format!(
+                "`shrink {name}`: the session holds no `{name}` and leases none"
+            ));
+            return;
+        };
+        let alloc_now = self.grown_alloc(sid, g);
+        let floor = match g {
+            Grown::Hold(hi, k) => self.sessions[sid].holds[hi].pools[k].pos,
+            Grown::Lease(_) => 0.0,
+        };
+        let target = self.round_up(pl, (alloc_now - units.max(0.0)).max(floor));
+        let back = alloc_now - target;
+        if back <= 0.0 {
+            return;
+        }
+        self.pools[pl].used -= back;
+        match g {
+            Grown::Hold(hi, k) => self.sessions[sid].holds[hi].pools[k].alloc -= back,
+            Grown::Lease(i) => {
+                let l = &mut self.sessions[sid].leases[i];
+                l.alloc -= back;
+                l.computed = l.computed.min(l.alloc);
+            }
+        }
+        self.retry_growers(pl);
     }
 
     /// Allocate `units` more for the innermost hold of `sid` on `pl`, or

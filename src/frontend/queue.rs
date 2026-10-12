@@ -544,6 +544,7 @@ impl Ctx<'_> {
                 },
             },
             Stmt::Grow(r, e) => Stmt::Grow(self.reference(r)?, self.expr(e)?),
+            Stmt::Shrink(r, e) => Stmt::Shrink(self.reference(r)?, self.expr(e)?),
             Stmt::Drop(r) => Stmt::Drop(self.reference(r)?),
             Stmt::Release(r) => Stmt::Release(self.reference(r)?),
             Stmt::Load(r, e) => Stmt::Load(self.reference(r)?, self.expr(e)?),

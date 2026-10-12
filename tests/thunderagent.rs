@@ -108,3 +108,17 @@ fn a_shared_system_prompt_keeps_paused_prefixes_and_gives_default_mode_its_hits(
         "TR hit: S 0 {alone}, S 3968 {shared}, counted once {once}; default hit {default}"
     );
 }
+
+/// `w`, ThunderAgent's acting weight: counting a program that calls a tool
+/// for less lets more programs in, whose next requests pause others. At the
+/// paper's scale that costs more than it gains: the weight the code
+/// defaults to, 1, serves more than 0 (docs/design/thunderagent.md, item 7).
+#[test]
+fn counting_idle_programs_for_less_costs_more_than_it_gains() {
+    let turns = |w: &str| paper("tr=1", &["g=3.3e-9", "S=3968", w]).turns;
+    let (whole, none) = (turns("w=1"), turns("w=0"));
+    assert!(
+        whole as f64 > 1.2 * none as f64,
+        "turns: w 1 {whole}, w 0 {none}"
+    );
+}

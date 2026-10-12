@@ -150,7 +150,11 @@ fn constant_probability_guard(p: &Program, block: usize, out: &mut Vec<String>) 
 /// included; its body is a block of its own).
 fn exprs_of(s: &CStmt) -> Vec<&CExpr> {
     match s {
-        CStmt::Set(_, e) | CStmt::Observe(_, e) | CStmt::Grow(_, e) | CStmt::Load(_, e) => {
+        CStmt::Set(_, e)
+        | CStmt::Observe(_, e)
+        | CStmt::Grow(_, e)
+        | CStmt::Shrink(_, e)
+        | CStmt::Load(_, e) => {
             vec![e]
         }
         CStmt::Hold {

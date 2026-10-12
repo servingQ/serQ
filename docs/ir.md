@@ -132,7 +132,7 @@ between simulation checks and proofs.
 | `Turn` | draw the next turn's attributes (workload `turn` block or trace); the source `turn;` also expands the server statements immediately after this node |
 | `Set(slot, e)`, `Observe(k, e)` | assign an attribute, record an observation |
 | `Hold {pools: [(pool, units, reserve?)], reuse?, body, cache?, prefix?, lease?}` | acquire units of every pool (admission gate `reserve` if given), run `body`, release; with `cache` the admission reads the cached prefix of the hold's chain and keeps it allocated while the hold lasts, `reuse` bounds how much, and `cache` is the units left cached along the chain; without `cache` the hold leaves the cache where it is; `prefix: [(key, length)]` is the chain, keyed segments shared with every hold whose leading keys are equal (a key is equal when it is the same `Attr` slot, or a structurally equal expression, with the same value, -0 = 0; a segment of length 0 is left out), absent `[(serial, ∞)]`, the session's own; a prefix several holds read is allocated once; with `prefix` the read is at most the allocation, without it the session's entry is consumed whole; what the session's entry held past a `reuse` bound stays cached, dead; on a pool without `block` the chain is the session's own; `lease: (pool, t)` keeps that pool's allocation past the scope, neither evictable nor a preemption victim except under the pool's `Leases`, until the session's `Release` of it, `t` seconds, or its end (vLLM's `delay_free_blocks`) |
-| `Grow(pool, e)`, `Drop(pool)` | grow the current hold, or outside every hold of the pool the session's latest lease of it; drop the session's own cached entry |
+| `Grow(pool, e)`, `Shrink(pool, e)`, `Drop(pool)` | grow, or give `e` back from, the current hold, or outside every hold of the pool the session's lease of it (a hold keeps what it computed); drop the session's own cached entry |
 | `Release(pool)` | give the innermost enclosing hold's allocation on the pool back now, or end the session's lease of it, caching per the hold's `cache`; nothing held or leased there is a no-op. A KV transfer between instances is `Run` (the link), `Load` (the destination) and `Release` (the source's lease) |
 | `Load(pool, e)` | the KV of `e` tokens arrived from outside the engine (a NIXL read): the innermost enclosing hold's computed position on the pool advances by `e`, within its allocation |
 | `Run {stage, mode, work, growing?, also?}` | work at a stage; `mode` `Plain`, `Prefill`, `Decode` (step stages); `growing` the pool that grows with the tokens computed, whose innermost hold's position, when the run ends, is its position at the run's start plus `work`; `also` further stages the same job holds at once (a flow of `share`), omitted when empty |
@@ -211,9 +211,9 @@ text and directly constructed IR meet the same rules. Validation covers:
   a session's cache entry is what hangs under the key of its serial.
   `BudgetLeft` references only step stages, including every member of an
   indexed family.
-- **Ownership.** `Grow`, `Load`, `Release` and a run's `growing` require an
+- **Ownership.** `Grow`, `Shrink`, `Load`, `Release` and a run's `growing` require an
   enclosing hold with the same `CRef` (base, count and index expression);
-  `Grow` and `Release` may instead act on a lease of it. A hold leases only its own pool, names
+  `Grow`, `Shrink` and `Release` may instead act on a lease of it. A hold leases only its own pool, names
   each reference once, and cannot change attributes its index reads.
   An index read again inside the hold cannot depend on state or time.
   Preemptible holds cannot use such indices or `cached`/`computed` in

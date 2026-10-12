@@ -106,6 +106,7 @@ stmt     := turn ;                           -- draw attributes, submit, wait fo
                                              -- lease: that pool's allocation outlives the scope,
                                              -- until a release/transfer takes it, expr seconds, or the end
           | grow POOL ( expr ) ;             -- the enclosing hold's allocation on POOL grows, or the session's lease of it
+          | shrink POOL ( expr ) ;           -- it gives expr back: the inverse of grow, a hold keeping what it computed
           | drop POOL ;                      -- discard the own cached prefix
           | release POOL ;                   -- give the enclosing hold's allocation on POOL back now, or end a lease of it
           | load POOL ( expr ) ;             -- the KV of expr tokens arrived: the enclosing hold's computed position advances

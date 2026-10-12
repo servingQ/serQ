@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 /// IR 12 also adds resource cost conversions and mandatory attribute types
 /// and workload/server statement authority. 13 removes `CStageKind::Delay`,
 /// which meant `Ps(present)` (`CStageKind::delay`); 13 also adds
-/// `Preempt::Leases`, `Fun::Allocated`, and `Grow` of a lease outside
+/// `Preempt::Leases`, `Fun::Allocated`, `Shrink`, and `Grow` of a lease outside
 /// every hold of its pool (`docs/design/thunderagent.md`).
 pub const IR_VERSION: u32 = 13;
 
@@ -633,6 +633,11 @@ pub enum CStmt {
         lease: Option<(CRef, CExpr)>,
     },
     Grow(CRef, CExpr),
+    /// Give back `e` units of the innermost hold's allocation on the pool,
+    /// or of the session's lease of it outside every hold: the inverse of
+    /// `Grow`. A hold keeps at least what it has computed. ThunderAgent
+    /// counts a program calling a tool at a weight below 1 this way.
+    Shrink(CRef, CExpr),
     Drop(CRef),
     /// Release the innermost enclosing hold's allocation on the pool now,
     /// caching per that hold's `cache` clause; the scope's end then has
@@ -1232,6 +1237,7 @@ impl Program {
                     held.truncate(depth);
                 }
                 CStmt::Grow(r, _) => need(held, r, "grow", true).map_err(here)?,
+                CStmt::Shrink(r, _) => need(held, r, "shrink", true).map_err(here)?,
                 CStmt::Load(r, _) => need(held, r, "load", false).map_err(here)?,
                 CStmt::Release(r) => need(held, r, "release", true).map_err(here)?,
                 CStmt::Run {
@@ -2759,6 +2765,11 @@ impl Validator<'_> {
                 self.cref(r, np, "pool", m)?;
                 self.expr(e, m)?;
                 amount(e, &format!("grow {}", self.p.pools[r.base].name))
+            }
+            CStmt::Shrink(r, e) => {
+                self.cref(r, np, "pool", m)?;
+                self.expr(e, m)?;
+                amount(e, &format!("shrink {}", self.p.pools[r.base].name))
             }
             CStmt::Drop(r) | CStmt::Release(r) => self.cref(r, np, "pool", m),
             CStmt::Load(r, e) => {

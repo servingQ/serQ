@@ -20,6 +20,7 @@ indices and predicates remain ordinary quantities.
 | [`turn`](#turn) | draws attributes and waits for the turn's response |
 | [`hold`](#hold) | takes units of pools for the scope of a block |
 | [`grow`](#grow) | enlarges the innermost hold, or the session's lease |
+| [`shrink`](#shrink) | gives back part of the innermost hold, or of the session's lease |
 | [`drop`](#drop) | discards the session's cached prefix |
 | [`release`](#release) | gives the innermost hold's units back now |
 | [`load`](#load) | the KV of some tokens arrived from outside |
@@ -167,9 +168,27 @@ grow POOL (d);
 | Argument | Type | Description |
 |---|---|---|
 | `POOL` | `pool` | A pool the session holds, or leases. |
-| `d` | `Cost(POOL)` | Units added to the innermost hold on `POOL`, or outside every hold of it to the session's latest lease of it, rounded to blocks. |
+| `d` | `Cost(POOL)` | Units added to the innermost hold on `POOL`, or outside every hold of it to the session's lease of it, rounded to blocks. |
 
 If it does not fit, the pool's [`preempt`](pool.md#preempt) applies.
+
+## `shrink`
+
+```serq
+shrink POOL (d);
+```
+
+| Argument | Type | Description |
+|---|---|---|
+| `POOL` | `pool` | A pool the session holds, or leases. |
+| `d` | `Cost(POOL)` | Units given back by the innermost hold on `POOL`, or outside every hold of it by the session's lease of it, to the nearest block above what remains. |
+
+The inverse of [`grow`](#grow). A hold keeps at least what it has
+computed; a lease can give back everything and stays, at nothing. The
+units go back at once, and a hold or a growth waiting for them may be let
+in. Nothing held or leased there fails the run, as for `grow`.
+ThunderAgent counts a program that is calling a tool at its
+`--acting-token-weight` this way (`examples/multi-turn/thunderagent.sq`).
 
 ## `drop`
 

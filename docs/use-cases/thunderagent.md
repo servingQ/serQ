@@ -55,6 +55,7 @@ a program whose lease has gone that it must be let in again.
 | The program's tokens are counted while it reasons and while it calls a tool, at `acting_token_weight` 1.0, the default ([`backend/state.py#L104-L107`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/backend/state.py#L104-L107), [`__main__.py#L30`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/__main__.py#L30)) | `lease prog[home] (inf)`: the allocation outlives the hold |
 | A running program's next request is let through without a capacity check; its count becomes the new prompt's estimate ([`scheduler/router.py#L384-L389`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L384-L389), [`#L450-L458`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L450-L458)) | `grow prog[home] (cost(prog, prompt + buffer - allocated(prog[home])))`, on the lease |
 | After the response, the count is the response's usage, the answer included ([`scheduler/router.py#L493-L494`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L493-L494)) | `grow prog[home] (cost(prog, o))` after the engine's request |
+| An ACTING program counts `acting_token_weight` of its tokens ([`backend/state.py#L104-L107`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/backend/state.py#L104-L107)) | `shrink prog[home] (cost(prog, (1 - w) * allocated(prog[home])))` after the response, grown back at the next request |
 | Over capacity, pause the ACTING programs, the smallest first, then the REASONING ones ([`scheduler/router.py#L773-L805`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L773-L805)) | `preempt leases by (reasoning, prompt);` on `prog`: the growth ends idle programs' leases first, the smaller first |
 | A paused program's next request waits to be let in again, on any replica with room ([`scheduler/router.py#L411-L424`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L411-L424), [`#L807-L932`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L807-L932)) | `allocated(prog[home])` is 0: the program is placed as a new one, and may move |
 | A program that has waited 30 minutes is let in whatever the capacity; otherwise, programs with a pending request, then new ones, each group smallest first ([`#L934-L956`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L934-L956), [`scheduler/router.py#L851-L866`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L851-L866)) | `queue by (waited < 1800, turn_no == 0, prompt)` on `prog` |
@@ -94,6 +95,7 @@ measurement.
 | `g` | 0 | a prefill's attention per token and context token (s): with it, recomputing a context costs its square |
 | `S` | 0 | tokens of a system prompt every program starts with, which vLLM caches once |
 | `count_shared` | 1 | 1: the router counts the shared prompt in every program, as the code does; 0: once, as ThunderAgent's wiki writes the capacity |
+| `w` | 1 | `--acting-token-weight`: a program calling a tool counts this share of its tokens |
 
 ## What the runs show
 
@@ -193,9 +195,12 @@ depends on one argument:
   in the queue, within the capacity.
 - **A pause ends the count at once.** ThunderAgent counts a reasoning
   program it has marked for a pause until its response arrives.
-- **Weights and decay are not written.** An acting weight below 1, and the
-  `2^-t` decay the paper's experiments use, would shrink a program's count
-  while it calls a tool. The program counts it whole, the code's default.
+- **The decay is not written.** `w` is ThunderAgent's acting weight; the
+  `2^-t` decay the paper's experiments use, which shrinks an idle
+  program's count with time and only when others are resumed, is not.
+  Its limit, `w` 0, counts idle programs for nothing: more are let in,
+  their next requests pause others, and at the paper's scale the ratio
+  falls from 3.1 to 2.0. The code's default, `w` 1, does best here.
 - **The paper is not fitted.** It does not state its KV capacity, context
   lengths, output lengths, coding tools' times, system prompts or vLLM
   version, so `g` and `S` are estimates and no panel is reproduced.
