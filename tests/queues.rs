@@ -1092,29 +1092,49 @@ fn self_names_nothing_a_program_declares() {
 
 /// A name read where it does not exist is pointed at where it is read, not
 /// at the statement: a hold's header that read `position` was shown at its
-/// `(` (#531). The position is found in the text, so the test holds
-/// however the program is laid out.
+/// pool (#531). A parameter is shown where the entry reads it, not at the
+/// caller's argument it stands for (#567 review). The position is found in
+/// the text, so the test holds however the program is laid out.
 #[test]
 fn a_refused_read_points_at_the_name() {
-    let src = "fn main() {
-  queue gw : gateway { route { E.decode (prompt); } }
-  queue E : decode {
-    device gpu { kv cap 100; }
-    pool kv on gpu { }
-    engine on gpu { tokens cap inf; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); }
-    decode (p) { hold kv (cost(kv, p + position)) { run E prefill (cost(E, p)) growing kv; } }
-  }
-  workload { arrive batch(1); init { set prompt = 3; } session { turn; end; } }
-  server { gw.route(); }
-}
-";
-    let at = src.find("position").unwrap();
-    let line = src[..at].matches('\n').count() + 1;
-    let col = at - src[..at].rfind('\n').map_or(0, |i| i + 1) + 1;
-    let e = compile_source(src, &common::horizon(100.0)).expect_err("refused");
+    let program = |units: &str, hidden: &str| {
+        format!(
+            "fn main() {{
+  queue gw : gateway {{ route {{ E.decode (prompt); }} }}
+  queue E : decode {{
+    device gpu {{ kv cap 100; }}
+    pool kv on gpu {{ }}
+    engine on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
+    decode (p) {{ hold kv (cost(kv, {units})) {{ run E prefill (cost(E, 1)) growing kv; }} }}
+  }}
+  workload {{ arrive batch(1); {hidden} init {{ set prompt = 3; }} session {{ turn; end; }} }}
+  server {{ gw.route(); }}
+}}
+"
+        )
+    };
+    // where `needle` is in the text, after `from`
+    let at = |src: &str, from: &str, needle: &str| {
+        let at = src.find(from).unwrap() + from.find(needle).unwrap();
+        let line = src[..at].matches('\n').count() + 1;
+        let col = at - src[..at].rfind('\n').map_or(0, |i| i + 1) + 1;
+        format!("{line}:{col}")
+    };
+    let src = program("p + position", "");
+    let e = compile_source(&src, &common::horizon(100.0)).expect_err("refused");
+    let want = at(&src, "cost(kv, p + position)", "position");
     assert!(
         e.contains(&format!(
-            "{line}:{col}: session: `position` is read in a hold's header"
+            "{want}: session: `position` is read in a hold's header"
+        )),
+        "{e}"
+    );
+    let src = program("p", "hidden prompt;");
+    let e = compile_source(&src, &common::horizon(100.0)).expect_err("refused");
+    let want = at(&src, "cost(kv, p)", "p)");
+    assert!(
+        e.contains(&format!(
+            "{want}: session: `prompt` is hidden from the scheduler"
         )),
         "{e}"
     );

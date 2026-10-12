@@ -205,7 +205,8 @@ struct Linker<'a> {
     declarations: Vec<(usize, DeclaredType)>,
     side: crate::ir::Side,
     /// Per block, per statement: where the statement is in the text, as
-    /// far as a reference or an expression in it says (#279).
+    /// far as a reference or an expression in it says (#279), and where its
+    /// own expressions read each name (#531).
     spans: Spans,
     prog: &'a Program,
     /// The step stages' registers (`state`), and their indices by name.
@@ -382,7 +383,10 @@ pub struct StmtSpan {
 
 impl StmtSpan {
     /// Where an error about this statement points: the name its message
-    /// quotes first, when the statement reads it, else the statement.
+    /// quotes first, when the statement reads it, else the statement. It
+    /// reads `Program::validate`'s wording, which quotes the offending name
+    /// first; a message that quotes something else falls back to the
+    /// statement.
     pub fn of(&self, message: &str) -> Option<Span> {
         let quoted = message.split('`').nth(1);
         quoted
@@ -921,8 +925,15 @@ fn stmt_span(s: &Stmt) -> Option<Span> {
 fn stmt_names(s: &Stmt) -> Vec<(String, Span)> {
     fn walk(e: &Expr, out: &mut Vec<(String, Span)>) {
         match e {
+            // a name where it is written: a parameter an entry substituted
+            // keeps its own place around the caller's argument, which is
+            // the outermost
             Expr::Located(span, inner) => {
-                if let Expr::Var(n) = inner.as_ref()
+                let mut read = inner.as_ref();
+                while let Expr::Located(_, i) = read {
+                    read = i;
+                }
+                if let Expr::Var(n) = read
                     && !out.iter().any(|(m, _)| m == n)
                 {
                     out.push((n.clone(), *span));
