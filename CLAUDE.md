@@ -31,11 +31,12 @@ make oracle-ir    # regenerate tools/oracle/*.ir.json
 make draw-golden  # regenerate docs/assets/*.deployment.svg
 make lean         # the Lean model: oracle theorems current, lake build, no sorry, axiom audit
 make metrics      # regenerate tools/metrics.json (the language's size)
+make unused       # regenerate tools/unused.json (the IR variants no program uses)
 ```
 
 `make check` is the gate. Generated files (`tools/oracle/*.ir.json`,
-`docs/assets/*.deployment.svg`, `tools/metrics.json`) are committed, so
-regenerate them in the change that moves them.
+`docs/assets/*.deployment.svg`, `tools/metrics.json`, `tools/unused.json`) are
+committed, so regenerate them in the change that moves them.
 
 ## Design criteria
 
@@ -86,6 +87,8 @@ trusted, not proved. Three rules:
 - **A construct some program uses.** A construct no example, tutorial or
   companion program (`serving-queue-theory/programs`) uses is a path only
   tests exercise. Add the program that needs it, or do not add it.
+  `tools/unused.json` lists the IR variants no program here uses (`make
+  unused`, checked by `make check`); a change that moves it says why.
 
 ## The vLLM reference: read the code, not the memory of it
 

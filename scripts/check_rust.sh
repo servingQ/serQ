@@ -51,4 +51,8 @@ python3 scripts/check_citations.py
 # variants and the lines three programs repeat. A change that moves them
 # regenerates tools/metrics.json (`make metrics`) and says why in its PR.
 python3 scripts/metrics.py --check
+# The IR variants no example, tutorial or oracle program uses: a construct
+# only tests reach. A change that moves the list regenerates
+# tools/unused.json (`make unused`) and says why in its PR.
+python3 scripts/unused.py --check
 echo "OK: serq, $n programs link and draw, $t tutorial programs link, $(ls tools/oracle/*.out.json | wc -l) vLLM oracle scenarios + 1 prefix-cache trace (CPU oracle = A100 engine = serQ)"
