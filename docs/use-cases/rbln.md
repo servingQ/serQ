@@ -37,8 +37,7 @@ local phase isolation does not remove cross-rank shape coordination.
 For a local non-speculative model, a cost expression can charge fixed
 prefill width or bucketed `decoders` while the logical work stays unchanged.
 The current example uses illustrative costs and does not emulate these
-compiled shapes. See [input shapes](input-shapes.md) for executable cost
-expressions and the remaining IR requirements.
+compiled shapes.
 
 ## Executable serQ approximation
 

@@ -33,7 +33,7 @@ and KV writes use only actual tokens.
 A single-rank cost can round `tokens` without changing request progress.
 Cross-rank graph agreement and per-request boundary validation require more
 than aggregate cost terms. The current example does not model graph capture
-or padded device buffers. See [input shapes](input-shapes.md).
+or padded device buffers.
 
 ## Executable serQ approximation
 
