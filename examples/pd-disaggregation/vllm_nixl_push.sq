@@ -59,10 +59,8 @@ fn main() {
         P.prefill (prompt);              // the sidecar's order: the prefill's answer first
       }
       D.decode (prompt) from P;          // the decode request; it waits for the prefill's KV inside
-      observe ttft = D.first_token - t0;
       observe parked = D.written - D.parked;   // how long the decoder's blocks waited for the KV
       observe sent = t0;
-      observe response = now - t0;
     }
   }
 
@@ -138,7 +136,6 @@ fn main() {
         // Back in the waiting queue: a running slot and a token of budget.
         hold reqs (cost(reqs, 1)) {
           run D prefill (cost(D, known - c)) growing kv;
-          branch (known == prompt) { mark first_token; }
           run D decode (cost(D, out - 1 - (known - prompt))) growing kv;
         }
       } cache (cost(kv, reqs, prompt + out));

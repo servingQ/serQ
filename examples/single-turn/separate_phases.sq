@@ -23,14 +23,11 @@ fn main() {
   }
   server {
     run gate (cost(gate, serial));
-    set t0 = now;
     hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, left))) reserve (cost(kv, prompt))
          at admission (left = budget_left(llm)) {
       run llm prefill (cost(llm, prompt)) growing kv;
-      observe ttft = now - t0;
       branch (serial == 0) { run llm decode (cost(llm, 2)) growing kv; }
     }
-    observe response = now - t0;
   }
 
 }

@@ -47,7 +47,6 @@ server {
   Cost s = cost(svc, S * work_size);
   set t0 = now;
   run svc (s);
-  observe response = now - t0;
   observe wait = now - t0 - S * work_size;
 }
 ```
@@ -56,7 +55,10 @@ The `server` block converts the requested work into a `svc` cost: `S` seconds
 per unit. The workload owns `work_size`; the server cannot overwrite it.
 The `server` block handles one request. `run svc (cost(svc, s))` is `s` seconds of work
 at the FIFO stage named `svc`. `now` is the clock. `observe name = expr`
-records a sample — the program says what it measures.
+records a sample — the program says what it measures: here `wait`, the
+time before the service starts. The time from sending a turn to its answer
+is the client's `response`, which the report gives for every program in
+its `client` section ([what the client sees](../language.md#what-the-client-sees)).
 
 ### Execution settings
 
@@ -74,10 +76,13 @@ serq run docs/tutorial/programs/01-queue.sq --horizon 100000 --warmup 5000 --see
 ```text
 run: horizon 100000 end 100000 warmup 5000 seed 1 events 158921 arrivals 79460 ended 75464 turns 75462 mean live 3.832
 
-observe   count    mean   95% CI    cv2      p99
+observe  count    mean   95% CI    cv2      p99
+-------  -----  ------  -------  -----  -------
+wait     75464  3.8237  ±0.3462  1.516  21.1774
+
+client    count    mean   95% CI    cv2      p99
 --------  -----  ------  -------  -----  -------
 response  75464  4.8235  ±0.3537  0.995  22.2569
-wait      75464  3.8237  ±0.3462  1.516  21.1774
 
 stage  number   util   done    thru    wait  service  iters
 -----  ------  -----  -----  ------  ------  -------  -----

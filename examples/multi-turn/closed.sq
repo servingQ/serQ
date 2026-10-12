@@ -25,7 +25,6 @@ fn main() {
   server {
     run svc (cost(svc, s));
     observe wait = now - t0 - s;
-    observe response = now - t0;
   }
 
 

@@ -37,8 +37,12 @@ observe         count      mean    95% CI    cv2        p99
 --------------  -----  --------  --------  -----  ---------
 hit               779    0.8858   ±0.0215  0.129     1.0000
 prefill_tokens    779  685.2439  ±56.1267  1.068  2883.0000
-ttft              779    0.0143   ±0.0012  1.070     0.0592
-response          779    0.0599   ±0.0040  0.567     0.1977
+
+client    count    mean   95% CI    cv2     p99
+--------  -----  ------  -------  -----  ------
+ttft        779  0.0143  ±0.0012  1.070  0.0592
+tpot        776  0.0003  ±0.0000  3.742  0.0007
+response    779  0.0599  ±0.0040  0.567  0.1977
 
 …
 
@@ -48,9 +52,12 @@ kv    1251.5  144310.0  0.000    0.171     NaN     798        76    545120      
 reqs     0.2       0.0  0.001    0.171  0.0005     798         0         0        0      0    0      0
 ```
 
-The metrics are the program's own: `ttft` is whatever the `observe ttft = …`
-line says it is, so read that line before comparing the number with a
-measurement. Before reading the means, check the pool columns: `rej`
+`observe` rows are the program's own: each is whatever its `observe` line
+says, so read that line before comparing the number with a measurement.
+`client` rows are what each turn's client saw, the same in every program:
+`ttft` from sending the turn to its first output token, `tpot` the time per
+output token after the first, `response` from sending to the answer
+([what the client sees](language.md#what-the-client-sees)). Before reading the means, check the pool columns: `rej`
 (requests that can never fit), `stuck` (sessions preempted again without
 progress, a livelock) and `preempt`. A run with non-zero `stuck` has a
 mean over the sessions that got through, not over the traffic.
@@ -70,7 +77,7 @@ for lam in 0.3 0.6 0.9; do
   for seed in 1 2 3; do
     serq run examples/multi-turn/vllm.sq --horizon 2000 --warmup 200 --set Lambda=$lam --seed $seed --json \
       | jq -r --arg l $lam --arg s $seed \
-          '[$l, $s, .observes.ttft.mean, (.pools[] | select(.name=="kv") | .preemptions)] | @tsv'
+          '[$l, $s, .client.ttft.mean, (.pools[] | select(.name=="kv") | .preemptions)] | @tsv'
   done
 done
 ```

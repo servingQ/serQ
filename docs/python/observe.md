@@ -1,7 +1,8 @@
 # pyserq.Observe
 
-Statistics and sample records for one `observe` declaration. Obtain it from
-[`Report.observe(name)`](report.md#observe) or `Report.observes`.
+Statistics and sample records for one `observe` declaration, or for one of
+the client's metrics. Obtain it from [`Report.observe(name)`](report.md#observe),
+`Report.observes` or `Report.client`.
 `Observe()` is not a public constructor; attributes are read-only.
 
 ## Attributes

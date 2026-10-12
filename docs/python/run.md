@@ -41,16 +41,14 @@ fn main() {
     arrive batch(4);
   }
   server {
-    set t0 = now;
     hold reqs (cost(reqs, 1)) { run svc (cost(svc, 2)); }
-    observe response = now - t0;
   }
   gauge occupied = used(reqs);
 }
 """
 report = pyserq.run(pyserq.compile(source=source, horizon=10))
 assert report.ended == 4
-assert report.observe("response").samples == [2.0, 4.0, 6.0, 8.0]
+assert report.client["response"].samples == [2.0, 4.0, 6.0, 8.0]
 ```
 
 ## See also

@@ -328,7 +328,6 @@ workload {
 }
 
 server {
-  set t0 = now;
   set prompt = K + n;
   hold reqs (cost(reqs, 1)), kv (…) at admission (…) {
     …
@@ -336,9 +335,12 @@ server {
     …
     run vllm decode (cost(vllm, o - 1 - (known - prompt))) growing kv;
   } cache (cost(reqs, kv, prompt + o));
-  observe response = now - t0;
 }
 ```
+
+The report gives what the client saw of each turn, its time to first token,
+time per output token and response time ([What the client
+sees](#what-the-client-sees)); the program observes what else it needs.
 
 The end of the session block ends the session. `end;` is only needed for
 an early exit, including an exit from an unconditional `loop`.
@@ -1080,6 +1082,31 @@ When every session holding the pool is one of those waiting
 what it needs, or the holders wait on each other (#238).
 A boolean observation that remains zero for at least 40 samples produces
 a report note, not an error.
+
+### What the client sees
+
+Every turn is one request from a virtual client, and the report gives what
+that client saw of it in its `client` section, whatever the program
+observes ([the design](design/client-metrics.md)):
+
+| Metric | Sample | Recorded |
+|---|---|---|
+| `ttft` | the turn's first output token less its start | at the first token |
+| `tpot` | (the turn's last output token less its first) / the output tokens after the first | when the turn is answered |
+| `response` | the turn's answer less its start | when the turn is answered |
+
+A turn starts at its `turn;`, and is answered when the server's statements
+for it are done. Its first output token is when its first `decode` run
+starts, on whichever engine. Its output tokens after the first are the
+decode tokens its engines commit and the token a resumed prefill samples
+after a preemption; a prefill before the first token samples one the
+client does not see (a P/D prefiller's, which the decoder recomputes). A
+turn that runs no `decode` has no `ttft` or `tpot`, and one with no
+output token after the first has no `tpot`. These are vLLM's
+`time_to_first_token`, `mean_time_per_output_token` and `e2e_latency`
+(`vllm/v1/metrics/stats.py`), with the turn's start for vLLM's arrival.
+A program's `observe` keeps its own name beside them: an `observe ttft`
+is the program's, reported in its own section.
 
 ### Gauges
 

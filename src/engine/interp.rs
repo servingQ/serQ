@@ -21,6 +21,7 @@ use crate::engine::stats::*;
 use crate::frontend::ast::{BinOp, RunMode, UnOp};
 use crate::frontend::link::*;
 use crate::ir::Preempt;
+use crate::ir::Side;
 use crate::ir::trace::Corpus;
 use crate::ir::{CIter, ClaimKind};
 
@@ -264,6 +265,8 @@ struct Session<'p> {
     /// keeps becoming ready without time passing is a loop that never
     /// blocks (`READIES_PER_INSTANT`).
     readies: (f64, u64),
+    /// The turn in progress, as the session's client sees it.
+    client: Option<ClientTurn>,
     /// Whether this is a leg (`fork`), and of which session.
     leg: Leg,
     /// Legs forked and not yet ended, and forks so far (the key of a leg's
@@ -320,6 +323,31 @@ const STEPS_PER_INSTANT: u64 = 1_000_000;
 /// without time passing. Per session, so that an instant with many
 /// sessions (a `batch` arrival) is not mistaken for one.
 const READIES_PER_INSTANT: u64 = 1_000;
+
+/// A turn as the virtual client that sent it sees it
+/// (`docs/design/client-metrics.md`): sent at its `Turn`, its first token
+/// when its first decode-mode run starts, its tokens after that, and
+/// answered when the server statements spliced after the `Turn` are done.
+#[derive(Clone, Copy, Debug)]
+struct ClientTurn {
+    start: f64,
+    first: Option<f64>,
+    /// The latest output token after the first, and how many there were.
+    last: f64,
+    after: u64,
+    /// The turn is answered when the frame at this depth, on this block,
+    /// reaches this statement: the first after the `Turn` on the workload's
+    /// side, or the block's end.
+    depth: usize,
+    block: BlockId,
+    end: usize,
+}
+
+/// The client's metrics, in the report's order.
+pub const CLIENT: [&str; 3] = ["ttft", "tpot", "response"];
+const TTFT: usize = 0;
+const TPOT: usize = 1;
+const RESPONSE: usize = 2;
 
 #[derive(Clone, Copy, Debug)]
 struct LastToken {
@@ -652,6 +680,8 @@ pub struct Interp<'p> {
     rng_trace: StdRng,
     trace: Option<Corpus>,
     observes: Vec<ObserveStat>,
+    /// The client's `ttft`, `tpot` and `response` (`CLIENT`).
+    client: Vec<ObserveStat>,
     /// Per gauge: its change points `(time, value)`, the value from that
     /// time on, one point per instant (the state after the instant's last
     /// event).
@@ -812,6 +842,14 @@ impl<'p> Interp<'p> {
             trace_iter: std::env::var_os("SERQ_TRACE_ITER").is_some(),
             observes: p
                 .observes
+                .iter()
+                .map(|_| ObserveStat {
+                    w: Welford::new(),
+                    samples: vec![],
+                    records: vec![],
+                })
+                .collect(),
+            client: CLIENT
                 .iter()
                 .map(|_| ObserveStat {
                     w: Welford::new(),
@@ -1306,6 +1344,7 @@ impl<'p> Interp<'p> {
             stuck: false,
             leases: vec![],
             last_token: None,
+            client: None,
             rng_wl: substream(self.p.seed, serial, 0, STREAM_WORKLOAD),
             rng: substream(self.p.seed, serial, 0, STREAM_SESSION),
             turn_count: 0,
@@ -1427,6 +1466,82 @@ impl<'p> Interp<'p> {
         }
         let turn = p.turn;
         self.exec_workload_block(sid, turn);
+        // the server's statements follow the `Turn` in its block
+        let fr = self.sessions[sid]
+            .frames
+            .last()
+            .cloned()
+            .expect("a turn runs in a frame");
+        let sides = &p.sides[fr.block];
+        let end = (fr.pc..sides.len())
+            .find(|&i| sides[i] == Side::Workload)
+            .unwrap_or(sides.len());
+        self.sessions[sid].client = Some(ClientTurn {
+            start: self.now,
+            first: None,
+            last: self.now,
+            after: 0,
+            depth: self.sessions[sid].frames.len(),
+            block: fr.block,
+            end,
+        });
+    }
+
+    /// Whether the session's turn is answered: its frame has passed the
+    /// server's statements. Then the client records `tpot` and `response`.
+    fn answered(&mut self, sid: usize) {
+        let s = &self.sessions[sid];
+        let Some(c) = s.client else { return };
+        let Some(fr) = s.frames.get(c.depth.wrapping_sub(1)) else {
+            return;
+        };
+        if s.frames.len() != c.depth || fr.block != c.block || fr.pc < c.end {
+            return;
+        }
+        self.sessions[sid].client = None;
+        if let Some(first) = c.first
+            && c.after > 0
+        {
+            self.client_sample(sid, TPOT, (c.last - first) / c.after as f64);
+        }
+        self.client_sample(sid, RESPONSE, self.now - c.start);
+    }
+
+    /// A sample of the client's metric `k`, recorded now.
+    fn client_sample(&mut self, sid: usize, k: usize, v: f64) {
+        if self.warm {
+            let s = &self.sessions[sid];
+            let rec = (self.now, s.serial, s.attrs[self.p.slot_turn] as u32);
+            self.client[k].w.push(v);
+            self.client[k].samples.push(v);
+            self.client[k].records.push(rec);
+        }
+    }
+
+    /// The session a leg is of, or the session itself.
+    fn root(&self, sid: usize) -> Option<usize> {
+        match self.sessions[sid].leg {
+            Leg::No => Some(sid),
+            Leg::Of(r) => Some(r),
+            Leg::Orphan => None,
+        }
+    }
+
+    /// A decode-mode run of `sid`'s turn starts: the turn's first one is its
+    /// first output token, which the client sees now.
+    fn decode_starts(&mut self, sid: usize) {
+        let Some(r) = self.root(sid) else { return };
+        let now = self.now;
+        let Some(c) = &mut self.sessions[r].client else {
+            return;
+        };
+        if c.first.is_some() {
+            return;
+        }
+        c.first = Some(now);
+        c.last = now;
+        let start = c.start;
+        self.client_sample(r, TTFT, now - start);
     }
 
     fn end_session(&mut self, sid: usize) {
@@ -1496,6 +1611,7 @@ impl<'p> Interp<'p> {
             stuck: false,
             leases: vec![],
             last_token: None,
+            client: None,
             rng_wl: s.rng_wl.clone(),
             rng: substream(p.seed, s.serial, n, STREAM_LEG),
             turn_count: s.turn_count,
@@ -1707,6 +1823,7 @@ impl<'p> Interp<'p> {
                 ));
                 return;
             }
+            self.answered(sid);
             let Some(fr) = self.sessions[sid].frames.last().cloned() else {
                 self.end_session(sid);
                 return;
@@ -1905,6 +2022,9 @@ impl<'p> Interp<'p> {
                         return;
                     }
                     let g = growing.as_ref().map(|r| self.session_index(r, sid));
+                    if *mode == RunMode::Decode {
+                        self.decode_starts(sid);
+                    }
                     self.start_job(st, Some(sid), w, *mode, g);
                     return;
                 }
@@ -4157,6 +4277,13 @@ impl<'p> Interp<'p> {
     /// token less its first.
     fn token(&mut self, st: usize, sid: usize, decode: bool) {
         let now = self.now;
+        if let Some(r) = self.root(sid)
+            && let Some(c) = &mut self.sessions[r].client
+            && c.first.is_some()
+        {
+            c.after += 1;
+            c.last = now;
+        }
         let turn = self.sessions[sid].attrs[self.p.slot_turn];
         let last = self.sessions[sid].last_token.filter(|t| t.turn == turn);
         let decoded = last.is_some_and(|t| t.decoded);
@@ -4482,6 +4609,26 @@ impl<'p> Interp<'p> {
                 records: o.records.clone(),
             })
             .collect();
+        let client = self
+            .client
+            .iter()
+            .zip(CLIENT)
+            .map(|(o, name)| ObserveReport {
+                name: name.to_string(),
+                is_test: false,
+                count: o.w.count(),
+                mean: o.w.mean(),
+                cv2: o.w.cv2(),
+                ci: if o.samples.len() >= CI_MIN_SAMPLES {
+                    batch_means(&o.samples, 20)
+                } else {
+                    Estimate::nan()
+                },
+                p99: quantile(&o.samples, 0.99),
+                samples: o.samples.clone(),
+                records: o.records.clone(),
+            })
+            .collect();
         let gauges = self
             .gauges
             .iter()
@@ -4574,6 +4721,7 @@ impl<'p> Interp<'p> {
             turns: self.turns,
             mean_live: self.live_avg.mean(now),
             observes,
+            client,
             gauges,
             claims,
             stages,

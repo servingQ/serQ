@@ -260,6 +260,10 @@ pub struct Report {
     pub turns: u64,
     pub mean_live: f64,
     pub observes: Vec<ObserveReport>,
+    /// What each turn's virtual client saw, `ttft`, `tpot` and `response`
+    /// in that order, whatever the program observes
+    /// (`docs/design/client-metrics.md`).
+    pub client: Vec<ObserveReport>,
     pub gauges: Vec<GaugeReport>,
     /// The program's claims, in order; empty (and absent from the JSON)
     /// when it has none.
@@ -270,16 +274,25 @@ pub struct Report {
 
 impl Report {
     /// Write every observation as `<name>.csv` with columns
-    /// `time,session,turn,value` into `dir`, and every gauge's change points
-    /// as `gauge/<name>.csv` with columns `time,value`.
+    /// `time,session,turn,value` into `dir`, the client's metrics as
+    /// `client/<name>.csv` alike, and every gauge's change points as
+    /// `gauge/<name>.csv` with columns `time,value`.
     pub fn dump(&self, dir: &std::path::Path) -> std::io::Result<()> {
         std::fs::create_dir_all(dir)?;
-        for o in &self.observes {
+        let samples = |o: &ObserveReport| {
             let mut s = String::from("time,session,turn,value\n");
             for (rec, v) in o.records.iter().zip(&o.samples) {
                 s.push_str(&format!("{},{},{},{}\n", rec.0, rec.1, rec.2, v));
             }
-            std::fs::write(dir.join(format!("{}.csv", o.name)), s)?;
+            s
+        };
+        for o in &self.observes {
+            std::fs::write(dir.join(format!("{}.csv", o.name)), samples(o))?;
+        }
+        let cdir = dir.join("client");
+        std::fs::create_dir_all(&cdir)?;
+        for o in &self.client {
+            std::fs::write(cdir.join(format!("{}.csv", o.name)), samples(o))?;
         }
         if !self.gauges.is_empty() {
             let gdir = dir.join("gauge");
@@ -297,6 +310,11 @@ impl Report {
 
     pub fn observe(&self, name: &str) -> Option<&ObserveReport> {
         self.observes.iter().find(|o| o.name == name)
+    }
+
+    /// The client's metric `name`: `ttft`, `tpot` or `response`.
+    pub fn client(&self, name: &str) -> Option<&ObserveReport> {
+        self.client.iter().find(|o| o.name == name)
     }
 
     pub fn gauge(&self, name: &str) -> Option<&GaugeReport> {
@@ -363,6 +381,26 @@ impl Report {
                     o.name, o.count
                 );
             }
+        }
+        // the client's metrics that have a sample: a turn that runs no
+        // engine has no first token
+        let seen: Vec<&ObserveReport> = self.client.iter().filter(|o| o.count > 0).collect();
+        if !seen.is_empty() {
+            let rows = seen.iter().map(|o| {
+                vec![
+                    o.name.clone(),
+                    o.count.to_string(),
+                    format!("{:.4}", o.mean),
+                    format!("±{:.4}", o.ci.half_width),
+                    format!("{:.3}", o.cv2),
+                    format!("{:.4}", o.p99),
+                ]
+            });
+            table(
+                &mut s,
+                &["client", "count", "mean", "95% CI", "cv2", "p99"],
+                rows,
+            );
         }
         if !self.gauges.is_empty() {
             let rows = self.gauges.iter().map(|g| {
@@ -553,6 +591,22 @@ impl Report {
         );
         s.push_str(",\"observes\":{");
         for (i, o) in self.observes.iter().enumerate() {
+            if i > 0 {
+                s.push(',');
+            }
+            let _ = write!(
+                s,
+                "\"{}\":{{\"count\":{},\"mean\":{},\"ci\":{},\"cv2\":{},\"p99\":{}}}",
+                o.name,
+                o.count,
+                f(o.mean),
+                f(o.ci.half_width),
+                f(o.cv2),
+                f(o.p99)
+            );
+        }
+        s.push_str("},\"client\":{");
+        for (i, o) in self.client.iter().enumerate() {
             if i > 0 {
                 s.push(',');
             }

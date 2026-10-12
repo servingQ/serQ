@@ -24,7 +24,6 @@ fn main() {
 
   }
   server {
-    set t0 = now;
     set kept = prompt;
     hold reqs (cost(reqs, 1)), kv (cost(kv, min(known, reused + min(128, left)))) reserve (cost(kv, known))
          at admission (known = max(kept, computed + 1),
@@ -33,10 +32,8 @@ fn main() {
       set kept = known;
       set c = min(cached, reusable(known, blocksize(kv)));
       run llm prefill (cost(llm, known - c)) growing kv;
-      branch (known == prompt) { observe ttft = now - t0; }   // not a resumed request's re-prefill
       run llm decode (cost(llm, out - (known - prompt))) growing kv;
     } cache (cost(reqs, kv, prompt + out));
-    observe response = now - t0;
   }
 
 }

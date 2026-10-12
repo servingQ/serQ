@@ -73,7 +73,6 @@ fn main() {
       } else {
         D[j].decode (prompt);
       }
-      observe ttft = D.first_token - t0;
       observe remote = remote_prefill;
       observe response = now - t0;
     }
@@ -133,7 +132,6 @@ fn main() {
         set c = min(cached, reusable(known, bs));
         observe local_tokens = known - c;
         run D prefill (cost(D, known - c)) growing kv;
-        branch (known == prompt) { mark first_token; }   // not a resumed request's re-prefill
         run D decode (cost(D, produced - 1 - (known - prompt))) growing kv;
       } cache (cost(kv, reqs, prompt + produced));
     }
@@ -167,7 +165,6 @@ fn main() {
         // lost here, as any local prefill would (do_remote_prefill is spent).
         hold reqs (cost(reqs, 1)) {
           run D prefill (cost(D, known - c)) growing kv;
-          branch (known == prompt) { mark first_token; }
           run D decode (cost(D, produced - 1 - (known - prompt))) growing kv;
         }
       } cache (cost(kv, reqs, prompt + produced));

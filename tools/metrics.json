@@ -16,8 +16,6 @@
     "advance running each at most (threshold);",
     "at admission (known = max(kept, computed + 1)) {",
     "at admission (known = max(kept, computed + 1),",
-    "branch (known == prompt) { mark first_token; }",
-    "branch (known == prompt) { observe ttft = now - t0; }",
     "branch (more) { tool (~exp(Z)); } else { end; }",
     "device gpu { compute (t) = a * ceil(t / b0); }",
     "execute (c + compute(batch.tokens));",

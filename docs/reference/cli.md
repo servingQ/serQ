@@ -50,17 +50,17 @@ to 0 and `seed` to 1. JSON IR contains all resolved settings already.
 | `--trace F` | run, ir | replace the program's trace corpus |
 | `--inline-trace` | ir | turn the trace file into the sessions' turns, as `CArrival::Sessions` data |
 | `--json` | run | print the report as JSON |
-| `--dump DIR` | run | write `DIR/<name>.csv` per `observe`, columns `time,session,turn,value`, and `DIR/gauge/<name>.csv` per `gauge`, columns `time,value` (its change points) |
+| `--dump DIR` | run | write `DIR/<name>.csv` per `observe`, columns `time,session,turn,value`, `DIR/client/<name>.csv` per client metric, the same columns, and `DIR/gauge/<name>.csv` per `gauge`, columns `time,value` (its change points) |
 | `--format` | draw | `tikz` (default) or `svg` |
 | `--out PATH` | draw | write to a file instead of stdout |
 | `--check` | fmt | exit with code 1 and list files that need formatting, without writing them |
 
 ## The JSON report
 
-`observes` and `gauges` are objects keyed by name; `stages` and `pools` are arrays.
+`observes`, `client` and `gauges` are objects keyed by name; `stages` and `pools` are arrays.
 
 ```bash
-serq run examples/multi-turn/vllm.sq --horizon 2000 --warmup 200 --seed 1 --json | jq '.observes.ttft.mean'
+serq run examples/multi-turn/vllm.sq --horizon 2000 --warmup 200 --seed 1 --json | jq '.client.ttft.mean'
 serq run examples/multi-turn/vllm.sq --horizon 2000 --warmup 200 --seed 1 --json | jq '.pools[] | select(.name=="kv") | .preemptions'
 ```
 
@@ -68,6 +68,7 @@ serq run examples/multi-turn/vllm.sq --horizon 2000 --warmup 200 --seed 1 --json
 |---|---|
 | top level | `serq_version` (the interpreter that ran, `serq --version`), `horizon` (the configured deadline), `end` (when the run ended: `horizon`, or earlier with `--arrivals`), `warmup`, `seed`, `events`, `arrivals` (sessions that arrived, warm-up included), `ended` (sessions that ended after warm-up), `turns` (`turn;` statements run after warm-up: each is one request to the `server`), `mean_live` (time-average sessions alive) |
 | `observes.<name>` | `count`, `mean`, `ci`, `cv2`, `p99` |
+| `client.ttft`, `client.tpot`, `client.response` | the same fields, of what each turn's client saw, in every program ([what the client sees](../language.md#what-the-client-sees)): `ttft` from the turn to its first output token, `tpot` the time per output token after the first, `response` from the turn to its answer. A turn that runs no decode has no `ttft` or `tpot` sample |
 | `gauges.<name>` | `mean` (time average over `[warmup, end]`), `ci`, `min`, `max` |
 | `claims[]` | present when the program has a `claim`: `name`, `kind` (`every_iteration`, `some_iteration`, `at_end`), `result` (`holds`, `fails`, `witnessed`, `not_witnessed`, `not_evaluated`, `out_of_scope`), `checked` (iterations read, or 1 for a claim read at the end), `failures` (of those, the ones that read 0), `first` (the first failure, or a `some` claim's first witness; `null` when none), `note` (the sessions live at the end, or the session that failed `given`; `null` otherwise). The whole run, warm-up included |
 | `stages[]` | stage statistics, below |
