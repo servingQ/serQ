@@ -284,7 +284,7 @@ admitted to one inside:
 ```
 
 A queue's entries are already named per shape (`decode (prompt)`,
-`decode (prompt) from src`). The proposal: a queue's entries are its
+`decode (prompt) from P`). The proposal: a queue's entries are its
 engine's requests, with the `request` grammar for their bodies, and
 `taking` is written once per entry on the engine's `admit waiting`:
 
