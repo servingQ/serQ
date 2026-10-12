@@ -1,0 +1,92 @@
+name: Automerge
+
+# A pull request into main labelled `automerge` is squash-merged once every
+# check on its head commit has passed. The label is the author's word that
+# the PR is done; this workflow only waits for CI to agree.
+#
+# It runs when the label is added and whenever a workflow that checks a PR
+# completes, and each time looks at every open PR carrying the label, so a
+# run missed for one PR is caught by the next. A PR is merged when
+#   - it is open, not a draft, into main, and mergeable;
+#   - the CI workflow has run on its head commit (a label added before CI
+#     has started must not merge on the checks that happen to be done);
+#   - every workflow run and check run on that commit has completed, and
+#     each one succeeded or was skipped.
+# A failed check leaves the PR open and labelled: push a fix and it is
+# checked again. The merge names the head commit it checked, so a push
+# that lands between the check and the merge is refused, not merged.
+#
+# The merge uses AUTOMERGE_TOKEN (a fine-grained token with contents and
+# pull requests write on this repository), not GITHUB_TOKEN: a push made
+# with GITHUB_TOKEN starts no workflow, and main's CI, Docs and Dev runs
+# must start on the merge commit.
+
+on:
+  pull_request_target:
+    types: [labeled]
+  workflow_run:
+    workflows: [CI, PR title, Docs]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: automerge
+  cancel-in-progress: false
+
+jobs:
+  merge:
+    name: merge labelled PRs whose checks passed
+    if: github.event_name != 'pull_request_target' || github.event.label.name == 'automerge'
+    runs-on: ubuntu-22.04
+    steps:
+      - name: merge
+        env:
+          GH_TOKEN: ${{ secrets.AUTOMERGE_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::secret AUTOMERGE_TOKEN is not set; see the comment at the top of automerge.yml"
+            exit 1
+          fi
+          prs=$(gh pr list -R "$REPO" --label automerge --state open --base main \
+            --json number,isDraft --jq '.[] | select(.isDraft | not) | .number')
+          for n in $prs; do
+            pr=$(gh api "repos/$REPO/pulls/$n")
+            sha=$(jq -r .head.sha <<<"$pr")
+            title=$(jq -r .title <<<"$pr")
+            # null while GitHub is still computing it; the next run decides
+            if [ "$(jq -r .mergeable <<<"$pr")" != true ]; then
+              echo "#$n: not mergeable ($(jq -r .mergeable_state <<<"$pr"))"
+              continue
+            fi
+            # the latest run of each workflow: a PR title fixed by an edit
+            # leaves the failed run on the same commit behind it
+            runs=$(gh api --paginate "repos/$REPO/actions/runs?head_sha=$sha&per_page=100" \
+              --jq '.workflow_runs[] | select(.name != "Automerge") | {name, status, conclusion, created_at}' \
+              | jq -s 'group_by(.name) | map(max_by(.created_at) | del(.created_at))')
+            # the check-runs API gives the latest run of each check
+            checks=$(gh api --paginate "repos/$REPO/commits/$sha/check-runs?per_page=100" \
+              --jq '.check_runs[] | {name, status, conclusion}' | jq -s .)
+            all=$(jq -s 'add' <<<"$runs$checks")
+            if ! jq -e 'any(.[]; .name == "CI")' <<<"$runs" >/dev/null; then
+              echo "#$n: CI has not started on $sha"
+              continue
+            fi
+            if jq -e 'any(.[]; .status != "completed")' <<<"$all" >/dev/null; then
+              echo "#$n: waiting for $(jq -r '[.[] | select(.status != "completed") | .name] | join(", ")' <<<"$all")"
+              continue
+            fi
+            failed=$(jq -r '[.[] | select(.conclusion | IN("success", "skipped", "neutral") | not) | "\(.name) (\(.conclusion))"] | join(", ")' <<<"$all")
+            if [ -n "$failed" ]; then
+              echo "#$n: not merged, failed: $failed"
+              continue
+            fi
+            echo "#$n: every check passed on $sha; merging"
+            gh api -X PUT "repos/$REPO/pulls/$n/merge" \
+              -f merge_method=squash -f sha="$sha" -f commit_title="$title (#$n)" \
+              --jq .message || echo "#$n: merge refused"
+          done
