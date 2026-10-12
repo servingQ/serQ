@@ -1,6 +1,6 @@
 //! An engine's request (`docs/design/engine-request.md`): `request (…) {
-//! … }`, `taking` on `admit waiting` and `release cache` say in the engine
-//! what it does with one request, and the server calls it, `llm (prompt,
+//! … }` with its `at admission` and `cache`, and `taking` on `admit
+//! waiting`, say in the engine what it does with one request, and the server calls it, `llm (prompt,
 //! o);`. It is parse-time sugar for the hold a server writes, so a program
 //! written either way has one IR; and what the design refuses does not link.
 
@@ -47,11 +47,12 @@ engine llm on gpu {
   reqs cap 2;
   tokens cap 8;
   request (prompt, output) {
-    state kept = prompt;
-    known = max(kept, computed + 1);
+    set kept = prompt;
+    at admission { known = max(kept, computed + 1); }
     set kept = known;
     prefill (known - cached) growing kv;
     decode (output - 1 - (known - prompt)) growing kv;
+    cache (prompt + output);
   }
   schedule {
     advance running;
@@ -59,7 +60,6 @@ engine llm on gpu {
       taking reqs (1), kv (min(known, budget_left(llm))) reserve (known);
   }
   execute (1);
-  release cache (prompt + output);
 }
 ";
 
@@ -169,12 +169,31 @@ server {{ run llm prefill (cost(llm, n)); }}
 
 // What the request says, and where.
 
+/// The request without its admission: no `at admission`, no `cache`.
+const UNTAKEN: &[(&str, &str)] = &[
+    (
+        "\n      taking reqs (1), kv (min(known, budget_left(llm))) reserve (known)",
+        "",
+    ),
+    (
+        "    at admission { known = max(kept, computed + 1); }\n",
+        "",
+    ),
+    ("    set kept = known;\n", ""),
+    ("prefill (known - cached)", "prefill (prompt)"),
+    (
+        "decode (output - 1 - (known - prompt))",
+        "decode (output - 1)",
+    ),
+    ("    cache (prompt + output);\n", ""),
+];
+
 #[test]
 fn taking_needs_a_request() {
     let src = replaced(
         &program(),
         &[(
-            "  request (prompt, output) {\n    state kept = prompt;\n    known = max(kept, computed + 1);\n    set kept = known;\n    prefill (known - cached) growing kv;\n    decode (output - 1 - (known - prompt)) growing kv;\n  }\n",
+            "  request (prompt, output) {\n    set kept = prompt;\n    at admission { known = max(kept, computed + 1); }\n    set kept = known;\n    prefill (known - cached) growing kv;\n    decode (output - 1 - (known - prompt)) growing kv;\n    cache (prompt + output);\n  }\n",
             "",
         )],
     );
@@ -185,26 +204,27 @@ fn taking_needs_a_request() {
 }
 
 #[test]
-fn release_cache_needs_what_the_admission_took() {
-    let src = replaced(
-        &program(),
-        &[
-            (
-                "\n      taking reqs (1), kv (min(known, budget_left(llm))) reserve (known)",
-                "",
-            ),
-            (
-                "    known = max(kept, computed + 1);\n    set kept = known;\n",
-                "",
-            ),
-            ("prefill (known - cached)", "prefill (prompt)"),
-            (
-                "decode (output - 1 - (known - prompt))",
-                "decode (output - 1)",
-            ),
-        ],
+fn a_cache_needs_what_the_admission_took() {
+    let mut pairs = UNTAKEN.to_vec();
+    pairs.pop();
+    refused(
+        &replaced(&program(), &pairs),
+        "`cache` in engine `llm`'s request, which takes nothing at admission",
     );
-    refused(&src, "and the request takes nothing: write `taking`");
+}
+
+#[test]
+fn bindings_need_an_admission() {
+    let mut pairs = UNTAKEN.to_vec();
+    pairs.remove(1);
+    pairs.remove(1);
+    pairs.remove(1);
+    pairs.remove(1);
+    let src = replaced(&program(), &pairs);
+    refused(
+        &src,
+        "`at admission` in engine `llm`'s request, which takes nothing at admission",
+    );
 }
 
 #[test]
@@ -220,37 +240,34 @@ fn every_admission_takes_the_same() {
 }
 
 #[test]
-fn a_binding_needs_an_admission() {
-    let src = replaced(
-        &program(),
-        &[
-            (
-                "\n      taking reqs (1), kv (min(known, budget_left(llm))) reserve (known)",
-                "",
-            ),
-            ("  release cache (prompt + output);\n", ""),
-        ],
-    );
-    refused(
-        &src,
-        "`known` is an admission binding, and engine `llm`'s request takes nothing",
-    );
-}
-
-#[test]
-fn a_state_stands_above_the_bindings() {
+fn taking_names_the_engine_s_pools() {
     let src = replaced(
         &program(),
         &[(
-            "    state kept = prompt;\n    known = max(kept, computed + 1);\n",
-            "    known = max(computed + 1, prompt);\n    state kept = prompt;\n",
+            "kv (min(known, budget_left(llm))) reserve (known)",
+            "kvx (min(known, budget_left(llm))) reserve (known)",
         )],
     );
-    refused(&src, "a request's `state` stands above its bindings");
+    refused(
+        &src,
+        "engine `llm`'s `taking` names `kvx`, which is no capacity of the engine or its device",
+    );
 }
 
 #[test]
-fn a_binding_stands_above_the_statements() {
+fn a_request_is_admitted_once() {
+    let src = replaced(
+        &program(),
+        &[(
+            "    set kept = known;\n",
+            "    set kept = known;\n    at admission { late = known; }\n",
+        )],
+    );
+    refused(&src, "a request is admitted once: one `at admission`");
+}
+
+#[test]
+fn a_binding_goes_in_at_admission() {
     let src = replaced(
         &program(),
         &[(
@@ -260,17 +277,32 @@ fn a_binding_stands_above_the_statements() {
     );
     refused(
         &src,
-        "a request's admission binding stands above its statements",
+        "an admission binding goes in the request's `at admission { … }`",
     );
 }
 
 #[test]
-fn the_header_reads_no_attribute_of_the_session() {
+fn the_cache_is_the_request_s_last_item() {
+    let src = replaced(
+        &program(),
+        &[(
+            "    cache (prompt + output);\n",
+            "    cache (prompt + output);\n    observe late = 1;\n",
+        )],
+    );
+    refused(&src, "a request's `cache (e);` is its last item");
+}
+
+#[test]
+fn the_admission_reads_no_attribute_of_the_session() {
     let src = replaced(
         &program(),
         &[("kv (min(known, budget_left(llm)))", "kv (min(known, n))")],
     );
-    refused(&src, "the header reads `n`");
+    refused(
+        &src,
+        "engine `llm`'s admission (its `taking` and `at admission`) reads `n`",
+    );
 }
 
 #[test]
@@ -292,6 +324,31 @@ fn the_program_reads_what_the_request_marks_not_its_names() {
         &[("observe response = now - t0;", "observe response = kept;")],
     );
     refused(&src, "`kept` is engine `llm`'s request's own");
+}
+
+/// Two engines' requests that name one value: one attribute would carry
+/// both.
+#[test]
+fn two_requests_do_not_share_a_name() {
+    let second = "
+device gpu2 { kv2 cap 64; }
+pool kv2 on gpu2 { block bs; }
+engine llm2 on gpu2 {
+  tokens cap 8;
+  request (prompt) {
+    set kept = prompt;
+    at admission { }
+    prefill (prompt) growing kv2;
+  }
+  schedule { advance running; admit waiting while (running.preempted == 0) taking kv2 (prompt); }
+  execute (1);
+}
+";
+    let src = format!("{DEVICE}{ENGINE}{POOLS}{second}{SERVER}");
+    refused(
+        &src,
+        "`kept` is engine `llm`'s request's own and engine `llm2`'s too",
+    );
 }
 
 #[test]

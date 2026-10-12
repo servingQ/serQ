@@ -404,7 +404,6 @@ impl Parser {
         let mut caps: Vec<Capacity> = vec![];
         let (mut tokens, mut schedule, mut execute) = (false, false, false);
         let mut request: Option<request::RequestSrc> = None;
-        let mut release: Option<(usize, Vec<Token>)> = None;
         self.takings.clear();
         while *self.peek() != Tok::RBrace {
             let k_at = self.pos;
@@ -416,11 +415,6 @@ impl Parser {
                     );
                 }
                 request = Some(self.request_src(&name, &device, dev_array)?);
-            } else if self.eat_kw("release") {
-                if release.is_some() {
-                    return self.err_at(k_at, "`release cache` twice: a request leaves one cache");
-                }
-                release = Some((k_at, self.release_src()?));
             } else if self.eat_kw("tokens") {
                 if tokens {
                     return self.err_at(k_at, "`tokens cap` twice: an iteration has one budget");
@@ -546,6 +540,12 @@ impl Parser {
                 return self.err_at(at, format!("engine `{name}` needs {what}"));
             }
         }
+        // what its request may take: its own capacities and its device's
+        let takeable: Vec<String> = caps
+            .iter()
+            .chain(&self.devices[dev].caps)
+            .map(|c| c.name.clone())
+            .collect();
         self.stages.push(name.clone());
         self.engines.push(EngineDecl {
             name: name.clone(),
@@ -561,7 +561,7 @@ impl Parser {
             array: dev_array,
             kind: StageKind::Step(Box::new(s)),
         });
-        self.engine_request(&name, request, release)
+        self.engine_request(&name, request, &takeable)
     }
 
     /// `{ let …; stmt* }` of engine `engine`'s `schedule`, written into `s`.

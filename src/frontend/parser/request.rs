@@ -4,15 +4,15 @@
 //! ```text
 //! engine vllm on gpu {
 //!   request (prompt, output) {
-//!     state kept = prompt;                    // set when the call is reached
-//!     known = max(kept, computed + 1);        // an admission binding
-//!     set kept = known;                       // the statements while admitted
+//!     set kept = prompt;                      // when the call is reached
+//!     at admission { known = max(kept, computed + 1); }
+//!     set kept = known;                       // while admitted
 //!     prefill (known - cached) growing kv;
 //!     mark prefilled;
 //!     decode (output - 1) growing kv;
+//!     cache (prompt + output);                // what it leaves cached
 //!   }
 //!   schedule { …; admit waiting … taking reqs (1), kv (known) reserve (known); }
-//!   release cache (prompt + output);
 //! }
 //! ```
 //!
@@ -45,14 +45,50 @@ pub(super) struct RequestSrc {
     pub at: usize,
     /// `( … )`, the parentheses included.
     pub params: Vec<Token>,
-    /// What the braces hold.
+    /// What the braces hold, and the position of its first token.
     pub body: Vec<Token>,
+    pub body_at: usize,
 }
 
-/// `taking P (u) [reserve (r)], … [reuse (e)]`, each expression's tokens.
+/// One pool of a `taking`: `POOL (units) [reserve (units)]`.
+struct TakenPool {
+    pool: Token,
+    units: Vec<Token>,
+    reserve: Option<Vec<Token>>,
+}
+
+/// `taking P (u) [reserve (r)], … [reuse (e)]` on `admit waiting`.
 struct Taking {
-    pools: Vec<(Token, Vec<Token>, Option<Vec<Token>>)>,
+    /// The position of `taking`.
+    at: usize,
+    pools: Vec<TakenPool>,
     reuse: Option<Vec<Token>>,
+}
+
+/// `NAME = e;` in `at admission { … }`.
+struct Binding {
+    name: Token,
+    value: Vec<Token>,
+}
+
+/// A request's items in the order they happen: the statements when the
+/// call is reached, the admission, the statements while admitted, and
+/// what the release leaves cached.
+struct RequestItems<'a> {
+    before: &'a [Token],
+    /// `at admission { … }`: its position and bindings.
+    admission: Option<(usize, Vec<Binding>)>,
+    after: &'a [Token],
+    /// `cache (e);`: its position and `e`.
+    cache: Option<(usize, Vec<Token>)>,
+}
+
+/// An engine's request's own names, which the rest of the program does not
+/// read or set.
+pub(super) struct RequestNames {
+    pub engine: String,
+    pub at: usize,
+    pub names: Vec<String>,
 }
 
 /// A token written by the lowering, placed at `like` for the errors.
@@ -71,10 +107,14 @@ fn word(w: &str, like: &Token) -> Token {
     made(Tok::Ident(w.into()), like)
 }
 
-/// The tokens of the group that opens at `toks[i]`, without its brackets,
-/// and the index after its close.
+fn is_word(t: Option<&Token>, w: &str) -> bool {
+    matches!(t, Some(Token { tok: Tok::Ident(x), .. }) if x == w)
+}
+
+/// The tokens of the group that opens at `toks[i]` with `(` or `{`,
+/// without its brackets, and the index after its close.
 fn group(toks: &[Token], i: usize) -> Option<(Vec<Token>, usize)> {
-    if toks.get(i)?.tok != Tok::LParen {
+    if !matches!(toks.get(i)?.tok, Tok::LParen | Tok::LBrace) {
         return None;
     }
     let mut depth = 0usize;
@@ -105,6 +145,23 @@ fn item_end(toks: &[Token], i: usize) -> Option<usize> {
         }
     }
     None
+}
+
+/// The positions of `toks` at depth 0, with the token at each.
+fn top_level(toks: &[Token]) -> Vec<usize> {
+    let mut depth = 0isize;
+    let mut out = vec![];
+    for (j, t) in toks.iter().enumerate() {
+        if depth == 0 {
+            out.push(j);
+        }
+        match t.tok {
+            Tok::LParen | Tok::LBracket | Tok::LBrace => depth += 1,
+            Tok::RParen | Tok::RBracket | Tok::RBrace => depth -= 1,
+            _ => {}
+        }
+    }
+    out
 }
 
 /// `cost ( P₁ , … , e )` over the pools taken.
@@ -158,43 +215,28 @@ impl Parser {
             );
         }
         let start = self.pos;
-        let Some((_, end)) = group(&self.toks, start) else {
+        if self.toks[start].tok != Tok::LParen {
             return self.err(
                 "expected `(` and the request's parameters: `request (prompt, output) { … }`",
             );
+        }
+        let Some((_, end)) = group(&self.toks, start) else {
+            return self.err("the request's `(` is not closed");
         };
         let params = self.toks[start..end].to_vec();
         self.pos = end;
         let open = self.pos;
         self.expect(&Tok::LBrace)?;
-        let mut depth = 1usize;
-        while depth > 0 {
-            match self.peek() {
-                Tok::Eof => return self.err_at(open, "the request's `{` is not closed"),
-                Tok::LBrace => depth += 1,
-                Tok::RBrace => depth -= 1,
-                _ => {}
-            }
-            self.advance();
-        }
-        let body = self.toks[open + 1..self.pos - 1].to_vec();
-        Ok(RequestSrc { at, params, body })
-    }
-
-    /// `cache ( e ) ;` after `release`: `e`'s tokens.
-    pub(super) fn release_src(&mut self) -> PResult<Vec<Token>> {
-        self.expect_kw("cache")?;
-        let Some((e, end)) = group(&self.toks, self.pos) else {
-            return self.err(
-                "expected `(`: `release cache (e);` says what a finished request leaves cached",
-            );
+        let Some((body, close)) = group(&self.toks, open) else {
+            return self.err_at(open, "the request's `{` is not closed");
         };
-        if e.is_empty() {
-            return self.err("`release cache ()` needs what the request leaves cached");
-        }
-        self.pos = end;
-        self.expect(&Tok::Semi)?;
-        Ok(e)
+        self.pos = close;
+        Ok(RequestSrc {
+            at,
+            params,
+            body,
+            body_at: open + 1,
+        })
     }
 
     /// `taking …` on `admit waiting`, if it is next: its tokens up to `;`.
@@ -217,8 +259,9 @@ impl Parser {
         Ok(())
     }
 
-    /// `P (u) [reserve (r)], … [reuse (e)]`, from the tokens at `at`.
-    fn taking(&self, at: usize, toks: &[Token]) -> PResult<Taking> {
+    /// The `taking` at `at`: `P (u) [reserve (r)], … [reuse (e)]`, each `P`
+    /// one of `pools`, the engine's capacities and its device's.
+    fn taking(&self, engine: &str, at: usize, toks: &[Token], pools: &[String]) -> PResult<Taking> {
         let bad = || {
             self.err_at(
                 at,
@@ -226,7 +269,13 @@ impl Parser {
                  `reuse (units)`: `taking reqs (1), kv (n) reserve (m)`",
             )
         };
+        let paren_group = |i: usize| {
+            toks.get(i)
+                .filter(|t| t.tok == Tok::LParen)
+                .and_then(|_| group(toks, i))
+        };
         let mut t = Taking {
+            at,
             pools: vec![],
             reuse: None,
         };
@@ -238,45 +287,53 @@ impl Parser {
             else {
                 return bad();
             };
-            let Some((u, next)) = group(toks, i + 1) else {
+            let Some((units, next)) = paren_group(i + 1) else {
                 return bad();
             };
             i = next;
-            let reserve = match toks.get(i) {
-                Some(Token {
-                    tok: Tok::Ident(w), ..
-                }) if w == "reserve" => {
-                    let Some((r, next)) = group(toks, i + 1) else {
-                        return bad();
-                    };
-                    i = next;
-                    Some(r)
-                }
-                _ => None,
+            let reserve = if is_word(toks.get(i), "reserve") {
+                let Some((r, next)) = paren_group(i + 1) else {
+                    return bad();
+                };
+                i = next;
+                Some(r)
+            } else {
+                None
             };
-            if u.is_empty() || reserve.as_ref().is_some_and(|r| r.is_empty()) {
+            if units.is_empty() || reserve.as_ref().is_some_and(|r| r.is_empty()) {
                 return bad();
             }
-            let Tok::Ident(name) = &p.tok else {
-                unreachable!()
-            };
-            if t.pools.iter().any(|(q, ..)| q.tok == p.tok) {
-                return self.err_at(at, format!("`taking` names `{name}` twice"));
+            if !pools.contains(&p.text) {
+                return self.err_at(
+                    at,
+                    format!(
+                        "engine `{engine}`'s `taking` names `{}`, which is no capacity of the \
+                         engine or its device: it takes {}",
+                        p.text,
+                        pools
+                            .iter()
+                            .map(|q| format!("`{q}`"))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                );
             }
-            t.pools.push((p.clone(), u, reserve));
-            match toks.get(i) {
-                Some(Token {
-                    tok: Tok::Comma, ..
-                }) => i += 1,
-                _ => break,
+            if t.pools.iter().any(|q| q.pool.text == p.text) {
+                return self.err_at(at, format!("`taking` names `{}` twice", p.text));
+            }
+            t.pools.push(TakenPool {
+                pool: p.clone(),
+                units,
+                reserve,
+            });
+            if toks.get(i).is_some_and(|t| t.tok == Tok::Comma) {
+                i += 1;
+            } else {
+                break;
             }
         }
-        if let Some(Token {
-            tok: Tok::Ident(w), ..
-        }) = toks.get(i)
-            && w == "reuse"
-        {
-            let Some((e, next)) = group(toks, i + 1) else {
+        if is_word(toks.get(i), "reuse") {
+            let Some((e, next)) = paren_group(i + 1) else {
                 return bad();
             };
             t.reuse = Some(e);
@@ -288,17 +345,99 @@ impl Parser {
         Ok(t)
     }
 
+    /// The request's items, in the order they happen.
+    fn request_items<'a>(&self, r: &'a RequestSrc) -> PResult<RequestItems<'a>> {
+        let body = &r.body;
+        let starts = top_level(body);
+        // `at admission { … }`: the admission, once
+        let mut admission = None;
+        let (mut before, mut after): (&[Token], &[Token]) = (&[], body);
+        for &i in &starts {
+            if !(is_word(body.get(i), "at")
+                && is_word(body.get(i + 1), "admission")
+                && body.get(i + 2).is_some_and(|t| t.tok == Tok::LBrace))
+            {
+                continue;
+            }
+            if admission.is_some() {
+                return self.err_at(
+                    r.body_at + i,
+                    "a request is admitted once: one `at admission`",
+                );
+            }
+            let (inner, close) = group(body, i + 2).expect("balanced");
+            admission = Some((r.body_at + i, self.bindings_of(&inner, r.body_at + i)?));
+            before = &body[..i];
+            after = &body[close..];
+        }
+        // `cache (e);`, the last item, after a statement's `;`
+        let mut cache = None;
+        let offset = body.len() - after.len();
+        if let Some(&i) = starts.iter().rev().find(|&&i| {
+            i >= offset && is_word(body.get(i), "cache") && (i == 0 || body[i - 1].tok == Tok::Semi)
+        }) && body.get(i + 1).is_some_and(|t| t.tok == Tok::LParen)
+        {
+            let (e, close) = group(body, i + 1).expect("balanced");
+            if close + 1 != body.len() || body.get(close).is_none_or(|t| t.tok != Tok::Semi) {
+                return self.err_at(
+                    r.body_at + i,
+                    "a request's `cache (e);` is its last item: what the release leaves cached",
+                );
+            }
+            if e.is_empty() {
+                return self.err_at(
+                    r.body_at + i,
+                    "`cache ()` needs what the request leaves cached",
+                );
+            }
+            cache = Some((r.body_at + i, e));
+            after = &body[offset..i];
+        }
+        Ok(RequestItems {
+            before,
+            admission,
+            after,
+            cache,
+        })
+    }
+
+    /// `NAME = e; …` inside `at admission { … }` at `at`.
+    fn bindings_of(&self, toks: &[Token], at: usize) -> PResult<Vec<Binding>> {
+        let mut out = vec![];
+        let mut i = 0;
+        while i < toks.len() {
+            let named = matches!(toks[i].tok, Tok::Ident(_))
+                && toks.get(i + 1).is_some_and(|t| t.tok == Tok::Assign);
+            let Some(end) = item_end(toks, i).filter(|_| named) else {
+                return self.err_at(
+                    at,
+                    "`at admission { … }` holds bindings, `NAME = expr;`, read when the request \
+                     is admitted",
+                );
+            };
+            out.push(Binding {
+                name: toks[i].clone(),
+                value: toks[i + 2..end].to_vec(),
+            });
+            i = end + 1;
+        }
+        Ok(out)
+    }
+
     /// Engine `engine` is read: write its request out as the kernel a
-    /// server writes, a queue entry of the engine, and read it.
+    /// server writes, a queue entry of the engine, and read it. `pools`
+    /// are the capacities it may take: its own and its device's.
     pub(super) fn engine_request(
         &mut self,
         engine: &str,
         request: Option<RequestSrc>,
-        release: Option<(usize, Vec<Token>)>,
+        pools: &[String],
     ) -> PResult<()> {
         let takings = std::mem::take(&mut self.takings);
-        let written: Vec<&(usize, Option<Vec<Token>>)> =
-            takings.iter().filter(|(_, t)| t.is_some()).collect();
+        let written: Vec<(usize, &Vec<Token>)> = takings
+            .iter()
+            .filter_map(|(at, t)| t.as_ref().map(|t| (*at, t)))
+            .collect();
         let Some(request) = request else {
             if let Some((at, _)) = written.first() {
                 return self.err_at(
@@ -309,24 +448,15 @@ impl Parser {
                     ),
                 );
             }
-            if let Some((at, _)) = release {
-                return self.err_at(
-                    at,
-                    format!(
-                        "`release cache` says what engine `{engine}`'s request leaves cached, \
-                         and `{engine}` declares no `request (…) {{ … }}`"
-                    ),
-                );
-            }
             return Ok(());
         };
         // every admission is the request's: one sizing
         let taking = match written.first() {
             None => None,
-            Some((at, Some(first))) => {
+            Some((at, first)) => {
                 let same = |t: &Option<Vec<Token>>| {
                     t.as_ref().is_some_and(|t| {
-                        t.len() == first.len() && t.iter().zip(first).all(|(a, b)| a.tok == b.tok)
+                        t.len() == first.len() && t.iter().zip(*first).all(|(a, b)| a.tok == b.tok)
                     })
                 };
                 if let Some((other, _)) = takings.iter().find(|(_, t)| !same(t)) {
@@ -338,145 +468,37 @@ impl Parser {
                         ),
                     );
                 }
-                Some(self.taking(*at, first)?)
+                Some(self.taking(engine, *at, first, pools)?)
             }
-            Some((_, None)) => unreachable!("filtered"),
         };
-        if taking.is_none()
-            && let Some((at, _)) = release
-        {
-            return self.err_at(
-                at,
+        let items = self.request_items(&request)?;
+        if taking.is_none() {
+            let without = |what: &str| {
                 format!(
-                    "`release cache` says what engine `{engine}`'s request leaves of what it took, \
-                     and the request takes nothing: write `taking` on `admit waiting`"
-                ),
-            );
-        }
-        // `state`s, then bindings, then statements
-        let body = &request.body;
-        let mut states: Vec<(Token, Vec<Token>)> = vec![];
-        let mut binds: Vec<(Token, Vec<Token>)> = vec![];
-        let mut i = 0;
-        while i < body.len() {
-            let is_state = matches!(&body[i].tok, Tok::Ident(w) if w == "state");
-            let is_bind = matches!(&body[i].tok, Tok::Ident(_))
-                && body.get(i + 1).is_some_and(|t| t.tok == Tok::Assign);
-            if !is_state && !is_bind {
-                break;
-            }
-            let Some(end) = item_end(body, i) else {
-                return self.err_at(request.at, "an item of the request ends with `;`");
+                    "{what} in engine `{engine}`'s request, which takes nothing at admission: \
+                     write `taking` on `admit waiting`"
+                )
             };
-            if is_state {
-                if !binds.is_empty() {
-                    return self.err_at(
-                        request.at,
-                        "a request's `state` stands above its bindings: it is set when the call \
-                         is reached, before the admission",
-                    );
-                }
-                let name = body.get(i + 1).filter(|t| matches!(t.tok, Tok::Ident(_)));
-                let (Some(name), true) =
-                    (name, body.get(i + 2).is_some_and(|t| t.tok == Tok::Assign))
-                else {
-                    return self.err_at(request.at, "`state NAME = expr;` in a request");
-                };
-                states.push((name.clone(), body[i + 3..end].to_vec()));
-            } else {
-                binds.push((body[i].clone(), body[i + 2..end].to_vec()));
+            if let Some((at, _)) = items.admission {
+                return self.err_at(at, without("`at admission`"));
             }
-            i = end + 1;
-        }
-        let stmts = &body[i..];
-        let like = self.toks[request.at].clone();
-        if taking.is_none()
-            && let Some((name, _)) = binds.first()
-        {
-            return self.err_at(
-                request.at,
-                format!(
-                    "`{}` is an admission binding, and engine `{engine}`'s request takes nothing \
-                     at admission: write `taking` on `admit waiting`",
-                    name.text
-                ),
-            );
-        }
-        // the kernel text
-        let mut out = vec![like.clone()];
-        out.extend(request.params.iter().cloned());
-        out.push(made(Tok::LBrace, &like));
-        for (name, e) in &states {
-            out.push(word("set", name));
-            out.push(name.clone());
-            out.push(made(Tok::Assign, name));
-            out.extend(e.iter().cloned());
-            out.push(made(Tok::Semi, name));
-        }
-        match &taking {
-            None => out.extend(stmts.iter().cloned()),
-            Some(t) => {
-                let pools: Vec<&Token> = t.pools.iter().map(|(p, ..)| p).collect();
-                out.push(word("hold", &like));
-                for (k, (p, u, reserve)) in t.pools.iter().enumerate() {
-                    if k > 0 {
-                        out.push(made(Tok::Comma, p));
-                    }
-                    out.push(p.clone());
-                    out.extend(paren(cost(&[p], u, p), p));
-                    if let Some(r) = reserve {
-                        out.push(word("reserve", p));
-                        out.extend(paren(cost(&[p], r, p), p));
-                    }
-                }
-                if let Some(e) = &t.reuse {
-                    out.push(word("reuse", &like));
-                    out.extend(paren(cost(&pools, e, &like), &like));
-                }
-                if !binds.is_empty() {
-                    out.push(word("at", &like));
-                    out.push(word("admission", &like));
-                    out.push(made(Tok::LParen, &like));
-                    for (k, (name, e)) in binds.iter().enumerate() {
-                        if k > 0 {
-                            out.push(made(Tok::Comma, name));
-                        }
-                        out.push(name.clone());
-                        out.push(made(Tok::Assign, name));
-                        out.extend(e.iter().cloned());
-                    }
-                    out.push(made(Tok::RParen, &like));
-                }
-                out.push(made(Tok::LBrace, &like));
-                out.extend(stmts.iter().cloned());
-                out.push(made(Tok::RBrace, &like));
-                if let Some((at, e)) = &release {
-                    let at = self.toks[*at].clone();
-                    out.push(word("cache", &at));
-                    out.extend(paren(cost(&pools, e, &at), &at));
-                }
-                out.push(made(Tok::Semi, &like));
+            if let Some((at, _)) = items.cache {
+                return self.err_at(at, without("`cache`"));
             }
         }
-        out.push(made(Tok::RBrace, &like));
+        let text = self.kernel_text(&request, &items, taking.as_ref());
         // read it where the engine ends, as a queue's entry
         let at = self.pos;
-        self.toks.splice(at..at, out);
-        let pools = taking
-            .as_ref()
-            .map(|t| {
-                t.pools
-                    .iter()
-                    .map(|(p, ..)| p.text.clone())
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
+        self.toks.splice(at..at, text);
         self.queues.push(QueueDecl {
             name: engine.to_string(),
             count: 1,
             family: false,
             roles: vec![],
-            pools,
+            pools: taking
+                .as_ref()
+                .map(|t| t.pools.iter().map(|p| p.pool.text.clone()).collect())
+                .unwrap_or_default(),
             has_stage: true,
             entries: vec![],
             leased: None,
@@ -485,6 +507,7 @@ impl Parser {
             nic: false,
             takes: None,
             engine: true,
+            header_at: taking.as_ref().map(|t| t.at),
             at: request.at,
         });
         let qi = self.queues.len() - 1;
@@ -492,6 +515,73 @@ impl Parser {
         let read = self.entry(qi, "request".into());
         self.in_request = None;
         read
+    }
+
+    /// The kernel text the request stands for: the entry `request (…) { …
+    /// }`, with the statements before the admission, then the hold of
+    /// what `taking` takes, its bindings, its body and its cache.
+    fn kernel_text(
+        &self,
+        request: &RequestSrc,
+        items: &RequestItems,
+        taking: Option<&Taking>,
+    ) -> Vec<Token> {
+        let like = self.toks[request.at].clone();
+        let mut out = vec![like.clone()];
+        out.extend(request.params.iter().cloned());
+        out.push(made(Tok::LBrace, &like));
+        out.extend(items.before.iter().cloned());
+        let Some(t) = taking else {
+            out.extend(items.after.iter().cloned());
+            out.push(made(Tok::RBrace, &like));
+            return out;
+        };
+        let at = self.toks[t.at].clone();
+        let pools: Vec<&Token> = t.pools.iter().map(|p| &p.pool).collect();
+        out.push(word("hold", &at));
+        for (k, p) in t.pools.iter().enumerate() {
+            if k > 0 {
+                out.push(made(Tok::Comma, &p.pool));
+            }
+            out.push(p.pool.clone());
+            out.extend(paren(cost(&[&p.pool], &p.units, &p.pool), &p.pool));
+            if let Some(r) = &p.reserve {
+                out.push(word("reserve", &p.pool));
+                out.extend(paren(cost(&[&p.pool], r, &p.pool), &p.pool));
+            }
+        }
+        if let Some(e) = &t.reuse {
+            out.push(word("reuse", &at));
+            out.extend(paren(cost(&pools, e, &at), &at));
+        }
+        if let Some((a, binds)) = &items.admission
+            && !binds.is_empty()
+        {
+            let a = self.toks[*a].clone();
+            out.push(word("at", &a));
+            out.push(word("admission", &a));
+            out.push(made(Tok::LParen, &a));
+            for (k, b) in binds.iter().enumerate() {
+                if k > 0 {
+                    out.push(made(Tok::Comma, &b.name));
+                }
+                out.push(b.name.clone());
+                out.push(made(Tok::Assign, &b.name));
+                out.extend(b.value.iter().cloned());
+            }
+            out.push(made(Tok::RParen, &a));
+        }
+        out.push(made(Tok::LBrace, &like));
+        out.extend(items.after.iter().cloned());
+        out.push(made(Tok::RBrace, &like));
+        if let Some((c, e)) = &items.cache {
+            let c = self.toks[*c].clone();
+            out.push(word("cache", &c));
+            out.extend(paren(cost(&pools, e, &c), &c));
+        }
+        out.push(made(Tok::Semi, &like));
+        out.push(made(Tok::RBrace, &like));
+        out
     }
 
     /// `prefill (e) [growing P];` or `decode (…) …` in engine `engine`'s
@@ -569,9 +659,25 @@ impl Parser {
     }
 
     /// A request's own names (`kept`, `known`) keep their names in the
-    /// IR; the rest of the program reads what the request marks, not them.
+    /// IR; the rest of the program, another engine's request included,
+    /// reads what the request marks, not them.
     pub(super) fn check_request_names(&self, prog: &Program) -> PResult<()> {
-        for (engine, at, locals) in &self.request_locals {
+        for r in &self.request_names {
+            if let Some((other, l)) = self.request_names.iter().find_map(|o| {
+                (o.engine != r.engine)
+                    .then(|| r.names.iter().find(|l| o.names.contains(l)).map(|l| (o, l)))
+                    .flatten()
+            }) {
+                return self.err_at(
+                    r.at,
+                    format!(
+                        "`{l}` is engine `{}`'s request's own and engine `{}`'s too: one \
+                         attribute would carry both, mixed when the requests run beside each \
+                         other\nhelp: name it otherwise in one of them",
+                        r.engine, other.engine
+                    ),
+                );
+            }
             let mut outside: Vec<&Stmt> = vec![];
             if let Some((_, s)) = &self.server {
                 outside.extend(s);
@@ -587,16 +693,18 @@ impl Parser {
             for s in &outside {
                 assigned_in(std::slice::from_ref(*s), &mut assigned);
             }
-            let found = locals
+            let found = r
+                .names
                 .iter()
                 .find(|l| assigned.contains(l) || outside.iter().any(|s| stmt_reads(s, l)));
             if let Some(l) = found {
                 return self.err_at(
-                    *at,
+                    r.at,
                     format!(
-                        "`{l}` is engine `{engine}`'s request's own, and the program reads or sets \
+                        "`{l}` is engine `{}`'s request's own, and the program reads or sets \
                          it outside the request\nhelp: name it otherwise there, or `mark` a moment \
-                         the caller reads as `{engine}.NAME`"
+                         the caller reads as `{}.NAME`",
+                        r.engine, r.engine
                     ),
                 );
             }

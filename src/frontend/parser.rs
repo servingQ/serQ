@@ -230,7 +230,7 @@ struct Parser {
     in_request: Option<String>,
     /// Each engine's request: the engine, where the request is, and the
     /// names it sets, which are its own.
-    request_locals: Vec<(String, usize, Vec<String>)>,
+    request_names: Vec<request::RequestNames>,
     /// The `hold`s and `fork`s the statement being parsed is inside: a
     /// server's `end` is refused there.
     holds_open: usize,
@@ -817,6 +817,15 @@ fn says(b: &[Token], w: &str) -> bool {
 }
 
 /// The error for an entry that reads a pool or stage not its queue's.
+/// An entry as an error names it: `Q.verb`, or an engine's request.
+fn entry_name(q: &QueueDecl, verb: &str) -> String {
+    if q.engine {
+        format!("engine `{}`'s request", q.name)
+    } else {
+        format!("`{}.{verb}`", q.name)
+    }
+}
+
 fn not_its_own(queue: &str, verb: &str, name: &str) -> String {
     format!(
         "`{queue}.{verb}` reads `{name}`, which is not a pool or stage of `{queue}`: \
@@ -1646,7 +1655,7 @@ impl Parser {
             device_scope: None,
             takings: vec![],
             in_request: None,
-            request_locals: vec![],
+            request_names: vec![],
             holds_open: 0,
             forks_open: 0,
         }
@@ -2247,13 +2256,24 @@ impl Parser {
                             .place_refusal(prog, q, &e.verb, n)
                             .or_else(|| self.names_device(q, n).then(|| a_device(&q.name, &e.verb, n)))
                             .unwrap_or_else(|| {
-                                format!(
-                                    "`{}.{}`: the header reads `{n}`; an entry's header sees its \
-                                     parameters and the queue's pools and stage. Pass `{n}` as a parameter",
-                                    q.name, e.verb
-                                )
+                                if q.engine {
+                                    format!(
+                                        "engine `{}`'s admission (its `taking` and `at admission`) \
+                                         reads `{n}`: it sees the request's parameters, what the \
+                                         request sets before `at admission`, its bindings, the \
+                                         engine's pools and stage and the constants. Pass `{n}` \
+                                         as a parameter",
+                                        q.name
+                                    )
+                                } else {
+                                    format!(
+                                        "`{}.{}`: the header reads `{n}`; an entry's header sees its \
+                                         parameters and the queue's pools and stage. Pass `{n}` as a parameter",
+                                        q.name, e.verb
+                                    )
+                                }
                             });
-                        return self.err_at(e.at, message);
+                        return self.err_at(q.header_at.unwrap_or(e.at), message);
                     }
                     if let Some(n) = e.reads.iter().find(|n| !hidden.contains(n)) {
                         if let Some(message) = self.place_refusal(prog, q, &e.verb, n) {
@@ -2281,8 +2301,20 @@ impl Parser {
                             return self.err_at(
                                 e.at,
                                 format!(
-                                    "`{}.{}` reads `{n}`, which nothing sets: an unknown name\nhelp: {help}",
-                                    q.name, e.verb
+                                    "{} reads `{n}`, which nothing sets: an unknown name\nhelp: {help}",
+                                    entry_name(q, &e.verb)
+                                ),
+                            );
+                        }
+                        if q.engine {
+                            return self.err_at(
+                                e.at,
+                                format!(
+                                    "engine `{}`'s request reads `{n}`, a session attribute set \
+                                     outside it: a request sees its parameters, the engine's pools, \
+                                     the context and the session's `hidden` attributes; pass `{n}` \
+                                     as a parameter",
+                                    q.name
                                 ),
                             );
                         }
@@ -3673,6 +3705,7 @@ impl Parser {
             nic: false,
             takes: None,
             engine: false,
+            header_at: None,
             at,
         });
         let qi = self.queues.len() - 1;
@@ -4107,6 +4140,16 @@ impl Parser {
                 .iter()
                 .find(|r| !q.pools.contains(&r.name) && from.as_deref() != Some(r.name.as_str()))
             {
+                if q.engine {
+                    return self.err_at(
+                        at,
+                        format!(
+                            "engine `{qname}`'s request holds `{}`, which its `taking` does not \
+                             take: a request grows and loads the pools it was admitted with",
+                            r.name
+                        ),
+                    );
+                }
                 return self.err_at(
                     at,
                     format!(
@@ -4169,8 +4212,9 @@ impl Parser {
                         continue;
                     }
                     if header && locals.contains(&v) {
-                        return self.err_at(at, format!(
-                            "`{qname}.{verb}`: the admission header reads local `{v}`, which the entry does not set above this hold; a header sees the parameters, the queue's resources and the locals set before its hold, not a value its own body or a later statement calculates\nhelp: set `{v}` before the hold, in both arms of a `branch` and not in a loop or `fork` that ends before it, or write its value in the header"
+                        return self.err_at(q.header_at.unwrap_or(at), format!(
+                            "{}: the admission header reads local `{v}`, which the entry does not set above this hold; a header sees the parameters, the queue's resources and the locals set before its hold, not a value its own body or a later statement calculates\nhelp: set `{v}` before the hold, in both arms of a `branch` and not in a loop or `fork` that ends before it, or write its value in the header",
+                            entry_name(q, &verb)
                         ));
                     }
                     if v.contains('.') {
@@ -4220,7 +4264,11 @@ impl Parser {
         let leases = always_leases(&body);
         let engine = q.engine;
         if engine {
-            self.request_locals.push((qname, at, locals.clone()));
+            self.request_names.push(request::RequestNames {
+                engine: qname,
+                at,
+                names: locals.clone(),
+            });
         }
         let q = &mut self.queues[qi];
         q.entries.push(queue::Entry {
@@ -4349,8 +4397,8 @@ impl Parser {
             }
             if matches!(self.peek(), Tok::Ident(_)) && *self.peek_at(1) == Tok::Assign {
                 return self.err(
-                    "a request's admission binding stands above its statements: it is read \
-                     when the request is admitted",
+                    "an admission binding goes in the request's `at admission { … }`: it is \
+                     read when the request is admitted",
                 );
             }
         }
@@ -4359,7 +4407,8 @@ impl Parser {
         {
             let s = s.clone();
             return self.err(format!(
-                "`{s}` is the mode of a `run` on a step engine, not a statement\n\
+                "`{s}` is the mode of a `run` on a step engine, not a statement, except in an \
+                 engine's `request`, where `{s} (e)` is `run E {s} (cost(E, e))`\n\
                  help: write `run E {s} (cost(E, T));` on the step engine `E`, or `run S (cost(S, W));` on another stage"
             ));
         }

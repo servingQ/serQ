@@ -29,7 +29,6 @@
     "pool kv on gpu { block bs; evict lru; preempt lifo; }",
     "pool reqs on vllm { queue fifo; }",
     "prefill (known - c) growing kv;",
-    "release cache (prompt + output);",
     "reused = min(cachedin(kv), reusable(known, blocksize(kv)));",
     "run D prefill (cost(D, known - c)) growing kv;",
     "schedule { advance running; admit waiting while (running.preempted == 0); }",

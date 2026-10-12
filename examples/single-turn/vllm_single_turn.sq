@@ -24,6 +24,7 @@ fn main() {
     hbm (k) = omega + beta * k;
     kv cap blocks * bs;
   }
+  pool kv on gpu { block bs; evict lru; preempt lifo; }
   engine vllm on gpu {
     reqs cap max_seqs;
     tokens cap B;
@@ -34,15 +35,18 @@ fn main() {
     // scheduler.py:1560-1561). `reused` is how many of them the prefix cache
     // holds in full blocks; `observe hit` says whether any.
     request (prompt, output) {
-      state kept = prompt;
-      known = max(kept, computed + 1);
-      reused = min(cachedin(kv), reusable(known, blocksize(kv)));
+      set kept = prompt;
+      at admission {
+        known = max(kept, computed + 1);
+        reused = min(cachedin(kv), reusable(known, blocksize(kv)));
+      }
       set kept = known;
       set c = min(cached, reusable(known, blocksize(kv)));
       observe hit = c > 0;                    // any reused block, again after a preemption
       observe prefill_tokens = known - c;
       prefill (known - c) growing kv;
       decode (output - 1 - (known - prompt)) growing kv;
+      cache (prompt + output);                // a finished request's blocks stay cached
     }
     schedule {
       // long_prefill_token_threshold binds only while another request is
@@ -61,9 +65,7 @@ fn main() {
         taking reqs (1), kv (min(known, reused + budget_left(vllm))) reserve (known);
     }
     execute (c0 + max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
-    release cache (prompt + output);   // a finished request's blocks stay cached
   }
-  pool kv on gpu { block bs; evict lru; preempt lifo; }
   pool reqs on vllm { queue fifo; }   // the engine admits the waiting, FCFS
 
   // --8<-- [start:workload]
