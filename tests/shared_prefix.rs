@@ -677,3 +677,54 @@ fn an_engine_s_request_takes_a_chain() {
         assert!(error.contains(said), "{body}: {error}");
     }
 }
+
+/// SGLang's LPM order over the shared cache: `queue by (-cachedin(kv))`
+/// admits the waiting request whose chain the cache holds most of.
+/// Session 0 computes system prompt 7 and holds the pool; sessions 1
+/// (system prompt 9) and 2 (system prompt 7) wait, in that order. Room
+/// for one: FIFO admits session 1, which evicts the prompt; LPM admits
+/// session 2, which reads it (examples/engines/sglang.sq `--lpm 1`).
+#[test]
+fn lpm_admits_the_longest_cached_chain_first() {
+    let src = |queue: &str| {
+        format!(
+            r#"
+        device gpu {{ kv cap 2000; }}
+        pool kv on gpu {{ block 16; evict lru; {queue} }}
+        stage user : delay;
+        workload {{ arrive batch(3); init {{ set sys = serial == 1 ? 9 : 7; }} session {{ turn; }} }}
+        server {{
+          run user (cost(user, serial == 0 ? 0 : 1));
+          hold kv (cost(kv, 1600)) {CHAIN} {{
+            observe start = now;
+            observe got = cached;
+            run user (cost(user, 10));
+          }} cache (cost(kv, 1600));
+        }}
+"#
+        )
+    };
+    // session `s`'s observation `name`
+    let of = |r: &serq::Report, name: &str, s: u64| {
+        let o = r.observe(name).unwrap();
+        o.records
+            .iter()
+            .zip(&o.samples)
+            .find(|(rec, _)| rec.1 == s)
+            .map(|(_, v)| *v)
+            .unwrap()
+    };
+    let fifo = run(&src(""), &options(100.0));
+    assert!(
+        of(&fifo, "start", 1) < of(&fifo, "start", 2),
+        "{}",
+        fifo.text()
+    );
+    let lpm = run(&src("queue by (-cachedin(kv));"), &options(100.0));
+    assert!(
+        of(&lpm, "start", 2) < of(&lpm, "start", 1),
+        "{}",
+        lpm.text()
+    );
+    assert_eq!(of(&lpm, "got", 2), 1200.0, "{}", lpm.text());
+}

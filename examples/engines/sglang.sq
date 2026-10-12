@@ -22,8 +22,16 @@
 //   its lower bound, so it admits more boldly than SGLang after one;
 // - SGLang retracts only in a decode batch; here a chunked prefill's growth
 //   may preempt too, and its iteration does not move the ratio;
-// - the radix cache is shared across requests, and serQ's entries are a
-//   session's own (#374).
+// - the radix cache is shared across requests by content; here the kv pool
+//   has no `block` (page size 1), on which a request writes no shared chain
+//   (`prefix`, docs/design/shared-prefix-cache.md), and this workload shares
+//   nothing across sessions, so LPM orders the waiting by their own
+//   sessions' cached prefixes; SGLang also moves an in-batch duplicate
+//   prefix to the back, which no request here has;
+// - SGLang decides LPM or FCFS once a round and sorts the list, FCFS
+//   keeping the last sort's order; here the key is read at every admission
+//   try, and ties are in the order the requests joined.
+use "std/args";
 
 let B = 8192;           // chunked_prefill_size
 let max_run = 256;      // max_running_requests
@@ -34,6 +42,7 @@ let r0 = 0.7;           // SGLANG_INIT_NEW_TOKEN_RATIO times schedule_conservati
 let r_min = r0 * 0.14;  // SGLANG_MIN_NEW_TOKEN_RATIO_FACTOR
 let r_decay = (r0 - r_min) / 600;   // SGLANG_NEW_TOKEN_RATIO_DECAY_STEPS
 let retract_steps = 20; // SGLANG_RETRACT_DECODE_STEPS
+let lpm_queue = 128;    // LPM sorts while at most this many wait (`_determine_active_policy`)
 let a = 2e-5;           // compute per scheduled token (s)
 let omega = 2e-4;       // weights read per iteration (s)
 let beta = 2e-9;        // KV read per iteration per resident context token (s)
@@ -42,6 +51,7 @@ let p = 0.9;            // continue after a turn
 let Z = 3.0;            // tool time (s)
 
 fn main() {
+  let lpm = args.number("lpm", 0);         // 1: --schedule-policy lpm
   device gpu {
     compute (t) = t * a;
     hbm (k) = omega + beta * k;
@@ -91,7 +101,11 @@ fn main() {
     }
     execute (max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
   }
-  pool reqs on sglang { queue fifo; }
+  // FCFS, SGLang's default; `--lpm 1` is `--schedule-policy lpm`: the
+  // waiting requests by their cached prefix, longest first, and FCFS while
+  // more than `lpm_queue` wait (schedule_policy.py `_sort_by_longest_prefix`,
+  // `_determine_active_policy`)
+  pool reqs on sglang { queue by (lpm == 1 && queued(reqs) <= lpm_queue ? -cachedin(kv) : 0); }
   pool kv on gpu { evict lru; preempt by (1 - decoding, position - prompt, -prompt) requeue tail; }
 
   workload {
