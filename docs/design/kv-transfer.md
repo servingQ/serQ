@@ -145,7 +145,11 @@ the pool it fills ``).
 | `queue C : l2 { pool kv …; serve …; }` | the pool `C.kv` and the stage `C` |
 | `kvt.l2_load (C, P, n, per_token = r);` | `run C (cost(C, n * r)); load P (cost(P, n));` |
 | `kvt.l2_store (P, C, n, per_token = r);` | `hold C.kv (cost(C.kv, cachedin(C.kv))) { grow C.kv (cost(C.kv, m)); run C (cost(C, m * r)); load C.kv (cost(C.kv, m)); } cache (cost(C.kv, n));`, `m = max(0, n - cached)` |
-| `…, on = S)` | `run S, C (cost(S, C, …))` |
+
+A request may write the load's two statements itself (`serq ir` is the
+same), and `kvt.l2_load` stays beside them, as `transfer` stays beside
+`run; load; release`: it says which copy the two are. The store has one
+spelling, since an entry may not hold another queue's pool.
 
 The language gains the role and one reach across the queue boundary: an
 entry or an engine's request reads an L2 queue's pool and copies through
@@ -260,3 +264,9 @@ what the scheduler sees.
 says `cache (prompt + output)`, `cached` and `cachedin` of the GPU's
 prefix cache, and a reader would have to tell by the place which cache a
 word meant; `l2` names the tier, as `kvt.l2_load` does.
+
+**A path stage, `on = S`.** The first version took a stage of the path
+held with the cache's (a GPU's PCIe), as `transfer on` does. No program
+has more than one engine on one L2 yet, where the path would matter, and
+a construct no program uses is a path only tests take; it waits for that
+program.

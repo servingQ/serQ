@@ -128,8 +128,8 @@ stmt     := turn ;                           -- draw attributes, submit, wait fo
 serving  := transfer [ '[' expr ']' | on STAGE [, STAGE]* ] expr from POOL to POOL ( expr ) ;
                                              -- the KV moves: run link; load; release
           | tool     [ '[' expr ']' | on STAGE [, STAGE]* ] expr ;
-          | kvt.l2_load ( CACHE , POOL , expr , per_token = expr [, on = STAGE] ) ;   -- std/kvt: copy the cache's KV in, the cache keeps it
-          | kvt.l2_store ( POOL , CACHE , expr , per_token = expr [, on = STAGE] ) ;  -- std/kvt: the session's entry in the cache comes to hold expr tokens
+          | kvt.l2_load ( CACHE , POOL , expr , per_token = expr ) ;   -- std/kvt: copy the cache's KV in, the cache keeps it
+          | kvt.l2_store ( POOL , CACHE , expr , per_token = expr ) ;  -- std/kvt: the session's entry in the cache comes to hold expr tokens
 ```
 
 ### Arrivals and the run
@@ -503,16 +503,16 @@ queue lmc : l2 { device host { kv cap l2_cap; } pool kv on host { block chunk; e
 
 `kvt.l2_load (C, P, n, per_token = r)` is `run C (cost(C, n · r)); load P
 (cost(P, n));`: the KV of `n` tokens arrives in the enclosing hold on `P`
-and nothing is released. `kvt.l2_store (P, C, n, per_token = r)` is `hold
+and nothing is released; a request may write those two statements
+itself, and `kvt.l2_load` stays beside them as `transfer` stays beside its
+kernel, to say which copy it is. `kvt.l2_store (P, C, n, per_token = r)` is `hold
 C.kv (cost(C.kv, cachedin(C.kv))) { grow C.kv (cost(C.kv, m)); run C
 (cost(C, m · r)); load C.kv (cost(C.kv, m)); } cache (cost(C.kv, n));`
 with `m = max(0, n - cached)`: the session's entry in the cache comes to
 hold `n` tokens, and only the part it lacks is copied. Its hold takes the
 entry the cache has and grows in its body, so `n` may read what a header
 may not, such as a request's hidden length; it may not read `cached` or
-`computed`, which inside the copy are the cache's. `on = S` adds a stage of the
-path, held at once with the cache's (`run S, C (…)`), as `transfer on`
-does; a run over two stages needs the program's `share`. The source comes
+`computed`, which inside the copy are the cache's. The source comes
 first in both, as the bytes go; `per_token` is required. The entry is the
 session's, as a pool's cache is (*Known limitations*). See
 `examples/multi-turn/vllm_lmcache.sq` and [the KV-transfer

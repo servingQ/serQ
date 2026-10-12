@@ -201,7 +201,7 @@ fn an_l2_and_its_copies_say_what_they_are() {
     );
     refused(
         &with(cache, "kvt.l2_load (lmc, kv, 20, rate = 1);"),
-        "`kvt.l2_load` takes `per_token = …` and `on = …`, found `rate`",
+        "`kvt.l2_load` names the time a token takes at `lmc`'s bandwidth: `per_token = …`, not `rate = …`",
     );
     // the store's copy is a hold of its own, where `cached` is the cache's:
     // `cached + 100` would read the entry, not the enclosing hold (#522 review)
@@ -220,38 +220,6 @@ fn an_l2_and_its_copies_say_what_they_are() {
         &with(cache, load).replacen("use \"std/kvt\";", "", 1),
         "`kvt.l2_load` needs `use \"std/kvt\";`",
     );
-}
-
-/// `on = S` adds a stage of the path, held with the cache's at once, as
-/// `transfer on` does: a GPU's PCIe beside the server's bandwidth.
-#[test]
-fn an_l2_copy_names_its_path() {
-    let compile = |src: &str| {
-        compile_source(&common::main_source(src), &common::horizon(100.0))
-            .unwrap_or_else(|e| panic!("{e}\n{src}"))
-            .to_json()
-    };
-    let kvt = format!(
-        "{CACHE}
-         stage pcie : ps(1);
-         share maxmin;
-         pool kv {{ cap 1000; }}
-         {SESSION}
-         server {{ hold kv (cost(kv, 50)) {{ kvt.l2_load (lmc, kv, 20, per_token = 0.5, on = pcie); }} }}"
-    );
-    let flat = format!(
-        "pool l2 {{ cap 1000; }}
-         stage bw : ps(1);
-         stage pcie : ps(1);
-         share maxmin;
-         pool kv {{ cap 1000; }}
-         {SESSION}
-         server {{ hold kv (cost(kv, 50)) {{ run pcie, bw (cost(pcie, bw, 20 * 0.5)); load kv (cost(kv, 20)); }} }}"
-    );
-    let got = compile(&kvt)
-        .replace("\"lmc.kv\"", "\"l2\"")
-        .replace("\"lmc\"", "\"bw\"");
-    assert_eq!(got, compile(&flat));
 }
 
 /// An engine's request copies in its L2 at the cache's bandwidth: 50 tokens

@@ -154,7 +154,6 @@ for `r` per token copied.
 | Argument | Type | Description |
 |---|---|---|
 | `per_token = r` | `expr` | The time a token takes at the cache's bandwidth; required. |
-| `on = S` | stage | A stage of the path held with the cache's at once (a GPU's PCIe); optional. |
 
 ## `def`
 

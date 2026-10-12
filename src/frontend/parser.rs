@@ -2573,14 +2573,15 @@ impl Parser {
             })
     }
 
-    /// `kvt.l2_load (C, P, n, per_token = r [, on = S]);`: the KV of `n`
-    /// tokens the L2 queue `C` holds is copied into the enclosing hold
-    /// on `P`, at `C`'s bandwidth, and stays in `C`: `run [S,] C (cost(…,
-    /// n·r)); load P (cost(P, n));`. `kvt.l2_store (P, C, n, per_token = r
-    /// [, on = S]);`: the session's entry in `C` comes to hold `n` tokens,
-    /// and the part it does not hold yet is copied: `hold C.kv (cost(C.kv,
-    /// cachedin(C.kv))) { grow C.kv (cost(C.kv, m)); run [S,] C (cost(…,
-    /// m·r)); load C.kv (cost(C.kv, m)); } cache (cost(C.kv, n));` with `m =
+    /// `kvt.l2_load (C, P, n, per_token = r);`: the KV of `n` tokens the L2
+    /// queue `C` holds is copied into the enclosing hold on `P`, at `C`'s
+    /// bandwidth, and stays in `C`: `run C (cost(C, n·r)); load P (cost(P,
+    /// n));`, which a request may also write, as `transfer` stays beside its
+    /// kernel. `kvt.l2_store (P, C, n, per_token = r);`: the session's entry
+    /// in `C` comes to hold `n` tokens, and the part it does not hold yet is
+    /// copied: `hold C.kv (cost(C.kv, cachedin(C.kv))) { grow C.kv (cost(C.kv,
+    /// m)); run C (cost(C, m·r)); load C.kv (cost(C.kv, m)); } cache
+    /// (cost(C.kv, n));` with `m =
     /// max(0, n - cached)`. The hold takes the entry it has at its admission
     /// and grows by the rest in its body, so that `n` may read what a header
     /// may not (a request's hidden length). LMCache's and Mooncake's L2,
@@ -2635,59 +2636,46 @@ impl Parser {
         self.expect(&Tok::Comma)?;
         let n_at = self.pos;
         let n = self.expr()?;
-        let mut rate = None;
-        let mut on: Option<Ref> = None;
-        while self.eat(&Tok::Comma) {
-            let n_at = self.pos;
-            let name = self.ident()?;
-            self.expect(&Tok::Assign)?;
-            // a function's argument names, not keywords
-            let twice = (name == "per_token" && rate.is_some()) || (name == "on" && on.is_some());
-            if twice {
-                return self.err_at(n_at, format!("`{name}` is given twice"));
-            } else if name == "per_token" {
-                rate = Some(self.expr()?);
-            } else if name == "on" {
-                on = Some(self.declared_stage(&written)?);
+        // the one named argument, required: the time a token takes
+        let r_at = self.pos;
+        let name = if self.eat(&Tok::Comma) {
+            self.ident()?
+        } else {
+            String::new()
+        };
+        if name != "per_token" {
+            let found = if name.is_empty() {
+                String::new()
             } else {
-                return self.err_at(
-                    n_at,
-                    format!("{written} takes `per_token = …` and `on = …`, found `{name}`"),
-                );
-            }
-        }
-        self.expect(&Tok::RParen)?;
-        self.expect(&Tok::Semi)?;
-        let Some(rate) = rate else {
+                format!(", not `{name} = …`")
+            };
             return self.err_at(
-                at,
+                r_at,
                 format!(
                     "{written} names the time a token takes at `{cache_stage}`'s bandwidth: \
-                     `per_token = …`"
+                     `per_token = …`{found}"
                 ),
             );
-        };
+        }
+        self.expect(&Tok::Assign)?;
+        let rate = self.expr()?;
+        self.expect(&Tok::RParen)?;
+        self.expect(&Tok::Semi)?;
         let r = |name: &str| Ref {
             span,
             name: name.into(),
             index: None,
         };
-        // the path: the named stage, then the cache's own, held at once
-        let (first, also) = match on {
-            Some(s) => (s, vec![r(&cache_stage)]),
-            None => (r(&cache_stage), vec![]),
-        };
-        let mut resources = vec![first.clone()];
-        resources.extend(also.iter().cloned());
+        let stage = r(&cache_stage);
         let times = |e: Expr| Expr::Binary(BinOp::Mul, Box::new(e), Box::new(rate.clone()));
         if load {
             return Ok(vec![
                 Stmt::Run {
-                    stage: first,
+                    stage: stage.clone(),
                     mode: RunMode::Plain,
-                    work: Expr::cost(&resources, times(n.clone())),
+                    work: Expr::cost(std::slice::from_ref(&stage), times(n.clone())),
                     growing: None,
-                    also,
+                    also: vec![],
                 },
                 Stmt::Load(pool.clone(), Expr::cost(&[pool], n)),
             ]);
@@ -2731,11 +2719,11 @@ impl Parser {
                     Expr::cost(std::slice::from_ref(&kv), new.clone()),
                 ),
                 Stmt::Run {
-                    stage: first,
+                    stage: stage.clone(),
                     mode: RunMode::Plain,
-                    work: Expr::cost(&resources, times(new.clone())),
+                    work: Expr::cost(std::slice::from_ref(&stage), times(new.clone())),
                     growing: None,
-                    also,
+                    also: vec![],
                 },
                 Stmt::Load(kv.clone(), Expr::cost(std::slice::from_ref(&kv), new)),
             ],
