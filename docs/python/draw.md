@@ -28,8 +28,10 @@ not accept a compiled `Program`.
 `str` — a TikZ `tikzpicture` or a standalone SVG document. It does not write
 a file. In a notebook, pass SVG output to `IPython.display.SVG`.
 
-For source split into a workload and a server, the diagram shows one
-request's route. JSON IR is drawn whole and rejects `sets` and `defs`.
+For a program split into a workload and a server, the diagram shows one
+request's route, from source or from its JSON IR alike: the IR marks each
+statement as the workload's or the server's. JSON IR rejects `sets` and
+`defs`.
 
 ## Raises
 

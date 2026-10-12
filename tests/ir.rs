@@ -593,14 +593,15 @@ fn branch_with_is_sugar_for_bernoulli() {
 #[test]
 fn a_draw_is_labelled_w_p() {
     // a station before the branch, as every program in the corpus has: the
-    // guard labels the edge that leaves it
+    // guard labels the edge that leaves it; the runs are the session's, so
+    // the view draws the session
     let src = "stage svc : fifo; stage tool : delay;
         workload { arrive poisson(0.5); turn { set Z = ~exp(3); }
-          session {  loop { turn; branch with (0.8) { run tool (cost(tool, Z));  } else { end; } }
+          session {  loop { turn; run svc (cost(svc, 1));
+              branch with (0.8) { run tool (cost(tool, Z));  } else { end; } }
           }
         }
-        server { run svc (cost(svc, 1));
-        }
+        server {}
         ";
     let p = serq::compile_source(&common::main_source(src), &common::horizon(100.0)).unwrap();
     let svg = serq::view::svg::render(&serq::view::deployment::figure(&p));

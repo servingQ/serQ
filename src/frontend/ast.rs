@@ -689,11 +689,10 @@ pub struct Program {
     pub stages: Vec<StageDecl>,
     pub workload: Option<Workload>,
     pub session: Vec<Stmt>,
-    /// What one request runs, as the session runs it at its `request`: the
-    /// server, or a gateway's `route`, expanded like the session. Empty when
-    /// no request body exists, or the session requests more than one thing.
-    /// The deployment view draws this; the session is what runs.
-    pub request: Vec<Stmt>,
+    /// The `server` block, expanded like the session, which splices it in
+    /// at each `request`: the linker checks what it reveals of the
+    /// workload's `hidden` attributes. Empty without a `server`.
+    pub server: Vec<Stmt>,
     /// `share maxmin;` or `share bottleneck;`
     pub share: Option<crate::ir::Share>,
     /// `gauge NAME = e;`, in order.
@@ -831,7 +830,7 @@ pub(crate) fn without_locations(mut p: Program) -> Program {
         block(&mut w.turn);
     }
     block(&mut p.session);
-    block(&mut p.request);
+    block(&mut p.server);
     for c in &mut p.claims {
         c.span = None;
         c.given.iter_mut().for_each(expr);

@@ -718,7 +718,7 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
         }
     }
     if let Some(w) = prog.workload.as_ref() {
-        hidden_in_server(&prog.request, &w.hidden)?;
+        hidden_in_server(&prog.server, &w.hidden)?;
     }
     let mut gauges = vec![];
     for (name, e) in &prog.gauges {
