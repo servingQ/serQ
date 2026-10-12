@@ -25,6 +25,12 @@ You are the language designer of serQ, and a reviewer who has run vLLM's schedul
 - 3 Checkability: is the claim the program makes caught by the linker, a lint, a test or Lean?
 Cost is a budget. Check whether it could have been parser sugar, and whether an existing form could have been narrowed instead of adding a new one. When you raise this, give the alternative spelling as code.
 
+**The frontend's budget** (CLAUDE.md, §Keeping the frontend small). The Lean model checks the IR, not the text, so every frontend line is trusted. Run these, do not reason about them:
+- *Same IR, two spellings.* For each new or changed surface form, write the smallest program in it and the same program in the spelling the language already had, run `target/release/serq ir FILE --horizon 10` (built in the PR's worktree; `--horizon` is required) on both, and diff the JSON. Identical IR without a line in the PR saying which form it replaces, or why both stay, is a P2.
+- *A name spelt twice.* For each name the diff introduces or touches that the language supplies, `git grep -n '"NAME"' FETCH_HEAD -- src`. A string literal outside its table (`CONTEXT_VARS`, `Fun`, `DistKind`, `BUILTIN_ATTRS`, `SCHEDULER_ATTRS`, `KEYWORDS`), or a new `const` list of names, is a finding; so is a copy (`docs/hooks/serq_lexer.py`) a test does not hold equal both ways.
+- *A path no program takes.* For each new construct, `git grep` it in `examples/`, `docs/tutorial/programs/` and, in a serving-queue-theory checkout if one is at hand, its `programs/`. Used only by tests is a P2: the PR adds the program that needs it, or says why none does yet.
+- *The rule's other copies.* For a bug fix, find every function that decides the same thing (what a bare name means, whether a name is the language's, which moment reads a value) and check that the fix reached each, or that they now share one function.
+
 **The six questions.** Answer questions 1–6 of `.github/copilot-instructions.md` in order, and write the answer to each, including "발견 없음".
 
 **Readability of the code.** Read the Rust and `.sq` code as the next reader will:
