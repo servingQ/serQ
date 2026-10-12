@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="904.4" height="355" viewBox="0 0 904.4 355" role="img">
+<style>
+  text { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+  @media (prefers-color-scheme: dark) {
+    text { fill: #e8e6e3; } text.dim { fill: #9aa4b2; }
+    .bg { fill:#14171a }
+    .solid { fill:#232a31;stroke:#b6bfcc }
+    .cached { fill:#33302a }
+    .instance { fill:#1a1f24;stroke:#b6bfcc }
+    .frame { stroke:#b6bfcc }
+    .enclosure { stroke:#9aa4b2 }
+    .station { fill:#26403d;stroke:#b6bfcc }
+    .cell { fill:#14171a;stroke:#b6bfcc }
+    .rail { stroke:#b6bfcc }
+    .flow { stroke:#b6bfcc }
+    .back { stroke:#b6bfcc }
+    .relation { stroke:#9aa4b2 }
+  }
+</style>
+<defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="context-stroke"/></marker></defs>
+<rect class="bg" fill="#ffffff" x="0" y="0" width="904.4" height="355"/>
+<rect class="frame" fill="none" stroke="#4b5563" stroke-width="1.1" x="339.2" y="51" width="358.4" height="229" rx="8"/>
+<path class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" d="M 351.2 158 L 351.2 176 A 11 4 0 0 0 373.2 176 L 373.2 158 Z"/>
+<ellipse class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" cx="362.2" cy="158" rx="11" ry="4"/>
+<text x="383.2" y="164" text-anchor="start" font-size="10" fill="#1d2021">pool prog</text>
+<text x="383.2" y="176" text-anchor="start" font-size="8" fill="#6b7280" class="dim">cap 64000 · preempt leases by (reasoning, prompt)</text>
+<text x="383.2" y="187" text-anchor="start" font-size="8" fill="#6b7280" class="dim">queue by (waited &lt; 1800, turn_no == 0, prompt)</text>
+<path class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" d="M 351.2 201 L 351.2 219 A 11 4 0 0 0 373.2 219 L 373.2 201 Z"/>
+<ellipse class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" cx="362.2" cy="201" rx="11" ry="4"/>
+<text x="383.2" y="207" text-anchor="start" font-size="10" fill="#1d2021">pool E.kv on E's device</text>
+<text x="383.2" y="219" text-anchor="start" font-size="8" fill="#6b7280" class="dim">cap 64000 · block 16 · evict lru · preempt lifo · admitted by E</text>
+<rect class="cached" fill="#e6e2da" stroke="none" x="351.2" y="224" width="334.4" height="11" rx="2"/>
+<text x="518.4" y="232.5" text-anchor="middle" font-size="8" fill="#6b7280" class="dim">prefix cache</text>
+<path class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" d="M 351.2 249 L 351.2 267 A 11 4 0 0 0 373.2 267 L 373.2 249 Z"/>
+<ellipse class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" cx="362.2" cy="249" rx="11" ry="4"/>
+<text x="383.2" y="255" text-anchor="start" font-size="10" fill="#1d2021">pool E.reqs on E</text>
+<text x="383.2" y="267" text-anchor="start" font-size="8" fill="#6b7280" class="dim">cap 256</text>
+<polygon class="station" fill="#d8e6e4" stroke="#4b5563" stroke-width="1.3" points="223.2,77 249.2,103 223.2,129 197.2,103"/>
+<text x="223.2" y="69" text-anchor="middle" font-size="10" fill="#1d2021">choose j</text>
+<rect class="station" fill="#d8e6e4" stroke="#4b5563" stroke-width="1.3" x="476.4" y="77" width="84" height="52" rx="3"/>
+<rect class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" x="484.4" y="116" width="68" height="6"/>
+<rect class="solid" fill="#eef2f5" stroke="#4b5563" stroke-width="1.1" x="484.4" y="116" width="42.16" height="6"/>
+<text x="518.4" y="99" text-anchor="middle" font-size="10" fill="#1d2021">engine</text>
+<text x="518.4" y="69" text-anchor="middle" font-size="10" fill="#1d2021">E[home]</text>
+<text x="518.4" y="142" text-anchor="middle" font-size="8" fill="#6b7280" class="dim">tokens cap 8192</text>
+<path class="flow" fill="none" stroke="#4b5563" stroke-width="1.3" d="M28 103 L181.2 103" marker-end="url(#a)"/>
+<text x="28" y="93" text-anchor="start" font-size="8" fill="#6b7280" class="dim">new sessions: closed, 32 live</text>
+<path class="flow" fill="none" stroke="#4b5563" stroke-width="1.3" d="M244.2 129 L244.2 316 L723.6 316" marker-end="url(#a)"/>
+<text x="727.6" y="319" text-anchor="start" font-size="8" fill="#6b7280" class="dim">out (prompt + 100 &gt;= 4000 * 16)</text>
+<path class="flow" fill="none" stroke="#4b5563" stroke-width="1.3" d="M265.2 103 L476.4 103" marker-end="url(#a)"/>
+<path class="flow" fill="none" stroke="#4b5563" stroke-width="1.3" d="M560.4 103 L723.6 103" marker-end="url(#a)"/>
+<text x="727.6" y="106" text-anchor="start" font-size="8" fill="#6b7280" class="dim">out</text>
+</svg>

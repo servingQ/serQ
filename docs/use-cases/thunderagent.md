@@ -18,6 +18,16 @@ Where the two differ, the program follows the code. This is a reduced
 simulation model: it is not checked against ThunderAgent by a differential
 test, and its costs are not fitted to hardware.
 
+![ThunderAgent's router in front of a vLLM replica](../assets/thunderagent.deployment.svg)
+
+The router chooses a replica (`choose j`), and a program's tokens are its
+lease of that replica's `pool prog`, beside vLLM's own `pool E.kv` and
+`pool E.reqs`; its [`queue by`](../api/pool.md#queue) and
+[`preempt leases by`](../api/pool.md#preempt) are the router's order and
+pause rule, read in the table below. The lower exit is a prompt the
+replica's KV cannot hold: the router ends that trajectory before it
+chooses, as vLLM would refuse the request.
+
 ## Configuration
 
 Each replica is `examples/pd-disaggregation/llmd_nixl_pull.sq`'s local
