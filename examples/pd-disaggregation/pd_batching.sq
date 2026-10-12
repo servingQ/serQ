@@ -158,7 +158,7 @@ fn main() {
     pool reqs on D { queue fifo; }
     pool kv on D.gpu { block bs; evict lru; preempt lifo; }
     nic ps(Bw);
-    decode (prompt) from src {
+    decode (prompt) from P {
       set transferred = 0;
       set kept = prompt;
       hold kv (cost(kv, known)) reserve (cost(kv, known)), reqs (cost(reqs, 0)) reserve (cost(reqs, 1))
@@ -167,7 +167,7 @@ fn main() {
         set c = 0;
         branch (!transferred) {
           mark admitted;
-          transfer (prompt) from src to kv (prompt - 1);   // over P's NIC and this pod's
+          transfer (prompt) from P to kv (prompt - 1);   // over P's NIC and this pod's
           mark read_done;
           set transferred = 1;
           set c = prompt - 1;

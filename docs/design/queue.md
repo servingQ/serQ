@@ -92,10 +92,10 @@ expr  += QUEUE [ '[' expr ']' ] . POOL            -- from outside, a pool's read
 |---|---|
 | `queue Q[N] { pool p {…} serve k; … }` | `pool Q.p[N] {…}; stage Q[N] : k;` |
 | `Q[i].verb (e, …)` | the body in place, parameters substituted as an `at admission` binding is (no `~`), `set` names renamed |
-| `Q[i].decode (…) from S[k]` | the body's `src` := `S.kv[k]` |
-| `L[j].transfer (n) from src to kv (m)` | `run L[j] (t); load Q.kv[i] (m); release src`, `t` the link entry's `run (…)` |
+| `Q[i].decode (…) from S[k]`, to the entry `decode (…) from S` | the body's `S` := `S.kv[k]` |
+| `L[j].transfer (n) from S to kv (m)` | `run L[j] (t); load Q.kv[i] (m); release S.kv[k]`, `t` the link entry's `run (…)` |
 | `nic k;` in `queue Q[N]` | `stage Q.nic[N] : k;` |
-| `D pull P latency x share s;`, and `transfer (n) from src to kv (m)` in `D[j]`'s `decode … from src`, called `from P[i]` | `stage D.nic.latency[N] : delay; share s;`, and `run D.nic.latency[j] (x); run P.nic[i], D.nic[j] (n); load D.kv[j] (m); release P.kv[i]` ([The pull relation](pull-relation.md)) |
+| `D pull P latency x share s;`, and `transfer (n) from P to kv (m)` in `D[j]`'s `decode … from P`, called `from P[i]` | `stage D.nic.latency[N] : delay; share s;`, and `run D.nic.latency[j] (x); run P.nic[i], D.nic[j] (n); load D.kv[j] (m); release P.kv[i]` ([The pull relation](pull-relation.md)) |
 | `queue L[N] : link { serve k latency x; }`, and a `transfer on L[k] …` | `stage L[N] : k; stage L.latency[N] : delay;`, and `run L.latency[k] (x);` before the transfer's `run` |
 | `mark x;` / `Q.x` | `set Q.x = now;` / the attribute |
 | `request Q;` | the named gateway's `route` body in place; no request node in the IR |
@@ -176,14 +176,14 @@ estimate. An `expose` clause naming what a queue lets the deployment read
 is the next step, and the moment the router's estimate and the pod's truth
 part in the notation.
 
-**`src` in an index is a pun.** A pool where a pool is read, the source
-member in an index. Nothing else can be meant in either place, so no
-program reads two ways, but a reader has to know the rule. The NICs no
-longer need it: a pod owns its `nic`, and the [pull
-relation](pull-relation.md) names the read's two ends.
+**The source is named, not bound.** An entry `from S` names the queue its
+KV comes from, and in its body `S` is the request's lease there, never a
+number ([The entry's source](entry-source.md)). A name the call binds,
+read as a pool in one place and as the source member's index in another,
+is the alternative rejected there.
 
 **Two ways to cross a link.** A link with a `transfer (n)` entry is called
-(`nic[self].transfer (n) from src to kv (m)`) and runs its body; a link with
+(`nic[self].transfer (n) from P to kv (m)`) and runs its body; a link with
 none is named by the serving form (`transfer on L[k], M[l] (n) …`) and
 runs its `serve`. The first says what one NIC costs; the second
 is the only way to hold two at once. A joint call over entries — which

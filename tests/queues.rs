@@ -121,10 +121,10 @@ fn a_transfer_between_queues_is_the_flat_transfer() {
         device gpu { kv cap 1000; } pool kv on gpu { block 16; }
         engine on gpu { tokens cap inf; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); }
         decode (prompt) { hold kv (cost(kv, prompt)) { run D prefill (cost(D, prompt)) growing kv; mark first; } }
-        decode (prompt) from src {
+        decode (prompt) from P {
           set c = 0;
           hold kv (cost(kv, prompt)) {
-            nic[self].transfer (prompt - c) from src to kv (prompt - 1);
+            nic[self].transfer (prompt - c) from P to kv (prompt - 1);
             run D prefill (cost(D, 1)) growing kv; mark first;
             run D decode (cost(D, o - 1)) growing kv;
           }
@@ -166,9 +166,9 @@ fn a_transfer_between_queues_is_the_flat_transfer() {
 }
 
 /// A read over the sender's link and the receiver's at once: link queues
-/// with no entry are their `serve`, the decoder names its own with `self`
-/// and the prefiller's with the `from` name, which as an index is the
-/// source member's.
+/// with no entry are their `serve`, and the decoder names its own with
+/// `self`. (The source member's own link is a `nic` and a pull relation:
+/// in the entry the `from` queue is the lease, not an index.)
 #[test]
 fn a_read_over_both_links_is_the_flat_read() {
     let queues = "
@@ -177,7 +177,7 @@ fn a_read_over_both_links_is_the_flat_read() {
         P[i].prefill (prompt);
         D[j].decode (prompt) from P[i];
       } }
-      queue egress[NP] : link { serve ps(100); }
+      queue egress : link { serve ps(100); }
       queue ingress[ND] : link { serve ps(200); }
       stage setup : delay;
       queue P[NP] : prefill {
@@ -189,10 +189,10 @@ fn a_read_over_both_links_is_the_flat_read() {
         device gpu { kv cap 1000; } pool kv on gpu { block 16; }
         engine on gpu { tokens cap inf; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); }
         decode (prompt) { hold kv (cost(kv, prompt)) { run D prefill (cost(D, prompt)) growing kv; } }
-        decode (prompt) from src {
+        decode (prompt) from P {
           hold kv (cost(kv, prompt)) {
             run setup (cost(setup, 1));
-            transfer on egress[src], ingress[self] (prompt) from src to kv (prompt - 1);
+            transfer on egress, ingress[self] (prompt) from P to kv (prompt - 1);
             run D decode (cost(D, o - 1)) growing kv;
           }
         }
@@ -202,7 +202,7 @@ fn a_read_over_both_links_is_the_flat_read() {
       ";
     let flat = "
         let NP = 2; let ND = 2;
-        stage egress[2] : ps(100);
+        stage egress : ps(100);
         stage ingress[2] : ps(200);
         stage setup : delay;
         pool kvP[2] { cap 1000; }
@@ -214,7 +214,7 @@ fn a_read_over_both_links_is_the_flat_read() {
           hold kvP[i] (cost(kvP, prompt)) { run P[i] (cost(P, prompt)); } cache (cost(kvP, prompt)) lease kvP[i] (inf);
           hold kvD[j] (cost(kvD, prompt)) {
             run setup (cost(setup, 1));
-            transfer on egress[i], ingress[j] (prompt) from kvP[i] to kvD[j] (prompt - 1);
+            transfer on egress, ingress[j] (prompt) from kvP[i] to kvD[j] (prompt - 1);
             run D[j] decode (cost(D, o - 1)) growing kvD[j];
           }
         }
@@ -233,7 +233,7 @@ fn a_link_latency_is_a_wait_before_the_read() {
         P[i].prefill (prompt);
         D[j].decode (prompt) from P[i];
       } }
-      queue egress[2] : link { serve ps(100) latency x1; }
+      queue egress : link { serve ps(100) latency x1; }
       queue ingress[2] : link { serve ps(200) latency x0; }
       queue P[2] : prefill {
         pool kv { cap 1000; }
@@ -244,9 +244,9 @@ fn a_link_latency_is_a_wait_before_the_read() {
         device gpu { kv cap 1000; } pool kv on gpu { block 16; }
         engine on gpu { tokens cap inf; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); }
         decode (prompt) { hold kv (cost(kv, prompt)) { run D prefill (cost(D, prompt)) growing kv; } }
-        decode (prompt) from src {
+        decode (prompt) from P {
           hold kv (cost(kv, prompt)) {
-            transfer on egress[src], ingress[self] (prompt) from src to kv (prompt - 1);
+            transfer on egress, ingress[self] (prompt) from P to kv (prompt - 1);
             run D decode (cost(D, o - 1)) growing kv;
           }
         }
@@ -256,8 +256,8 @@ fn a_link_latency_is_a_wait_before_the_read() {
       ";
     let flat = "
         let x0 = 0.5; let x1 = 0.25;
-        stage egress[2] : ps(100);
-        stage egressL[2] : delay;
+        stage egress : ps(100);
+        stage egressL : delay;
         stage ingress[2] : ps(200);
         stage ingressL[2] : delay;
         pool kvP[2] { cap 1000; }
@@ -268,9 +268,9 @@ fn a_link_latency_is_a_wait_before_the_read() {
         server {
           hold kvP[i] (cost(kvP, prompt)) { run P[i] (cost(P, prompt)); } cache (cost(kvP, prompt)) lease kvP[i] (inf);
           hold kvD[j] (cost(kvD, prompt)) {
-            run egressL[i] (cost(egressL, x1));
+            run egressL (cost(egressL, x1));
             run ingressL[j] (cost(ingressL, x0));
-            transfer on egress[i], ingress[j] (prompt) from kvP[i] to kvD[j] (prompt - 1);
+            transfer on egress, ingress[j] (prompt) from kvP[i] to kvD[j] (prompt - 1);
             run D[j] decode (cost(D, o - 1)) growing kvD[j];
           }
         }
@@ -308,8 +308,8 @@ fn a_latency_is_the_links_constant() {
         device gpu {{ kv cap 1000; }} pool kv on gpu {{ }}
         engine on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
         decode (p) {{ hold kv (cost(kv, p)) {{ run D prefill (cost(D, p)) growing kv; }} }}
-        decode ({param}) from src {{
-          hold kv (cost(kv, {param})) {{ transfer on egress, ingress ({param}) from src to kv ({param} - 1); }}
+        decode ({param}) from P {{
+          hold kv (cost(kv, {param})) {{ transfer on egress, ingress ({param}) from P to kv ({param} - 1); }}
         }}
       }}
       share maxmin;
@@ -439,24 +439,24 @@ fn a_link_has_a_cost() {
       queue P : prefill { pool kv { cap 100; } serve fifo; prefill (p) { hold kv (cost(kv, p)) { run (cost(P, p)); } cache (cost(kv, p)) lease kv (inf); } }
       queue D : decode { device gpu { kv cap 100; } pool kv on gpu { } engine on gpu { tokens cap inf; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); }
         decode (p) { hold kv (cost(kv, p)) { run D prefill (cost(D, p)) growing kv; } }
-        decode (p) from src { hold kv (cost(kv, p)) { BODY } } }
+        decode (p) from P { hold kv (cost(kv, p)) { BODY } } }
       workload { arrive batch(1); hidden o; init { set prompt = 32; set o = 4; } session { turn; end; } } server { gw.route(); }
       ";
     refused(
-        &calls.replace("BODY", "nic.transfer (p) from src to kv (p);"),
+        &calls.replace("BODY", "nic.transfer (p) from P to kv (p);"),
         "its `serve` is its cost: `transfer on nic[…] (n) from S to P (m);`",
     );
-    // the source member's index stands in an index only
+    // in the entry `P` is the request's lease there: not a number, not
+    // even its member's index
     refused(
-        &calls.replace("BODY", "transfer on nic (p + src) from src to kv (p);"),
-        "reads `src` as a number",
+        &calls.replace("BODY", "transfer on nic (p + P) from P to kv (p);"),
+        "reads `P` as a number: in an entry `from P`",
     );
-    // `P` is one queue: there is no member index for `src` to be
     refused(
         &calls
             .replace("queue nic : link", "queue nic[2] : link")
-            .replace("BODY", "transfer on nic[src] (p) from src to kv (p);"),
-        "`src` as an index: its source `P.kv` is no family's member",
+            .replace("BODY", "transfer on nic[P] (p) from P to kv (p);"),
+        "reads `P` as a number (an index)",
     );
 }
 
@@ -834,10 +834,10 @@ fn roles_and_entries_agree() {
 #[test]
 fn a_call_is_checked_against_the_entry() {
     let decls = "
-      queue P : prefill { pool kv { cap 10; } serve fifo; prefill (p) { hold kv (cost(kv, p)) { run (cost(P, p)); } cache (cost(kv, p)); } }
+      queue P : prefill { pool kv { cap 10; } serve fifo; prefill (p) { hold kv (cost(kv, p)) { run (cost(P, p)); } cache (cost(kv, p)) lease kv (inf); } }
       queue D[2] : decode { device gpu { kv cap 10; } pool kv on gpu { } engine on gpu { tokens cap inf; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); }
         decode (p) { hold kv (cost(kv, p)) { run D prefill (cost(D, p)) growing kv; } }
-        decode (p) from src { hold kv (cost(kv, p)) { run D prefill (cost(D, p)) growing kv; } } }";
+        decode (p) from P { hold kv (cost(kv, p)) { run D prefill (cost(D, p)) growing kv; } } }";
     let program = |route: &str| {
         format!(
             "queue gw : gateway {{ route {{ {route} }} }} {decls}
@@ -855,10 +855,22 @@ fn a_call_is_checked_against_the_entry() {
     );
     refused(&program("D[j].decode (~exp(1));"), "draws a sample");
     refused(&program("D[j].warm (prompt);"), "has no such entry");
-    // `from P`: P leases nothing, so there is nothing to take
+    // `from P` names a queue declared above whose entries lease: the header
+    // is refused, whatever calls it
     refused(
-        &program("P.prefill (prompt); D[j].decode (prompt) from P;"),
-        "no entry of `P` leases a pool",
+        &program("D[j].decode (prompt);").replace(
+            "cache (cost(kv, p)) lease kv (inf);",
+            "cache (cost(kv, p));",
+        ),
+        "`D.decode (…) from P`: no entry of `P` leases a pool",
+    );
+    refused(
+        &program("D[j].decode (prompt);").replace(") from P {", ") from X {"),
+        "`D.decode (…) from X`: no queue `X` is declared above",
+    );
+    refused(
+        &program("D[j].decode (prompt);").replace(") from P {", ") from D {"),
+        "`D.decode (…) from D`: a queue takes the KV from another",
     );
     refused(&program("X.decode (prompt);"), "no queue `X` is declared");
     // `self` is a member's word
@@ -881,7 +893,7 @@ fn a_decode_queue_needs_one_of_its_entries() {
     let engine = "device gpu { kv cap 10; } pool kv on gpu { } engine on gpu { tokens cap inf; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); }";
     let local = "decode (p) { hold kv (cost(kv, p)) { run D prefill (cost(D, p)) growing kv; } }";
     let remote =
-        "decode (p) from src { hold kv (cost(kv, p)) { run D prefill (cost(D, p)) growing kv; } }";
+        "decode (p) from P { hold kv (cost(kv, p)) { run D prefill (cost(D, p)) growing kv; } }";
     let program = |route: &str, entries: &str| {
         format!(
             "queue gw : gateway {{ route {{ {route} }} }}
@@ -1166,7 +1178,7 @@ fn the_contract_holds_at_every_edge() {
                prefill (p) {{ branch (p > 1) {{ hold kv (cost(kv, p)) {{ run (cost(P, p)); }} cache (cost(kv, p)) lease kv (inf); }} else {{ run (cost(P, p)); }} }} }}
              queue D : decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
                decode (p) {{ hold kv (cost(kv, p)) {{ run D prefill (cost(D, p)) growing kv; }} }}
-               decode (p) from src {{ hold kv (cost(kv, p)) {{ transfer on nic (p) from src to kv (p); }} }} }}
+               decode (p) from P {{ hold kv (cost(kv, p)) {{ transfer on nic (p) from P to kv (p); }} }} }}
              {}",
             wl("turn; end;")
         ),
@@ -1217,7 +1229,7 @@ fn the_contract_holds_at_four_more_edges() {
              queue P : prefill {{ pool kv {{ cap 100; }} serve fifo; prefill (p) {{ hold kv (cost(kv, p)) {{ run (cost(P, p)); }} cache (cost(kv, p)) lease kv (inf); }} }}
              queue D : decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
                decode (p) {{ hold kv (cost(kv, p)) {{ run D prefill (cost(D, p)) growing kv; }} }}
-               decode (p) from src {{ hold kv (cost(kv, p)) {{ transfer on nic (p) from src to kv (p); }} }} }}
+               decode (p) from P {{ hold kv (cost(kv, p)) {{ transfer on nic (p) from P to kv (p); }} }} }}
              {wl}"
         ),
         "a call takes from a queue",
@@ -1256,9 +1268,9 @@ fn a_pull_relation_is_the_flat_read() {
         engine on gpu { tokens cap inf; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); }
         nic ps(200);
         decode (prompt) { hold kv (cost(kv, prompt)) { run D prefill (cost(D, prompt)) growing kv; } }
-        decode (prompt) from src {
+        decode (prompt) from P {
           hold kv (cost(kv, prompt)) {
-            transfer (prompt) from src to kv (prompt - 1);
+            transfer (prompt) from P to kv (prompt - 1);
             run D decode (cost(D, o - 1)) growing kv;
           }
         }
@@ -1313,7 +1325,7 @@ fn a_pull_relation_says_what_it_couples() {
                prefill (p) {{ hold kv (cost(kv, p)) {{ run (cost(Q, p)); }} cache (cost(kv, p)) lease kv (inf); }} }}
              queue D : decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }} nic ps(1);
                decode (p) {{ hold kv (cost(kv, p)) {{ run D prefill (cost(D, p)) growing kv; }} }}
-               decode (p) from src {{ hold kv (cost(kv, p)) {{ transfer (p) from src to kv (p); }} }} }}
+               decode (p) from P {{ hold kv (cost(kv, p)) {{ transfer (p) from P to kv (p); }} }} }}
              {rel}
              workload {{ arrive batch(1); init {{ set prompt = 3; }} session {{ turn; end; }} }} server {{ gw.route(); }} "
         )
@@ -1343,14 +1355,22 @@ fn a_pull_relation_says_what_it_couples() {
     // the read takes from the entry's source, not any pool (#207 review)
     refused(
         &program("nic ps(1);", "D pull P share maxmin;", "P").replace(
-            "transfer (p) from src to kv (p)",
+            "transfer (p) from P to kv (p)",
             "transfer (p) from kv to kv (p)",
         ),
-        "a read takes from the entry's source, `from src`",
+        "a read takes from the entry's source, `from P`",
     );
+    // the call takes from the queue the entry names, and the entry from the
+    // relation's source
     refused(
         &program("nic ps(1);", "D pull P share maxmin;", "Q"),
-        "`D` pulls from `P`, and this entry was called `from Q.kv`",
+        "`D.decode (…) from Q`: the entry takes the KV `from P`",
+    );
+    refused(
+        &program("nic ps(1);", "D pull P share maxmin;", "Q")
+            .replace(" from P {", " from Q {")
+            .replace("from P to kv", "from Q to kv"),
+        "`D pull P`, and `D.decode (…)` takes the KV `from Q`",
     );
     refused(
         &program("nic ps(1);", "D pull P latency ~exp(1) share maxmin;", "P"),
@@ -1365,8 +1385,9 @@ fn a_pull_relation_says_what_it_couples() {
 /// What the review of the rebased #87 found an entry could still reach.
 #[test]
 fn an_entry_reaches_only_its_own() {
-    let wl = "workload { arrive batch(1); hidden o, src; init { set prompt = 3; set o = 2; set src = 7; } session { turn; end; } } server { gw.route(); } ";
-    // the `from` name is a number only in an index, whatever `hidden` says
+    let wl = "workload { arrive batch(1); hidden o, P; init { set prompt = 3; set o = 2; set P = 7; } session { turn; end; } } server { gw.route(); } ";
+    // the `from` queue is the request's lease there, not a number, whatever
+    // `hidden` says
     refused(
         &format!(
             "stage nic : delay;
@@ -1374,10 +1395,10 @@ fn an_entry_reaches_only_its_own() {
              queue P[2] : prefill {{ pool kv {{ cap 100; }} serve fifo; prefill (p) {{ hold kv (cost(kv, p)) {{ run (cost(P, p)); }} cache (cost(kv, p)) lease kv (inf); }} }}
              queue D : decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
                decode (p) {{ hold kv (cost(kv, p)) {{ run D prefill (cost(D, p)) growing kv; }} }}
-               decode (p) from src {{ observe x = src; hold kv (cost(kv, p)) {{ transfer on nic (p) from src to kv (p); }} }} }}
+               decode (p) from P {{ observe x = P; hold kv (cost(kv, p)) {{ transfer on nic (p) from P to kv (p); }} }} }}
              {wl}"
         ),
-        "reads `src` as a number",
+        "reads `P` as a number",
     );
     // another queue's mark is the gateway's to read
     refused(
@@ -1420,7 +1441,7 @@ fn an_entry_reaches_only_its_own() {
                decode (p) {{ hold kv (cost(kv, p)) {{ run P prefill (cost(P, p)) growing kv; }} }} }}
              queue D : decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
                decode (p) {{ hold kv (cost(kv, p)) {{ run D prefill (cost(D, p)) growing kv; }} }}
-               decode (p) from src {{ hold kv (cost(kv, p)) {{ transfer on nic (p) from src to kv (p); }} }} }}
+               decode (p) from P {{ hold kv (cost(kv, p)) {{ transfer on nic (p) from P to kv (p); }} }} }}
              {wl}"
         ),
         "`P.decode` leases nothing",
@@ -1450,21 +1471,22 @@ fn an_entry_reaches_only_its_own() {
 fn each_overload_substitutes_only_its_own_locals() {
     same_ir(
         "queue gw : gateway { route { D.decode (1); } }
+         queue P : prefill { pool kv { cap 1; } serve fifo; prefill (p) { hold kv (cost(kv, p)) { } lease kv (inf); } }
          queue D : decode { serve fifo;
            decode (p) { observe seen = x; }
-           decode (p) from src { set x = 1; }
+           decode (p) from P { set x = 1; }
          }
          workload { arrive batch(1); hidden x; init { set x = 3; }
            session { turn; end; } } server { gw.route(); }
          ",
-        "stage D : fifo;
+        "pool kvP { cap 1; } stage P : fifo; stage D : fifo;
         workload { arrive batch(1); hidden x; init { set x = 3; }
           session { turn; end;
           }
         }
         server { observe seen = x;
         } ",
-        &[],
+        &[("P.kv", "kvP")],
     );
 }
 
