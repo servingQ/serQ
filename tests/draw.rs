@@ -618,6 +618,23 @@ fn thunderagents_router_pool_is_drawn() {
             .any(|x| x.contains("preempt leases by (reasoning, prompt)")),
         "{t:?}"
     );
+    // its queue order, on a line of its own (#571)
+    assert!(
+        t.iter()
+            .any(|x| x == "queue by (waited < 1800, turn_no == 0, prompt)"),
+        "{t:?}"
+    );
+}
+
+/// A queue key longer than a label holds is cut at a space, and says so.
+#[test]
+fn a_long_queue_key_is_cut_short() {
+    let t = texts("ascend");
+    let q = t
+        .iter()
+        .find(|x| x.starts_with("queue by ("))
+        .expect("a queue line");
+    assert!(q.ends_with(" …)") && q.len() < 60, "{q}");
 }
 
 /// `examples/pd-disaggregation/llmd_nixl_pull.sq`: the prompt's KV is in the prefiller's pool

@@ -1655,6 +1655,8 @@ const BACK_DROP: f64 = 26.0;
 const CACHE_ROOM: f64 = 20.0;
 /// Baseline-to-baseline for the stacked pool options.
 const NOTE_LINE: f64 = 11.0;
+/// Characters of a pool's queue keys a label writes before it cuts them.
+const QUEUE_KEYS_MAX: usize = 40;
 /// A framed station: the room above its glyph for its name, its margin,
 /// and the height of one resident pool's row under it.
 const FRAME_HEAD: f64 = 26.0;
@@ -1786,13 +1788,23 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
         } else {
             0.0
         };
-    let row_notes = |q: usize| pool_notes(p, q, net.cached.contains(&q)).join(" · ");
+    // a row's options on one line, its queue order on one of its own: a
+    // `queue by` key can be as long as the station is wide
+    let row_notes = |q: usize| -> Vec<String> {
+        let (queue, rest): (Vec<String>, Vec<String>) = pool_notes(p, q, net.cached.contains(&q))
+            .into_iter()
+            .partition(|n| n.starts_with("queue by"));
+        std::iter::once(rest.join(" · ")).chain(queue).collect()
+    };
+    let row_h = |q: usize| ROW_H + (row_notes(q).len() as f64 - 1.0) * NOTE_LINE;
     let row_w = |q: usize| {
         DRUM_W
             + 10.0
-            + TextSize::Normal
-                .width_of(&pool_title(p, q))
-                .max(TextSize::Small.width_of(&row_notes(q)))
+            + row_notes(q)
+                .iter()
+                .fold(TextSize::Normal.width_of(&pool_title(p, q)), |w, n| {
+                    w.max(TextSize::Small.width_of(n))
+                })
     };
     // under the glyph: its note, then a row per resident pool
     let rows_top = |i: usize| {
@@ -1808,7 +1820,11 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
             .iter()
             .filter(|q| net.cached.contains(q))
             .count();
-        FRAME_HEAD + rows_top(i) + resident[i].len() as f64 * ROW_H + cached as f64 * 16.0 + 4.0
+        FRAME_HEAD
+            + rows_top(i)
+            + resident[i].iter().map(|&q| row_h(q)).sum::<f64>()
+            + cached as f64 * 16.0
+            + 4.0
     };
     // a transfer between two instances is drawn in the gap between their
     // boxes, with what it moves above and what it waits for below
@@ -2072,8 +2088,10 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
                 Anchor::Start,
                 TextSize::Normal,
             );
-            f.note(pt(tx, y + 23.0), row_notes(q), Anchor::Start);
-            y += ROW_H;
+            for (k, line) in row_notes(q).into_iter().enumerate() {
+                f.note(pt(tx, y + 23.0 + k as f64 * NOTE_LINE), line, Anchor::Start);
+            }
+            y += row_h(q);
             if net.cached.contains(&q) {
                 let strip = Rect::new(gx, y - 4.0, fr.right() - FRAME_PAD - gx, 11.0);
                 f.boxed(strip, BoxStyle::Cached, 2.0);
@@ -2339,6 +2357,14 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
     f
 }
 
+/// A pool rule's keys as the program reads them, comma-separated.
+fn show_keys(p: &Program, keys: &[crate::ir::CExpr]) -> String {
+    keys.iter()
+        .map(|k| p.show_expr(k))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// A pool's options, one short line each. They are stacked in the glyph
 /// column rather than run together beside the name: `evict by (waiting, size)`
 /// is wider than a station, and a note that reaches the next glyph is worse
@@ -2349,17 +2375,26 @@ fn pool_notes(p: &Program, i: usize, cached: bool) -> Vec<String> {
     if let Some(b) = pool.block {
         parts.push(format!("block {}", crate::ir::show_num(b)));
     }
+    // the order the pool's waiting holds are let in; FIFO says nothing. A
+    // key the IR writes out whole (a `def` inlined) is cut short: the
+    // program says it in full
+    if let Some(keys) = &pool.queue {
+        let all = show_keys(p, keys);
+        let shown = if all.chars().count() > QUEUE_KEYS_MAX {
+            let cut: String = all.chars().take(QUEUE_KEYS_MAX).collect();
+            // at a space, not inside a name or a number
+            let cut = cut.rsplit_once(' ').map_or(cut.as_str(), |(head, _)| head);
+            format!("{} …", cut.trim_end())
+        } else {
+            all
+        };
+        parts.push(format!("queue by ({shown})"));
+    }
     // An eviction order says nothing about a pool nothing is cached in.
     if cached {
         match &pool.evict {
             crate::ir::CEvict::Lru => parts.push("evict lru".into()),
-            crate::ir::CEvict::By(keys) => parts.push(format!(
-                "evict by ({})",
-                keys.iter()
-                    .map(|k| p.show_expr(k))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )),
+            crate::ir::CEvict::By(keys) => parts.push(format!("evict by ({})", show_keys(p, keys))),
         }
     }
     match &pool.preempt {
@@ -2367,19 +2402,12 @@ fn pool_notes(p: &Program, i: usize, cached: bool) -> Vec<String> {
         lifo if lifo.is_lifo() => parts.push("preempt lifo".into()),
         crate::ir::Preempt::By { keys, tail } => parts.push(format!(
             "preempt by ({}){}",
-            keys.iter()
-                .map(|k| p.show_expr(k))
-                .collect::<Vec<_>>()
-                .join(", "),
+            show_keys(p, keys),
             if *tail { " requeue tail" } else { "" }
         )),
-        crate::ir::Preempt::Leases { keys } => parts.push(format!(
-            "preempt leases by ({})",
-            keys.iter()
-                .map(|k| p.show_expr(k))
-                .collect::<Vec<_>>()
-                .join(", ")
-        )),
+        crate::ir::Preempt::Leases { keys } => {
+            parts.push(format!("preempt leases by ({})", show_keys(p, keys)))
+        }
     }
     // the title says `on S` only for a pool that is no memory
     if let (Some(_), Some(s)) = (memory_of(p, i), pool.admit_via) {
