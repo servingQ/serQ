@@ -97,6 +97,24 @@ fn inspected(ov: &Overrides) -> Overrides {
     }
 }
 
+/// Refuse a program argument or a `def` override on a program already in
+/// IR: its constants are folded and its definitions expanded.
+pub fn refuse_text_overrides(ov: &Overrides) -> Result<(), String> {
+    if !ov.lets.is_empty() {
+        return Err("a program argument applies to program text, not to IR \
+             (an IR's constants are already folded)\n\
+             help: override the program text (.sq) this IR was compiled from"
+            .into());
+    }
+    if !ov.defs.is_empty() {
+        return Err("a `def` override applies to program text, not to IR \
+             (an IR's definitions are already expanded)\n\
+             help: override the program text (.sq) this IR was compiled from"
+            .into());
+    }
+    Ok(())
+}
+
 /// Load a program file as IR: `.json` is read as IR (only the run
 /// parameters and the trace can be overridden, since constants are already
 /// folded); anything else is compiled from text.
@@ -104,18 +122,7 @@ pub fn load(path: &Path, ov: &Overrides) -> Result<ir::Program, String> {
     let text = std::fs::read_to_string(path)
         .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
     if path.extension().is_some_and(|e| e == "json") {
-        if !ov.lets.is_empty() {
-            return Err("a program argument applies to program text, not to IR \
-                 (an IR's constants are already folded)\n\
-                 help: override the program text (.sq) this IR was compiled from"
-                .into());
-        }
-        if !ov.defs.is_empty() {
-            return Err("a `def` override applies to program text, not to IR \
-                 (an IR's definitions are already expanded)\n\
-                 help: override the program text (.sq) this IR was compiled from"
-                .into());
-        }
+        refuse_text_overrides(ov)?;
         let mut p = ir::Program::from_json(&text)?;
         if let Some(h) = ov.horizon {
             p.horizon = h;

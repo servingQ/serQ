@@ -19,7 +19,8 @@ the link's latency are written on it.
 For a program with a `server` or gateway, the figure shows one request's
 path. Workload tool calls, subsequent turns and session exits are omitted,
 but holds surrounding the workload's `request` remain visible. The figure
-reads the request from the IR (`sides`), so a program and its JSON IR draw
+reads the request from the IR (`sides`), so a program, its JSON IR and a
+compiled `pyserq.Program` draw
 the same figure. Two requests are the same when they run the same
 statements inside workload holds of the same pools, whatever the units;
 when the session's requests differ, the figure shows the full session.
