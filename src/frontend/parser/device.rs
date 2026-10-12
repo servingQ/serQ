@@ -761,19 +761,22 @@ impl Parser {
     /// below 0, once the `let`s have their values.
     fn per_run_cap(&self, at: usize, c: Expr) -> PResult<Expr> {
         // `inf` anywhere in `e`, a bare call argument (`min(inf, c)`) included
+        fn inf(n: &str) -> bool {
+            supplied(n) == Some(Supplied::Inf)
+        }
         fn reads_inf(e: &Expr) -> bool {
             e.any(&|x| match x {
-                Expr::Var(n) => n == "inf",
+                Expr::Var(n) => inf(n),
                 Expr::Call(_, args) => args
                     .iter()
-                    .any(|a| matches!(a, Arg::Ref(r) if r.name == "inf" && r.index.is_none())),
+                    .any(|a| matches!(a, Arg::Ref(r) if inf(&r.name) && r.index.is_none())),
                 _ => false,
             })
         }
         fn inf_inside(e: &Expr) -> bool {
             match e {
                 Expr::Located(_, a) => inf_inside(a),
-                Expr::Var(n) if n == "inf" => false,
+                Expr::Var(n) if inf(n) => false,
                 Expr::Cond(k, a, b) => reads_inf(k) || inf_inside(a) || inf_inside(b),
                 e => reads_inf(e),
             }

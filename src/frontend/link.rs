@@ -252,18 +252,50 @@ pub const CONTEXT_VARS: [(&str, CtxVar); 23] = [
 /// `waiting.count`, `batch.tokens` (`parser/device.rs`).
 pub(crate) const LISTS: [&str; 3] = ["running", "waiting", "batch"];
 
+/// What the language supplies under a name read as a value: a context
+/// variable, or `inf`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum Supplied {
+    Ctx(CtxVar),
+    Inf,
+}
+
+/// Whether the language supplies `name` as a value, and as what: the one
+/// place `CONTEXT_VARS` and `inf` are read together. An engine's lists
+/// (`LISTS`) are the language's too, but read as `name.…`, not as a value.
+pub(crate) fn supplied(name: &str) -> Option<Supplied> {
+    if name == "inf" {
+        return Some(Supplied::Inf);
+    }
+    CONTEXT_VARS
+        .iter()
+        .find(|(n, _)| *n == name)
+        .map(|(_, v)| Supplied::Ctx(*v))
+}
+
+/// What a bare name read as a value means, in the order the linker
+/// resolves it: an attribute, a `let` constant, an engine's register, then
+/// what the language supplies (#538).
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Meaning {
+    Attr(usize),
+    Const(f64),
+    Reg(usize),
+    Supplied(Supplied),
+}
+
 /// Where the language reads `name`, when it supplies it: a context
 /// variable at its moments, `inf` in every expression, an engine's list in
 /// the engine.
 fn read_in(name: &str) -> Option<String> {
-    let moments = if name == "inf" {
-        &[][..]
-    } else if let Some((_, var)) = CONTEXT_VARS.iter().find(|(n, _)| *n == name) {
-        var.moments()
-    } else {
-        return LISTS
-            .contains(&name)
-            .then(|| format!("an engine, as `{name}.…`"));
+    let moments = match supplied(name) {
+        Some(Supplied::Inf) => &[][..],
+        Some(Supplied::Ctx(var)) => var.moments(),
+        None => {
+            return LISTS
+                .contains(&name)
+                .then(|| format!("an engine, as `{name}.…`"));
+        }
     };
     Some(match moments {
         [] => "every expression".to_string(),
@@ -472,13 +504,9 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
                         s.name
                     )));
                 }
-                let taken = lk.attr_index.contains_key(name)
-                    || lk.consts.contains_key(name)
-                    || CONTEXT_VARS.iter().any(|(n, _)| n == name)
-                    || name == "inf"
+                let taken = lk.resolve(name).is_some()
                     || lk.pools.contains_key(name)
-                    || lk.stages.contains_key(name)
-                    || lk.reg_index.contains_key(name);
+                    || lk.stages.contains_key(name);
                 if taken {
                     return Err(LinkError::new(format!(
                         "engine `{}`: `state {name}`: the name is taken; a register's name is \
@@ -1315,6 +1343,20 @@ fn collect_attrs(stmts: &[Stmt], lk: &mut Linker) {
 }
 
 impl Linker<'_> {
+    /// What the bare name `n` means read as a value, if anything: the one
+    /// order of the linker's lookups (#538).
+    fn resolve(&self, n: &str) -> Option<Meaning> {
+        if let Some(&i) = self.attr_index.get(n) {
+            Some(Meaning::Attr(i))
+        } else if let Some(&v) = self.consts.get(n) {
+            Some(Meaning::Const(v))
+        } else if let Some(&r) = self.reg_index.get(n) {
+            Some(Meaning::Reg(r))
+        } else {
+            supplied(n).map(Meaning::Supplied)
+        }
+    }
+
     fn attr(&mut self, name: &str) -> usize {
         if let Some(&i) = self.attr_index.get(name) {
             return i;
@@ -1806,27 +1848,21 @@ impl Linker<'_> {
                 self.expr(body)?
             }
             Expr::Num(x) => CExpr::Num(*x),
-            Expr::Var(n) => {
-                if let Some(&i) = self.attr_index.get(n) {
-                    CExpr::Attr(i)
-                } else if let Some(&v) = self.consts.get(n) {
-                    CExpr::Num(v)
-                } else if let Some(&r) = self.reg_index.get(n) {
-                    CExpr::Reg(r)
-                } else {
-                    if let Some(&(_, v)) = CONTEXT_VARS.iter().find(|(name, _)| name == n) {
-                        CExpr::Ctx(v)
-                    } else if n == "inf" {
-                        CExpr::Num(f64::INFINITY)
-                    } else if let Some((_, new)) = RENAMED.iter().find(|(old, _)| old == n) {
-                        return Err(LinkError::new(format!(
-                            "the context variable `{n}` is now `{new}`"
-                        )));
-                    } else {
-                        return Err(self.unknown("name", n));
-                    }
+            Expr::Var(n) => match self.resolve(n) {
+                Some(Meaning::Attr(i)) => CExpr::Attr(i),
+                Some(Meaning::Const(v)) => CExpr::Num(v),
+                Some(Meaning::Reg(r)) => CExpr::Reg(r),
+                Some(Meaning::Supplied(Supplied::Ctx(v))) => CExpr::Ctx(v),
+                Some(Meaning::Supplied(Supplied::Inf)) => CExpr::Num(f64::INFINITY),
+                None => {
+                    return Err(match RENAMED.iter().find(|(old, _)| old == n) {
+                        Some((_, new)) => {
+                            LinkError::new(format!("the context variable `{n}` is now `{new}`"))
+                        }
+                        None => self.unknown("name", n),
+                    });
                 }
-            }
+            },
             Expr::Sample(d, args) => {
                 let Some(kind) = DistKind::from_name(d) else {
                     return Err(LinkError::new(format!("unknown distribution `{d}`")));
@@ -2074,7 +2110,7 @@ pub(crate) trait Constants {
         Ok(match e {
             Expr::Located(span, inner) => self.eval_const(inner).map_err(|e| e.at(Some(*span)))?,
             Expr::Num(x) => *x,
-            Expr::Var(n) if n == "inf" => f64::INFINITY,
+            Expr::Var(n) if supplied(n) == Some(Supplied::Inf) => f64::INFINITY,
             Expr::Var(n) => self.constant(n)?,
             Expr::Unary(UnOp::Neg, a) => -self.eval_const(a)?,
             Expr::Unary(UnOp::Not, a) => {
@@ -2232,7 +2268,7 @@ impl Constants for Linker<'_> {
             Some("a pool")
         } else if self.stages.contains_key(j) {
             Some("a stage")
-        } else if CONTEXT_VARS.iter().any(|(name, _)| *name == j) || j == "inf" {
+        } else if supplied(j).is_some() {
             Some("a name the language supplies")
         } else {
             None

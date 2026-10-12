@@ -69,8 +69,8 @@ use std::fmt;
 use crate::frontend::ast::*;
 use crate::frontend::lexer::{LexError, Tok, Token, lex};
 use crate::frontend::link::{
-    AGGREGATES, BUILTIN_ATTRS, CONTEXT_VARS, Constants, FOLDED, LISTS, LResult, LinkError, RENAMED,
-    SCHEDULER_ATTRS, takes_supplied,
+    AGGREGATES, BUILTIN_ATTRS, Constants, FOLDED, LISTS, LResult, LinkError, RENAMED,
+    SCHEDULER_ATTRS, Supplied, supplied, takes_supplied,
 };
 use crate::frontend::queue::{self, QueueDecl};
 use crate::ir::{DistKind, Fun};
@@ -893,7 +893,7 @@ fn is_reference(a: &[Token]) -> bool {
 }
 
 fn is_context_var(v: &str) -> bool {
-    CONTEXT_VARS.iter().any(|(name, _)| *name == v)
+    matches!(supplied(v), Some(Supplied::Ctx(_)))
 }
 
 /// Does this expression read the name `n` (an attribute, a constant, or a
@@ -4189,7 +4189,7 @@ impl Parser {
         let allowed_var = |n: &str, header: bool, seen: &[String]| -> bool {
             params.iter().any(|p| p == n)
                 || n == "self"
-                || n == "inf"
+                || supplied(n) == Some(Supplied::Inf)
                 || self.consts.iter().any(|(c, _)| c == n)
                 || in_context(n)
                 || (!header && n == "now")
