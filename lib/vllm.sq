@@ -1,9 +1,0 @@
-// vLLM v1 (ref/vllm at 0c87a197, `vllm/v1/core/sched/scheduler.py`,
-// `kv_cache_manager.py`, `block_pool.py`): the rule a program states as an
-// expression, `use "…/lib/vllm.sq";`. docs/language.md §7 has the
-// line-by-line correspondence, for `examples/replay/vllm_replay.sq`.
-
-// What a cache hit may cover of a request of x tokens: its full blocks of
-// `bs` tokens, and never the last token, which is computed for its logits
-// (kv_cache_manager.py:289-300).
-def reusable(x, bs) { floor((x - 1) / bs) * bs }

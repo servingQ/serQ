@@ -22,12 +22,6 @@ The scheduler guards whether victim blocks can actually be freed and manages def
 --8<-- "examples/multi-turn/vllm.sq"
 ```
 
-The program's definition `reusable` is a library the other vLLM programs share:
-
-```serq title="lib/vllm.sq"
---8<-- "lib/vllm.sq"
-```
-
 | Requirement | Current expression | Limit of the model |
 |---|---|---|
 | Token budget and chunked prefill | `engine … { tokens cap …; schedule { … each at most (…); } }` | Resident selection then waiting admission is a specific policy |

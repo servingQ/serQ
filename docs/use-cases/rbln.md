@@ -68,7 +68,7 @@ prefix, with the hit bound at admission, `cache (prompt + out)` and `preempt
 lifo` on `kv`. `RBLNScheduler` hands a preemption to upstream vLLM
 ([`_preempt_request`][resume]), which keeps the generated tokens and drops
 their KV, so a resumed request prefills from what it had computed (`known`,
-as `lib/vllm.sq` cites). In this workload neither fires: the six requests
+as `examples/multi-turn/vllm.sq` cites). In this workload neither fires: the six requests
 are separate sessions, and serQ's cache is keyed by session where vLLM's is
 shared by content hash, so none hits another's prefix; four slots of at most
 272 tokens never fill 8192 tokens (512 blocks) of KV.

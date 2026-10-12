@@ -142,11 +142,11 @@ distribution or a key the program leaves open is a parameter of the run
 (`def service() { ~exp(1) }`, run with `--def service='~erlang(4, 1)'`).
 
 ```serq
-def reusable(x, bs) { floor((x - 1) / bs) * bs }
-set hitD = min(cachedin(D[j].kv), reusable(prompt, bs));
+def service_time(units) { units * seconds_per_unit }
+run worker (cost(worker, service_time(units)));
 ```
 
-(`lib/vllm.sq`, and its use in `examples/pd-disaggregation/llmd_nixl_pull.sq`)
+(`examples/single-turn/arguments.sq`)
 
 | Argument | Type | Description |
 |---|---|---|
@@ -177,15 +177,12 @@ from here on. A library read once is not read again. An error in a library
 is reported in the library, with the uses it was expanded from.
 
 ```serq
-use "../../lib/vllm.sq";
+use "lib/a.sq";        // def take(n) { hold kv (cost(kv, n)) { … } }
 …
-    set kept = prompt;
-    hold reqs (cost(reqs, 1)), kv (cost(kv, min(known, reused + budget_left(vllm)))) reserve (cost(kv, known))
-         at admission (known = max(kept, computed + 1),
-                       reused = min(cachedin(kv), reusable(known, blocksize(kv)))) {
+server { take(twice(k)); }
 ```
 
-(`examples/multi-turn/vllm.sq`; the library is `lib/vllm.sq`.) A program
+(`tests/library.rs`.) A program
 given as text rather than read from a file cannot `use`. The library's names
 are the program's, as for any [`def`](#def): what a statement definition
 sets is the session's attribute, and what it observes is the program's

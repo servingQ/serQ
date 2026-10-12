@@ -19,8 +19,6 @@
 // stay cached), and the decoder's request queues once more for a running slot
 // and a token of budget, recomputes the last prompt token for its logits,
 // and decodes. docs/use-cases/pd.md has the line-by-line correspondence.
-use "../../lib/vllm.sq";
-
 use "std/args";
 
 let NP = 2;            // prefill instances
@@ -59,7 +57,7 @@ fn main() {
       // (prefix-based-pd-decider: nonCachedTokens, promptTokens); the estimate is
       // the router's own prefix-cache picture of the pod.
       choose j in ND by (holders(D[j].kv) + queued(D[j].kv));
-      set hitD = min(cachedin(D[j].kv), reusable(prompt, bs));
+      set hitD = min(cachedin(D[j].kv), floor(prompt - 1, bs));
       set remote_prefill = prompt >= minp && prompt - hitD >= thr;
       branch (remote_prefill) {
         // Prefill profile: a pod that has the prefix (prefix-cache-affinity-filter),
@@ -96,7 +94,7 @@ fn main() {
     nic ps(BwP);                          // the pod's NIC: the reads out of it share it
     prefill (prompt) {
       hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, reused + budget_left(P)))) reserve (cost(kv, prompt))
-           at admission (reused = min(cachedin(kv), reusable(prompt, bs))) {
+           at admission (reused = min(cachedin(kv), floor(prompt - 1, bs))) {
         set c = cached;
         run P prefill (cost(P, prompt - c)) growing kv;      // chunked; one token is sampled and discarded
       } cache (cost(reqs, kv, prompt)) lease kv (inf);
@@ -125,9 +123,9 @@ fn main() {
       set kept = prompt;   // the most tokens an attempt had: a preemption keeps the outputs
       hold kv (cost(kv, min(known, reused + budget_left(D)))) reserve (cost(kv, known)), reqs (cost(reqs, 1))
            at admission (known = max(kept, computed + 1),
-                         reused = min(cachedin(kv), reusable(known, bs))) {
+                         reused = min(cachedin(kv), floor(known - 1, bs))) {
         set kept = known;
-        set c = min(cached, reusable(known, bs));
+        set c = min(cached, floor(known - 1, bs));
         observe local_tokens = known - c;
         run D prefill (cost(D, known - c)) growing kv;
         run D decode (cost(D, produced - 1 - (known - prompt))) growing kv;
@@ -143,7 +141,7 @@ fn main() {
       set transferred = 0;   // one KV transfer per request (nixl/pull_scheduler.py:187-189)
       set kept = prompt;     // the most tokens an attempt had: a preemption keeps the outputs
       hold kv (cost(kv, known)) reserve (cost(kv, known)), reqs (cost(reqs, 0)) reserve (cost(reqs, 1))
-           reuse (cost(kv, reqs, reusable(known, bs)))
+           reuse (cost(kv, reqs, floor(known - 1, bs)))
            at admission (known = max(kept, computed + 1)) {
         set kept = known;
         set c = cached;

@@ -20,8 +20,6 @@
 // n+1 before it reads n's samples, so a request that stops at n is in
 // n+1's batch, which the request's `decode (output)` stands for.
 
-def reusable(x, bs) { floor((x - 1) / bs) * bs }
-
 let B = 8192;            // max_num_tokens
 let max_batch = 2048;    // max_batch_size
 let blocks = 10000;      // KV blocks
@@ -44,7 +42,7 @@ fn main() {
     // reuse does not hold and decodes, and leaves every computed token
     // cached.
     request (prompt, output) {
-      set c = min(cached, reusable(prompt, blocksize(kv)));
+      set c = min(cached, floor(prompt - 1, blocksize(kv)));
       prefill (prompt - c) growing kv;
       decode (output) growing kv;
       cache (prompt + output - 1);

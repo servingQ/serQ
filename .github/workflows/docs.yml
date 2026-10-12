@@ -6,7 +6,6 @@ on:
     paths:
       - docs/**
       - examples/**
-      - lib/**
       - scripts/check_docs_lexer.py
       - mkdocs.yml
       - .github/workflows/docs.yml
@@ -14,7 +13,6 @@ on:
     paths:
       - docs/**
       - examples/**
-      - lib/**
       - scripts/check_docs_lexer.py
       - mkdocs.yml
       - .github/workflows/docs.yml

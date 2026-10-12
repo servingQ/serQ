@@ -16,7 +16,7 @@ See [types](index.md#types) and [evaluation moments](context.md).
 | [`min(a: expr, b: expr)`](#min) | The smaller argument. |
 | [`max(a: expr, b: expr)`](#max) | The larger argument. |
 | [`abs(x: expr)`](#abs) | The absolute value of `x`. |
-| [`floor(x: expr)`](#floor) | The greatest integer less than or equal to `x`, represented as a number. |
+| [`floor(x: expr [, step: expr])`](#floor) | The greatest integer less than or equal to `x`, represented as a number; with `step`, the greatest multiple of `step` at most `x`. |
 | [`ceil(x: expr)`](#ceil) | The least integer greater than or equal to `x`, represented as a number. |
 | [`sqrt(x: expr)`](#sqrt) | The square root of `x`. |
 | [`exp(x: expr)`](#exp) | The exponential `eˣ`. |
@@ -141,9 +141,20 @@ abs(x: expr) -> number
 
 ```text
 floor(x: expr) -> number
+floor(x: expr, step: expr) -> number
 ```
 
 **Returns:** The greatest integer less than or equal to `x`, represented as a number.
+With `step`, `x` rounded down to a multiple of `step`: sugar for
+`floor(x / step) * step`, so `step` may not draw. A vLLM prefix-cache hit
+covers the full blocks of the prompt but never its last token, which is
+computed for its logits:
+
+```serq
+reused = min(cachedin(kv), floor(known - 1, blocksize(kv)));
+```
+
+(`examples/multi-turn/vllm.sq`)
 
 ### `ceil` {#ceil}
 
@@ -337,7 +348,7 @@ blocksize(p: pool) -> number
 
 **Returns:** The allocation block size declared for `p`.
 
-The pool must declare `block`; otherwise linking fails. Although folded by the linker, this call is not allowed in a `const` position, such as a `let`, capacity or array size. A pool array requires an index. A pool-parameter definition can use `reusable(known, blocksize(kv))`.
+The pool must declare `block`; otherwise linking fails. Although folded by the linker, this call is not allowed in a `const` position, such as a `let`, capacity or array size. A pool array requires an index. A definition taking a pool parameter can read `blocksize(kv)` of it.
 
 ## Aggregates of the observations
 
