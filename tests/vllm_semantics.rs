@@ -22,13 +22,26 @@ fn engine(
     max_seqs: usize,
     schedule: &str,
 ) -> String {
+    let schedule = taking(schedule, &format!("reqs (1), kv (min(prompt, {budget}))"));
     format!(
         r#"
         let bs = {bs};
         device gpu {{ kv cap {blocks} * bs; }}
-        engine llm on gpu {{ tokens cap {budget}; schedule {{ {schedule} }} execute (1); }}
+        engine llm on gpu {{
+          reqs cap {max_seqs};
+          tokens cap {budget};
+          request (prompt, o, t0, s) {{
+            observe admitted_at = now - t0;
+            observe who_admitted = s;
+            prefill (prompt) growing kv;
+            observe ttft = now - t0;
+            decode (o - 1) growing kv;
+          }}
+          schedule {{ {schedule} }}
+          execute (1);
+        }}
         pool kv on gpu {{ block bs; evict lru; preempt lifo; }}
-        pool reqs {{ cap {max_seqs}; }}
+        pool reqs on llm {{ }}
         workload {{ arrive batch({n}); init {{ set prompt = {prompt}; set o = {out}; }}
           session {{ turn;
             end;
@@ -37,19 +50,29 @@ fn engine(
         }}
         server {{
           set t0 = now;
-          hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, {budget}))) {{
-            observe admitted_at = now - t0;
-            observe who_admitted = serial;
-            run llm prefill (cost(llm, prompt)) growing kv;
-            observe ttft = now - t0;
-            run llm decode (cost(llm, o - 1)) growing kv;
-          }}
+          llm (prompt, o, t0, serial);
           observe done = now - t0;
           observe order = serial;
         }}
 
 "#
     )
+}
+
+/// `schedule` with `taking {pools}` on each `admit waiting`: what the
+/// engine's request is admitted with.
+fn taking(schedule: &str, pools: &str) -> String {
+    let mut out = String::new();
+    let mut rest = schedule;
+    while let Some(i) = rest.find("admit waiting") {
+        let end = i + rest[i..].find(';').unwrap();
+        out.push_str(&rest[..end]);
+        out.push_str(" taking ");
+        out.push_str(pools);
+        rest = &rest[end..];
+    }
+    out.push_str(rest);
+    out
 }
 
 /// vLLM's schedule: the running requests, then the waiting while none was
@@ -102,12 +125,24 @@ fn a_request_preempted_during_decode_resumes_from_its_outputs() {
         let bs = 16;
         device gpu { kv cap 10 * bs; }
         engine llm on gpu {
+          reqs cap 16;
           tokens cap 1000;
-          schedule { advance running; admit waiting while (running.preempted == 0); }
+          request (prompt, o) {
+            at admission { known = computed < prompt ? prompt : computed + 1; }
+            observe known_at = known;
+            prefill (known) growing kv;
+            branch (known == prompt) { observe first = now; }
+            decode (o - 1 - (known - prompt)) growing kv;
+          }
+          schedule {
+            advance running;
+            admit waiting while (running.preempted == 0)
+              taking reqs (1), kv (min(known, 1000)) reserve (known);
+          }
           execute (1);
         }
         pool kv on gpu { block bs; evict lru; preempt lifo; }
-        pool reqs { cap 16; }
+        pool reqs on llm { }
         workload { arrive batch(2); init { set prompt = serial == 0 ? 64 : 48; set o = serial == 0 ? 20 : 40; }
           session { turn;
             end;
@@ -115,13 +150,7 @@ fn a_request_preempted_during_decode_resumes_from_its_outputs() {
           }
         }
         server {
-          hold reqs (cost(reqs, 1)), kv (cost(kv, min(known, 1000))) reserve (cost(kv, known))
-          at admission (known = computed < prompt ? prompt : computed + 1) {
-            observe known_at = known;
-            run llm prefill (cost(llm, known)) growing kv;
-            branch (known == prompt) { observe first = now; }
-            run llm decode (cost(llm, o - 1 - (known - prompt))) growing kv;
-          }
+          llm (prompt, o);
           observe done = now;
           observe order = serial;
         }
@@ -157,15 +186,26 @@ fn preempted_twice(set_kept: &str, known_is: &str) -> String {
         let bs = 16;
         device gpu {{ kv cap 6 * bs; }}
         engine llm on gpu {{
+          reqs cap 16;
           tokens cap 64;
+          request (prompt, o, s) {{
+            set kept = prompt;
+            at admission {{ known = {known_is}; }}
+            {set_kept}
+            branch (s == 2) {{ observe known_at = known; observe at = computed; }}
+            prefill (known) growing kv;
+            branch (known == prompt) {{ observe first = s; }}
+            decode (o - 1 - (known - prompt)) growing kv;
+          }}
           schedule {{
             advance running each at most (8);
-            admit waiting while (running.preempted == 0) each at most (8);
+            admit waiting while (running.preempted == 0) each at most (8)
+              taking reqs (1), kv (min(known, budget_left(llm))) reserve (known);
           }}
           execute (1);
         }}
         pool kv on gpu {{ block bs; evict lru; preempt lifo; }}
-        pool reqs {{ cap 16; }}
+        pool reqs on llm {{ }}
         workload {{ arrive batch(3);
           init {{ set prompt = serial == 2 ? 32 : 16; set o = serial == 0 ? 30 : (serial == 1 ? 60 : 10); }}
           session {{ turn;
@@ -174,15 +214,7 @@ fn preempted_twice(set_kept: &str, known_is: &str) -> String {
           }}
         }}
         server {{
-          set kept = prompt;
-          hold reqs (cost(reqs, 1)), kv (cost(kv, min(known, budget_left(llm)))) reserve (cost(kv, known))
-          at admission (known = {known_is}) {{
-            {set_kept}
-            branch (serial == 2) {{ observe known_at = known; observe at = computed; }}
-            run llm prefill (cost(llm, known)) growing kv;
-            branch (known == prompt) {{ observe first = serial; }}
-            run llm decode (cost(llm, o - 1 - (known - prompt))) growing kv;
-          }}
+          llm (prompt, o, serial);
           observe done = now;
         }}
 
@@ -356,39 +388,49 @@ fn a_request_preempted_twice_in_a_queue_keeps_its_outputs() {
 /// step). The pool is no engine's memory here: were it on the engine's
 /// device (`pool kv on gpu`), a holder away from the engine would not be in
 /// its `running` list and would not be a victim.
+///
+/// An engine's request grows only a pool its `taking` takes, a capacity of
+/// the engine or its device, so the two holds are a decode queue's entry,
+/// in the kernel's words, on a pool of the queue's own that is on no
+/// device (`llm.kv`); A is the 64-token prompt.
 #[test]
 fn a_holder_preempted_before_its_first_step_has_computed_nothing() {
     let src = r#"
         let bs = 16;
-        pool kv { cap 6 * bs; block bs; evict lru; preempt lifo; }
-        device gpu { }
-        engine llm on gpu {
-          tokens cap 1000;
-          schedule { advance running; admit waiting while (running.preempted == 0); }
-          execute (1);
-        }
         stage svc : fifo;
-        workload { arrive batch(2); init { set prompt = serial == 0 ? 64 : 32; set o = 20; }
+        queue llm : decode {
+          pool kv { cap 6 * bs; block bs; evict lru; preempt lifo; }
+          device gpu { }
+          engine on gpu {
+            tokens cap 1000;
+            schedule { advance running; admit waiting while (running.preempted == 0); }
+            execute (1);
+          }
+          decode (prompt) {
+            branch (prompt == 64) {
+              hold kv (cost(kv, prompt)) reserve (cost(kv, prompt)) {
+                run llm prefill (cost(llm, prompt)) growing kv;
+                run llm decode (cost(llm, o - 1)) growing kv;
+              }
+            } else {
+              hold kv (cost(kv, prompt)) { observe c2 = computed; run svc (cost(svc, 100)); }
+            }
+          }
+        }
+        workload { arrive batch(2); hidden o; init { set prompt = serial == 0 ? 64 : 32; set o = 20; }
           session { turn;
             end;
 
           }
         }
         server {
-          branch (serial == 0) {
-            hold kv (cost(kv, prompt)) reserve (cost(kv, prompt)) {
-              run llm prefill (cost(llm, prompt)) growing kv;
-              run llm decode (cost(llm, o - 1)) growing kv;
-            }
-          } else {
-            hold kv (cost(kv, prompt)) { observe c2 = computed; run svc (cost(svc, 100)); }
-          }
+          llm.decode (prompt);
           observe done = now;
         }
 
 "#;
     let r = run(src, &common::horizon(200.0));
-    assert_eq!(r.pool("kv").unwrap().preemptions, 1, "{}", r.text());
+    assert_eq!(r.pool("llm.kv").unwrap().preemptions, 1, "{}", r.text());
     // first execution, then the re-execution after A frees its blocks at 20
     assert_eq!(
         r.observe("c2").unwrap().samples,
@@ -417,7 +459,18 @@ fn serve_by_orders_residents_by_the_declared_keys() {
     let prog = |order: &str| {
         format!(
             "device gpu {{ kv cap 1000; }}
-        engine llm on gpu {{ tokens cap 1; schedule {{ advance running {order}; admit waiting while (running.preempted == 0); }} execute (1); }}
+        engine llm on gpu {{
+          tokens cap 1;
+          request (o) {{
+            prefill (1) growing kv;
+            decode (o - 1) growing kv;
+          }}
+          schedule {{
+            advance running {order};
+            admit waiting while (running.preempted == 0) taking kv (100);
+          }}
+          execute (1);
+        }}
         pool kv on gpu {{ }}
         workload {{ arrive batch(2); init {{ set o = serial == 0 ? 10 : 3; }}
           session {{ turn;
@@ -426,10 +479,7 @@ fn serve_by_orders_residents_by_the_declared_keys() {
           }}
         }}
         server {{
-          hold kv (cost(kv, 100)) {{
-            run llm prefill (cost(llm, 1)) growing kv;
-            run llm decode (cost(llm, o - 1)) growing kv;
-          }}
+          llm (o);
           observe done = now;
           observe order = serial;
         }}
@@ -502,7 +552,14 @@ fn a_resident_admitted_mid_iteration_is_served_once_under_serve_by() {
         engine llm on gpu {
           reqs cap 8;
           tokens cap 2;
-          schedule { advance running by (remaining); admit waiting while (running.preempted == 0); }
+          request (o) {
+            prefill (1) growing kv;
+            decode (o - 1) growing kv;
+          }
+          schedule {
+            advance running by (remaining);
+            admit waiting while (running.preempted == 0) taking reqs (1), kv (10);
+          }
           execute (1);
         }
         pool reqs on llm { }
@@ -516,10 +573,7 @@ fn a_resident_admitted_mid_iteration_is_served_once_under_serve_by() {
         }
         server {
           run gate (cost(gate, arrive));
-          hold reqs (cost(reqs, 1)), kv (cost(kv, 10)) {
-            run llm prefill (cost(llm, 1)) growing kv;
-            run llm decode (cost(llm, o - 1)) growing kv;
-          }
+          llm (o);
           observe done = now;
           observe order = serial;
         }
@@ -645,12 +699,25 @@ fn next_turn_reuses_full_blocks_of_the_cached_prefix() {
         let bs = 16;
         device gpu { kv cap 1000 * bs; }
         engine llm on gpu {
+          reqs cap 16;
           tokens cap 8192;
-          schedule { advance running; admit waiting while (running.preempted == 0); }
+          request (prompt) {
+            at admission { c = min(cachedin(kv), floor((prompt - 1) / bs) * bs); }
+            observe cached_seen = cached;
+            observe prefill_tokens = prompt - min(cached, floor((prompt - 1) / bs) * bs);
+            prefill (prompt - min(cached, floor((prompt - 1) / bs) * bs)) growing kv;
+            decode (9) growing kv;
+            cache (prompt + 10);
+          }
+          schedule {
+            advance running;
+            admit waiting while (running.preempted == 0)
+              taking reqs (1), kv (c + min(prompt - c, 8192));
+          }
           execute (1);
         }
         pool kv on gpu { block bs; evict lru; preempt lifo; }
-        pool reqs { cap 16; }
+        pool reqs on llm { }
         workload { arrive batch(1); init { set K = 0; set turns = 0; }
           session {
             loop { turn; set K = prompt + 10; set turns = turns + 1;
@@ -661,13 +728,7 @@ fn next_turn_reuses_full_blocks_of_the_cached_prefix() {
         }
         server {
           set prompt = K + 100;
-          hold reqs (cost(reqs, 1)), kv (cost(kv, c + min(prompt - c, 8192)))
-          at admission (c = min(cachedin(kv), floor((prompt - 1) / bs) * bs)) {
-            observe cached_seen = cached;
-            observe prefill_tokens = prompt - min(cached, floor((prompt - 1) / bs) * bs);
-            run llm prefill (cost(llm, prompt - min(cached, floor((prompt - 1) / bs) * bs))) growing kv;
-            run llm decode (cost(llm, 9)) growing kv;
-          } cache (cost(reqs, kv, prompt + 10));
+          llm (prompt);
         }
 
 "#;
@@ -690,12 +751,23 @@ fn lru_eviction_drops_tail_blocks_first() {
         let bs = 16;
         device gpu { kv cap 20 * bs; }
         engine llm on gpu {
+          reqs cap 16;
           tokens cap 8192;
-          schedule { advance running; admit waiting while (running.preempted == 0); }
+          request (prompt, s) {
+            at admission { c = min(cachedin(kv), floor((prompt - 1) / bs) * bs); }
+            branch (s == 0) { observe cached0 = cached; }
+            prefill (prompt - min(cached, floor((prompt - 1) / bs) * bs)) growing kv;
+            cache (prompt);
+          }
+          schedule {
+            advance running;
+            admit waiting while (running.preempted == 0)
+              taking reqs (1), kv (c + min(prompt - c, 8192));
+          }
           execute (1);
         }
         pool kv on gpu { block bs; evict lru; preempt lifo; }
-        pool reqs { cap 16; }
+        pool reqs on llm { }
         stage gate : delay;
         workload { arrive batch(2); init { set K = 0; set turns = 0; }
           session {
@@ -712,11 +784,7 @@ fn lru_eviction_drops_tail_blocks_first() {
         }
         server {
           set prompt = serial == 0 ? K + 160 : 192;
-          hold reqs (cost(reqs, 1)), kv (cost(kv, c + min(prompt - c, 8192)))
-          at admission (c = min(cachedin(kv), floor((prompt - 1) / bs) * bs)) {
-            branch (serial == 0) { observe cached0 = cached; }
-            run llm prefill (cost(llm, prompt - min(cached, floor((prompt - 1) / bs) * bs))) growing kv;
-          } cache (cost(reqs, kv, prompt));
+          llm (prompt, serial);
         }
 
 "#;

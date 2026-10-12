@@ -10,6 +10,22 @@ fn run(src: &str, options: &Overrides) -> serq::Report {
     run_source(&common::main_source(src), options, None).unwrap()
 }
 
+/// `schedule` with `taking {pools}` on each `admit waiting`: what the
+/// engine's request is admitted with.
+fn taking(schedule: &str, pools: &str) -> String {
+    let mut out = String::new();
+    let mut rest = schedule;
+    while let Some(i) = rest.find("admit waiting") {
+        let end = i + rest[i..].find(';').unwrap();
+        out.push_str(&rest[..end]);
+        out.push_str(" taking ");
+        out.push_str(pools);
+        rest = &rest[end..];
+    }
+    out.push_str(rest);
+    out
+}
+
 /// A stage without a body runs vLLM's procedure: every program of the
 /// corpus whose engines' schedule is the procedure gives the same report
 /// with the procedure written as a body. An engine's schedule that is the
@@ -73,10 +89,21 @@ fn procedure_as_body(src: &str) -> Option<String> {
 #[test]
 fn several_prefills_run_alone_in_one_iteration() {
     let prog = |schedule: &str| {
+        let schedule = taking(schedule, "reqs (1), kv (4)");
         format!(
             r#"
         device gpu {{ kv cap 100; }}
-        engine llm on gpu {{ reqs cap 8; tokens cap 8; schedule {{ {schedule} }} execute (1); }}
+        engine llm on gpu {{
+          reqs cap 8;
+          tokens cap 8;
+          request (t0) {{
+            prefill (2) growing kv;
+            observe ttft = now - t0;
+            decode (2) growing kv;
+          }}
+          schedule {{ {schedule} }}
+          execute (1);
+        }}
         pool reqs on llm {{ }}
         pool kv on gpu {{ }}
         workload {{ arrive batch(3);
@@ -87,11 +114,7 @@ fn several_prefills_run_alone_in_one_iteration() {
         }}
         server {{
           set t0 = now;
-          hold reqs (cost(reqs, 1)), kv (cost(kv, 4)) {{
-            run llm prefill (cost(llm, 2)) growing kv;
-            observe ttft = now - t0;
-            run llm decode (cost(llm, 2)) growing kv;
-          }}
+          llm (t0);
         }}
 
 "#
@@ -138,7 +161,12 @@ fn a_gate_on_the_residents_admits_only_into_an_empty_engine() {
         engine llm on gpu {
           reqs cap 8;
           tokens cap 64;
-          schedule { advance running; branch (running.count == 0) { admit waiting; } }
+          request () {
+            observe start = now;
+            prefill (1);
+            decode (4);
+          }
+          schedule { advance running; branch (running.count == 0) { admit waiting taking reqs (1); } }
           execute (1);
         }
         pool reqs on llm { }
@@ -152,11 +180,7 @@ fn a_gate_on_the_residents_admits_only_into_an_empty_engine() {
         server {
           run gap (cost(gap, serial < 2 ? 0 : 0.5));
           set t0 = now;
-          hold reqs (cost(reqs, 1)) {
-            observe start = now;
-            run llm prefill (cost(llm, 1));
-            run llm decode (cost(llm, 4));
-          }
+          llm ();
         }
 
 "#;
@@ -177,17 +201,26 @@ fn a_gate_on_the_residents_admits_only_into_an_empty_engine() {
 
 #[test]
 fn a_body_that_may_schedule_nothing_does_not_link() {
+    // (a schedule without `admit waiting` has no `taking`: its request
+    // holds nothing)
     let prog = |schedule: &str| {
+        let schedule = taking(schedule, "reqs (1)");
         format!(
             r#"
         device gpu {{ }}
-        engine llm on gpu {{ reqs cap 8; tokens cap 8; schedule {{ {schedule} }} execute (1); }}
+        engine llm on gpu {{
+          reqs cap 8;
+          tokens cap 8;
+          request () {{ prefill (2); }}
+          schedule {{ {schedule} }}
+          execute (1);
+        }}
         pool reqs on llm {{ }}
         workload {{ arrive batch(1);
           session {{ turn; end;
           }}
         }}
-        server {{ hold reqs (cost(reqs, 1)) {{ run llm prefill (cost(llm, 2)); }}
+        server {{ llm ();
         }}
 
 "#
@@ -226,10 +259,8 @@ fn a_body_that_may_schedule_nothing_does_not_link() {
     let e = serq::Program::from_json(&p.to_json()).unwrap_err();
     assert!(e.contains("takes back"), "{e}");
     // `admitted` and `preempted` are a body's
-    let src = prog("advance running; admit waiting;").replace(
-        "run llm prefill (cost(llm, 2));",
-        "run llm prefill (cost(llm, 2)); set x = admitted;",
-    );
+    let src = prog("advance running; admit waiting;")
+        .replace("prefill (2);", "prefill (2); set x = admitted;");
     assert!(compile_source(&common::main_source(&src), &common::horizon(20.0)).is_err());
 }
 
@@ -259,7 +290,14 @@ fn the_vllm_body_is_the_procedure_under_keys_and_preemption() {
         engine llm on gpu {{
           reqs cap 6;
           tokens cap {budget};
-          schedule {{ advance running{order}{cap}; admit waiting while (running.preempted == 0){cap}; }}
+          request (n, s) {{
+            prefill (n) growing kv;
+            decode (6 + s - 3 * floor(s / 3)) growing kv;
+          }}
+          schedule {{
+            advance running{order}{cap};
+            admit waiting while (running.preempted == 0){cap} taking reqs (1), kv (1);
+          }}
           execute (1);
         }}
         pool reqs on llm {{ }}
@@ -272,10 +310,7 @@ fn the_vllm_body_is_the_procedure_under_keys_and_preemption() {
         }}
         server {{
           set n = 3 + serial - 5 * floor(serial / 5);
-          hold reqs (cost(reqs, 1)), kv (cost(kv, 1)) {{
-            run llm prefill (cost(llm, n)) growing kv;
-            run llm decode (cost(llm, 6 + serial - 3 * floor(serial / 3))) growing kv;
-          }}
+          llm (n, serial);
         }}
 
 "#
@@ -354,7 +389,8 @@ fn an_engine_idle_with_work_is_named() {
         engine llm on gpu {
           reqs cap 8;
           tokens cap 8;
-          schedule { advance running; admit waiting while (batch.tokens > 0); }
+          request () { prefill (2); }
+          schedule { advance running; admit waiting while (batch.tokens > 0) taking reqs (1); }
           execute (1);
         }
         pool reqs on llm { }
@@ -362,7 +398,7 @@ fn an_engine_idle_with_work_is_named() {
           session { turn; end;
           }
         }
-        server { hold reqs (cost(reqs, 1)) { run llm prefill (cost(llm, 2)); }
+        server { llm ();
         }
 
 "#;
@@ -386,7 +422,8 @@ fn a_guard_that_is_not_a_test_fails_the_run() {
         engine llm on gpu {
           reqs cap 8;
           tokens cap 8;
-          schedule { advance running; admit waiting while (running.count + 2); }
+          request () { prefill (2); }
+          schedule { advance running; admit waiting while (running.count + 2) taking reqs (1); }
           execute (1);
         }
         pool reqs on llm { }
@@ -394,7 +431,7 @@ fn a_guard_that_is_not_a_test_fails_the_run() {
           session { turn; end;
           }
         }
-        server { hold reqs (cost(reqs, 1)) { run llm prefill (cost(llm, 2)); }
+        server { llm ();
         }
 
 "#;
@@ -419,10 +456,21 @@ fn a_guard_that_is_not_a_test_fails_the_run() {
 #[test]
 fn a_register_remembers_the_last_iteration() {
     let prog = |items: &str| {
+        let items = taking(items, "reqs (1)");
         format!(
             r#"
         device gpu {{ }}
-        engine llm on gpu {{ reqs cap 64; tokens cap 64; {items} execute (1); }}
+        engine llm on gpu {{
+          reqs cap 64;
+          tokens cap 64;
+          request (t0) {{
+            observe wait = now - t0;
+            prefill (1);
+            decode (30);
+          }}
+          {items}
+          execute (1);
+        }}
         pool reqs on llm {{ }}
         workload {{ arrive renewal(1);
           session {{ turn;
@@ -432,11 +480,7 @@ fn a_register_remembers_the_last_iteration() {
         }}
         server {{
           set t0 = now;
-          hold reqs (cost(reqs, 1)) {{
-            observe wait = now - t0;
-            run llm prefill (cost(llm, 1));
-            run llm decode (cost(llm, 30));
-          }}
+          llm (t0);
         }}
 
 "#
@@ -483,10 +527,11 @@ fn a_set_in_an_iteration_that_is_none_is_undone() {
           reqs cap 1;
           tokens cap 4;
           state n = 0;
+          request () { prefill (100); }
           schedule {
             set n = n + 1;
             advance running only (decoding);
-            admit waiting while (running.count == 0);
+            admit waiting while (running.count == 0) taking reqs (1);
           }
           execute (1);
         }
@@ -495,7 +540,7 @@ fn a_set_in_an_iteration_that_is_none_is_undone() {
           session { turn; end;
           }
         }
-        server { hold reqs (cost(reqs, 1)) { run llm prefill (cost(llm, 100)); }
+        server { llm ();
         }
         gauge count = n;
 
@@ -517,11 +562,12 @@ fn a_set_in_an_iteration_that_is_none_is_undone() {
 #[test]
 fn a_register_is_the_stage_s_own() {
     let prog = |items: &str, session: &str| {
+        let items = taking(items, "reqs (1)");
         format!(
             r#"
         device gpu {{ }}
         device tpu {{ }}
-        engine llm on gpu {{ reqs cap 8; tokens cap 8; {items} execute (1); }}
+        engine llm on gpu {{ reqs cap 8; tokens cap 8; request () {{ prefill (2); }} {items} execute (1); }}
         pool reqs on llm {{ }}
         engine other on tpu {{
           tokens cap 8;
@@ -533,7 +579,7 @@ fn a_register_is_the_stage_s_own() {
           session {{ turn; end;
           }}
         }}
-        server {{ hold reqs (cost(reqs, 1)) {{ run llm prefill (cost(llm, 2)); }} {session}
+        server {{ llm (); {session}
         }}
 
 "#
@@ -597,63 +643,57 @@ fn a_register_is_the_stage_s_own() {
 /// the session's.
 #[test]
 fn a_register_is_read_where_its_stage_orders_the_read() {
-    let prog = |extra: &str, hold: &str| {
+    // `b`'s request is admitted `taking` its pools (none if empty), and
+    // the server is `server`; `other` is a capacity of `b`'s device, which
+    // `b` does not admit
+    let prog = |extra: &str, taking: &str, server: &str| {
+        let taking = if taking.is_empty() {
+            String::new()
+        } else {
+            format!(" taking {taking}")
+        };
         format!(
             r#"
-        device gpu {{ }}
+        device gpu {{ other cap 8; }}
         engine b on gpu {{
           reqs cap 8;
           tokens cap 8;
           state go = 0;
-          schedule {{ advance running; admit waiting; set go = 1; }}
+          request () {{ prefill (2); }}
+          schedule {{ advance running; admit waiting{taking}; set go = 1; }}
           execute (1);
         }}
         pool reqs on b {{ }}
-        pool other {{ cap 8; }}
+        pool other on gpu {{ }}
         {extra}
         workload {{ arrive batch(1);
           session {{ turn; end;
           }}
         }}
-        server {{ {hold}
+        server {{ {server}
         }}
 
 "#
         )
     };
-    let ok = |extra: &str, hold: &str| {
+    let ok = |extra: &str, taking: &str, server: &str| {
         compile_source(
-            &common::main_source(&prog(extra, hold)),
+            &common::main_source(&prog(extra, taking, server)),
             &common::horizon(20.0),
         )
     };
-    let base = "hold reqs (cost(reqs, 1)) { run b prefill (cost(b, 2)); }";
+    let call = "b ();";
+    let base = "reqs (1)";
     // its pool's header and keys, a gauge
-    assert!(
-        ok(
-            "gauge g = go;",
-            "hold reqs (cost(reqs, 1 + go)) { run b prefill (cost(b, 2)); }"
-        )
-        .is_ok()
-    );
+    assert!(ok("gauge g = go;", "reqs (1 + go)", call).is_ok());
     // a hold whose first pool, where it waits, the stage admits, whatever
     // else it holds (SGLang's `reqs` and `kv`); not one that waits elsewhere
-    assert!(
-        ok(
-            "",
-            "hold reqs (cost(reqs, 1)), other (cost(other, 1 + go)) { run b prefill (cost(b, 2)); }"
-        )
-        .is_ok()
-    );
-    let e = ok(
-        "",
-        "hold other (cost(other, 1)), reqs (cost(reqs, 1 + go)) { run b prefill (cost(b, 2)); }",
-    )
-    .unwrap_err();
+    assert!(ok("", "reqs (1), other (1 + go)", call).is_ok());
+    let e = ok("", "other (1), reqs (1 + go)", call).unwrap_err();
     assert!(e.contains("`go` is engine `b`'s register"), "{e}");
     // a ps capacity, another stage, a hold on a pool admitted at settle time
-    for (extra, hold) in [
-        ("stage p : ps(1 + go);", base),
+    for (extra, taking, server) in [
+        ("stage p : ps(1 + go);", base, call),
         (
             "device tpu { }
         engine a on tpu {
@@ -665,15 +705,13 @@ fn a_register_is_read_where_its_stage_orders_the_read() {
           execute (1);
         }",
             base,
+            call,
         ),
-        (
-            "",
-            "hold other (cost(other, 1 + go)) { run b prefill (cost(b, 2)); }",
-        ),
+        ("", "", "hold other (cost(other, 1 + go)) { b (); }"),
     ] {
-        let e = ok(extra, hold)
+        let e = ok(extra, taking, server)
             .err()
-            .unwrap_or_else(|| panic!("{extra} {hold} linked"));
+            .unwrap_or_else(|| panic!("{extra} {taking} {server} linked"));
         assert!(e.contains("`go` is engine `b`'s register"), "{e}");
     }
     let arr = "device tpu[2] { }
@@ -683,9 +721,9 @@ fn a_register_is_read_where_its_stage_orders_the_read() {
           schedule { advance running; admit waiting; }
           execute (1);
         }";
-    assert!(ok(arr, base).unwrap_err().contains("engine family"));
+    assert!(ok(arr, base, call).unwrap_err().contains("engine family"));
     let given = "claim c given (go == 0): at end (1);";
-    assert!(ok(given, base).is_err());
+    assert!(ok(given, base, call).is_err());
 }
 
 /// A try that admitted is kept with its sets, though it scheduled nothing
@@ -699,10 +737,11 @@ fn a_try_that_admitted_keeps_its_sets() {
           reqs cap 4;
           tokens cap 8;
           state k = 0;
+          request () { prefill (2); }
           schedule {
             advance running only (decoding);
             set k = k + 1;
-            admit waiting only (decoding);
+            admit waiting only (decoding) taking reqs (1);
           }
           execute (1);
         }
@@ -711,7 +750,7 @@ fn a_try_that_admitted_keeps_its_sets() {
           session { turn; end;
           }
         }
-        server { hold reqs (cost(reqs, 1)) { run llm prefill (cost(llm, 2)); }
+        server { llm ();
         }
         gauge seen = k;
 
@@ -740,7 +779,15 @@ fn a_reserve_on_a_register_waits_for_the_iteration() {
           reqs cap 16;
           tokens cap 512;
           state r = 5000;
-          schedule { set r = 10; advance running; admit waiting; }
+          request () {
+            prefill (100);
+            decode (9) growing kv;
+          }
+          schedule {
+            set r = 10;
+            advance running;
+            admit waiting taking reqs (1), kv (100) reserve (100 + r);
+          }
           execute (0.001 + batch.tokens * 1e-5);
         }
         pool reqs on llm { }
@@ -752,10 +799,7 @@ fn a_reserve_on_a_register_waits_for_the_iteration() {
           }
         }
         server {
-          hold reqs (cost(reqs, 1)), kv (cost(kv, 100)) reserve (cost(kv, 100 + r)) {
-            run llm prefill (cost(llm, 100));
-            run llm decode (cost(llm, 9)) growing kv;
-          }
+          llm ();
         }
 
 "#;
