@@ -69,10 +69,11 @@ use std::fmt;
 use crate::frontend::ast::*;
 use crate::frontend::lexer::{LexError, Tok, Token, lex};
 use crate::frontend::link::{
-    AGGREGATES, BUILTIN_ATTRS, CONTEXT_VARS, Constants, FOLDED, FUNCTIONS, LISTS, LResult,
-    LinkError, RENAMED, SCHEDULER_ATTRS, takes_supplied,
+    AGGREGATES, BUILTIN_ATTRS, CONTEXT_VARS, Constants, FOLDED, LISTS, LResult, LinkError, RENAMED,
+    SCHEDULER_ATTRS, takes_supplied,
 };
 use crate::frontend::queue::{self, QueueDecl};
+use crate::ir::{DistKind, Fun};
 
 mod device;
 mod request;
@@ -390,9 +391,6 @@ const MAX_TOKENS: usize = 100_000;
 
 /// The most members a family (`pool p[N]`, `queue D[N]`) may have.
 const MAX_FAMILY: usize = 10_000;
-
-/// The distributions of `~name(…)`, which a `def` may not be named.
-const DISTRIBUTIONS: [&str; 6] = ["exp", "det", "uniform", "erlang", "h2", "bernoulli"];
 
 /// Every word the grammar reads as a keyword somewhere. A `def` or a
 /// parameter may not be one: a parameter is replaced token by token, and a
@@ -713,10 +711,10 @@ fn entry_calls_of(b: &[Token]) -> Vec<(String, String)> {
     out
 }
 
-/// The functions of a value alone; the others read pool or stage state.
-const PURE: [&str; 9] = [
-    "min", "max", "abs", "floor", "ceil", "sqrt", "exp", "ln", "pow",
-];
+/// A function of a value alone; the others read pool or stage state.
+fn is_pure(name: &str) -> bool {
+    Fun::from_name(name).is_some_and(Fun::is_arithmetic)
+}
 
 /// The words #136 took out of the language, with what a program writes
 /// instead: one spelling for one admission.
@@ -850,9 +848,16 @@ fn through_queue<'a>(queue: &str, name: &'a str) -> Option<&'a str> {
 
 /// A function of the language: one the linker resolves or one it folds.
 fn is_function(name: &str) -> bool {
-    FUNCTIONS.contains(&name)
+    Fun::from_name(name).is_some()
         || FOLDED.contains(&name)
         || AGGREGATES.iter().any(|(n, _)| *n == name)
+}
+
+/// A word a definition or its parameter may not take: a keyword, a
+/// function or a distribution. A parameter is replaced token by token, so
+/// one named `uniform` turned `~uniform(…)` in its body into `~3(…)`.
+fn is_reserved(name: &str) -> bool {
+    KEYWORDS.contains(&name) || is_function(name) || DistKind::from_name(name).is_some()
 }
 
 /// Do these tokens use the definition `name`, `name(`?
@@ -1119,7 +1124,7 @@ fn live_read(e: &Expr, attrs: &[String], lets: &[String]) -> Option<String> {
         Expr::Var(v) => var(v),
         Expr::Sample(_, args) => args.iter().find_map(|a| live_read(a, attrs, lets)),
         Expr::Call(f, args) => {
-            if !PURE.contains(&f.as_str()) {
+            if !is_pure(f) {
                 return Some(format!("{f}(…)"));
             }
             args.iter().enumerate().find_map(|(k, a)| match a {
@@ -2554,10 +2559,7 @@ impl Parser {
     fn def(&mut self) -> PResult<()> {
         let at = self.pos;
         let name = self.ident()?;
-        if KEYWORDS.contains(&name.as_str())
-            || is_function(&name)
-            || DISTRIBUTIONS.contains(&name.as_str())
-        {
+        if is_reserved(&name) {
             return self.err_at(at, format!("`{name}` is a word of the language"));
         }
         self.declare(at, &name, Kind::Definition)?;
@@ -2593,7 +2595,7 @@ impl Parser {
         while *self.peek() != Tok::RParen {
             let p_at = self.pos;
             let p = self.name()?;
-            if KEYWORDS.contains(&p.as_str()) || is_function(&p) {
+            if is_reserved(&p) {
                 return self.err_at(
                     p_at,
                     format!("`{p}` is a word of the language: name the parameter otherwise"),
@@ -2831,8 +2833,8 @@ impl Parser {
                 continue;
             }
             let called = toks.get(k + 1).is_some_and(|t| t.tok == Tok::LParen);
-            if called && FUNCTIONS.contains(&n.as_str()) {
-                if !PURE.contains(&n.as_str()) {
+            if called && Fun::from_name(n).is_some() {
+                if !is_pure(n) {
                     calls.push(n.clone());
                 }
             } else if !called && (expr || !KEYWORDS.contains(&n.as_str())) {
@@ -3559,7 +3561,7 @@ impl Parser {
                         "a queue's device is the member's, one per member of `{name}`: write `device {dev}`"
                     ));
                 }
-                if KEYWORDS.contains(&dev.as_str()) {
+                if is_reserved(&dev) {
                     return self.err_at(d_at, format!("`{dev}` is a word of the language"));
                 }
                 self.declare_in(Scope::Queue(name.clone()), d_at, &dev, Kind::Device)?;
@@ -6106,6 +6108,12 @@ mod tests {
         assert!(
             err("def f(min) { min(min, 1) } workload { session { turn; \n} }\nserver {\n}")
                 .contains("a word of the language")
+        );
+        // a parameter is replaced token by token: one named `uniform` made
+        // `~uniform(1, uniform)` in a use `~3(1, 3)`, a parse error there
+        assert!(
+            err("def f(uniform) { ~uniform(1, uniform) } workload { session { turn; \n} }\nserver {\n}")
+                .contains("`uniform` is a word of the language: name the parameter otherwise")
         );
         // a definition uses only the ones before it: no recursion
         assert!(

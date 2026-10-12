@@ -296,34 +296,6 @@ pub(crate) const MAX_OVER: usize = 4096;
 /// declaration query (`blocksize`) and a resource conversion (`cost`).
 pub const FOLDED: [&str; 2] = ["blocksize", "cost"];
 
-/// The functions a call may name, as a constant the parser checks names
-/// against and `scripts/metrics.py` counts: the IR's `Fun::names`, which
-/// `tests/docs_lexer.rs` holds it to.
-pub const FUNCTIONS: [&str; 22] = [
-    "min",
-    "max",
-    "abs",
-    "floor",
-    "ceil",
-    "sqrt",
-    "exp",
-    "ln",
-    "pow",
-    "queue",
-    "busy",
-    "work",
-    "used",
-    "free",
-    "cachedin",
-    "holders",
-    "queued",
-    "price",
-    "budget_left",
-    "est_lambda",
-    "est_rho",
-    "est_wait",
-];
-
 /// The aggregates of a run's observations, `total(o)` …, which a claim
 /// `at end` reads: a call whose argument is an `observe` name.
 pub const AGGREGATES: [(&str, crate::ir::Agg); 5] = [
@@ -2010,7 +1982,7 @@ pub(crate) trait Constants {
     fn terms_written(&self) -> &Cell<usize>;
 
     /// The value of a constant expression: numbers, `inf` and constants,
-    /// combined by the operators, the constant functions (`const_call`), a
+    /// combined by the operators, the arithmetic functions (`Fun::arithmetic`), a
     /// condition and an aggregate written out. An attribute, a draw or
     /// `blocksize` is no constant; an unread argument is resolved, as in
     /// any expression, and never evaluated, so it need not be one
@@ -2069,7 +2041,9 @@ pub(crate) trait Constants {
                         Arg::Ref(_) => Err(not_constant()),
                     })
                     .collect::<LResult<_>>()?;
-                const_call(f, &xs).ok_or_else(not_constant)?
+                Fun::from_name(f)
+                    .and_then(|f| f.arithmetic(&xs))
+                    .ok_or_else(not_constant)?
             }
             Expr::Sample(..) => return Err(LinkError::new("a constant cannot sample".into())),
             Expr::Over(agg, j, n, body) => {
@@ -2182,24 +2156,6 @@ impl Constants for Linker<'_> {
     fn terms_written(&self) -> &Cell<usize> {
         &self.terms_written
     }
-}
-
-/// A constant function of constants: what a `let`, a `cap` or an array size
-/// may call. `Constants::eval_const` calls it, for the parser's array sizes
-/// and the linker's constants alike.
-pub fn const_call(f: &str, xs: &[f64]) -> Option<f64> {
-    Some(match (f, xs) {
-        ("min", [a, b]) => a.min(*b),
-        ("max", [a, b]) => a.max(*b),
-        ("abs", [a]) => a.abs(),
-        ("floor", [a]) => a.floor(),
-        ("ceil", [a]) => a.ceil(),
-        ("sqrt", [a]) => a.sqrt(),
-        ("exp", [a]) => a.exp(),
-        ("ln", [a]) => a.ln(),
-        ("pow", [a, b]) => a.powf(*b),
-        _ => return None,
-    })
 }
 
 pub fn binop(op: BinOp, a: f64, b: f64) -> f64 {

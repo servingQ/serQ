@@ -1970,7 +1970,7 @@ fn constant(e: &CExpr) -> Option<f64> {
                     CArg::Pool(_) | CArg::Stage(_) => None,
                 })
                 .collect::<Option<Vec<f64>>>()?;
-            crate::frontend::link::const_call(f.name(), &xs)
+            f.arithmetic(&xs)
         }
         _ => None,
     }
@@ -2809,20 +2809,51 @@ const FUNS: [Fun; 22] = [
 
 impl Fun {
     /// A function of its arguments alone (`min`, `ceil`, …), which reads
-    /// no state.
+    /// no state. Written out, not read off the signature: a function of
+    /// numbers alone may still read state.
     pub fn is_arithmetic(self) -> bool {
-        matches!(
-            self,
+        match self {
             Fun::Min
-                | Fun::Max
-                | Fun::Abs
-                | Fun::Floor
-                | Fun::Ceil
-                | Fun::Sqrt
-                | Fun::Exp
-                | Fun::Ln
-                | Fun::Pow
-        )
+            | Fun::Max
+            | Fun::Abs
+            | Fun::Floor
+            | Fun::Ceil
+            | Fun::Sqrt
+            | Fun::Exp
+            | Fun::Ln
+            | Fun::Pow => true,
+            Fun::Queue
+            | Fun::Busy
+            | Fun::Work
+            | Fun::Used
+            | Fun::Free
+            | Fun::CachedIn
+            | Fun::Holders
+            | Fun::Queued
+            | Fun::Price
+            | Fun::BudgetLeft
+            | Fun::EstLambda
+            | Fun::EstRho
+            | Fun::EstWait => false,
+        }
+    }
+
+    /// The value of an arithmetic function, the one definition the
+    /// interpreter and the constant folds share; `None` for a function that
+    /// reads state, or for arguments of the wrong number.
+    pub fn arithmetic(self, xs: &[f64]) -> Option<f64> {
+        Some(match (self, xs) {
+            (Fun::Min, [a, b]) => a.min(*b),
+            (Fun::Max, [a, b]) => a.max(*b),
+            (Fun::Abs, [a]) => a.abs(),
+            (Fun::Floor, [a]) => a.floor(),
+            (Fun::Ceil, [a]) => a.ceil(),
+            (Fun::Sqrt, [a]) => a.sqrt(),
+            (Fun::Exp, [a]) => a.exp(),
+            (Fun::Ln, [a]) => a.ln(),
+            (Fun::Pow, [a, b]) => a.powf(*b),
+            _ => return None,
+        })
     }
 
     /// The function's name in a program and the kind of each argument. The

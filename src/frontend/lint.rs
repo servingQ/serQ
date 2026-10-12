@@ -7,34 +7,14 @@
 //! legitimate instance in `examples/`, so they are errors rather than
 //! warnings: a warning nobody acts on is worse than no check.
 
-use crate::ir::{CExpr, CStmt, Fun, Program};
+use crate::ir::{CExpr, CStmt, Program};
 
 type Result = std::result::Result<(), String>;
 
 /// Does this expression read live pool or stage state - something that
 /// changes while a session waits?
 fn reads_live_state(p: &Program, e: &CExpr, found: &mut Option<String>) -> bool {
-    let live = e.find(&|x| {
-        matches!(
-            x,
-            CExpr::Call(
-                Fun::CachedIn
-                    | Fun::Used
-                    | Fun::Free
-                    | Fun::Holders
-                    | Fun::Queued
-                    | Fun::BudgetLeft
-                    | Fun::Queue
-                    | Fun::Busy
-                    | Fun::Work
-                    | Fun::Price
-                    | Fun::EstLambda
-                    | Fun::EstRho
-                    | Fun::EstWait,
-                _
-            )
-        )
-    });
+    let live = e.find(&|x| matches!(x, CExpr::Call(f, _) if !f.is_arithmetic()));
     if let Some(x) = live
         && found.is_none()
     {

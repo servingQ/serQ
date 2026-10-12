@@ -4493,16 +4493,26 @@ impl<'p> Interp<'p> {
             CArg::Pool(r) => s.ref_index(r, ctx, w),
             _ => unreachable!("Program::validate checks the arguments"),
         };
+        if f.is_arithmetic() {
+            // in order: an argument's draw is the stream's next
+            let a = num(self, 0);
+            let value = if args.len() == 2 {
+                f.arithmetic(&[a, num(self, 1)])
+            } else {
+                f.arithmetic(&[a])
+            };
+            return value.expect("Program::validate checks the arguments");
+        }
         match f {
-            Fun::Min => num(self, 0).min(num(self, 1)),
-            Fun::Max => num(self, 0).max(num(self, 1)),
-            Fun::Abs => num(self, 0).abs(),
-            Fun::Floor => num(self, 0).floor(),
-            Fun::Ceil => num(self, 0).ceil(),
-            Fun::Sqrt => num(self, 0).sqrt(),
-            Fun::Exp => num(self, 0).exp(),
-            Fun::Ln => num(self, 0).ln(),
-            Fun::Pow => num(self, 0).powf(num(self, 1)),
+            Fun::Min
+            | Fun::Max
+            | Fun::Abs
+            | Fun::Floor
+            | Fun::Ceil
+            | Fun::Sqrt
+            | Fun::Exp
+            | Fun::Ln
+            | Fun::Pow => unreachable!("an arithmetic function returned above"),
             Fun::Queue => {
                 let s = stage(self, 0);
                 self.stages[s].jobs.len() as f64
@@ -4848,22 +4858,10 @@ impl Ord for KeyOrd {
 fn static_key(e: &CExpr) -> bool {
     !e.any(&|x| match x {
         CExpr::Sample(..) | CExpr::Agg(..) => true,
-        CExpr::Call(f, _) => !matches!(
-            f,
-            Fun::Min
-                | Fun::Max
-                | Fun::Abs
-                | Fun::Floor
-                | Fun::Ceil
-                | Fun::Sqrt
-                | Fun::Exp
-                | Fun::Ln
-                | Fun::Pow
-                | Fun::Price
-                | Fun::EstLambda
-                | Fun::EstRho
-                | Fun::EstWait
-        ),
+        CExpr::Call(f, _) => {
+            !(f.is_arithmetic()
+                || matches!(f, Fun::Price | Fun::EstLambda | Fun::EstRho | Fun::EstWait))
+        }
         _ => false,
     })
 }

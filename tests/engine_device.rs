@@ -1445,6 +1445,34 @@ fn a_def_may_not_be_named_each_or_most() {
     }
 }
 
+/// A device's resource is a definition too, replaced token by token: its
+/// parameter may not be named like a distribution, as a `def`'s may not.
+#[test]
+fn a_resource_parameter_may_not_be_named_like_a_distribution() {
+    let src = std::fs::read_to_string(root().join("docs/tutorial/programs/05-engine.sq")).unwrap();
+    let prog = src.replacen(
+        "compute (t) = t * alpha;",
+        "compute (uniform) = uniform * alpha;",
+        1,
+    );
+    assert_ne!(prog, src);
+    refused(&prog, "`uniform` is a word of the language");
+}
+
+/// An arithmetic function takes numbers alone; one that reads a pool or a
+/// stage is not arithmetic. (A function of numbers alone may still read
+/// state, so the converse is not a test.)
+#[test]
+fn an_arithmetic_function_takes_numbers_alone() {
+    use serq::ir::{ArgKind, Fun};
+    for name in Fun::names() {
+        let f = Fun::from_name(name).unwrap();
+        if f.is_arithmetic() {
+            assert!(f.signature().iter().all(|a| *a == ArgKind::Expr), "{name}");
+        }
+    }
+}
+
 /// A name passed where a function takes a number is read as written
 /// (#469): `min(prompt[7], 1000)` linked as `min(prompt, 1000)`. A value
 /// has no index, and a pool or stage, whole or a member, is no number;
