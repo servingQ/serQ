@@ -1,0 +1,86 @@
+// `replay/vllm_replay.sq` with a system prompt every session's prompts begin
+// with: the oracle scenario `tools/oracle/shared_trace` (three sessions of
+// three turns, the first S tokens of every prompt the same). vLLM matches
+// the system prompt's blocks by content, whichever session computed them
+// (kv_cache_utils.py:650-680, block_pool.py:754-768); the request says the
+// same with `prefix (product: system, session: inf)`, its first item: the
+// product's system prompt, then the session's own. A session's first turn
+// may reuse the system prompt; a follow-up, its previous prompt.
+use "std/args";
+
+let bs = 16;           // block_size
+
+fn main() {
+  let spacing = args.number("spacing", 5);     // seconds between session arrivals
+  let N = args.number("N", 3);             // sessions in the trace
+  let S = args.number("S", 64);            // tokens of the system prompt
+  let B = args.number("B", 64);            // max_num_batched_tokens
+  let max_seqs = args.number("max_seqs", 4);      // max_num_seqs
+  let blocks = args.number("blocks", 30);       // KV blocks
+  let c_it = args.number("c_it", 1);         // s per iteration: the step clock
+
+  device gpu { kv cap blocks * bs; }
+  engine vllm on gpu {
+    reqs cap max_seqs;
+    tokens cap B;
+    // `vllm_replay.sq`'s request, its prompt's segments named: the system
+    // prompt of `product`, `system` tokens long, then the context of `session`
+    request (prompt, output, hitmax, product, system, session, t0) {
+      prefix (product: system, session: inf);
+      set kept = prompt;
+      at admission {
+        known = max(kept, computed + 1);
+        own = floor(max(kept > prompt ? kept - 1 : 0, computed), bs);
+        hit = min(cachedin(kv), max(hitmax, own));
+      }
+      set kept = known;
+      set c = cached;
+      observe cached_tokens = c;
+      observe sent = t0;
+      prefill (known - c) growing kv;
+      branch (known == prompt) { observe ttft = now - t0; }   // not a resumed request's re-prefill
+      decode (output - 1 - (known - prompt)) growing kv;
+      cache (prompt + output - 1);   // every computed token, full blocks (kv_cache_manager.py:602)
+    }
+    schedule {
+      advance running;
+      admit waiting while (running.preempted == 0)
+        taking reqs (1), kv (hit + min(known - hit, budget_left(vllm))) reserve (known)
+        reuse (max(hitmax, own));
+    }
+    execute (c_it);
+  }
+  pool kv on gpu { block bs; evict lru; preempt lifo; }
+  pool reqs on vllm { queue fifo; }  // the scheduler admits (scheduler.py:868)
+  stage gate : delay;
+
+  // The client: the trace's sessions, sent `spacing` apart; a turn is sent
+  // `think` seconds after the previous one completes. Every session sends
+  // the one system prompt.
+  workload {
+    arrive batch(N);
+    trace "../../tools/oracle/shared_trace.csv" ordered;
+    hidden out;            // the scheduler knows max_tokens, not the length (sched/utils.py:98-119)
+    init { set system = 1; }
+    session {
+      run gate (cost(gate, serial * spacing));
+      set prev = 0;
+      turn;
+      while (more) {
+        set prev = new;
+        tool think;
+        turn;
+      }
+    }
+  }
+
+  server {
+    set t0 = now;
+    set prompt = new;
+    // reusable: the previous prompt, or at least the system prompt (the
+    // generated tokens are not in this prompt), never the whole prompt
+    set hitmax = floor(min(max(prev, S), prompt - 1), bs);
+    vllm (prompt, out, hitmax, system, S, serial, t0);
+    observe response = now - t0;
+  }
+}

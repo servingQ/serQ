@@ -55,4 +55,4 @@ python3 scripts/metrics.py --check
 # only tests reach. A change that moves the list regenerates
 # tools/unused.json (`make unused`) and says why in its PR.
 python3 scripts/unused.py --check
-echo "OK: serq, $n programs link and draw, $t tutorial programs link, $(ls tools/oracle/*.out.json | wc -l) vLLM oracle scenarios + 1 prefix-cache trace (CPU oracle = A100 engine = serQ)"
+echo "OK: serq, $n programs link and draw, $t tutorial programs link, $(ls tools/oracle/*.out.json | wc -l) vLLM oracle scenarios + 2 prefix-cache traces (CPU oracle = A100 engine = serQ; the shared-prompt trace, CPU oracle = serQ)"
