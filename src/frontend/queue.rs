@@ -124,6 +124,9 @@ pub struct QueueDecl {
     /// An engine's request (`docs/design/engine-request.md`), its one
     /// entry `request`: it keeps its names and its pools are the program's.
     pub engine: bool,
+    /// An engine's request: the engine's `state` registers, which it reads
+    /// (SGLang's admission reads its new-token ratio); empty for a queue.
+    pub registers: Vec<String>,
     /// An engine's request: where its admission is written (`taking`),
     /// for the errors its header earns.
     pub header_at: Option<usize>,

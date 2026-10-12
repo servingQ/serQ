@@ -305,6 +305,90 @@ fn the_admission_reads_no_attribute_of_the_session() {
     );
 }
 
+/// The admission reads the engine's own registers, as SGLang's reservation
+/// reads its new-token ratio: the IR is the server hold that read it.
+#[test]
+fn the_admission_reads_the_engine_s_registers() {
+    let state = [("tokens cap 8;", "tokens cap 8;\n  state ratio = 2;")];
+    let sugar = compiled(&replaced(
+        &program(),
+        &[
+            state[0],
+            (
+                "    advance running;\n",
+                "    set ratio = ratio + 1;\n    advance running;\n",
+            ),
+            ("reserve (known);", "reserve (known + ratio);"),
+        ],
+    ));
+    let kernel = compiled(&replaced(
+        &format!("{DEVICE}{KERNEL}"),
+        &[
+            state[0],
+            (
+                "schedule { advance running;",
+                "schedule { set ratio = ratio + 1; advance running;",
+            ),
+            (
+                "reserve (cost(kv, known))",
+                "reserve (cost(kv, known + ratio))",
+            ),
+        ],
+    ));
+    assert_eq!(sugar.to_json(), kernel.to_json());
+}
+
+/// Only `taking` reads a register, at the engine's admission: the request's
+/// statements and its bindings are read when the session gets there, a hold
+/// whose first pool the engine does not admit is admitted apart from the
+/// engine's iteration, and a parameter named like a register would read the
+/// caller's value where the engine's was meant.
+#[test]
+fn a_register_is_read_by_the_taking_alone() {
+    let with_ratio = |more: &[(&str, &str)]| {
+        let mut pairs = vec![
+            ("tokens cap 8;", "tokens cap 8;\n  state ratio = 2;"),
+            (
+                "    advance running;\n",
+                "    set ratio = ratio + 1;\n    advance running;\n",
+            ),
+        ];
+        pairs.extend_from_slice(more);
+        replaced(&program(), &pairs)
+    };
+    refused(
+        &with_ratio(&[(
+            "    set kept = known;\n",
+            "    set kept = known;\n    observe r = ratio;\n",
+        )]),
+        "`ratio` is an engine's register (`state`), which its schedule reads; it is read in a session statement",
+    );
+    refused(
+        &with_ratio(&[(
+            "known = max(kept, computed + 1);",
+            "known = max(kept, computed + ratio);",
+        )]),
+        "`ratio` is an engine's register (`state`), which its schedule reads",
+    );
+    refused(
+        &with_ratio(&[(
+            "taking reqs (1), kv (min(known, budget_left(llm))) reserve (known);",
+            "taking kv (min(known, budget_left(llm))) reserve (known + ratio), reqs (1);",
+        )]),
+        "`ratio` is engine `llm`'s register, and a hold's header would read it apart from `llm`'s iteration",
+    );
+    refused(
+        &with_ratio(&[
+            (
+                "request (prompt, output)",
+                "request (prompt, output, ratio)",
+            ),
+            ("llm (prompt, o);", "llm (prompt, o, 3);"),
+        ]),
+        "engine `llm`'s request names a parameter `ratio`, which is also its register",
+    );
+}
+
 #[test]
 fn a_request_sets_no_parameter() {
     let src = replaced(

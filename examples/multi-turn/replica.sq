@@ -27,6 +27,10 @@ fn main() {
   device gpu { compute (t) = t * a; hbm (k) = omega + beta * k; kv cap C; }
   engine llm on gpu {
     tokens cap max(running.decoding, (omega + beta * running.kv_decode) / a);    // fill the memory time
+    request (prefill_work, output) {
+      prefill (prefill_work);
+      decode (output);
+    }
     schedule {
       advance running decode first;                // prefill in what decode leaves
       admit waiting while (running.preempted == 0);
@@ -77,8 +81,7 @@ fn main() {
       // converted at the compute rate 1/a
       set P = s0 / a + (warm ? n + (b / a) * n * (K + n / 2)
                             : (K + n) + (b / a) * (K + n) * (K + n) / 2);
-      run llm prefill (cost(llm, P));
-      run llm decode (cost(llm, o));
+      llm (P, o);
     } cache (cost(reqs, kv, K + n + o));
     branch (!cold) { observe hit = warm; }
   }

@@ -112,7 +112,7 @@ theorem vllm_seqcap :
 
 /-! ### A multi-turn scenario with a prefix cache -/
 
-/-- The vLLM replay program (serQ `examples/replay/vllm_replay.sq`) on a unit step clock, translated from its IR. Attributes: 2 = turn_no, 3 = new, 4 = out, 5 = think, 6 = more, 7 = forced, 8 = computed, 9 = prev, 10 = prevout, 11 = t0, 12 = prompt, 13 = kept, 14 = hitmax, 15 = known, 16 = c. Observations: 0 = cached_tokens, 1 = prefix, 2 = sent, 3 = ttft, 4 = response. Pools: 0 = kv, 1 = reqs. Stages: 0 = vllm, 1 = front, 2 = gate, 3 = tool. -/
+/-- The vLLM replay program (serQ `examples/replay/vllm_replay.sq`) on a unit step clock, translated from its IR. Attributes: 2 = turn_no, 3 = new, 4 = out, 5 = think, 6 = more, 7 = forced, 8 = computed, 9 = prev, 10 = prevout, 11 = t0, 12 = prompt, 13 = hitmax, 14 = kept, 15 = known, 16 = c. Observations: 0 = cached_tokens, 1 = prefix, 2 = sent, 3 = ttft, 4 = response. Pools: 0 = kv, 1 = reqs. Stages: 0 = vllm, 1 = front, 2 = gate, 3 = tool. -/
 def vllmTurn : Prog := [route|
   run 2 (x.serial * 3);
   set 9 = 0;
@@ -120,12 +120,12 @@ def vllmTurn : Prog := [route|
   turn;
   set 11 = x.now;
   set 12 = x.attr 3;
-  set 13 = x.attr 12;
   run 1 (0);
-  set 14 = if ((x.attr 7) ≠ 0) then 0 else (((min (x.attr 9) ((x.attr 12) - 1)) / 16) * 16);
-  hold 1 (1), 0 ((min (x.cachedIn 0) (max (x.attr 14) (((max (if ((x.attr 13) > (x.attr 12)) then ((x.attr 13) - 1) else 0) (x.attr 8)) / 16) * 16))) + (min ((max (x.attr 13) ((x.attr 8) + 1)) - (min (x.cachedIn 0) (max (x.attr 14) (((max (if ((x.attr 13) > (x.attr 12)) then ((x.attr 13) - 1) else 0) (x.attr 8)) / 16) * 16)))) x.budgetLeft)) fits (max (x.attr 13) ((x.attr 8) + 1)) reuse (max (x.attr 14) (((max (if ((x.attr 13) > (x.attr 12)) then ((x.attr 13) - 1) else 0) (x.attr 8)) / 16) * 16)) {
-    set 15 = max (x.attr 13) ((x.attr 8) + 1);
-    set 13 = x.attr 15;
+  set 13 = if ((x.attr 7) ≠ 0) then 0 else (((min (x.attr 9) ((x.attr 12) - 1)) / 16) * 16);
+  set 14 = x.attr 12;
+  hold 1 (1), 0 ((min (x.cachedIn 0) (max (x.attr 13) (((max (if ((x.attr 14) > (x.attr 12)) then ((x.attr 14) - 1) else 0) (x.attr 8)) / 16) * 16))) + (min ((max (x.attr 14) ((x.attr 8) + 1)) - (min (x.cachedIn 0) (max (x.attr 13) (((max (if ((x.attr 14) > (x.attr 12)) then ((x.attr 14) - 1) else 0) (x.attr 8)) / 16) * 16)))) x.budgetLeft)) fits (max (x.attr 14) ((x.attr 8) + 1)) reuse (max (x.attr 13) (((max (if ((x.attr 14) > (x.attr 12)) then ((x.attr 14) - 1) else 0) (x.attr 8)) / 16) * 16)) {
+    set 15 = max (x.attr 14) ((x.attr 8) + 1);
+    set 14 = x.attr 15;
     set 16 = x.cached;
     observe 0 = x.attr 16;
     observe 1 = (x.attr 9) + (x.attr 10);
@@ -148,12 +148,12 @@ def vllmTurn : Prog := [route|
     turn;
     set 11 = x.now;
     set 12 = x.attr 3;
-    set 13 = x.attr 12;
     run 1 (0);
-    set 14 = if ((x.attr 7) ≠ 0) then 0 else (((min (x.attr 9) ((x.attr 12) - 1)) / 16) * 16);
-    hold 1 (1), 0 ((min (x.cachedIn 0) (max (x.attr 14) (((max (if ((x.attr 13) > (x.attr 12)) then ((x.attr 13) - 1) else 0) (x.attr 8)) / 16) * 16))) + (min ((max (x.attr 13) ((x.attr 8) + 1)) - (min (x.cachedIn 0) (max (x.attr 14) (((max (if ((x.attr 13) > (x.attr 12)) then ((x.attr 13) - 1) else 0) (x.attr 8)) / 16) * 16)))) x.budgetLeft)) fits (max (x.attr 13) ((x.attr 8) + 1)) reuse (max (x.attr 14) (((max (if ((x.attr 13) > (x.attr 12)) then ((x.attr 13) - 1) else 0) (x.attr 8)) / 16) * 16)) {
-      set 15 = max (x.attr 13) ((x.attr 8) + 1);
-      set 13 = x.attr 15;
+    set 13 = if ((x.attr 7) ≠ 0) then 0 else (((min (x.attr 9) ((x.attr 12) - 1)) / 16) * 16);
+    set 14 = x.attr 12;
+    hold 1 (1), 0 ((min (x.cachedIn 0) (max (x.attr 13) (((max (if ((x.attr 14) > (x.attr 12)) then ((x.attr 14) - 1) else 0) (x.attr 8)) / 16) * 16))) + (min ((max (x.attr 14) ((x.attr 8) + 1)) - (min (x.cachedIn 0) (max (x.attr 13) (((max (if ((x.attr 14) > (x.attr 12)) then ((x.attr 14) - 1) else 0) (x.attr 8)) / 16) * 16)))) x.budgetLeft)) fits (max (x.attr 14) ((x.attr 8) + 1)) reuse (max (x.attr 13) (((max (if ((x.attr 14) > (x.attr 12)) then ((x.attr 14) - 1) else 0) (x.attr 8)) / 16) * 16)) {
+      set 15 = max (x.attr 14) ((x.attr 8) + 1);
+      set 14 = x.attr 15;
       set 16 = x.cached;
       observe 0 = x.attr 16;
       observe 1 = (x.attr 9) + (x.attr 10);

@@ -222,7 +222,7 @@ A register may be read in:
 
 - its engine's `tokens cap`, `execute`, keys, schedule and iteration claims;
 - queue keys of pools the engine admits;
-- hold headers whose first pool the engine admits;
+- hold headers whose first pool the engine admits, and its request's `taking`;
 - gauges and `at end` claims.
 
 Other reads are link errors. Each register name must be unique and cannot
