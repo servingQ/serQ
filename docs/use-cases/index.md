@@ -11,7 +11,6 @@ the program, what the runs show, and what the program leaves out.
 |---|---|
 | [vLLM](vllm.md) | The vLLM v1 engine, checked against the scheduler oracle |
 | [vllm-ascend](ascend.md), [vllm-rbln](rbln.md) | Vendor plugins' scheduling and KV-cache behavior, as reduced specifications ([below](#vendor-plugins)) |
-| [Input shapes and padding](input-shapes.md) | How scheduler output becomes compiled device inputs, per vendor |
 | [Different workloads](workloads.md) | One engine under single-turn, chat and subagent traffic |
 | [Prefill/decode over NIXL](pd.md) | llm-d's prefill/decode disaggregation with the KV transfer |
 | [FasterTransformer](fastertransformer.md) | Decode-only batches and their queueing cost (`only`) |
@@ -44,7 +43,6 @@ separate pinned reference and does not validate these plugin versions.
 | vllm-ascend | `v0.27.1rc1` (RC) | `v0.27.1` | [Release](https://github.com/vllm-project/vllm-ascend/releases/tag/v0.27.1rc1) |
 | vllm-rbln | `v0.11.3a21` (alpha) | `0.26.0+cpu` | [Dependency](https://github.com/rebellions-sw/vllm-rbln/blob/v0.11.3a21/pyproject.toml#L41) |
 
-For compiled buckets and dummy tokens, see [Input shapes and padding](input-shapes.md).
 The individual pages describe each model's rules and limitations.
 
 ### Run an example

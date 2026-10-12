@@ -256,7 +256,7 @@ fn sglang_and_tgi_as_engines_are_bodies() {
     assert_eq!(tgi.registers, vec![just]);
     assert_eq!((&st.budget, &st.cost), (&num(4096.0), &roofline()));
     // `advance running; branch (just == 0 || running.count == 0) { admit
-    // waiting; } set just = waiting.admitted > 0;`
+    // waiting taking …; } set just = waiting.admitted > 0;`
     assert_eq!(
         st.iteration,
         Some(vec![

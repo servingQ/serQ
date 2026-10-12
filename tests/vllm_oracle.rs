@@ -76,7 +76,6 @@ fn oracle_ir(name: &str) -> serq::Program {
             ]
         })
         .collect();
-    // its `use` reads the library next to the program
     compile_source(&common::main_source(&src), &ov)
         .unwrap()
         .with_sessions(&sessions)

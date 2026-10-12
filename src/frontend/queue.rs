@@ -74,7 +74,8 @@ pub fn role_of_verb(verb: &str, from: bool) -> Option<&'static RoleSig> {
 pub struct Entry {
     pub verb: String,
     pub params: Vec<String>,
-    /// `from NAME`: the name the body gives the source pool.
+    /// `from S`: the queue whose entry leased the KV; in the body `S` is
+    /// that lease, the pool `S.leased` of the member the call names.
     pub from: Option<String>,
     /// Whether the body leases the queue's `leased` pool.
     pub leases: bool,
@@ -194,7 +195,9 @@ impl Ctx<'_> {
             if r.index.is_some() {
                 return err(
                     self.at,
-                    format!("`{}` is the source pool; it takes no index", from),
+                    format!(
+                        "`{from}` is the KV this request leased on `{from}`: it takes no index"
+                    ),
                 );
             }
             return Ok(src.clone());
@@ -255,23 +258,6 @@ impl Ctx<'_> {
         }
         if let Some((_, e)) = self.params.iter().find(|(p, _)| p == n) {
             return Ok(e.clone());
-        }
-        // `from src`: in an index, `src` is the source member's index
-        // (`egress[src]`, the prefiller's own NIC); the parser refuses it
-        // anywhere else a number is read
-        if let Some((from, src)) = &self.from
-            && n == from
-        {
-            return match &src.index {
-                Some(i) => Ok((**i).clone()),
-                None => err(
-                    self.at,
-                    format!(
-                        "`{from}` as an index: its source `{}` is no family's member",
-                        src.name
-                    ),
-                ),
-            };
         }
         if self.locals.iter().any(|l| l == n) {
             return Ok(Expr::Var(format!("{}.{n}", self.q.name)));
@@ -391,7 +377,7 @@ impl Ctx<'_> {
         Ok(out)
     }
 
-    /// `transfer (n) from src to kv (m)` in an entry of a queue with a KV
+    /// `transfer (n) from P to kv (m)` in an entry `from P` of a queue with a KV
     /// relation: the poster's wait, then one run over the source's NIC and
     /// the reader's (the `load` and `release` follow as written).
     fn copy(&self, work: &Expr) -> Result<Vec<Stmt>, ExpandError> {
@@ -414,21 +400,8 @@ impl Ctx<'_> {
         let Some((_, src)) = &self.from else {
             return err(self.at, "a read takes `from` the entry's source");
         };
-        let from_queue = src.name.split_once('.').map(|(q, _)| q);
-        if from_queue != Some(source.as_str()) {
-            return err(
-                self.at,
-                format!(
-                    "{}, and this entry was called `from {}`",
-                    if *push {
-                        format!("`{source}` pushes to `{}`", self.q.name)
-                    } else {
-                        format!("`{}` pulls from `{source}`", self.q.name)
-                    },
-                    src.name
-                ),
-            );
-        }
+        // the entry's `from` is the relation's source (`copy_relation`) and
+        // the call's (`call`)
         // the generated references point at the call, for the linker's errors
         let own = |name: String| Ref {
             span: Some(self.at),
@@ -738,6 +711,19 @@ fn call(
             );
         }
     };
+    // the call takes the KV from the queue the entry names (or, inside
+    // another entry `from S`, passes that lease on: `S.kv`)
+    if let (Some(s), Some(r), false) = (&entry.from, from, is_transfer)
+        && r.name.split('.').next() != Some(s.as_str())
+    {
+        return err(
+            at,
+            format!(
+                "`{}.{verb} (…) from {}`: the entry takes the KV `from {s}`",
+                q.name, r.name
+            ),
+        );
+    }
     if args.len() != entry.params.len() {
         return err(
             at,

@@ -221,11 +221,11 @@ fn the_decode_leg_holds_its_blocks_during_the_prefill() {
           engine on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
           nic ps(10);
           decode (p) {{ hold kv (cost(kv, p)) {{ run D prefill (cost(D, p)) growing kv; }} }}
-          decode (p) from src {{
+          decode (p) from P {{
             hold kv (cost(kv, p)) {{
               mark parked;
               join;
-              transfer (p) from src to kv (p);
+              transfer (p) from P to kv (p);
               mark written;
             }}
           }}
@@ -272,7 +272,7 @@ fn legs_that_wait_for_each_other_fail_the_run() {
           engine on gpu { tokens cap inf; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); }
           nic ps(100);
           decode (p) { hold kv (cost(kv, p)) { run D prefill (cost(D, p)) growing kv; } }
-          decode (p) from src { hold kv (cost(kv, p)) { join; transfer (p) from src to kv (p); } }
+          decode (p) from P { hold kv (cost(kv, p)) { join; transfer (p) from P to kv (p); } }
         }
         P push D share maxmin;
         stage gate : delay;
@@ -461,7 +461,7 @@ fn a_lease_that_expires_is_not_a_deadlock() {
           engine on gpu { tokens cap inf; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); }
           nic ps(100);
           decode (p) { hold kv (cost(kv, p)) { run D prefill (cost(D, p)) growing kv; } }
-          decode (p) from src { hold kv (cost(kv, p)) { join; transfer (p) from src to kv (p); } }
+          decode (p) from P { hold kv (cost(kv, p)) { join; transfer (p) from P to kv (p); } }
         }
         P push D share maxmin;
         stage gate : delay;
@@ -521,11 +521,11 @@ fn a_queue_posts_the_copies_of_one_relation() {
         queue D : decode { device gpu { kv cap 10; } pool kv on gpu { }
           engine on gpu { tokens cap inf; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); } nic ps(1);
           decode (p) { hold kv (cost(kv, p)) { run D prefill (cost(D, p)) growing kv; } }
-          decode (p) from src { hold kv (cost(kv, p)) { transfer (p) from src to kv (p); } } }
+          decode (p) from P { hold kv (cost(kv, p)) { transfer (p) from P to kv (p); } } }
         queue E : decode { device gpu { kv cap 10; } pool kv on gpu { }
           engine on gpu { tokens cap inf; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); } nic ps(1);
           decode (p) { hold kv (cost(kv, p)) { run E prefill (cost(E, p)) growing kv; } }
-          decode (p) from src { hold kv (cost(kv, p)) { transfer (p) from src to kv (p); } } }
+          decode (p) from P { hold kv (cost(kv, p)) { transfer (p) from P to kv (p); } } }
         P push D latency 1 share maxmin;
         P push E latency 1 share maxmin;
         workload { arrive batch(1);

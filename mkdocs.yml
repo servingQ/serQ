@@ -98,7 +98,6 @@ nav:
           - vLLM: use-cases/vllm.md
           - vllm-ascend: use-cases/ascend.md
           - vllm-rbln: use-cases/rbln.md
-          - Input shapes and padding: use-cases/input-shapes.md
           - Different workloads: use-cases/workloads.md
           - Prefill/decode over NIXL: use-cases/pd.md
           - FasterTransformer: use-cases/fastertransformer.md

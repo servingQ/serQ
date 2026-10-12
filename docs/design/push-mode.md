@@ -72,12 +72,12 @@ queue gw : gateway {
 }
 queue D : decode {
   …
-  decode (prompt) from src {
+  decode (prompt) from P {
     hold kv (known) reserve (known), reqs (0) reserve (1) … {
       …
         mark parked;
         join;                                                     // P's finished blocks meet the registration: the write can start (nixl/push_worker.py:254-264)
-        transfer (prompt - c) from src to kv (prompt - 1 - c);   // P's WRITE over both NICs
+        transfer (prompt - c) from P to kv (prompt - 1 - c);   // P's WRITE over both NICs
       …
     } cache (prompt + o);
   }
@@ -93,7 +93,7 @@ its own, the session's serial and so its cached prefix. It is not a
 session: no arrival, no end, no `turn`. Its `set`s change its copy and end
 with it, so two legs never write one attribute. What it leases passes to
 the session when it ends, which is what lets the decode leg's `transfer …
-from src` take the prefiller's lease.
+from P` take the prefiller's lease.
 
 **`join;` waits for every leg forked so far.** No handle: the push proxy
 has one leg, and a `join` with a name would have to reach the entry of
@@ -112,7 +112,7 @@ with the same relation (criterion 2: the program states the opposite).
 | `fork { … }` | `CStmt::Fork(body)` |
 | `join;` | `CStmt::Join` |
 | `P push D latency x share s;` | `stage P.nic.latency[N] : delay; share s;`, `x` the constant `P.push.time` |
-| `transfer (n) from src to kv (m)` in `D[j]`, called `from P[i]` | `run P.nic.latency[i] (x); run P.nic[i], D.nic[j] (n); load D.kv[j] (m); release P.kv[i];` |
+| `transfer (n) from P to kv (m)` in `D[j]`, called `from P[i]` | `run P.nic.latency[i] (x); run P.nic[i], D.nic[j] (n); load D.kv[j] (m); release P.kv[i];` |
 
 **Checks.** At link time: a leg may not `turn`, `end`, fork or `join`; a
 leg acts on no hold around its fork; a `fork` stands in no hold that may be
@@ -181,7 +181,7 @@ request as any other. Fork/join keeps one meaning of hold and is the
 decoder is full the real prefiller goes on and the program stops, a wrong
 answer.
 
-**Not an implicit join.** A `transfer … from src` that waits for the
+**Not an implicit join.** A `transfer … from P` that waits for the
 source's lease to exist writes one statement less and hides where the
 request blocks.
 

@@ -364,7 +364,7 @@ pub type Spans = Vec<Vec<Option<Span>>>;
 pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> {
     if !prog.has_main {
         return Err(LinkError::new(
-            "missing `fn main()`: a library's definitions do not execute by themselves".into(),
+            "missing `fn main()`: definitions do not execute by themselves".into(),
         ));
     }
     for (name, _) in &ov.lets {

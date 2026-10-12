@@ -31,8 +31,8 @@ body. When the body finishes, the units are released automatically.
 !!! info "When are the units counted?"
     The declaration computes `processing.mem` once. The hold reads that
     stored amount **at admission**. A header that reads changing cache or
-    budget state must calculate it at admission instead; Chapter 5 uses
-    those expressions directly in the header.
+    budget state must calculate it at admission instead; Chapter 5 writes
+    those expressions in the engine's `taking`, which is read at admission.
 
 ## Running it
 

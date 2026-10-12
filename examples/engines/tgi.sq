@@ -29,10 +29,22 @@ fn main() {
   engine tgi on gpu {
     tokens cap B;
     state just = 0;                // the last forward admitted
+    // What TGI does with one request: it prefills what the prefix cache
+    // does not hold and decodes, in the blocks it was admitted with. The
+    // hit never covers the whole input; only the input is cached.
+    request (prompt, output) {
+      set c = cached;
+      prefill (prompt - c);
+      decode (output - 1);
+      cache (prompt);
+    }
     // with no running batch there is no decode forward, and the queue is read
     schedule {
       advance running;
-      branch (just == 0 || running.count == 0) { admit waiting; }
+      // blocks for the whole input plus max_new_tokens, at once
+      branch (just == 0 || running.count == 0) {
+        admit waiting taking kv (prompt + mnt - 1) reuse (prompt - 1);
+      }
       set just = waiting.admitted > 0;
     }
     execute (max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
@@ -57,14 +69,10 @@ fn main() {
     }
   }
 
-  // The hit never covers the whole input; only the input is cached.
+  // A turn is one request to the engine.
   server {
     set prompt = K + n;
-    hold kv (cost(kv, prompt + mnt - 1)) reuse (cost(kv, prompt - 1)) {
-      set c = cached;
-      run tgi prefill (cost(tgi, prompt - c));
-      run tgi decode (cost(tgi, o - 1));
-    } cache (cost(kv, prompt));
+    tgi (prompt, o);
   }
 
 

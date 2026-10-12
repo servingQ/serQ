@@ -214,8 +214,7 @@ contract applies to direct JSON IR as well as source. See
 Source programs declare exactly one `fn main()`. It constructs the deployment
 once; each arriving session executes its session body. Execution settings are supplied externally.
 Only imports, definitions and fixed constants may precede `main`. Declarations
-after it and nested or duplicate entry points are refused. Libraries provide
-definitions and imports, never an executable entry point.
+after it and nested or duplicate entry points are refused.
 
 A plain `let` cannot be replaced externally. With `use "std/args";`, a
 `let` inside `main` may declare an input using
@@ -429,12 +428,15 @@ predefined vocabulary; `gw`, `P` and `D` are names declared by this
 program. User-defined roles are not supported.
 
 The deployment calls an entry where the request goes: `P[i].prefill
-(prompt);` and `D[j].decode (prompt) from P[i];`. `from P[i]` is the pool
-`P`'s entry leases, and every entry of `P` must lease it on every way
-through it, so that whichever one the request went through left the KV; a `from` on a queue that leases
-nothing does not link.
-Inside the entry the `from` name is that pool, and in an index it is
-the source member's index.
+(prompt);` and `D[j].decode (prompt) from P[i];`. The entry names the
+queue its KV comes from, `decode (prompt) from P`: a queue declared above,
+every entry of which leases its pool on every way through it, so that
+whichever one the request went through left the KV; a `from` on a queue
+that leases nothing, or on one not declared above, does not link, and a
+call `from` another queue is refused. Inside the entry `P` is that lease,
+the pool `P`'s entry leased for this request on the member `P[i]` the call
+names (`transfer … from P to kv …`); it is not a number, not even in an
+index.
 
 A pod's NIC is the pod's: `nic ps(BwD);` in a queue is the stage
 `D.nic`, one per member. A *pull relation* says which queue reads the KV
@@ -444,9 +446,9 @@ from which, and how the reads share the NICs:
 queue P[NP] : prefill { … nic ps(BwP); prefill (prompt) { … } }
 queue D[ND] : decode {
   … nic ps(BwD);
-  decode (prompt) from src {
+  decode (prompt) from P {
     …
-    transfer (prompt - c) from src to kv (prompt - 1 - c);   // over P's NIC and this pod's
+    transfer (prompt - c) from P to kv (prompt - 1 - c);   // over P's NIC and this pod's
   }
 }
 D pull P latency x0 share maxmin;
@@ -460,7 +462,7 @@ left to a default. Inside an entry of `D` called `from P[i]`, a `transfer`
 without `on` is the read: the kernel's `run D.nic.latency[j] (x0); run
 P.nic[i], D.nic[j] (…); load D.kv[j] (…); release P.kv[i];`. Both queues
 are declared above the relation and have a `nic`; a reader has one source;
-an entry of `D` called `from` another queue is an error, and so is a
+an entry of `D` `from` another queue is an error, and so is a
 `transfer` without `on` in a queue that pulls from none. A program with a
 relation does not also write `share` on its own.
 
@@ -480,7 +482,7 @@ a `server` does: link queues, or any `ps` stages. `latency x` on a link's
 `L.latency` of the link's own, which every `transfer on` naming the link
 runs first, one wait per link named, in the order named. A number or a
 `let` constant; only a link without an entry takes one. A link with a `transfer (n)` entry is called
-instead, `nic[self].transfer (n) from src to kv (m);`, and runs its body on
+instead, `nic[self].transfer (n) from P to kv (m);`, and runs its body on
 its own stage. Arguments are substituted like an `at admission` binding, so
 none may draw.
 

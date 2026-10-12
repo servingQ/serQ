@@ -7,8 +7,7 @@ item    := let | def | use | pool | stage | queue | workload | server | share | 
 
 `fn main()` is the single execution entry point: it constructs the deployment and
 workload. The session body then runs for each arrival.
-Top-level constants and definitions do not execute a simulation. Libraries
-contain definitions and imports, and cannot declare a `main` or a deployment.
+Top-level constants and definitions do not execute a simulation.
 There are no arguments or return value on `main`; use `std/args` for inputs.
 
 Items are read in order and declarations come first: a [serving form](serving.md)
