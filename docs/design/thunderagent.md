@@ -90,6 +90,10 @@ pool prog[J] {
 …
 server {
   set prompt = K + n;
+  // vLLM refuses a prompt its KV cannot hold (max_model_len is at most
+  // the KV, as in examples/pd-disaggregation/llmd_nixl_pull.sq): the
+  // agent's trajectory ends there, in either mode
+  branch (prompt + buffer >= blocks * bs) { end; }
   set reasoning = 1;
   set placed = K > 0 && allocated(prog[home]) > 0;
   branch (placed) {
@@ -104,6 +108,11 @@ server {
     } lease prog[home] (inf);
   }
   E[home].decode (prompt);
+  // the response's usage counts the answer too (update_program_after_request),
+  // up to what a replica holds
+  branch (allocated(prog[home]) > 0) {
+    grow prog[home] (cost(prog, min(o, blocks * bs - allocated(prog[home]))));
+  }
   set reasoning = 0;
 }
 ```

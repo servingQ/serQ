@@ -143,8 +143,11 @@ fn main() {
       } lease prog[home] (inf);
     }
     E[home].decode (prompt);
-    // the response's usage counts the answer too (update_program_after_request)
-    branch (allocated(prog[home]) > 0) { grow prog[home] (cost(prog, o)); }
+    // the response's usage counts the answer too (update_program_after_request),
+    // up to what a replica holds
+    branch (allocated(prog[home]) > 0) {
+      grow prog[home] (cost(prog, min(o, blocks * bs - allocated(prog[home]))));
+    }
     set reasoning = 0;
   }
 }
