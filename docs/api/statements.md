@@ -295,6 +295,10 @@ end;
 ```
 
 The session leaves. It releases every hold but keeps its cached prefixes.
+In a `server`, `end;` refuses the request: the session ends and its turn
+is not answered, so the report's `client` section records nothing of it
+([what the client sees](../language.md#what-the-client-sees)). It is
+refused there inside a `hold`, inside a `fork` and in a queue's entry.
 
 ## Examples
 

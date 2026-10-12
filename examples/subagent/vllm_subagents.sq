@@ -89,7 +89,6 @@ fn main() {
   // --8<-- [end:workload]
 
   server {
-    set t0 = now;
     set prompt = K + n;
     // A slot of `reqs` and the blocks of `kv`. The scheduler looks up the
     // prefix hit when it admits (scheduler.py:932-939) and allocates the
@@ -113,10 +112,8 @@ fn main() {
       observe hit = c > 0;                    // any reused block, again after a preemption
       observe prefill_tokens = known - c;
       run vllm prefill (cost(vllm, known - c)) growing kv;
-      branch (known == prompt) { observe ttft = now - t0; }   // not a resumed request's re-prefill
       run vllm decode (cost(vllm, o - 1 - (known - prompt))) growing kv;
     } cache (cost(reqs, kv, prompt + o));
-    observe response = now - t0;
   }
 
 

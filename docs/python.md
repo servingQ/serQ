@@ -26,16 +26,13 @@ fn main() {
     session { turn; end; }
   }
   server {
-    set t0 = now;
     hold reqs (cost(reqs, 1)) { run svc (cost(svc, 2)); }
-    observe response = now - t0;
   }
   gauge occupied = used(reqs);
 }
 """
 report = pyserq.run(pyserq.compile(source=source, horizon=10))
-response = report.observe("response")
-assert response is not None
+response = report.client["response"]   # what each turn's client saw
 print(response.mean)
 ```
 

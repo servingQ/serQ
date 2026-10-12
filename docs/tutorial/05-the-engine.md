@@ -91,12 +91,11 @@ growth can preempt the most recently admitted running request. The hold is
 retried; see [preemption semantics](../language.md) for the state preserved
 across retries. A retried hold runs its body again, so the program observes
 `hit` only on the first attempt, where `computed` is 0.
-It observes `ttft` once, the first time the prefill ends, and `sent`
-remembers that it did: a request preempted during its prefill still records
-its one TTFT, and one preempted after its first token does not record a
-second, however many times it is preempted again. `computed` would not say
-so: it is where the last preemption caught the request, and a second one
-during the re-prefill can put it below the prompt again.
+The time to the first token needs no `observe`: the report's `client`
+section gives it for every turn, from the `turn;` to the token the
+prefill samples, once however many times the request is preempted, and
+the time per output token after it
+([what the client sees](../language.md#what-the-client-sees)).
 
 **`budget_left(llm)`** is the token budget left after serving the running requests.
 The admission allocates memory for the cached prefix plus the prefill chunk
@@ -127,11 +126,15 @@ serq run docs/tutorial/programs/05-engine.sq --horizon 20000 --warmup 2000 --see
 ```text
 run: horizon 20000 end 20000 warmup 2000 seed 1 events 9160272 arrivals 9905 ended 8905 turns 43948 mean live 6.012
 
-observe   count    mean   95% CI    cv2     p99
---------  -----  ------  -------  -----  ------
-hit       43948  0.7932  ±0.0030  0.261  1.0000
-ttft      43948  0.0180  ±0.0004  1.329  0.0763
-response  43949  0.0627  ±0.0009  0.665  0.2384
+observe  count    mean   95% CI    cv2     p99
+-------  -----  ------  -------  -----  ------
+hit      43948  0.7932  ±0.0030  0.261  1.0000
+
+client    count       mean      95% CI    cv2        p99
+--------  -----  ---------  ----------  -----  ---------
+ttft      43948    0.01798    ±0.00045  1.329    0.07634
+tpot      43949  0.0002383  ±0.0000060  4.047  0.0006076
+response  43949    0.06272    ±0.00095  0.665    0.23843
 
 stage  number   util   done    thru    wait  service    iters
 -----  ------  -----  -----  ------  ------  -------  -------
@@ -152,7 +155,7 @@ reqs    0.2      0.0  0.002    0.151  0.0007   48984         0         0        
 and decode.
 
 TTFT is now separately observable, and at 18 ms it is a different quantity from
-the 63 ms response. Iteration-level simulation lets the program measure both.
+the 63 ms response. Iteration-level simulation gives both.
 
 !!! note "`wait NaN` on the `kv` pool"
     A hold on several pools joins the queue of the **first** one, so `kv` never

@@ -531,10 +531,11 @@ impl Program {
                             ));
                         }
                     }
-                    CStmt::Turn | CStmt::End if side == Side::Server => {
-                        return Err(at(
-                            "turn and end belong to the workload, not the server".into()
-                        ));
+                    // a server may `End` the session: it refuses the request
+                    // (docs/design/client-metrics.md); the next turn is the
+                    // workload's
+                    CStmt::Turn if side == Side::Server => {
+                        return Err(at("a turn belongs to the workload, not the server".into()));
                     }
                     _ => {}
                 }

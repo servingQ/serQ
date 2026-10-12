@@ -328,7 +328,6 @@ workload {
 }
 
 server {
-  set t0 = now;
   set prompt = K + n;
   hold reqs (cost(reqs, 1)), kv (…) at admission (…) {
     …
@@ -336,9 +335,12 @@ server {
     …
     run vllm decode (cost(vllm, o - 1 - (known - prompt))) growing kv;
   } cache (cost(reqs, kv, prompt + o));
-  observe response = now - t0;
 }
 ```
+
+The report gives what the client saw of each turn, its time to first token,
+time per output token and response time ([What the client
+sees](#what-the-client-sees)); the program observes what else it needs.
 
 The end of the session block ends the session. `end;` is only needed for
 an early exit, including an exit from an unconditional `loop`.
@@ -352,7 +354,7 @@ ownership. The parser and IR validator enforce these boundaries:
 
 | | Session | Server |
 |---|---|---|
-| Turn lifecycle | `turn;`, optional early `end;` | Refused; completion is the end of its block |
+| Turn lifecycle | `turn;`, optional early `end;` | `turn;` refused; completion is the end of its block; `end;` refuses the request and ends the session, outside a `hold` or a `fork` |
 | Repetition | `while (condition) { … }`, `loop { … }` | The same, without session lifecycle statements |
 | Queue entry calls | Refused | `gw.route();`, `D[j].decode (prompt);`, … |
 | Admission | `hold … at admission (…) { … } cache (…)` | The same |
@@ -494,8 +496,8 @@ pool its `from` names. That is the `hidden` rule
 at the queue's boundary: vLLM's scheduler knows `max_tokens`, not the length,
 so `o` is not a parameter of `decode` and the body alone reads it. What the
 body `set`s is the queue's (`D.known`); what it `observe`s is the program's;
-a moment the caller needs is `mark first_token;`, read afterwards as
-`D.first_token` — the request's attribute, so without a member index. The gateway is the exception on the session's side: its
+a moment the caller needs is `mark read_done;`, read afterwards as
+`D.read_done` — the request's attribute, so without a member index. The gateway is the exception on the session's side: its
 `route` reads the request's attributes as a `server` does and sets the ones
 the session reads back (`prompt`).
 
@@ -1080,6 +1082,36 @@ When every session holding the pool is one of those waiting
 what it needs, or the holders wait on each other (#238).
 A boolean observation that remains zero for at least 40 samples produces
 a report note, not an error.
+
+### What the client sees
+
+Every turn is one request from a virtual client, and the report gives what
+that client saw of it in its `client` section, whatever the program
+observes ([the design](design/client-metrics.md)):
+
+| Metric | Sample | Recorded |
+|---|---|---|
+| `ttft` | the turn's first output token less its start | when the first token is known |
+| `tpot` | (the turn's answer less its first token) / the output tokens after the first | when the turn is answered |
+| `response` | the turn's answer less its start | when the turn is answered |
+
+A turn starts at its `turn;`, and is answered when the server's statements
+for it are done. Its first output token is the one sampled by the prefill
+that ended last before its first decode token, or that decode token when
+no prefill ended before it; with no decode token, its last prefill's (a
+request of one output token, which has a `ttft` and no `tpot`). Its output
+tokens after the first are the decode tokens its engines commit and the
+token a resumed prefill samples after a preemption. A turn that commits no
+token, at stations with no engine, has a `response` only. These follow
+vLLM's benchmark client and engine statistics (`vllm/benchmarks/serve.py`,
+`vllm/v1/metrics/stats.py`), with the turn's start for vLLM's arrival. A
+server that refuses a request ends the session there with `end;`, as
+vLLM's input processor refuses a prompt it cannot hold: that turn is not
+answered and the client records nothing of it, as vLLM's client counts
+only the requests that succeed. A sample counts when it is recorded after the
+warm-up, so a turn at the warm-up's start or at the horizon can have a
+`ttft` and no `response`, or the opposite. A program's `observe` keeps its
+own name beside them, in its own table.
 
 ### Gauges
 

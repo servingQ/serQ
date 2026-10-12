@@ -8,10 +8,10 @@
 //! p = pyserq.compile("examples/single-turn/mg1.sq", sets={"lam": 0.8}, seed=10, horizon=250000, warmup=25000)
 //! r = pyserq.run(p)            # the GIL is released while it runs
 //! r.json()                     # what `serq run --json` prints
-//! o = r.observe("response")    # o.mean, o.ci, ...; o.samples, o.times: what `--dump` writes
+//! o = r.client["response"]     # what each turn's client saw: o.mean, o.ci, ...; o.samples, o.times: what `--dump` writes
 //! g = pyserq.run(pyserq.compile("examples/pd-disaggregation/llmd_nixl_pull.sq", horizon=2000, warmup=200)).gauge("load_spread")
 //! g.mean, g.ci, g.min, g.max  # g.times, g.values: what `--dump` writes
-//! r.stage("svc").utilization; r.observes, r.gauges, r.claims, r.stages, r.pools: all of them
+//! r.stage("svc").utilization; r.observes, r.client, r.gauges, r.claims, r.stages, r.pools: all of them
 //! pyserq.run(pyserq.compile("examples/papers/kong_svf.sq", horizon=100000)).claim("queueing_bound").result  # "holds", ...
 //! pyserq.read_trace("examples/replay/data/short_base.csv")  # the sessions a replay draws from
 //! pyserq.draw("examples/multi-turn/vllm.sq")  # what `serq draw` prints
@@ -110,7 +110,18 @@ impl Report {
     fn observes<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         let d = PyDict::new(py);
         for (i, o) in self.0.observes.iter().enumerate() {
-            d.set_item(&o.name, Observe(self.0.clone(), i))?;
+            d.set_item(&o.name, Observe(self.0.clone(), i, Table::Program))?;
+        }
+        Ok(d)
+    }
+
+    /// What each turn's client saw: `ttft`, `tpot` and `response`, in
+    /// that order, whatever the program observes.
+    #[getter]
+    fn client<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let d = PyDict::new(py);
+        for (i, o) in self.0.client.iter().enumerate() {
+            d.set_item(&o.name, Observe(self.0.clone(), i, Table::Client))?;
         }
         Ok(d)
     }
@@ -162,7 +173,7 @@ impl Report {
     /// The observation `name`, or `None` (`serq::Report::observe`).
     fn observe(&self, name: &str) -> Option<Observe> {
         let i = self.0.observes.iter().position(|o| o.name == name)?;
-        Some(Observe(self.0.clone(), i))
+        Some(Observe(self.0.clone(), i, Table::Program))
     }
 
     /// The first stage named `name`, or `None`.
@@ -188,15 +199,28 @@ impl Report {
     }
 }
 
-/// One observation: its statistics as `serq run --json` prints them, and
-/// its samples as `serq run --dump` writes them. Each access to `samples`,
-/// `times`, `sessions` or `turns` makes a new list: bind it once.
+/// One observation, the program's or the client's: its statistics as `serq
+/// run --json` prints them, and its samples as `serq run --dump` writes
+/// them. Each access to `samples`, `times`, `sessions` or `turns` makes a
+/// new list: bind it once.
 #[pyclass(frozen, module = "pyserq")]
-struct Observe(Arc<serq::Report>, usize);
+struct Observe(Arc<serq::Report>, usize, Table);
+
+/// The report's table an observation is in.
+#[derive(Clone, Copy)]
+enum Table {
+    /// The program's `observe`s.
+    Program,
+    /// What each turn's client saw.
+    Client,
+}
 
 impl Observe {
     fn get(&self) -> &serq::engine::report::ObserveReport {
-        &self.0.observes[self.1]
+        match self.2 {
+            Table::Program => &self.0.observes[self.1],
+            Table::Client => &self.0.client[self.1],
+        }
     }
 }
 

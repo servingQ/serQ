@@ -34,8 +34,6 @@ fn main() {
 
   workload {
     arrive renewal(gap);
-    init { set t0 = now; }
-
   }
 
   server {
@@ -43,7 +41,6 @@ fn main() {
       run fastertransformer prefill (cost(fastertransformer, vp));
       run fastertransformer decode (cost(fastertransformer, vd));
     }
-    observe response = now - t0;
   }
 
   gauge pending = holders(reqs) + queued(reqs);

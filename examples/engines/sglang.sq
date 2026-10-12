@@ -95,7 +95,6 @@ fn main() {
   // reservation grows with the running requests, as SGLang's test does; above
   // the cap, the request waits for some to finish (#364).
   server {
-    set t0 = now;
     set prompt = K + n;
     set kept = prompt;
     set fin = 0;
@@ -107,11 +106,9 @@ fn main() {
       set kept = known;
       set c = min(cached, known - 1);
       run sglang prefill (cost(sglang, known - c)) growing kv;
-      branch (known == prompt) { observe ttft = now - t0; }
       run sglang decode (cost(sglang, o - 1 - (known - prompt))) growing kv;
       set fin = 1;
     } cache (cost(reqs, kv, fin == 1 ? prompt + o : prompt));
-    observe response = now - t0;
   }
 
 
