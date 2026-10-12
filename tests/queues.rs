@@ -830,7 +830,7 @@ fn a_call_is_checked_against_the_entry() {
     // `self` is a member's word
     refused(
         "stage s : fifo; workload { session { turn; end; \n} }\nserver { observe member = self;\n} ",
-        "`self` is a queue entry's word",
+        "`self` is read in a queue's entry, as its member's index",
     );
     refused(
         "queue gw : gateway { route { observe member = self; } } stage s : fifo;
@@ -1038,6 +1038,56 @@ fn the_scheduler_attributes_are_built_in() {
     for a in SCHEDULER_ATTRS {
         assert!(BUILTIN_ATTRS.contains(&a), "{a}");
     }
+}
+
+/// `self` is the member's index in a queue's entry, read before any
+/// parameter or local of that name: a family's `prefill (self)` read the
+/// gateway's index where the prompt was meant, and `set self = 2;` was a
+/// local nothing could read. Neither may take the name, nor a gateway's
+/// local, a session attribute (#560 review).
+#[test]
+fn self_names_nothing_a_program_declares() {
+    let program = |entry: &str, call: &str| {
+        format!(
+            "queue gw : gateway {{ route {{ {call} }} }}
+             queue E[2] : decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
+               {entry} }}
+             workload {{ arrive batch(1); init {{ set prompt = 3; set j = 0; }} session {{ turn; end; }} }} server {{ gw.route(); }}
+             "
+        )
+    };
+    let hold = "hold kv (cost(kv, 3)) { run E prefill (cost(E, 3)) growing kv; }";
+    let supplied =
+        "`self` is a name the language supplies, read in a queue's entry, as its member's index";
+    refused(
+        &program(
+            &format!("decode (self) {{ {hold} }}"),
+            "E[j].decode (prompt);",
+        ),
+        &format!("{supplied}; a parameter named `self`"),
+    );
+    refused(
+        &program(
+            &format!("decode (p) {{ set self = 2; {hold} }}"),
+            "E[j].decode (prompt);",
+        ),
+        &format!("{supplied}; `E.decode`'s local named `self`"),
+    );
+    refused(
+        &program(
+            &format!("decode (p) {{ {hold} }}"),
+            "set self = 2; E[j].decode (prompt);",
+        ),
+        &format!("{supplied}; `gw.route`'s local named `self`"),
+    );
+    // and anything else the program declares
+    refused(
+        &format!(
+            "let self = 2; {}",
+            program(&format!("decode (p) {{ {hold} }}"), "E[j].decode (prompt);")
+        ),
+        &format!("{supplied}; a `let` constant named `self`"),
+    );
 }
 
 /// Every context variable an entry reads, in its body or its hold's

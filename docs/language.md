@@ -409,7 +409,8 @@ queue declares its device and pools, then its stage (its engine, or a
 above it; a pool `on` the queue's device or engine may follow the engine. The body is the server's statements; `run (cost(P, X))` with
 no stage names the queue's own, and a step engine's run names it with its mode (`run P prefill (cost(P, T))`);
 the stages that are not a step engine (a link's, a delay) the body may name
-as a `server` does. `self` is the member's index in a family. A family's
+as a `server` does. `self` is the member's index in a family; nothing may be
+declared `self`, which an entry reads before a parameter or local. A family's
 size may be a `let` constant (`queue D[ND]`), and a family of one is still
 a family: its entries are called `D[j].decode (…)` and its lease taken
 `from D[j]`, as at any size. A reference to a member's pool or stage
