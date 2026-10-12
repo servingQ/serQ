@@ -36,19 +36,27 @@ fn invalid_arguments_are_diagnosed_before_file_io() {
         ),
         (
             vec!["run", "missing.sq", "--horizon", "10", "--bogus"],
-            vec!["unknown option `--bogus`"],
+            vec!["missing value for program argument `--bogus`"],
         ),
         (
-            vec!["run", "missing.sq", "--horizon", "10", "--set", "rate"],
-            vec!["--set", "name=expr"],
+            vec!["run", "missing.sq", "--horizon", "10", "--set", "rate=2"],
+            vec!["invalid number `rate=2`", "--set", "--name value"],
         ),
         (
-            vec!["run", "missing.sq", "--horizon", "10", "--set", "=1"],
-            vec!["--set", "identifier"],
+            vec!["run", "missing.sq", "--horizon", "10", "--=1"],
+            vec!["invalid argument name", "identifier"],
         ),
         (
-            vec!["run", "missing.sq", "--horizon", "10", "--set", "rate="],
-            vec!["--set", "expression"],
+            vec!["run", "missing.sq", "--horizon", "10", "--rate="],
+            vec!["invalid number ``", "--rate"],
+        ),
+        (
+            vec!["run", "missing.sq", "--horizon", "10", "--", "--rate", "2"],
+            vec!["unexpected `--`", "among the options"],
+        ),
+        (
+            vec!["run", "missing.sq", "--horizon", "10", "--seed=2"],
+            vec!["`seed` is the interpreter's option `--seed`"],
         ),
         (
             vec!["draw", "missing.sq", "--format", "png"],
@@ -56,7 +64,7 @@ fn invalid_arguments_are_diagnosed_before_file_io() {
         ),
         (
             vec!["draw", "missing.sq", "--view", "session"],
-            vec!["unknown option `--view`"],
+            vec!["invalid number `session`", "--view"],
         ),
         (
             vec!["check", "missing.sq", "--json"],
@@ -110,7 +118,7 @@ fn supported_options_still_work() {
             "--dump",
             "data",
         ],
-        vec!["check", "model.sq", "--set", "rate=2"],
+        vec!["check", "model.sq", "--rate", "2"],
         vec!["ir", "model.sq", "--horizon", "10", "--seed", "2"],
         vec!["draw", "model.sq", "--format", "svg", "--out", "figure.svg"],
     ] {
@@ -146,6 +154,6 @@ fn version_is_printed_on_request() {
     failure(
         &f.run(&["run", "x.sq", "--horizon", "10", "--version"]),
         2,
-        &["unknown option `--version`"],
+        &["missing value for program argument `--version`"],
     );
 }

@@ -75,7 +75,7 @@ evicted.
 
 ```bash
 for C in 2e5 6e4 4e4 3e4 2e4 1.5e4 1e4; do
-  serq run docs/tutorial/programs/04-cache.sq --horizon 20000 --warmup 2000 --seed 1 --set C=$C --json
+  serq run docs/tutorial/programs/04-cache.sq --horizon 20000 --warmup 2000 --seed 1 --C $C --json
 done
 ```
 

@@ -104,14 +104,14 @@ the report's: the gaps between a request's successive tokens.
   158, 161, 158, 166, 158 ms colocated (mean 160; the summary's 182 is
   high) and 878, 1023, 860, 915, 885 ms split (mean 912; the summary's
   1339 is high too), response 451–505 against 904–1067 ms. To repeat:
-  `serq run examples/pd-disaggregation/pd_batching.sq --set mode=1 --set Lambda=70 --def 'prompt_len=max(1, floor(~h2(2000, 9)))' --horizon 8000 --warmup 500 --seed 1`.
+  `serq run examples/pd-disaggregation/pd_batching.sq --mode 1 --Lambda 70 --def 'prompt_len=max(1, floor(~h2(2000, 9)))' --horizon 8000 --warmup 500 --seed 1`.
 
 ## The variations
 
 One change to the baseline at a time, prompts of 2000 tokens; the last
 table of `summary.md`. A policy or a family's size is a line of the
 program, which `sweep.py` edits in a copy (`exclusive prefill` read as
-`advance running`, `let NP = 2;`) and records in `results.csv`; the rest are `--set`.
+`advance running`, `let NP = 2;`) and records in `results.csv`; the rest are program inputs (`--name value`).
 The committed `results.csv` and `summary.md` record the edit as it was
 written before the engines were (#422): deleting `serve exclusive
 prefill;`, which has the IR of the edit above.
@@ -211,5 +211,5 @@ records each deployment's edits in `sessions.csv`.
   than the throughput's.
 
 Not covered here: N, NP, ND as constants a
-run can set (`--set` refuses a family's size); and how concurrent reads
+run can set (an input may not set a family's size); and how concurrent reads
 share a NIC beyond max-min fairness. Routing ties go to the lowest index.

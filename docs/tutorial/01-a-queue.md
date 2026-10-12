@@ -119,7 +119,7 @@ This is M/M/1 with \(\lambda = 0.8\) and \(\mathbb{E}[S] = 1\), so
 
 ```bash
 for L in 0.5 0.8 0.9 0.95 0.99; do
-  serq run docs/tutorial/programs/01-queue.sq --horizon 100000 --warmup 5000 --seed 1 --set Lambda=$L --json
+  serq run docs/tutorial/programs/01-queue.sq --horizon 100000 --warmup 5000 --seed 1 --Lambda $L --json
 done
 ```
 

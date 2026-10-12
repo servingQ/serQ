@@ -37,7 +37,7 @@ all bind the same external names. Binding names can differ from option names.
 A complete runnable example is `examples/single-turn/arguments.sq`:
 
 ```sh
-serq run examples/single-turn/arguments.sq --json -- --requests 3 --service 2
+serq run examples/single-turn/arguments.sq --horizon 10 --json --requests 3 --service 2
 ```
 
 It reports three arrivals and completions and `elapsed` count 3, mean 2:
@@ -54,11 +54,15 @@ runtime environment access. This first library only serves numbers, the
 source language's value type. NaN, missing CLI values, invalid option names,
 duplicate input declarations and unknown options fail before execution.
 
-After `--`, the CLI accepts `--name value` or `--name=value`. Before the
-separator are interpreter options. `--set name=expr` remains an expression
-transport for declared inputs, as do instance bindings and Python `sets`.
-Last supplied value wins. None can replace a private constant. The separate
-`--def` facility remains source substitution for expression definitions.
+The CLI accepts `--name value` or `--name=value` for an input, among the
+interpreter's own options and in any order with them: a word that is not an
+interpreter option (`args::OPTIONS`) is an input. So an input may not be
+named like one; `args.number("seed", 1)` is refused where it is declared,
+and the check reads the same table the CLI does. This is the only CLI
+spelling of an input. Instance bindings and Python `sets` remain the other
+transports and still accept an expression. Last supplied value wins. None
+can replace a private constant. The separate `--def` facility remains
+source substitution for expression definitions.
 
 Global definitions precede the one `fn main()`. Main-local names are never
 visible in later top-level items; these items are refused. Imported source
@@ -87,6 +91,14 @@ programs must add an entry point, and sweep parameters must opt in through
 
 ## Self-critique
 
+- **`--set name=expr` beside `--name value`** gave the CLI two spellings
+  of one input, and every `--set` in the repository passed a number. It is
+  removed; a computed value is computed by the shell or written as the
+  input's default.
+- **A `--` separator before the inputs** kept them apart from the
+  interpreter's options without reserving names, at the cost of a second
+  rule a reader has to know. It is removed; the reserved names are the
+  interpreter's twelve options, read from one table.
 - **A `param` keyword** would separate public and private constants, but would
   give a language keyword the job the requested input library can do. It is
   not added alongside `args.number`.

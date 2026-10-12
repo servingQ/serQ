@@ -99,7 +99,7 @@ Turn the thinking time down and watch the sessions pile back in:
 
 ```bash
 for Z in 0.5 1 3 10; do
-  serq run docs/tutorial/programs/03-sessions.sq --horizon 20000 --warmup 2000 --seed 1 --set Z=$Z
+  serq run docs/tutorial/programs/03-sessions.sq --horizon 20000 --warmup 2000 --seed 1 --Z $Z
 done
 ```
 

@@ -69,13 +69,13 @@ per-turn breakdown, or a statistic the report does not compute
 
 ### Sweep a parameter
 
-Every `let` can be overridden from the command line, so a sweep is a loop
-over `--set`, with a few seeds per point:
+An input declared with `args.number` is set from the command line, so a
+sweep is a loop over `--name value`, with a few seeds per point:
 
 ```bash
 for lam in 0.3 0.6 0.9; do
   for seed in 1 2 3; do
-    serq run examples/multi-turn/vllm.sq --horizon 2000 --warmup 200 --set Lambda=$lam --seed $seed --json \
+    serq run examples/multi-turn/vllm.sq --horizon 2000 --warmup 200 --Lambda $lam --seed $seed --json \
       | jq -r --arg l $lam --arg s $seed \
           '[$l, $s, .client.ttft.mean, (.pools[] | select(.name=="kv") | .preemptions)] | @tsv'
   done
@@ -114,7 +114,7 @@ one comes from:
 - **A quantity the program cannot compute itself.** For example, the subagent
   wait `W` of `examples/subagent/vllm_subagents.sq` is taken from the program's own
   output. Run the program, compute the statistic from `--dump`, set it with
-  `--set W=…` (the example exposes `W` through `args.number`), and repeat
+  `--W …` (the example exposes `W` through `args.number`), and repeat
   until it stops moving. Write the fixed point into that input's default
   with a comment that says how it was obtained.
 

@@ -21,7 +21,7 @@ IR produces the same diagram.
   `\usepackage{tikz}`. Include the generated file with `\input`.
 - **SVG**: a standalone image with light- and dark-mode colors.
 
-Output goes to stdout unless `--out` names a file. `--set` and `--def`
+Output goes to stdout unless `--out` names a file. Program inputs (`--name value`) and `--def`
 apply the same overrides as for simulation. Python's
 [`pyserq.draw`](../python.md) returns the diagram as text.
 See the [CLI reference](../reference/cli.md) for all options.

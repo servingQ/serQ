@@ -9,26 +9,19 @@ fn misspelled_and_empty_override_names_do_not_produce_ir() {
     f.write("model.sq", &common::main_source(PROGRAM));
     for name in ["raet", "Rate", ""] {
         failure(
-            &f.run(&[
-                "ir",
-                "model.sq",
-                "--horizon",
-                "10",
-                "--set",
-                &format!("{name}=2"),
-            ]),
+            &f.run(&["ir", "model.sq", "--horizon", "10", &format!("--{name}=2")]),
             if name.is_empty() { 2 } else { 1 },
             // an empty name is the CLI's argument error; a misspelled one
             // the linker's, which speaks of the `let` it overrides
             &[if name.is_empty() {
-                "--set"
+                "invalid argument name"
             } else {
                 "program argument"
             }],
         );
     }
     failure(
-        &f.run(&["ir", "model.sq", "--horizon", "10", "--set", "raet=2"]),
+        &f.run(&["ir", "model.sq", "--horizon", "10", "--raet", "2"]),
         1,
         &[
             "unknown program argument `raet`",
@@ -56,10 +49,10 @@ fn overrides_keep_last_value_and_declaration_order() {
         "model.sq",
         "--horizon",
         "10",
-        "--set",
-        "rate=2",
-        "--set",
-        "rate=3",
+        "--rate",
+        "2",
+        "--rate",
+        "3",
     ]);
     assert!(out.status.success());
     let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
@@ -159,7 +152,7 @@ fn overrides_are_refused_on_ir_by_what_they_override() {
     f.write("model.json", &program.to_json());
     for command in ["run", "ir", "check", "draw"] {
         failure(
-            &f.run(&[command, "model.json", "--set", "lam=2"]),
+            &f.run(&[command, "model.json", "--lam", "2"]),
             1,
             &["a program argument applies to program text, not to IR"],
         );

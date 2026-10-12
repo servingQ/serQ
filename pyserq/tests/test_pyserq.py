@@ -53,7 +53,7 @@ def cli_source(src, *args):
 
 def test_a_file_with_numbers_and_a_seed():
     r = pyserq.run(pyserq.compile(MG1, sets={"lam": 0.8, "law": 1}, seed=10, horizon=250000, warmup=25000))
-    want, dump = cli(MG1, "--set", "lam=0.8", "--set", "law=1", "--seed", "10", '--horizon', '250000', '--warmup', '25000')
+    want, dump = cli(MG1, "--lam", "0.8", "--law", "1", "--seed", "10", '--horizon', '250000', '--warmup', '25000')
     assert json.loads(r.json()) == want
     for name in want["observes"]:
         o = r.observes[name]
@@ -158,20 +158,20 @@ def test_the_report_is_its_json_by_name():
 def test_program_text_with_run_options():
     src = MG1.read_text()
     r = pyserq.run(pyserq.compile(source=src, sets={"lam": 0.5}, seed=3, horizon=20000.0, warmup=1000.0))
-    want, _ = cli(MG1, "--set", "lam=0.5", "--seed", "3", "--horizon", "20000", "--warmup", "1000")
+    want, _ = cli(MG1, "--lam", "0.5", "--seed", "3", "--horizon", "20000", "--warmup", "1000")
     assert json.loads(r.json()) == want
 
 
 def test_a_trace_read_next_to_the_program_and_an_expression():
     r = pyserq.run(pyserq.compile(REPLAY, sets={"N": 40, "spacing": "2 * 1.75"}, horizon=6000))
-    want, _ = cli(REPLAY, "--set", "N=40", "--set", "spacing=2 * 1.75", '--horizon', '6000')
+    want, _ = cli(REPLAY, "--N", "40", "--spacing", "3.5", '--horizon', '6000')
     assert json.loads(r.json()) == want
 
 
 def test_a_trace_given_as_a_path():
     trace = REPLAY.parent / "data" / "short_base.csv"
     r = pyserq.run(pyserq.compile(REPLAY, sets={"N": 40}, trace=trace, horizon=6000))
-    want, _ = cli(REPLAY, "--set", "N=40", "--trace", str(trace), '--horizon', '6000')
+    want, _ = cli(REPLAY, "--N", "40", "--trace", str(trace), '--horizon', '6000')
     assert json.loads(r.json()) == want
     assert pyserq.REPORT_VERSION >= 1
 
@@ -236,7 +236,7 @@ def test_draw_is_serq_draw():
             want = subprocess.run([CLI, "draw", str(f), "--format", fmt],
                                   capture_output=True, text=True, check=True).stdout
             assert pyserq.draw(f, format=fmt) == want, f
-    want = subprocess.run([CLI, "draw", str(MG1), "--set", "lam=0.8", "--def", "service=~exp(1)"],
+    want = subprocess.run([CLI, "draw", str(MG1), "--lam", "0.8", "--def", "service=~exp(1)"],
                           capture_output=True, text=True, check=True).stdout
     assert pyserq.draw(MG1, sets={"lam": 0.8}, defs={"service": "~exp(1)"}) == want
     assert pyserq.draw(source=MG1.read_text()) == pyserq.draw(MG1)
@@ -291,7 +291,7 @@ def test_an_override_on_ir_says_what_it_overrides():
 
 def test_an_override_error_names_the_let_or_def():
     # sets= and defs= meet the library's errors; they speak of what is
-    # overridden, not of the CLI's --set and --def
+    # overridden, not of the CLI's options
     for call, what in [
         (lambda: pyserq.compile(MG1, sets={"nope": 1}, horizon=250000, warmup=25000), "unknown program argument `nope`"),
         (lambda: pyserq.compile(MG1, sets={"x y": 1}, horizon=250000, warmup=25000), "invalid argument name `x y`"),
@@ -303,7 +303,7 @@ def test_an_override_error_names_the_let_or_def():
         try:
             call()
         except ValueError as e:
-            assert what in str(e) and "--set" not in str(e) and "--def" not in str(e), e
+            assert what in str(e) and "--name" not in str(e) and "--def" not in str(e), e
             continue
         raise AssertionError("no ValueError")
 

@@ -64,7 +64,7 @@ pub use crate::ir::{
 pub type Linked = crate::ir::Program;
 
 /// Values for a program's declared inputs and replacement expression `def`s: the
-/// CLI's `--set` and `--def`, pyserq's `sets=` and `defs=`.
+/// CLI's `--name value` and `--def`, pyserq's `sets=` and `defs=`.
 #[derive(Clone, Debug, Default)]
 pub struct Overrides {
     pub lets: Vec<(String, Expr)>,
@@ -106,11 +106,11 @@ impl Overrides {
     }
 
     /// `--instance FILE`, whose text is `src`: each `let` of the instance is
-    /// a `--set` of that declared input, and each option of its `run` block the
+    /// a value of that declared input, and each option of its `run` block the
     /// flag of the same name, in the order they are written, so a later
-    /// `--set` or flag wins over the instance as it would over an earlier
+    /// input or flag wins over the instance as it would over an earlier
     /// one. An instance changes values, never structure, so the program it
-    /// gives is one `--set`s could give, and the IR does not know it.
+    /// gives is one supplied inputs could give, and the IR does not know it.
     pub fn instance(&mut self, src: &str) -> Result<(), String> {
         let (lets, run) =
             crate::frontend::parser::parse_instance(src).map_err(|e| e.render(src))?;
@@ -164,7 +164,7 @@ impl Overrides {
     }
 
     /// Supply declared input `name` with `x`, exactly (no text round trip).
-    /// An infinity is `inf`, as `--set name=inf` writes it; NaN is refused
+    /// An infinity is `inf`, as `--name inf` writes it; NaN is refused
     /// when the program is linked, as any constant that is NaN.
     pub fn set_num(&mut self, name: &str, x: f64) -> Result<(), String> {
         crate::frontend::args::check_name(name)?;

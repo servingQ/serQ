@@ -220,8 +220,8 @@ after it and nested or duplicate entry points are refused.
 
 A plain `let` cannot be replaced externally. With `use "std/args";`, a
 `let` inside `main` may declare an input using
-`args.number("name", default)` as its entire initializer. CLI arguments after
-`--`, `--set`, instance bindings and API `sets` supply only those named
+`args.number("name", default)` as its entire initializer. CLI arguments
+(`--name value`), instance bindings and API `sets` supply only those named
 inputs. Defaults and supplied expressions are resolved at link time; the
 result is the same IR as a program written with those values. An input that
 would change a parse-time array size is refused. See [std/args](api/std/args.md)

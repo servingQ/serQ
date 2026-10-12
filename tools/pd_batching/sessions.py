@@ -41,7 +41,7 @@ LLMD = ROOT / "examples/pd-disaggregation/llmd_nixl_pull.sq"
 SEEDS = [1, 2, 3, 4, 5]
 T95 = {1: 12.706, 2: 4.303, 3: 3.182, 4: 2.776, 5: 2.571, 6: 2.447, 7: 2.365, 8: 2.306, 9: 2.262}
 
-# (the program's text, what it becomes), and `--set`s
+# (the program's text, what it becomes), and inputs
 FOUR_DECODERS = [("let NP = 2;", "let NP = 1;"), ("let ND = 2;", "let ND = 4;")]
 CACHE_ROUTER = (
     "    choose j in ND by (holders(D[j].kv) + queued(D[j].kv));",
@@ -80,7 +80,7 @@ def run(mode, workload, x, seed):
         program.write_text(text)
         cmd = [SERQ, "run", str(program), "--horizon", "2000", "--warmup", "200", "--json", "--seed", str(seed)]
         for k, v in sets.items():
-            cmd += ["--set", f"{k}={v}"]
+            cmd += [f"--{k}", str(v)]
         return json.loads(subprocess.run(cmd, check=True, capture_output=True, text=True).stdout)
 
 

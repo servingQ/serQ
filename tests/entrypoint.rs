@@ -91,15 +91,7 @@ fn cli_and_instance_bind_the_same_declared_inputs() {
         &SOURCE.replace("arrive batch(1)", "arrive poisson(rate)"),
     );
     f.write("values.sq", "let arrival_rate = 3;");
-    let direct = f.run(&[
-        "ir",
-        "model.sq",
-        "--horizon",
-        "10",
-        "--",
-        "--arrival_rate",
-        "3",
-    ]);
+    let direct = f.run(&["ir", "model.sq", "--horizon", "10", "--arrival_rate", "3"]);
     let instance = f.run(&[
         "ir",
         "model.sq",
@@ -108,28 +100,19 @@ fn cli_and_instance_bind_the_same_declared_inputs() {
         "--instance",
         "values.sq",
     ]);
-    let set = f.run(&[
-        "ir",
-        "model.sq",
-        "--horizon",
-        "10",
-        "--set",
-        "arrival_rate=3",
-    ]);
     assert!(
         direct.status.success(),
         "{}",
         String::from_utf8_lossy(&direct.stderr)
     );
     assert_eq!(direct.stdout, instance.stdout);
-    assert_eq!(direct.stdout, set.stdout);
     for rest in [
         vec!["--fixed", "3"],
         vec!["--arrival_rate", "NaN"],
         vec!["--arrival_rate"],
         vec!["oops"],
     ] {
-        let mut command = vec!["ir", "model.sq", "--horizon", "10", "--"];
+        let mut command = vec!["ir", "model.sq", "--horizon", "10"];
         command.extend(rest);
         assert!(!f.run(&command).status.success());
     }
@@ -168,14 +151,7 @@ fn numeric_options_accept_equals_negatives_and_last_value() {
     f.write("model.sq", SOURCE);
     // This input is unused in this fixture; accepting -2 tests numeric parsing
     // without asking an arrival process to have a negative rate.
-    let out = f.run(&[
-        "ir",
-        "model.sq",
-        "--horizon",
-        "10",
-        "--",
-        "--arrival_rate=-2",
-    ]);
+    let out = f.run(&["ir", "model.sq", "--horizon", "10", "--arrival_rate=-2"]);
     assert!(
         out.status.success(),
         "{}",
@@ -190,7 +166,6 @@ fn numeric_options_accept_equals_negatives_and_last_value() {
         "model.sq",
         "--horizon",
         "10",
-        "--",
         "--arrival_rate",
         "2",
         "--arrival_rate=3",
@@ -254,4 +229,33 @@ fn a_fixed_shadow_can_size_an_array_but_an_input_dependent_shadow_cannot() {
             .unwrap_err()
             .contains("affects an array size")
     );
+}
+
+/// An input shares the command line with the interpreter's options, so it
+/// may not take one of their names, and it may stand anywhere among them.
+#[test]
+fn an_input_may_not_be_named_like_an_interpreter_option() {
+    for option in serq::frontend::args::OPTIONS {
+        let src = SOURCE.replace("\"arrival_rate\"", &format!("\"{option}\""));
+        let err = compile_source(&src, &common::horizon(10.0)).unwrap_err();
+        // `inline-trace` is not an identifier in the first place
+        assert!(
+            err.contains(&format!("the interpreter's option `--{option}`"))
+                || err.contains("expected an identifier"),
+            "{option}: {err}"
+        );
+    }
+    let f = Fixture::new();
+    f.write(
+        "model.sq",
+        &SOURCE.replace("arrive batch(1)", "arrive poisson(rate)"),
+    );
+    let first = f.run(&["ir", "model.sq", "--arrival_rate", "3", "--horizon", "10"]);
+    let last = f.run(&["ir", "model.sq", "--horizon", "10", "--arrival_rate", "3"]);
+    assert!(
+        first.status.success(),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    assert_eq!(first.stdout, last.stdout);
 }
