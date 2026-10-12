@@ -24,18 +24,37 @@ fn main() {
     hbm (k) = omega + beta * k;
     kv cap blocks * bs;
   }
+  pool kv on gpu { block bs; evict lru; preempt lifo; }
   engine llm on gpu {
     reqs cap max_seqs;
     tokens cap B;
+    // what the engine does with one request: reuse what the cache holds of
+    // the prompt, prefill the rest, decode, and leave it all cached
+    request (prompt, output) {
+      // how much of the prompt the cache could supply, in whole blocks
+      set hitmax = floor((prompt - 1) / bs) * bs;
+      // read when the request is admitted: while it waits, its prefix is
+      // still evictable
+      at admission { reused = min(cachedin(kv), hitmax); }
+      // a request preempted runs again from here; count its hit once
+      set c = min(cached, floor((prompt - 1) / bs) * bs);
+      branch (computed == 0) { observe hit = c > 0; }
+      prefill (prompt - c) growing kv;
+      decode (output - 1) growing kv;
+      cache (prompt + output);
+    }
     schedule {
       advance running;
-      admit waiting while (running.preempted == 0);
+      // a running slot, and the blocks of the reused prefix plus the chunk
+      // the budget left allows; only if the whole prompt fits, as vLLM's
+      // default scheduler_reserve_full_isl (config/scheduler.py:191)
+      admit waiting while (running.preempted == 0)
+        taking reqs (1), kv (min(prompt, reused + budget_left(llm))) reserve (prompt);
     }
     // an iteration costs whichever is larger: reading the weights and the
     // running requests' KV, or computing the tokens it scheduled
     execute (max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
   }
-  pool kv on gpu { block bs; evict lru; preempt lifo; }
   pool reqs on llm { queue fifo; }
 
   workload {
@@ -56,23 +75,10 @@ fn main() {
     }
   }
 
-  // the engine: what it does with one request
+  // a turn is one request to the engine
   server {
     set prompt = K + n;
-    // how much of the prompt the cache could supply, in whole blocks. The
-    // cache itself is read inside the hold's units, so it is read when the
-    // request is admitted -- while it waits, its prefix is still evictable.
-    // It is admitted only if the whole prompt fits, as vLLM's default
-    // scheduler_reserve_full_isl (config/scheduler.py:191): the `reserve`
-    set hitmax = floor((prompt - 1) / bs) * bs;
-    hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, reused + budget_left(llm)))) reserve (cost(kv, prompt))
-         at admission (reused = min(cachedin(kv), hitmax)) {
-      set c = min(cached, floor((prompt - 1) / bs) * bs);
-      // a request preempted runs this body again; count its hit once
-      branch (computed == 0) { observe hit = c > 0; }
-      run llm prefill (cost(llm, prompt - c)) growing kv;
-      run llm decode (cost(llm, o - 1)) growing kv;
-    } cache (cost(reqs, kv, prompt + o));
+    llm (prompt, o);
   }
 
 

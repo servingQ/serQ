@@ -55,7 +55,7 @@ already acquired allocation stays held. A selected prefill stops further
 waiting admission. Ordinary capacity, budget-exhaustion and preemption gates
 still apply. See the [`exclusive prefill` reference](../api/engine.md#exclusive-prefill).
 
-`reserve (known)` tests the current sequence's capacity (the prompt, or what a resumed request had computed), while the hold allocates
+`reserve (known)` tests the current sequence's capacity (the prompt, or what a resumed request had computed), while `taking` allocates
 only the initial chunk and `growing kv` extends it as computation advances.
 The live token budget is bound at admission, rather than captured before
 queuing.
