@@ -140,10 +140,10 @@ not a fit:
 | N | TR steps/min | default steps/min | ratio | TR token hit | default token hit |
 |---|---|---|---|---|---|
 | 24 | 170.9 | 170.9 | 1.00 | 0.94 | 0.94 |
-| 48 | 294.9 | 285.7 | 1.03 | 0.94 | 0.93 |
-| 96 | 310.3 | 100.6 | 3.09 | 0.91 | 0.24 |
-| 144 | 308.3 | 99.5 | 3.10 | 0.91 | 0.23 |
-| 192 | 306.7 | 99.4 | 3.09 | 0.90 | 0.23 |
+| 48 | 294.8 | 286.1 | 1.03 | 0.94 | 0.93 |
+| 96 | 309.9 | 100.5 | 3.08 | 0.91 | 0.24 |
+| 144 | 308.2 | 99.3 | 3.10 | 0.91 | 0.23 |
+| 192 | 306.5 | 99.6 | 3.08 | 0.90 | 0.23 |
 
 The paper's SWE-agent runs on GLM-4.6 (Fig. 4a and Fig. 5a, read from the
 figures) serve 218, 275, 162 and 140 steps/min under vLLM and 220, 350,
@@ -189,10 +189,9 @@ depends on one argument:
 
 ## Limitations
 
-- **One shared prefix.** `S` is one prompt every program shares and every
-  replica keeps cached. Programs that share part of a task, or a prompt
-  a replica may evict, need a cache shared across sessions, which serQ
-  does not have ([Known limitations](../language.md#9-known-limitations)).
+- **One shared prompt.** `S` is one system prompt every program starts
+  with, shared in each replica's cache as vLLM shares it. Programs that
+  share more, such as part of a task, are not written.
 - **Pauses are immediate.** ThunderAgent checks capacity every 5 s and lets
   a replica overflow in between. The program pauses at the growth that
   does not fit. In the paper's ablation, an interval from 2 to 10 moves

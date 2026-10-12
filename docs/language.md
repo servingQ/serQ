@@ -535,8 +535,10 @@ its own stage. Arguments are substituted like an `at admission` binding, so
 none may draw.
 
 An entry sees its own. Its header — the units, `reserve`, `reuse`, the
-`at admission` bindings — reads the parameters, the queue's pools and stage,
-the constants, `cached` and `computed`, and what the entry sets above the
+`at admission` bindings, the `prefix` — reads the parameters, the queue's
+pools and stage, the constants, `cached` and `computed`, the request's
+identity `serial` (an engine's request id, by which a `prefix` keys the
+session's own context), and what the entry sets above the
 hold, as a server's header reads an attribute set before it (`set kept =
 prompt;` before it, or in both arms of a `branch`; not in a loop or `fork`
 that may not have run). A local set only in the hold's body or after it is
