@@ -546,7 +546,7 @@ also reads `now`, what it
 sets itself and the request's `hidden` attributes, and nothing else the
 session has set, nor another queue's
 `Q.x`; every index it writes (`run nic[k]`) reads as the body does. Its
-statements hold, grow, load and release only the queue's own pools and the
+statements hold, grow, shrink, load and release only the queue's own pools and the
 pool its `from` names. That is the `hidden` rule
 at the queue's boundary: vLLM's scheduler knows `max_tokens`, not the length,
 so `o` is not a parameter of `decode` and the body alone reads it. What the
@@ -672,12 +672,12 @@ nothing (a hold re-executed after a preemption reaches the statement
 again). `load m (cost(m, n))` advances the innermost
 enclosing hold's position on `m` by `n` tokens, which its allocation must
 cover; the KV of a transfer counts as computed from then on. `grow`,
-`growing`, `load` and `release` stand inside a hold of the same pool
-reference, index included, as the linker resolves it (`kv[k]` with `let k
-= 1` is `kv[1]`; `kv[i]` is not `kv[j]`), or `grow` and `release` in a
-session that leases it, where outside every hold of the pool they grow
-or end the session's latest lease of it; elsewhere the program does not
-link. A hold's index is read at
+`shrink`, `growing`, `load` and `release` stand inside a hold of the same
+pool reference, index included, as the linker resolves it (`kv[k]` with
+`let k = 1` is `kv[1]`; `kv[i]` is not `kv[j]`), or `grow`, `shrink` and
+`release` in a session that leases it, where outside every hold of the
+pool they act on the session's lease of it, its earliest if it has
+several; elsewhere the program does not link. A hold's index is read at
 admission, at such a statement and after a preemption, and the readings
 must name one member: the hold's body does not change an attribute its
 index reads (`set`, `choose`, `turn`), and an index read again inside
@@ -727,6 +727,16 @@ left. Under an `exclusive prefill` schedule, a selected prefill ends admission;
 otherwise a fitting waiting prefill can displace tentative decodes, and
 its header sees the full budget. Until then a waiting session's cached
 prefix is evictable: the *wait channel*.
+
+`shrink m (cost(m, d))` is the inverse: the innermost hold on `m`, or
+outside every hold the session's lease of it, gives back `d` units, down
+to the nearest block above what remains. A hold keeps at least its
+position on `m`; under `reserve held` what it gives back is no longer
+reserved. A lease keeps something: a shrink that would leave it at
+nothing fails the run, since a lease of nothing would read as one that
+has ended (`allocated` 0) while it lasts on, and `release m` is what ends
+it. The units go back at once, and a hold or a growth waiting for them
+may be let in. Nothing held or leased there fails the run, as for `grow`.
 
 `grow m (cost(m, d))` enlarges the innermost hold on `m` by `d` (rounded to
 blocks). If it does not fit: with `preempt none` the session waits and
@@ -1187,7 +1197,7 @@ interpreter and the Lean model know only the one form, and the draw is a
 ### Amounts and indices
 
 The work of a `run`, the units of a `hold`, a
-`grow` and a `load` are amounts, and an amount is not negative and not NaN;
+`grow`, a `shrink` and a `load` are amounts, and an amount is not negative and not NaN;
 an index names a member, a whole number from 0 below the array's count.
 Anything else is the program's error, not a value to round: a constant
 amount or index that is one is refused at link time, a computed one when it

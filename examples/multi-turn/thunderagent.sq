@@ -156,10 +156,11 @@ fn main() {
     branch (allocated(prog[home]) > 0) {
       grow prog[home] (cost(prog, min(o, room - allocated(prog[home]))));
     }
-    // calling its tool now, the program counts at the acting weight; its
-    // next request grows it back (active_program_tokens)
+    // calling its tool now, the program counts at the acting weight, its
+    // buffer whole (active_program_tokens, remaining_capacity); its next
+    // request grows it back
     branch (w < 1 && allocated(prog[home]) > 0) {
-      shrink prog[home] (cost(prog, (1 - w) * allocated(prog[home])));
+      shrink prog[home] (cost(prog, (1 - w) * (allocated(prog[home]) - buffer)));
     }
     set reasoning = 0;
   }

@@ -195,12 +195,13 @@ depends on one argument:
   in the queue, within the capacity.
 - **A pause ends the count at once.** ThunderAgent counts a reasoning
   program it has marked for a pause until its response arrives.
-- **The decay is not written.** `w` is ThunderAgent's acting weight; the
-  `2^-t` decay the paper's experiments use, which shrinks an idle
-  program's count with time and only when others are resumed, is not.
-  Its limit, `w` 0, counts idle programs for nothing: more are let in,
-  their next requests pause others, and at the paper's scale the ratio
-  falls from 3.1 to 2.0. The code's default, `w` 1, does best here.
+- **The decay is not written.** `w` is ThunderAgent's acting weight,
+  which the router reads wherever it reads a replica's room. Counting idle
+  programs for less costs throughput here: at the paper's scale the ratio
+  is 3.1 at `w` 1, 2.0 at 0.5 and 1.0 at 0, because their next requests
+  grow back and pause others. The `2^-t` decay the paper's experiments
+  use weighs idle programs by the time they have waited, and only when
+  others are resumed; that is not written.
 - **The paper is not fitted.** It does not state its KV capacity, context
   lengths, output lengths, coding tools' times, system prompts or vLLM
   version, so `g` and `S` are estimates and no panel is reproduced.

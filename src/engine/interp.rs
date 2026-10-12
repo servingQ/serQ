@@ -183,6 +183,15 @@ enum Grown {
     Lease(usize),
 }
 
+/// The run-time error of a `grow` or `shrink` with nothing to act on.
+fn nothing_held(what: &str, name: &str) -> String {
+    format!(
+        "`{what} {name}`: the session holds no `{name}` and leases none; a lease ends at \
+         its `release`, its expiry, or under `preempt leases by` (`allocated({name})` is \
+         0 then)"
+    )
+}
+
 /// Whether the session waits to grow in pool `pool`.
 fn grows_in(s: &Session, pool: usize) -> bool {
     matches!(s.status, Status::Growing(q, ..) if q == pool)
@@ -3016,24 +3025,36 @@ impl<'p> Interp<'p> {
     fn shrink(&mut self, sid: usize, pl: usize, units: f64) {
         let name = &self.p.pools[pl].name;
         let Some(g) = self.grown(sid, pl) else {
-            self.error = Some(format!(
-                "`shrink {name}`: the session holds no `{name}` and leases none"
-            ));
+            self.error = Some(nothing_held("shrink", name));
             return;
         };
         let alloc_now = self.grown_alloc(sid, g);
+        // a hold keeps its position, a lease something: a lease of nothing
+        // is `release`'s, and would read as one that has ended
         let floor = match g {
             Grown::Hold(hi, k) => self.sessions[sid].holds[hi].pools[k].pos,
             Grown::Lease(_) => 0.0,
         };
-        let target = self.round_up(pl, (alloc_now - units.max(0.0)).max(floor));
+        let target = self.round_up(pl, (alloc_now - units).max(floor));
+        if matches!(g, Grown::Lease(_)) && target <= 0.0 {
+            self.error = Some(format!(
+                "`shrink {name}` would leave the session's lease of `{name}` at nothing; \
+                 `release {name}` ends it"
+            ));
+            return;
+        }
         let back = alloc_now - target;
         if back <= 0.0 {
             return;
         }
         self.pools[pl].used -= back;
         match g {
-            Grown::Hold(hi, k) => self.sessions[sid].holds[hi].pools[k].alloc -= back,
+            Grown::Hold(hi, k) => {
+                // under `reserve held`, what it gives back is no longer reserved either
+                let e = &mut self.sessions[sid].holds[hi].pools[k];
+                e.alloc -= back;
+                e.reserved = (e.reserved - back).max(e.alloc);
+            }
             Grown::Lease(i) => {
                 let l = &mut self.sessions[sid].leases[i];
                 l.alloc -= back;
@@ -3049,12 +3070,7 @@ impl<'p> Interp<'p> {
     /// preempts is the session's no more, and the session goes on.
     fn grow(&mut self, sid: usize, pl: usize, units: f64) -> bool {
         let Some(g) = self.grown(sid, pl) else {
-            let name = &self.p.pools[pl].name;
-            self.error = Some(format!(
-                "`grow {name}`: the session holds no `{name}` and leases none; a lease \
-                 ends at its `release`, its expiry, or under `preempt leases by` \
-                 (`allocated({name})` is 0 then)"
-            ));
+            self.error = Some(nothing_held("grow", &self.p.pools[pl].name));
             return false;
         };
         let alloc_now = self.grown_alloc(sid, g);

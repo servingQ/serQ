@@ -183,10 +183,13 @@ shrink POOL (d);
 | `POOL` | `pool` | A pool the session holds, or leases. |
 | `d` | `Cost(POOL)` | Units given back by the innermost hold on `POOL`, or outside every hold of it by the session's lease of it, to the nearest block above what remains. |
 
-The inverse of [`grow`](#grow). A hold keeps at least what it has
-computed; a lease can give back everything and stays, at nothing. The
-units go back at once, and a hold or a growth waiting for them may be let
-in. Nothing held or leased there fails the run, as for `grow`.
+The inverse of [`grow`](#grow). A hold keeps at least its position (and
+under `reserve held` what it gives back is no longer reserved); a lease
+keeps something, and a shrink that would leave it at nothing fails the
+run: `release` ends a lease. The units go back at once, and a hold or a
+growth waiting for them may be let in. Nothing held or leased there fails
+the run, as for `grow`. A negative `grow` is not this: an amount is not
+negative ([Amounts](../language.md#amounts-and-indices)).
 ThunderAgent counts a program that is calling a tool at its
 `--acting-token-weight` this way (`examples/multi-turn/thunderagent.sq`).
 

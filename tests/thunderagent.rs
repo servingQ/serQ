@@ -109,16 +109,23 @@ fn a_shared_system_prompt_keeps_paused_prefixes_and_gives_default_mode_its_hits(
     );
 }
 
-/// `w`, ThunderAgent's acting weight: counting a program that calls a tool
-/// for less lets more programs in, whose next requests pause others. At the
-/// paper's scale that costs more than it gains: the weight the code
-/// defaults to, 1, serves more than 0 (docs/design/thunderagent.md, item 7).
+/// `w`, ThunderAgent's acting weight: a program calling a tool gives back
+/// (1 - w) of its tokens and grows them back at its next request, which
+/// pauses others. The claim is the mechanism: at `w` 0.5 more of the turns
+/// come from paused programs, and fewer turns are served than at the
+/// code's default, 1 (docs/design/thunderagent.md, item 7).
 #[test]
-fn counting_idle_programs_for_less_costs_more_than_it_gains() {
-    let turns = |w: &str| paper("tr=1", &["g=3.3e-9", "S=3968", w]).turns;
-    let (whole, none) = (turns("w=1"), turns("w=0"));
+fn counting_idle_programs_for_less_pauses_more_and_serves_less() {
+    let run = |w: &str| paper("tr=1", &["g=3.3e-9", "S=3968", w]);
+    let resumed =
+        |r: &serq::Report| r.observe("resume_wait").map_or(0, |o| o.count) as f64 / r.turns as f64;
+    let (whole, half) = (run("w=1"), run("w=0.5"));
     assert!(
-        whole as f64 > 1.2 * none as f64,
-        "turns: w 1 {whole}, w 0 {none}"
+        resumed(&half) > 2.0 * resumed(&whole) && whole.turns > half.turns,
+        "resumed/turn: w 1 {}, w 0.5 {}; turns: {} against {}",
+        resumed(&whole),
+        resumed(&half),
+        whole.turns,
+        half.turns
     );
 }

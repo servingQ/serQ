@@ -82,3 +82,51 @@ fn a_shrink_outside_every_hold_and_lease_does_not_link() {
     let e = check_source(&common::main_source(src), &common::horizon(10.0)).unwrap_err();
     assert!(e.contains("outside a hold of `prog`"), "{e}");
 }
+
+/// A lease shrunk to nothing would read as one that has ended
+/// (`allocated` 0) while it lasts on: the run fails and says `release`.
+#[test]
+fn a_lease_shrunk_to_nothing_fails_the_run() {
+    let src = r#"
+        stage svc : fifo;
+        pool prog { cap 10; }
+        workload { arrive batch(1); session { turn; } }
+        server {
+          hold prog (cost(prog, 4)) { } lease prog (inf);
+          shrink prog (cost(prog, 4));
+          run svc (cost(svc, 1));
+        }
+"#;
+    let e = run_source(&common::main_source(src), &common::horizon(10.0), None).unwrap_err();
+    assert!(e.contains("`release prog` ends it"), "{e}");
+}
+
+/// Under `reserve held` what a hold gives back is no longer reserved: a
+/// hold reserving 8 and shrunk to 2 leaves 8 of 10 to the next, at t = 1.
+#[test]
+fn under_reserve_held_what_is_given_back_is_no_longer_reserved() {
+    let src = r#"
+        stage svc : fifo(2);
+        pool prog { cap 10; reserve held; }
+        workload { arrive batch(2); session { turn; } }
+        server {
+          branch (serial == 0) {
+            hold prog (cost(prog, 8)) reserve (cost(prog, 8)) {
+              run svc (cost(svc, 1));
+              shrink prog (cost(prog, 6));
+              run svc (cost(svc, 2));
+            }
+          } else {
+            run svc (cost(svc, 0.5));
+            hold prog (cost(prog, 6)) { observe let_in = now; }
+          }
+        }
+"#;
+    let r = run_source(&common::main_source(src), &common::horizon(100.0), None).unwrap();
+    assert_eq!(
+        r.observe("let_in").unwrap().samples,
+        vec![1.0],
+        "{}",
+        r.text()
+    );
+}

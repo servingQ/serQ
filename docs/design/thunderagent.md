@@ -287,8 +287,8 @@ paper`), one factor at a time:
 | `g` 1.1e-9 | 1.88, 1.91, 1.91 | 0.90-0.91 | 0.23-0.26 |
 | `Z` 1 s | 3.33, 3.31, 3.28 | 0.90 | 0.23-0.24 |
 | `Z` 10 s | 2.00, 2.13, 2.12 | 0.89 | 0.23-0.30 |
-| `w` 0.5 | 2.04, 2.04, 2.02 | 0.69-0.72 | 0.23-0.24 |
-| `w` 0 | 2.01, 2.08, 2.05 | 0.71-0.74 | 0.23-0.29 |
+| `w` 0.5 | 2.05, 2.05, 2.03 | 0.69-0.72 | 0.23-0.24 |
+| `w` 0 | 1.03, 1.03, 1.04 | 0.25-0.27 | 0.23-0.24 |
 
 The preset in full:
 
@@ -386,18 +386,28 @@ What the program does not reproduce:
    prompt, and the answer when the response has arrived, since its length
    is `hidden` until then.
 7. **Decay.** `--acting-token-weight` is written: `w` below 1 gives back
-   (1 − w) of a program's lease when its response arrives (`shrink`), and
-   its next request grows it back. The `2^-t` decay the paper's
-   experiments use weighs an acting program by the time it has called its
-   tool, and only when the router resumes others
-   ([`backend/state.py#L196-L214`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/backend/state.py#L196-L214)):
-   an allocation that shrinks with time, which no allocation is. Its limit
-   after a few seconds is `w` 0, which the table above runs: counting idle
-   programs for less lets more in, and their next requests pause others,
-   so a paused program sends half the turns (0.49-0.55 against 0.15) and
-   the ratio falls to 2.0. The code's default, 1, is the best of the three
-   here. The paper's ablation of the decay base moves throughput by under
-   13 % (Fig. 6b: 373, 382, 360, 333 steps/min for x = 2, 4, 6, 8).
+   (1 − w) of a program's tokens, not its buffer, when its response
+   arrives (`shrink`), and its next request grows it back. ThunderAgent
+   counts the weight wherever it reads a replica's room: in placing a new
+   program, in pausing, in resuming
+   ([`backend/state.py#L104-L107`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/backend/state.py#L104-L107)).
+   Counting idle programs for less costs throughput here, monotonically:
+   at the paper preset the ratio is 3.1 at `w` 1, 3.0 at 0.9, 2.6-2.7 at
+   0.75, 2.0 at 0.5 and 1.0 at 0. The programs the router lets in do not
+   increase; the churn does. Their next requests grow back what they gave
+   and pause others: pauses more than double, a paused program sends half
+   the turns (0.49 against 0.15), half of those resume on the other
+   replica and recompute, and prefill is three times the tokens a turn.
+   The code's default, 1, is the best of these. The `2^-t` decay the
+   paper's experiments use is not this: it weighs an acting program by the
+   time it has called its tool, and only in the resume check
+   ([`backend/state.py#L196-L214`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/backend/state.py#L196-L214),
+   [`scheduler/router.py#L833-L837`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L833-L837)),
+   while pausing and placing count it whole. A resume check of its own
+   that the pause rule does not share is not written, nor an allocation
+   that shrinks with time. The paper's ablation of the decay base moves
+   throughput by under 13 % (Fig. 6b: 373, 382, 360, 333 steps/min for x =
+   2, 4, 6, 8).
 8. **The force-resume.** ThunderAgent lets a program in after 30 minutes
    of waiting whatever the capacity, onto its replica or the least loaded
    ([`scheduler/router.py#L934-L956`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L934-L956)).
