@@ -713,4 +713,95 @@ impl Parser {
         }
         Ok(())
     }
+
+    /// An engine is run only through its request (#539): the server, a
+    /// gateway's `route` and the session may not run an engine's prefill
+    /// or decode, nor hold a pool an engine admits. A queue's entries run
+    /// the queue's own engine, and a pool no engine admits (a top-level
+    /// pool, one `on DEVICE`) is held anywhere.
+    pub(super) fn check_engine_runs(&self, prog: &Program) -> PResult<()> {
+        let admitter = |pool: &str| -> Option<String> {
+            let po = self.pools_on.iter().find(|po| prog.pools[po.pool].name == pool)?;
+            if self.engines.iter().any(|e| e.name == po.on.owner) {
+                Some(po.on.owner.clone())
+            } else {
+                po.on.admitted_by.clone()
+            }
+        };
+        let is_engine = |stage: &str| self.engines.iter().any(|e| e.name == stage);
+        let mut blocks: Vec<(&str, usize, &[Stmt])> = vec![];
+        if let Some((at, s)) = &self.server {
+            blocks.push(("the server", *at, s));
+        }
+        if let Some((at, s)) = &self.wl_session {
+            blocks.push(("the session", *at, s));
+        }
+        for q in &self.queues {
+            if q.roles.iter().any(|r| r == "gateway") {
+                for e in q.entries.iter().filter(|e| e.verb == "route") {
+                    blocks.push(("the gateway's `route`", e.at, &e.body));
+                }
+            }
+        }
+        for (who, at, stmts) in blocks {
+            if let Some((span, msg)) = engine_use(stmts, &admitter, &is_engine, who) {
+                return match span {
+                    Some(s) => Err(ParseError {
+                        line: s.line,
+                        col: s.col,
+                        msg,
+                    }),
+                    None => self.err_at(at, msg),
+                };
+            }
+        }
+        Ok(())
+    }
+}
+
+/// The first statement of `stmts` that runs an engine outside its
+/// request: where it is and what to write instead.
+fn engine_use(
+    stmts: &[Stmt],
+    admitter: &impl Fn(&str) -> Option<String>,
+    is_engine: &impl Fn(&str) -> bool,
+    who: &str,
+) -> Option<(Option<Span>, String)> {
+    for s in stmts {
+        let found = match s {
+            Stmt::Run { stage, mode, .. } if *mode != RunMode::Plain && is_engine(&stage.name) => {
+                let (e, m) = (&stage.name, if *mode == RunMode::Prefill { "prefill" } else { "decode" });
+                Some((
+                    stage.span,
+                    format!(
+                        "{who} runs engine `{e}`'s {m} (`run {e} {m} (…)`): an engine's prefill and \
+                         decode are written in its `request (…) {{ … }}`, which {who} calls as `{e} (…);`"
+                    ),
+                ))
+            }
+            Stmt::Hold { pools, body, .. } => pools
+                .iter()
+                .find_map(|(p, _, _)| admitter(&p.name).map(|e| (p, e)))
+                .map(|(p, e)| {
+                    (
+                        p.span,
+                        format!(
+                            "{who} holds `{}`, which engine `{e}` admits: write the admission as \
+                             `taking {} (…)` on `{e}`'s `admit waiting`, and what the hold does in \
+                             `{e}`'s `request (…) {{ … }}`, which {who} calls as `{e} (…);`",
+                            p.name, p.name
+                        ),
+                    )
+                })
+                .or_else(|| engine_use(body, admitter, is_engine, who)),
+            Stmt::Branch(_, a, b) => engine_use(a, admitter, is_engine, who)
+                .or_else(|| engine_use(b, admitter, is_engine, who)),
+            Stmt::Loop(b) | Stmt::While(_, b) | Stmt::Fork(b) => engine_use(b, admitter, is_engine, who),
+            _ => None,
+        };
+        if found.is_some() {
+            return found;
+        }
+    }
+    None
 }

@@ -2095,6 +2095,7 @@ impl Parser {
         }
         served.shared = shared;
         self.check_request_names(&prog)?;
+        self.check_engine_runs(&prog)?;
         self.assemble(&mut prog, &mut served)?;
         self.link_engines(&mut prog)?;
         self.check_binding_names(&prog)?;
