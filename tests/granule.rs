@@ -16,7 +16,7 @@ use serq::{Overrides, compile_source, run_source};
 fn prog(granule: &str) -> String {
     program(
         granule,
-        "advance running; admit waiting while (running.preempted == 0);",
+        "advance running; admit waiting while (running.preempted == 0) taking reqs (1);",
     )
 }
 
@@ -29,6 +29,10 @@ fn program(granule: &str, schedule: &str) -> String {
           reqs cap 4;
           tokens cap 8;
           {granule}
+          request (t0) {{
+            prefill (6);
+            observe ttft = now - t0;
+          }}
           schedule {{ {schedule} }}
           execute (1 + max(0, batch.tokens - 6));
         }}
@@ -41,10 +45,7 @@ fn program(granule: &str, schedule: &str) -> String {
         }}
         server {{
           set t0 = now;
-          hold reqs (cost(reqs, 1)) {{
-            run llm prefill (cost(llm, 6));
-            observe ttft = now - t0;
-          }}
+          llm (t0);
         }}
 
 "#
@@ -88,17 +89,17 @@ fn a_granule_that_could_never_be_given_does_not_link() {
     for (granule, schedule, message) in [
         (
             "granule inf;",
-            "exclusive prefill; admit waiting while (running.preempted == 0);",
+            "exclusive prefill; admit waiting while (running.preempted == 0) taking reqs (1);",
             "exclusive prefill",
         ),
         (
             "granule inf;",
-            "advance running each at most (4); admit waiting while (running.preempted == 0) each at most (4);",
+            "advance running each at most (4); admit waiting while (running.preempted == 0) each at most (4) taking reqs (1);",
             "`each at most (4)`",
         ),
         (
             "granule 4;",
-            "advance running each at most (3); admit waiting while (running.preempted == 0) each at most (3);",
+            "advance running each at most (3); admit waiting while (running.preempted == 0) each at most (3) taking reqs (1);",
             "`each at most (3)`",
         ),
     ] {
@@ -131,10 +132,15 @@ fn a_granule_above_a_computed_caps_floor_does_not_link() {
           reqs cap 32;
           tokens cap 4096;
           granule {granule};
+          request (t0) {{
+            prefill (1024);
+            observe ttft = now - t0;
+          }}
           schedule {{
             let n = running.count + waiting.count;
             advance running each at most (max(256, floor(4096 / n)));
-            admit waiting while (running.preempted == 0) each at most (max(256, floor(4096 / n)));
+            admit waiting while (running.preempted == 0) each at most (max(256, floor(4096 / n)))
+              taking reqs (1);
           }}
           execute (1);
         }}
@@ -146,10 +152,7 @@ fn a_granule_above_a_computed_caps_floor_does_not_link() {
         }}
         server {{
           set t0 = now;
-          hold reqs (cost(reqs, 1)) {{
-            run llm prefill (cost(llm, 1024));
-            observe ttft = now - t0;
-          }}
+          llm (t0);
         }}
 "#
         )
@@ -176,9 +179,10 @@ fn the_chunk_caps_and_the_granule_rounds() {
           reqs cap 4;
           tokens cap 8;
           granule 4;
+          request (t0) { prefill (10); observe ttft = now - t0; }
           schedule {
             advance running each at most (6);
-            admit waiting while (running.preempted == 0) each at most (6);
+            admit waiting while (running.preempted == 0) each at most (6) taking reqs (1);
           }
           execute (1);
         }
@@ -191,7 +195,7 @@ fn the_chunk_caps_and_the_granule_rounds() {
         }
         server {
           set t0 = now;
-          hold reqs (cost(reqs, 1)) { run llm prefill (cost(llm, 10)); observe ttft = now - t0; }
+          llm (t0);
         }
 
 "#;
@@ -224,7 +228,15 @@ fn a_refused_prefill_ends_the_admissions() {
           reqs cap 8;
           tokens cap 8;
           granule inf;
-          schedule { advance running; admit waiting while (running.preempted == 0); }
+          request () {
+            at admission { left = budget_left(llm); }
+            observe admitted_at = now;
+            prefill (6) growing kv;
+          }
+          schedule {
+            advance running;
+            admit waiting while (running.preempted == 0) taking reqs (1), kv (min(6, left));
+          }
           execute (1);
         }
         pool reqs on llm { }
@@ -235,12 +247,7 @@ fn a_refused_prefill_ends_the_admissions() {
 
           }
         }
-        server {
-          hold reqs (cost(reqs, 1)), kv (cost(kv, min(6, left))) at admission (left = budget_left(llm)) {
-            observe admitted_at = now;
-            run llm prefill (cost(llm, 6)) growing kv;
-          }
-        }
+        server { llm (); }
 
 "#;
     let r = run_source(
