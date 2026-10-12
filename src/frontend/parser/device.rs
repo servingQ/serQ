@@ -327,6 +327,18 @@ impl Parser {
         }
         self.declare(at, &name, Kind::Engine)?;
         let array = self.array_count()?;
+        // an engine runs through its request, and a family has none: a
+        // family of engines is a queue family, whose entries run them
+        if let Some(n) = array {
+            return self.err_at(
+                at,
+                format!(
+                    "engine family `{name}[{n}]`: a family of engines is a queue family, \
+                     `queue {name}[{n}] : ROLE {{ device …; engine on DEVICE {{ … }} … }}`, whose \
+                     entries the server calls as `{name}[j].VERB (…);` (#539)"
+                ),
+            );
+        }
         self.expect_kw("on")?;
         let d_at = self.pos;
         let device = self.ident()?;
@@ -480,6 +492,18 @@ impl Parser {
                     return self.err_at(k_at, format!("`{r}` is a word of the language"));
                 }
                 let family = self.array_count()?;
+                // a family of capacities is admitted by no `taking`, which
+                // names one pool, and the server may not hold them (#539)
+                if let (Some(n), None) = (family, device.split_once('.')) {
+                    return self.err_at(
+                        k_at,
+                        format!(
+                            "`{r}[{n}]` in engine `{name}`: an engine admits through its \
+                             request's `taking`, which names one `{r}`; write `{r} cap c;`, or \
+                             a queue family `queue Q[{n}]` for {n} engines"
+                        ),
+                    );
+                }
                 if let Some(n) = family
                     && dev_array
                     && dev_count != 1
