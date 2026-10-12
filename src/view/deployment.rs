@@ -116,8 +116,10 @@ pub struct FlowNote {
 #[derive(Clone, Debug)]
 pub struct HoldSpan {
     /// The hold's first pool: a hold of several pools waits once, in this
-    /// pool's queue (`interp.rs` `enqueue_hold`, `first_pool`).
-    pub queue: usize,
+    /// pool's queue (`interp.rs` `enqueue_hold`, `first_pool`). None for a
+    /// lease a `grow` takes the pool by: a growth waits among the pool's
+    /// growers, not in its queue.
+    pub queue: Option<usize>,
     /// The stations reached while it held a pool, as (pool, node). A pool
     /// of no units occupies nothing and has none; a `release` ends one pool's
     /// before the others', and a leased pool's runs on past the hold.
@@ -246,9 +248,9 @@ impl Net {
     /// Whether `pool`'s enclosure over the stations `first..=last` draws a
     /// queue: a hold that waits in `pool` reaches one of them.
     fn waits_in_enclosure(&self, pool: usize, first: usize, last: usize) -> bool {
-        self.holds
-            .iter()
-            .any(|h| h.queue == pool && h.visits.iter().any(|(_, n)| (first..=last).contains(n)))
+        self.holds.iter().any(|h| {
+            h.queue == Some(pool) && h.visits.iter().any(|(_, n)| (first..=last).contains(n))
+        })
     }
 }
 
@@ -453,6 +455,22 @@ impl Walker<'_> {
         idx
     }
 
+    /// After a branch or a loop, the pools still held are those the other
+    /// way through holds too, whichever hold took them: a lease grown in one
+    /// arm and held anew in the other (ThunderAgent's router), or a lease
+    /// each arm takes by a hold of its own (vLLM's push proxy, with and
+    /// without a leg). A pool one way occupies and the other holds at no
+    /// units encloses only where both do.
+    fn keep_held(&mut self, other: &[(usize, usize, bool)]) {
+        let mut kept = vec![];
+        for &(q, id, e) in &self.holds {
+            if let Some(&(_, _, f)) = other.iter().find(|&&(p, _, _)| p == q) {
+                kept.push((q, id, e && f));
+            }
+        }
+        self.holds = kept;
+    }
+
     fn walk(&mut self, block: usize) {
         let Some(stmts) = self.p.blocks.get(block) else {
             return;
@@ -521,7 +539,7 @@ impl Walker<'_> {
                     let id = self.next_hold;
                     self.next_hold += 1;
                     self.net.holds.push(HoldSpan {
-                        queue: pools[0].0.base,
+                        queue: Some(pools[0].0.base),
                         visits: vec![],
                     });
                     for (r, units, _) in &pools {
@@ -603,11 +621,7 @@ impl Walker<'_> {
                     self.frontier = saved;
                     self.arm = Some("else".into());
                     self.walk(e);
-                    // a pool both arms hold stays held, whichever hold took
-                    // it in each (a lease grown in one arm, held anew in the
-                    // other: ThunderAgent's router)
-                    self.holds
-                        .retain(|&(q, _, e)| then_held.iter().any(|&(p, _, f)| p == q && f == e));
+                    self.keep_held(&then_held);
                     if self.last_flow != then_flow {
                         self.last_flow = None;
                     }
@@ -647,7 +661,7 @@ impl Walker<'_> {
                     // The body may be skipped; its assignments and leases
                     // are not unconditional facts after the loop.
                     self.known.clear();
-                    self.holds.retain(|h| held.contains(h));
+                    self.keep_held(&held);
                 }
                 CStmt::Loop(body) => {
                     // A full-session view (IR input or no unique request
@@ -714,7 +728,7 @@ impl Walker<'_> {
                     let id = self.next_hold;
                     self.next_hold += 1;
                     self.net.holds.push(HoldSpan {
-                        queue: r.base,
+                        queue: None,
                         visits: vec![],
                     });
                     self.holds.push((r.base, id, true));
