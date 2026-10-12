@@ -899,7 +899,8 @@ fn is_context_var(v: &str) -> bool {
 
 /// Whether `v` reads the context variable of its name: the program's
 /// attributes and constants shadow one, as `Linker::resolve` reads them
-/// (#538).
+/// (#538). A program that names one so is refused by the linker
+/// (`takes_supplied`); this leaves that message to it.
 fn reads_context<'a>(v: &str, program: impl IntoIterator<Item = &'a str>) -> bool {
     is_context_var(v) && !program.into_iter().any(|a| a == v)
 }

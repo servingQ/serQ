@@ -159,8 +159,6 @@ impl QueueDecl {
     }
 }
 
-/// The error type of an expansion: a message and the source location it is
-/// reported at.
 /// What a bare name read in a queue's entry is before it is the
 /// program's: the member's index (`self`), one of the entry's parameters,
 /// or a local the entry sets. The one order both the entry's check
@@ -173,6 +171,8 @@ pub(crate) enum InEntry {
     Local,
 }
 
+/// What `n` is among an entry's own names, in their one order: `self`,
+/// then a parameter, then a local.
 pub(crate) fn in_entry<'a>(
     n: &str,
     params: impl IntoIterator<Item = &'a str>,
@@ -187,6 +187,8 @@ pub(crate) fn in_entry<'a>(
     locals.iter().any(|l| l == n).then_some(InEntry::Local)
 }
 
+/// The error type of an expansion: a message and the source location it is
+/// reported at.
 pub struct ExpandError {
     pub at: Span,
     pub msg: String,
@@ -275,9 +277,13 @@ impl Ctx<'_> {
         })
     }
 
+    /// What `n` is among this entry's own names (`in_entry`).
+    fn entry_name(&self, n: &str) -> Option<InEntry> {
+        in_entry(n, self.params.iter().map(|(p, _)| p.as_str()), self.locals)
+    }
+
     fn var(&self, n: &str) -> Result<Expr, ExpandError> {
-        let params = self.params.iter().map(|(p, _)| p.as_str());
-        match in_entry(n, params, self.locals) {
+        match self.entry_name(n) {
             Some(InEntry::SelfIndex) => match &self.index {
                 Some(i) => Ok(i.clone()),
                 None => err(
@@ -342,10 +348,8 @@ impl Ctx<'_> {
             ),
             Expr::Over(agg, j, n, body) => {
                 // the entry's names would be substituted for the index
-                let taken = j == "self"
-                    || self.params.iter().any(|(p, _)| p == j)
-                    || self.locals.iter().any(|l| l == j)
-                    || self.from.as_ref().is_some_and(|(f, _)| f == j);
+                let taken =
+                    self.entry_name(j).is_some() || self.from.as_ref().is_some_and(|(f, _)| f == j);
                 if taken {
                     return err(
                         self.at,
@@ -372,10 +376,7 @@ impl Ctx<'_> {
             // a bare identifier argument names a parameter, a local, `self`,
             // or a pool or stage
             Arg::Ref(r) if r.index.is_none() => {
-                let is_name = r.name == "self"
-                    || self.params.iter().any(|(p, _)| *p == r.name)
-                    || self.locals.iter().any(|l| l == &r.name);
-                if is_name {
+                if self.entry_name(&r.name).is_some() {
                     Arg::Expr(self.var(&r.name)?)
                 } else {
                     Arg::Ref(self.reference(r)?)
