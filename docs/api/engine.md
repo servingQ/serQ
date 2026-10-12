@@ -52,6 +52,7 @@ the [IR](../ir.md) and the Lean model see only that.
 | `state NAME = c` | `const` | | A register; see below. |
 | `schedule` | statements | as the iteration is planned | Whom the iteration serves, in what order, and when it admits. |
 | `execute` | `expr` | after the batch is formed | Clock time of the iteration. Reads `batch.…`, `running.count`, `waiting.count` and the device's time resources. |
+| `request (…) { … }` | parameters, statements | when the server calls it | What the engine does with one request; see below. |
 
 The values an engine reads, and in which clause, are in
 [Engines on devices](../language.md#engines-on-devices): `running.…` is
@@ -245,9 +246,22 @@ Without the `running.count == 0` condition, an empty engine with `just ==
 1` could never admit again: its unsuccessful attempt would undo the reset.
 The report flags an engine left in this state as `idle: engine …`.
 
+## `request`
+
+`request (PARAM, …) { … }` says what the engine does with one request, and
+the server runs it with `ENGINE (arg, …);`. Its items come in the order
+they happen: the statements when the call is reached, `at admission {
+NAME = e; … }` with the bindings read when the request is admitted, the
+statements while it is admitted (`prefill (e)` and `decode (e)` are the
+engine's runs in that mode), and `cache (e);`, what it leaves cached. What
+the admission takes is written on the schedule's `admit waiting`, `taking
+POOL (units) [reserve (units)], … [reuse (units)]`, the same on each. A request's `mark m;` is read by the
+caller as `ENGINE.m`. It is sugar for the server's hold:
+[An engine's request](../language.md#an-engines-request).
+
 ## Examples
 
-`examples/multi-turn/vllm.sq`'s engine:
+`examples/multi-turn/vllm.sq`'s engine, its comments elided:
 
 ```serq
 device gpu {
@@ -255,17 +269,32 @@ device gpu {
   hbm (k) = omega + beta * k;
   kv cap blocks * bs;
 }
+pool kv on gpu { block bs; evict lru; preempt lifo; }
 engine vllm on gpu {
   reqs cap max_seqs;
   tokens cap B;
+  request (prompt, output) {
+    set kept = prompt;
+    at admission {
+      known = max(kept, computed + 1);
+      reused = min(cachedin(kv), reusable(known, blocksize(kv)));
+    }
+    set kept = known;
+    set c = min(cached, reusable(known, blocksize(kv)));
+    observe hit = c > 0;
+    observe prefill_tokens = known - c;
+    prefill (known - c) growing kv;
+    decode (output - 1 - (known - prompt)) growing kv;
+    cache (prompt + output);
+  }
   schedule {
     let threshold = running.count + waiting.count > 1 ? chunk_cap : inf;
     advance running each at most (threshold);
-    admit waiting while (running.preempted == 0) each at most (threshold);
+    admit waiting while (running.preempted == 0) each at most (threshold)
+      taking reqs (1), kv (min(known, reused + budget_left(vllm))) reserve (known);
   }
   execute (c0 + max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
 }
-pool kv on gpu { block bs; evict lru; preempt lifo; }
 pool reqs on vllm { queue fifo; }
 ```
 

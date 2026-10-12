@@ -75,8 +75,16 @@ eitem    := NAME [ '[' N ']' ] cap expr ;    -- a capacity the engine holds (`re
           | granule expr ; | state NAME = expr ;
           | schedule { (let NAME = expr ;)* sstmt+ }   -- what each iteration does (required)
           | execute ( expr ) ;               -- the batch's time over the device's resources (required)
+          | request ( NAME , ... ) { rstmt* [at admission { (NAME = expr ;)* }] rstmt* [cache ( expr ) ;] }
+                                             -- what the engine does with one request (*An engine's request*):
+                                             -- the statements when the call is reached, the admission's
+                                             -- bindings, the statements while admitted, what it leaves cached
+rstmt    := stmt
+          | prefill ( expr ) [ growing POOL ] ;   -- the engine's run in that mode
+          | decode ( expr ) [ growing POOL ] ;
 sstmt    := advance running [only ( expr )] [admission | by ( expr , ... ) | decode first] [each at most ( expr )] ;
-          | admit waiting [only ( expr )] [while ( expr )] [each at most ( expr )] ;
+          | admit waiting [only ( expr )] [while ( expr )] [each at most ( expr )]
+                [taking POOL ( expr ) [reserve ( expr )] , ... [reuse ( expr )]] ;   -- what the admission takes of the request
           | exclusive prefill [each at most ( expr )] ;
           | branch ( expr ) { sstmt* } [else { sstmt* }]
           | set NAME = expr ;
@@ -115,7 +123,8 @@ stmt     := turn ;                           -- draw attributes, submit, wait fo
           | end ;
           | QUEUE [ '[' expr ']' ] . VERB ( expr, ... ) [ from QUEUE [ '[' expr ']' ] ] [ to POOL ( expr ) ] ;
                                              -- a queue's entry, in its place (*Queues*)
-          | mark NAME ;                        -- in an entry: the moment, read by the caller as QUEUE.NAME
+          | mark NAME ;                        -- in an entry or a request: the moment, read by the caller as QUEUE.NAME or ENGINE.NAME
+          | ENGINE ( expr, ... ) ;           -- in a server: the engine's request, in its place
           | serving                          -- the serving vocabulary, sugar for run
 serving  := transfer [ '[' expr ']' | on STAGE [, STAGE]* ] expr from POOL to POOL ( expr ) ;
                                              -- the KV moves: run link; load; release
@@ -234,7 +243,9 @@ sugar: the parser rewrites each to the kernel statement it stands for, so
 the IR (`serq ir` prints the kernel), the interpreter and the Lean model
 know nothing of them. Prefill and decode are not forms: on a step engine
 they are the mode of the run, `run E prefill (cost(E, T));` and
-`run E decode (cost(E, T));`, which names the engine the request uses.
+`run E decode (cost(E, T));`, which names the engine the request uses,
+except in an engine's `request`, where `prefill (e)` is `run E prefill
+(cost(E, e))` on that engine (*An engine's request*).
 
 | Serving form | Kernel |
 |---|---|
@@ -329,12 +340,7 @@ workload {
 
 server {
   set prompt = K + n;
-  hold reqs (cost(reqs, 1)), kv (…) at admission (…) {
-    …
-    run vllm prefill (cost(vllm, known - c)) growing kv;
-    …
-    run vllm decode (cost(vllm, o - 1 - (known - prompt))) growing kv;
-  } cache (cost(reqs, kv, prompt + o));
+  vllm (prompt, o);                       // the engine's request
 }
 ```
 
@@ -949,14 +955,75 @@ engine is named for what it models (`vllm`, `sglang`, `tgi`) or `llm`.
 Inside a `queue`, `device gpu` is the member's and `engine on gpu` is the
 queue's stage, named after the queue, so its pool is `pool reqs on Q`.
 
+### An engine's request
+
+An engine says what it does with one request
+([the design](design/engine-request.md)), and the server calls it. From
+`examples/multi-turn/vllm.sq`, its comments elided:
+
+```serq
+engine vllm on gpu {
+  reqs cap max_seqs;
+  tokens cap B;
+  request (prompt, output) {
+    set kept = prompt;
+    at admission {
+      known = max(kept, computed + 1);
+      reused = min(cachedin(kv), reusable(known, blocksize(kv)));
+    }
+    set kept = known;
+    set c = min(cached, reusable(known, blocksize(kv)));
+    observe hit = c > 0;
+    observe prefill_tokens = known - c;
+    prefill (known - c) growing kv;
+    decode (output - 1 - (known - prompt)) growing kv;
+    cache (prompt + output);
+  }
+  schedule {
+    let threshold = running.count + waiting.count > 1 ? chunk_cap : inf;
+    advance running each at most (threshold);
+    admit waiting while (running.preempted == 0) each at most (threshold)
+      taking reqs (1), kv (min(known, reused + budget_left(vllm))) reserve (known);
+  }
+  execute (c0 + max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
+}
+```
+
+It is parse-time sugar for the hold a server writes, and the call
+`vllm (prompt, o);` is replaced by it, each parameter substituted by its
+argument (one that draws is refused):
+
+| Request | Kernel at the call |
+|---|---|
+| the statements before `at admission` | the same statements, before the hold |
+| `taking P (u) reserve (r), …` | `hold P (cost(P, u)) reserve (cost(P, r)), …`, the pools in the order written |
+| `taking … reuse (e)` | the hold's `reuse (cost(P₁, …, e))` |
+| `at admission { x = e; … }` | the hold's `at admission (x = e, …)` |
+| the statements after it | the hold's body |
+| `prefill (e) growing P;`, `decode (e) …` | `run E prefill (cost(E, e)) growing P;`, `run E decode …` |
+| `mark m;` | `set E.m = now;`, read afterwards as `E.m` |
+| `cache (e);`, the last item | the hold's `cache (cost(P₁, …, e))` over the pools taken |
+
+Without `at admission`, the admission is at the request's top. A request
+without `taking` holds nothing, and has no `at admission` and no `cache`.
+`taking` names the engine's capacities and its device's. Every `admit
+waiting` of the engine writes the same `taking`. The rules are a queue
+entry's: the admission reads the parameters, what the request sets before
+it, the engine's pools and stage, `cached`, `computed` and the
+constants; the statements also read `now`, what the request sets and the
+`hidden` attributes; a request sets no parameter. Its names keep their
+spelling in the IR (`kept`, not `vllm.kept`), and the rest of the program
+neither reads nor sets them: the caller reads what it marks. An engine has
+one request; a queue's engine and an engine family have none.
+
 ### `at admission`
 
 Everything in a hold's header — the units, `reserve`,
 `reuse` — is evaluated when the session is admitted, and a `set` above the
 hold is not (`cache` is read when the session releases, `Serq/Exec.lean`'s
 `release` and the interpreter agree). `at admission (x = e)` gives the
-header a place to name what it is written in terms of, as
-`examples/multi-turn/vllm.sq` does:
+header a place to name what it is written in terms of, as the request of
+`examples/multi-turn/vllm.sq` lowers to:
 
 ```
 hold reqs (cost(reqs, 1)), kv (cost(kv, min(known, reused + budget_left(vllm)))) reserve (cost(kv, known))
@@ -1229,7 +1296,7 @@ scheduler at the pinned revision (`ref/vllm` at 0c87a197; the A100 testbed
 runs vLLM 0.30.0, whose scheduler gives the same answers on the first six
 scenarios below). It is a correspondence under synchronous scheduling at that
 revision, not to the latest vLLM ([the vLLM use case](use-cases/vllm.md)).
-The `server` block of `examples/multi-turn/vllm.sq`, the engine of the
+The request of `examples/multi-turn/vllm.sq`'s engine, the engine of the
 workload examples, is a simpler one: it reserves `known` as this one does, but takes its hit
 from the cache alone rather than from the previous prompt, and caches `prompt + o`.
 
@@ -1277,7 +1344,7 @@ blocks, asynchronous scheduling ([A100 testbed](#8-vllm-on-the-a100-testbed)), a
 
 ### Admission
 
-The header of the `hold` in `examples/multi-turn/vllm.sq`'s server is the
+The admission of the request in `examples/multi-turn/vllm.sq`'s engine is the
 prefix-cache lookup and the allocation of the first chunk, and both happen
 when the scheduler admits the request, not when it queues. `known` is
 every token the request has: the prompt, or after a preemption the tokens
