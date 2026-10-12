@@ -74,6 +74,29 @@ pub fn check_source(src: &str, ov: &Overrides) -> Result<Linked, String> {
     compile_source(src, ov)
 }
 
+/// `load`, for a command that inspects the program and neither runs nor
+/// exports it (`check`, `target`, `draw`): program text without a horizon
+/// is given a placeholder one, since nothing here chooses an experiment's
+/// duration. IR keeps its own.
+pub fn load_inspected(path: &Path, ov: &Overrides) -> Result<ir::Program, String> {
+    if path.extension().is_some_and(|e| e == "json") {
+        return load(path, ov);
+    }
+    load(path, &inspected(ov))
+}
+
+/// `compile_source`, for inspection (`load_inspected`).
+pub fn compile_inspected(src: &str, ov: &Overrides) -> Result<ir::Program, String> {
+    compile_source(src, &inspected(ov))
+}
+
+fn inspected(ov: &Overrides) -> Overrides {
+    Overrides {
+        horizon: ov.horizon.or(Some(f64::MAX)),
+        ..ov.clone()
+    }
+}
+
 /// Load a program file as IR: `.json` is read as IR (only the run
 /// parameters and the trace can be overridden, since constants are already
 /// folded); anything else is compiled from text.

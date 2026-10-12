@@ -1019,6 +1019,8 @@ struct Site {
 }
 
 /// The server's runs in a block, each inside the workload's holds around it.
+/// A run ends at the first workload statement, where the interpreter ends
+/// the client turn too (`ClientTurn`).
 fn sites(p: &Program, block: usize, holds: &mut Vec<CStmt>, out: &mut Vec<Site>) {
     let (stmts, sides) = (&p.blocks[block], &p.sides[block]);
     let mut i = 0;

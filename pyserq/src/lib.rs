@@ -435,7 +435,7 @@ fn overriding(
 
 /// `draw(path=None, *, source=None, sets={}, defs={}, format="tikz")`: the
 /// deployment view, as `serq draw` prints it: what one request runs
-/// (`serq::view::deployment::request`). Program text needs no horizon here.
+/// (`serq::view::deployment::request`).
 #[pyfunction]
 #[pyo3(signature = (path=None, *, source=None, sets=HashMap::new(), defs=HashMap::new(), format="tikz"))]
 fn draw(
@@ -447,15 +447,9 @@ fn draw(
 ) -> PyResult<String> {
     let mut ov = serq::Overrides::default();
     overriding(&mut ov, sets, defs)?;
-    let text = path
-        .as_ref()
-        .is_none_or(|p| p.extension().is_none_or(|e| e != "json"));
-    if text {
-        ov.horizon = Some(f64::MAX);
-    }
     let ir = match (&path, source) {
-        (Some(p), None) => serq::load(p, &ov),
-        (None, Some(src)) => serq::compile_source(src, &ov),
+        (Some(p), None) => serq::load_inspected(p, &ov),
+        (None, Some(src)) => serq::compile_inspected(src, &ov),
         _ => {
             return Err(PyValueError::new_err(
                 "draw takes exactly one of a path and a source",
