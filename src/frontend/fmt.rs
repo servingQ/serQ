@@ -52,8 +52,10 @@ fn format_code(tokens: &[&Token]) -> String {
     out
 }
 
-/// Format program text while keeping comments, blank lines, token spellings,
-/// and line breaks. Formatting twice has the same result as formatting once.
+/// Format program text while keeping comments, token spellings and line
+/// breaks. A run of blank lines becomes one, and none is kept at the start
+/// or end of the file or of a block. Formatting twice has the same result as
+/// formatting once.
 pub fn format(src: &str) -> Result<String, String> {
     format_with(src, &parser::parse)
 }
@@ -89,15 +91,29 @@ fn format_with(
     let mut at_started = false;
     let mut previous_comma = false;
     let mut continuation = false;
+    // a run of blank lines waiting for the next line, written as one unless
+    // that line closes a block or the run opens one or the file
+    let mut blank = false;
+    let mut opened = true;
     for (i, raw) in lines.iter().enumerate() {
         let line = i + 1;
         let row = &by_line[line];
         let trimmed = raw.trim();
-        if trimmed.is_empty() {
-            out.push('\n');
+        if trimmed.is_empty() && !commented[line] {
+            blank = true;
             continue;
         }
         let closing = row.first().is_some_and(|t| t.tok == Tok::RBrace);
+        if blank && !opened && !closing {
+            out.push('\n');
+        }
+        blank = false;
+        opened = row.last().is_some_and(|t| t.tok == Tok::LBrace);
+        if trimmed.is_empty() {
+            // a blank line inside a block comment is the comment's
+            out.push('\n');
+            continue;
+        }
         let base = depth.saturating_sub(usize::from(closing)) * 2;
         let first = row.first().map(|t| t.text.as_str()).unwrap_or("");
         if first == "hold" {

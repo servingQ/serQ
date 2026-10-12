@@ -99,6 +99,4 @@ fn main() {
     } cache (cost(reqs, kv, prompt + out - 1));   // every computed token, full blocks (kv_cache_manager.py:602)
     observe response = now - t0;
   }
-
-
 }

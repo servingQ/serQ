@@ -27,7 +27,6 @@ fn main() {
       set t0 = now;
       set s = service();
     }
-
   }
 
   server {
@@ -35,6 +34,4 @@ fn main() {
     observe wait = now - t0 - s;
     observe service_time = s;
   }
-
-
 }

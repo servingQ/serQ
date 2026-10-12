@@ -19,7 +19,6 @@ fn main() {
   workload {
     arrive batch(2);
     init { set prompt = serial == 0 ? 2 : 4; }
-
   }
   server {
     run gate (cost(gate, serial));
@@ -32,5 +31,4 @@ fn main() {
     }
     observe gated_response = now - t0;
   }
-
 }

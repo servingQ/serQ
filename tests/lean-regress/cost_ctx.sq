@@ -20,7 +20,6 @@ fn main() {
   workload {
     arrive batch(2);
     init { set n = 0; set o = 0; set t0 = 0; }
-
   }
 
   server {
@@ -32,6 +31,4 @@ fn main() {
       observe done = now;
     }
   }
-
-
 }

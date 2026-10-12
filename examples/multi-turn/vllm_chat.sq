@@ -97,6 +97,4 @@ fn main() {
     set prompt = K + n;
     vllm (prompt, o);
   }
-
-
 }
