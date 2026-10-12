@@ -145,7 +145,10 @@ serving `M` products this way.
 1. The trie with keys, the same answers for per-session chains, and a
    program that shares a system prompt (this document).
 2. A vLLM oracle scenario with a shared system prompt, run by the real
-   scheduler (`tools/vllm_replay_oracle.py`), before any other engine.
+   scheduler (`tools/vllm_replay_oracle.py`), before any other engine:
+   `tools/oracle/shared_trace` and `examples/oracle/vllm_shared_prompt.sq`,
+   every request's first and last token and cached tokens the same
+   (`docs/language.md` §7).
 3. The engine form's request with a chain: `prefix (k: n, …);`, the
    request's first item, written into the hold of its admission
    (`examples/multi-turn/vllm_system_prompt.sq`). Then LPM, and the agent

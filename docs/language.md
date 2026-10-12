@@ -1391,6 +1391,7 @@ that program's paths ([use cases](use-cases/index.md), `docs/lean.md`).
 | `multi-turn/vllm_lmcache.sq` | `vllm.sq` with an LMCache server as its L2 (`queue lmc : l2`, `kvt.l2_load`, `kvt.l2_store`) | the source (vLLM at 0c87a197); `tests/kvt_l2.rs`; no scheduler oracle |
 | `multi-turn/vllm_system_prompt.sq` | `vllm.sq` serving the sessions of `M` products, each with its own system prompt, shared across sessions (its request's `prefix (product: system, session: inf);`) | the source (vLLM at 0c87a197); `tests/shared_prefix.rs`; no scheduler oracle |
 | `single-turn/vllm_single_turn.sq`, `multi-turn/vllm_chat.sq`, `subagent/vllm_subagents.sq` | the same engine under a single-turn, a chat and an approximated subagent workload ([use case](use-cases/workloads.md)) | `tests/workloads.rs` |
+| `oracle/vllm_shared_prompt.sq` | `vllm_replay.sq` with a system prompt every session shares (its request's `prefix (product: system, session: inf);`), on the scenario `tools/oracle/shared_trace` | the upstream oracle, `tests/vllm_cache.rs`; no Lean theorem |
 | `oracle/vllm_request.sq` | one vLLM v1 request on the step clock, compiled per scenario to `tools/oracle/{alone,chunked,hol,longchunk,mixed,preempt,seqcap}.ir.json` | the upstream oracle ([vLLM correspondence](#7-vllm-v1-as-a-serq-program)), `tests/vllm_oracle.rs`, the Lean theorems generated from the same IR |
 | `replay/vllm_replay.sq` | vLLM v1 on the A100 testbed replaying the short-context trace ([A100 testbed](#8-vllm-on-the-a100-testbed)) | the prefix-cache oracle `tools/oracle/cache_trace` (`tests/vllm_cache.rs`, theorem `vllm_cache_trace`) |
 | `pd-disaggregation/llmd_nixl_pull.sq` | llm-d's prefill/decode disaggregation with the NIXL connector, two prefill and two decode instances ([use case](use-cases/pd.md)) | the source (llm-d at 8a2f37d, the router at 13eebdb, vLLM at 0c87a197), `tests/pd_semantics.rs`; no scheduler oracle |
@@ -1503,6 +1504,16 @@ checks the whole sequence before it allocates the first chunk
    requests. That run was made in `serving-queue-theory`; this repository
    checks the excerpt of 2, and `scripts/lean_bench.py` checks that Lean
    and the interpreter agree on the full trace.
+4. *A shared system prompt* (`tools/oracle/shared_trace.*`, written by
+   `tools/oracle/shared_trace.py`): three sessions of three turns whose
+   prompts all begin with one system prompt of 64 tokens, replayed by the
+   real scheduler and by `oracle/vllm_shared_prompt.sq` (`tests/vllm_cache.rs`)
+   on 30 blocks: the same first-token and last-token step and cached tokens
+   for all nine requests, the later sessions' first turns reading the
+   prompt another session computed, and eviction taking the sessions' own
+   tails before it. The sessions start after the earlier ones' first turns
+   end ([limitations](#9-known-limitations)). No Lean theorem: a chain is
+   outside the model's fragment.
 
 These comparisons check individual requests and steps, rather than only
 aggregate statistics.
