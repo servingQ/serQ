@@ -101,8 +101,8 @@ program here; a server that runs a stage after its decode charges it to
 the engine's is the frontend's arrival; serQ has no frontend between them
 unless the program writes one (`vllm_nixl_push.sq`'s `run front`). The
 benchmark counts only the requests that succeed
-(`benchmarks/serve.py:604-605, 633`); serQ answers every turn, a refused
-one included (*Open*).
+(`benchmarks/serve.py:604-605, 633`), and so does the client here (*A
+refused turn*, below).
 
 **Where it is reported.** A section of its own, `client`, beside the
 program's `observe` table, in the text report, in the JSON (`client.ttft`,
@@ -136,7 +136,7 @@ seeds 1 to 3 at horizons 60 (no warm-up), 200 and 1 000, the program's
 |---|---|---|
 | `multi-turn/vllm.sq`, `vllm_chat.sq`, `single-turn/vllm_single_turn.sq`, `subagent/vllm_subagents.sq`, `engines/sglang.sq`, `tensorrt_llm.sq`, `tgi.sq`, `multi-turn/replica.sq`, `vendors/rbln.sq` | `ttft`, `response` | the same samples, at the same times |
 | `multi-turn/closed.sq`, `single-turn/fastertransformer.sq`, `mg1.sq`, `ps.sq`, `vendors/ascend.sq`, `pd-disaggregation/pd_open.sq`, the tutorial's five programs | `response` (and `ttft` in the fifth) | the same samples, at the same times |
-| `pd-disaggregation/llmd_nixl_pull.sq` | `ttft` and its marks | the same value for every turn; recorded at the first token, where the gateway recorded it at the end, so a turn at either edge counts on the other side (at the warm-up's start, or one with its first token and no answer at the horizon) |
+| `pd-disaggregation/llmd_nixl_pull.sq` | `ttft` and its marks, `response` (the refusal now `end;`) | `response` the same samples, at the same times; `ttft` the same value for every turn, recorded at the first token, where the gateway recorded it at the end, so a turn at either edge counts on the other side (at the warm-up's start, or one with its first token and no answer at the horizon) |
 | `pd-disaggregation/vllm_nixl_push.sq` | `ttft`, `response` and its mark | `response` the same; `ttft` as llm-d's |
 
 Kept, because they measure something else, renamed where the name was the
@@ -151,7 +151,6 @@ client's:
 - `pd_tandem.sq`'s, now `cycle`: one per pass of a server loop that never
   ends its turn, a job of a closed tandem; the client answers no turn and
   the report says so.
-- `llmd_nixl_pull.sq`'s `response`: only an accepted turn's (*Open*).
 - `pd_batching.sq`'s `ttft`, `tpot` and `response`: the same values (its
   `tpot` divides by `o - 1`, the client's count), its `ttft` recorded at
   the turn's end; kept because `tools/pd_batching/` reads them from the
@@ -163,19 +162,30 @@ client's:
 - the papers' (`dai_*.sq`, `bari_rad.sq`): the Lean claims' programs,
   left with their claims.
 
-## Open
+## A refused turn
 
-**A refused turn.** vLLM refuses a prompt of `max_model_len` tokens or
-more before it schedules it (`input_processor.py:512-536`) and the
-benchmark does not count the failed request; `llmd_nixl_pull.sq`'s server
-writes the refusal as `branch (accepted) { gw.route(); }` and its session
-stops after the turn. The client answers that turn at once, a `response`
-of 0 (9 to 67 turns a run at the defaults), and the program's own
-`response` leaves it out. A server cannot end the session (`end` is the
-session's, refused in a `server`), so "a turn whose session ends in the
-server is not answered" has no program to say it. Either a server may
-`end;` a refused request, or a turn that runs nothing is not answered (a
-rule the program would not state), or the refusal stays a `response` of 0.
+vLLM refuses a prompt of `max_model_len` tokens or more before it
+schedules it (`input_processor.py:512-536`), and its benchmark client
+does not count the failed request. A server says the same with `end;`:
+the request is refused and the session ends, and a turn whose session
+ends among its server statements is not answered, so the client records
+nothing of it. `llmd_nixl_pull.sq` writes it as its comment says:
+
+```serq
+  server {
+    observe too_long = K + n >= max_model_len;
+    branch (K + n >= max_model_len) { end; }
+    gw.route();
+  }
+```
+
+A server's `end` is refused inside a `hold` (the request would end
+holding what it was admitted with, before its release and `cache`),
+inside a `fork` (a leg runs beside the request and is not the session),
+and in a queue's entry (a station does not decide whether the session
+goes on). The IR had `End` already; its validation stops refusing it on
+the server's side, a weaker check of an untagged IR version (13), recorded
+for the coming tag.
 
 ## Self-critique
 
@@ -193,6 +203,17 @@ which a reader of the report would want anyway, and one that measures the
 same would have to delete it. Rejected for a section of its own: a reader
 sees in the section's title whose number it is; the programs here that
 measured something else are renamed.
+
+**A refused turn answered at once (c).** The server's `branch (accepted)
+{ gw.route(); }` answered a refused turn with nothing run, a `response` of
+0 the client counted (9 to 67 turns a run at the defaults), which no
+vLLM client records. Rejected.
+
+**A turn that runs nothing is not answered (b).** It would read the
+refusal from the absence of work, a rule the language would hold and the
+program not say (criterion 2): a server that answers at once on purpose,
+a cache hit served by the router, would lose its turns. Rejected for
+`end;`, which the program writes.
 
 **The first token at the start of the first decode run.** It is the
 prefill's end in a turn that prefills, and it is wrong where no prefill

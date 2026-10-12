@@ -95,6 +95,22 @@ server {{
     assert_eq!(r.client("ttft").unwrap().count, 0);
 }
 
+/// A server that refuses a request ends the session there: the turn is not
+/// answered, so the client records nothing of it, and no turn follows.
+#[test]
+fn a_refused_turn_is_not_answered() {
+    let r = run("stage svc : fifo;
+workload { arrive batch(2); init { set big = serial == 0; } session { turn; turn; } }
+server {
+  branch (big) { end; }
+  run svc (cost(svc, 1));
+}");
+    // session 1 is answered twice, at 1 and 2; session 0 ends at its first turn
+    assert_eq!(samples(&r, "response"), [1.0, 1.0]);
+    assert_eq!(r.ended, 2);
+    assert_eq!(r.turns, 3);
+}
+
 /// One output token: a first token, and no time per token after it.
 #[test]
 fn one_output_token_has_no_tpot() {

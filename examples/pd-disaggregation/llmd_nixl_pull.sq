@@ -52,7 +52,6 @@ fn main() {
   // scheduler is its queue's entries, and the two NICs of a read are links.
   queue gw : gateway {
     route {
-      set t0 = now;
       set prompt = K + n;
       // The router. Decode profile first: the least busy decode pod
       // (active-request-scorer). Then the decider: a remote prefill only when the
@@ -74,7 +73,6 @@ fn main() {
         D[j].decode (prompt);
       }
       observe remote = remote_prefill;
-      observe response = now - t0;
     }
   }
 
@@ -195,7 +193,7 @@ fn main() {
     }
     session {
       turn;
-      while (more && accepted) {
+      while (more) {
         set K = prompt + D.produced;
         tool (~exp(Z));
         turn;
@@ -207,8 +205,8 @@ fn main() {
     // vLLM refuses a prompt of max_model_len tokens or more before it is
     // scheduled (input_processor.py:512-536): the session ends there.
     observe too_long = K + n >= max_model_len;
-    set accepted = K + n < max_model_len;
-    branch (accepted) { gw.route(); }
+    branch (K + n >= max_model_len) { end; }
+    gw.route();
   }
 
   // How evenly the router spreads the decoders, read at every instant: the

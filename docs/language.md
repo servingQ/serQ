@@ -354,7 +354,7 @@ ownership. The parser and IR validator enforce these boundaries:
 
 | | Session | Server |
 |---|---|---|
-| Turn lifecycle | `turn;`, optional early `end;` | Refused; completion is the end of its block |
+| Turn lifecycle | `turn;`, optional early `end;` | `turn;` refused; completion is the end of its block; `end;` refuses the request and ends the session, outside a `hold` or a `fork` |
 | Repetition | `while (condition) { … }`, `loop { … }` | The same, without session lifecycle statements |
 | Queue entry calls | Refused | `gw.route();`, `D[j].decode (prompt);`, … |
 | Admission | `hold … at admission (…) { … } cache (…)` | The same |
@@ -1104,10 +1104,11 @@ tokens after the first are the decode tokens its engines commit and the
 token a resumed prefill samples after a preemption. A turn that commits no
 token, at stations with no engine, has a `response` only. These follow
 vLLM's benchmark client and engine statistics (`vllm/benchmarks/serve.py`,
-`vllm/v1/metrics/stats.py`), with the turn's start for vLLM's arrival; a
-request vLLM refuses is no successful request to its client and no
-`e2e_latency` to its engine, and a turn the server refuses is still
-answered here, at once. A sample counts when it is recorded after the
+`vllm/v1/metrics/stats.py`), with the turn's start for vLLM's arrival. A
+server that refuses a request ends the session there with `end;`, as
+vLLM's input processor refuses a prompt it cannot hold: that turn is not
+answered and the client records nothing of it, as vLLM's client counts
+only the requests that succeed. A sample counts when it is recorded after the
 warm-up, so a turn at the warm-up's start or at the horizon can have a
 `ttft` and no `response`, or the opposite. A program's `observe` keeps its
 own name beside them, in its own table.
