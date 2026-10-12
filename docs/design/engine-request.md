@@ -7,8 +7,7 @@ when it finishes. The client says what it sends and what it measures. The
 
 This document is the design for #501's three steps. Step 1 is specified
 completely; it lowers at parse time to the kernel the server writes today,
-but for the first-token mark, which becomes a `set` the caller reads.
-Steps 2 and 3 are sketched. Every step is checked by the report, not the
+and the IR does not move. Steps 2 and 3 are sketched. Every step is checked by the report, not the
 IR text (*How a step is checked*, below).
 
 ## The problem
@@ -71,27 +70,31 @@ because "the IR has no engine to compare".
 
 **Step 1. The engine owns what it does with a request.** The admission's
 sizing goes on the schedule's `admit waiting`, as `taking`; what the
-request computes goes in a `request` block of the engine; what a finished
-request leaves cached is `release cache`. `kept` and the first-token mark
-are written in the engine. The server calls the engine.
+request computes, its admission's bindings and what it leaves cached go in
+a `request` block of the engine, in the order they happen, in the
+kernel's words (`set`, `at admission`, `cache`). `kept` is written there.
+The server calls the engine.
 
 ```serq
+  pool kv on gpu { block bs; evict lru; preempt lifo; }
   engine vllm on gpu {
     reqs cap max_seqs;
     tokens cap B;
     // What vLLM does with one request: the tokens it has, the prefix it
     // reuses, what it computes.
     request (prompt, output) {
-      state kept = prompt;                 // the most tokens an attempt has had (scheduler.py:1560-1561)
-      known = max(kept, computed + 1);     // request.num_tokens, at admission
-      reused = min(cachedin(kv), reusable(known, blocksize(kv)));
+      set kept = prompt;                   // the most tokens an attempt has had (scheduler.py:1560-1561)
+      at admission {
+        known = max(kept, computed + 1);   // request.num_tokens
+        reused = min(cachedin(kv), reusable(known, blocksize(kv)));
+      }
       set kept = known;
       set c = min(cached, reusable(known, blocksize(kv)));
       observe hit = c > 0;
       observe prefill_tokens = known - c;
       prefill (known - c) growing kv;
-      branch (known == prompt) { mark first_token; }   // not a resumed request's re-prefill
       decode (output - 1 - (known - prompt)) growing kv;
+      cache (prompt + output);
     }
     schedule {
       let threshold = running.count + waiting.count > 1 ? chunk_cap : inf;
@@ -100,28 +103,27 @@ are written in the engine. The server calls the engine.
         taking reqs (1), kv (min(known, reused + budget_left(vllm))) reserve (known);
     }
     execute (c0 + max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
-    release cache (prompt + output);
   }
-  pool kv on gpu { block bs; evict lru; preempt lifo; }
   pool reqs on vllm { queue fifo; }
   …
   server {
-    set t0 = now;
     set prompt = K + n;
     vllm (prompt, o);
-    observe ttft = vllm.first_token - t0;
-    observe response = now - t0;
   }
 ```
 
+The time to first token and the response time are the client's, which
+the report gives for every turn with no program text
+([What the client sees](client-metrics.md)).
+
 Each clause reads one moment: `request` what one request is and computes,
 `schedule` what an iteration admits and advances (its `taking` read per
-request at admission), `execute` how long an iteration lasts, `release`
-what a finished request leaves.
+request at admission), `execute` how long an iteration lasts.
 
 **Step 2. Observations move to the client, and routing to gateway
-entries.** The client measures: `observe response` and `observe ttft`
-follow the turn in the workload's session. A server that chooses an
+entries.** What the client measures follows the turn in the workload's
+session; its time to first token, time per token and response time the
+report already gives ([What the client sees](client-metrics.md)). A server that chooses an
 instance (`routing.sq`, `replica.sq`'s `choose j by …`) becomes a gateway
 queue's `route`, as the P/D programs already write it.
 
@@ -142,34 +144,36 @@ queue's `route`, as the P/D programs already write it.
 New productions, beside those of `docs/language.md` §Syntax:
 
 ```
-eitem    += request ( NAME , ... ) { ritem* }      -- what the engine does with one request; one per engine
-          | release cache ( expr ) ;             -- what a finished request leaves cached; needs `taking`
+eitem    += request ( NAME , ... ) { rstmt* [at admission { bind* }] rstmt* [cache ( expr ) ;] }
+                                                 -- what the engine does with one request; one per engine
 sstmt     : admit waiting [only ( expr )] [while ( expr )] [each at most ( expr )] [taking take , ... [reuse ( expr )]] ;
-take     := POOL ( expr ) [ reserve ( expr ) ]   -- units of POOL, in the pool's unit
-ritem    := state NAME = expr ;                  -- a value of the request's, set when the request reaches the engine
-          | NAME = expr ;                        -- an admission binding: read by `taking` and the statements
-          | stmt                                 -- the statements while the request is admitted, and:
+take     := POOL ( expr ) [ reserve ( expr ) ]   -- units of POOL, one of the engine's capacities or its device's
+bind     := NAME = expr ;                        -- read when the request is admitted
+rstmt    := stmt                                 -- and:
           | prefill ( expr ) [ growing POOL ] ;  -- this engine's prefill of expr tokens
           | decode ( expr ) [ growing POOL ] ;   -- this engine's decode of expr tokens
           | mark NAME ;                          -- a moment the caller reads as ENGINE.NAME
 stmt     += ENGINE ( expr , ... ) ;              -- in `server`: the engine's request, in its place
 ```
 
-The items of a `request` come in that order: its `state`s, its bindings,
-its statements. A binding reads the parameters, the `state`s, the bindings
+The items of a `request` come in the order they happen: the statements
+when the call is reached, `at admission { … }`, the statements while the
+request is admitted, and `cache (e);`, what the release leaves cached.
+Without `at admission`, the admission is at the top. A binding reads the
+parameters, what the request sets before its admission, the bindings
 before it, the engine's pools and stage, `cached`, `computed` and the
 constants; a statement reads those, `now`, what the request sets and the
-workload's `hidden` attributes, and nothing else the session has set. That
-is the rule a queue's entry has ([Queues](queue.md)), for the same reason.
-`taking`, its `reserve` and `reuse` read what a binding reads and the
-bindings; `release cache` reads the parameters, the constants and what the
-request sets. A request
-may not `set` a parameter. A caller reads a request's marks, `vllm.first_token`,
-and nothing else of it.
+workload's `hidden` attributes, and nothing else the session has set.
+That is the rule a queue's entry has ([Queues](queue.md)), for the same
+reason. `taking`, its `reserve` and `reuse` read what a binding reads and
+the bindings; `cache` reads the parameters, the constants and what the
+request sets. A request may not `set` a parameter. A caller reads a
+request's marks (`mark prefilled;`, read as `vllm.prefilled`) and nothing
+else of it.
 
 An engine whose schedule has several `admit waiting` writes the same
 `taking` on each; a request without `taking` holds nothing, and then has no
-bindings and no `release cache`.
+`at admission` and no `cache`.
 
 ## Step 1: how it lowers
 
@@ -181,38 +185,31 @@ statement keeps the side `Server` it has in `sides`.
 | Step 1 | Kernel at the call | Moment (`docs/ir.md` §Moments) |
 |---|---|---|
 | `E (a₁, …);` | the statements of this table, in this order | — |
-| `state x = e;` | `set x = e;` before the hold | `Session`, when the call is reached |
+| the statements before `at admission` | the same, before the hold | `Session`, when the call is reached |
 | `taking P (u) reserve (r), …` | `hold P (cost(P, u)) reserve (cost(P, r)), …`, the pools in the order written | `Admit` |
 | `taking … reuse (e)` | the hold's `reuse (cost(P₁, …, e))` over every pool taken | `Admit` |
-| `x = e;` | `at admission (x = e, …)`, and `set x = e;` at the body's top when a statement reads `x` | `Admit` |
-| the statements | the hold's body | `Session` |
+| `at admission { x = e; … }` | the hold's `at admission (x = e, …)`; the kernel's hold sets `x` at its body's top when the body reads it (`docs/language.md` §`at admission`) | `Admit` |
+| the statements after it | the hold's body | `Session` |
 | `prefill (e) growing P;` | `run E prefill (cost(E, e)) growing P;` | `Session` |
 | `decode (e) growing P;` | `run E decode (cost(E, e)) growing P;` | `Session` |
 | `mark m;` | `set E.m = now;`, read by the caller afterwards as `E.m` | `Session`, at the mark |
-| `release cache (e);` | the hold's `cache (cost(P₁, …, e))` over every pool taken | `Session`, at the release |
+| `cache (e);`, the last item | the hold's `cache (cost(P₁, …, e))` over every pool taken | `Session`, at the release |
 
-A request's own names (its `state`s, bindings and `set`s) keep their names
+A request's own names (its bindings and `set`s) keep their names
 in the IR, as the server's do; a program attribute or another request's
 name that shares one does not link. A queue's entry renames its own
 (`D.known`); a request cannot without moving every attribute name of the
 IR.
 
 **The mark.** A request's `mark m` lowers as a queue's does, to `set E.m
-= now`, and the caller reads `E.m` afterwards: `observe ttft =
-vllm.first_token - t0;` after the call. One construct, one lowering. The
-server today records `ttft` inside the hold, `branch (known == prompt) {
-observe ttft = now - t0; }`; step 1 moves that observation after the hold,
-and the IR gains the attribute `vllm.first_token`, its `Set` in the branch
-where the `Observe` was, and the `Observe` after the hold.
+= now`, and the caller reads `E.m` afterwards. One construct, one
+lowering.
 
 Applied to the After of step 1, the call `vllm (prompt, o);` with
-`prompt ↦ prompt` and `output ↦ o` writes the Before's server otherwise
-line for line: `set kept = prompt;`, the hold with the header of `taking`,
-the bindings in `at admission`, the body with its runs, and `cache
-(cost(reqs, kv, prompt + o))`. The observation names keep their order
-(`hit`, `prefill_tokens`, `ttft`, `response`), and so do the attribute
-slots (`t0`, `prompt`, `kept`, `known`, `c`), with `vllm.first_token`
-after them.
+`prompt ↦ prompt` and `output ↦ o` writes the server the program has
+since #509, line for line: `set kept = prompt;`, the hold with the header
+of `taking`, the bindings in `at admission`, the body with its runs, and
+`cache (cost(reqs, kv, prompt + o))`.
 
 Why the server keeps `set prompt = K + n;` and calls `vllm (prompt, o)`
 rather than `vllm (K + n, o)`: a parameter is substituted, so `K + n`
@@ -230,33 +227,19 @@ moves something, and a script checks that: it rewrites the IR before the
 step by the expected moves and compares the result with the IR after,
 exactly. The expected moves:
 
-- step 1: the first-token mark (above): the attribute `vllm.first_token`
-  (`Value`), its `Set` where the `Observe` of `ttft` was, and that
-  `Observe`, reading it, after the hold;
+- step 1: none; `serq ir` is byte-identical;
 - steps 2 and 3: `sides`, `attr_types` and statement order where ownership
   moves from the server to the client (*What steps 2 and 3 move*, below).
 
 `tests/workloads.rs` compares the `engine vllm` block of the four vLLM
 programs instead of their server, and `make check` and `make lean` pass.
 
-**The mark moves the `ttft` report at the run's edges.** A hand-written
-`vllm.sq` with `set first_token = now;` in the branch and `observe ttft =
-first_token - t0;` after the hold, which is what step 1 lowers to, was run
-against `vllm.sq` with seeds 1 to 3 and horizons 100, 300 and 1000
-(warm-up 10, 50, 100). Seven of the nine reports are identical. Two differ
-in one line, the count of `ttft`:
-
-```
-seed 2, --horizon 300 --warmup 50:   ttft  554 → 555   (mean 0.0132, CI, cv², p99 unchanged)
-seed 2, --horizon 1000 --warmup 100: ttft 2408 → 2407  (mean 0.0142, CI, cv², p99 unchanged)
-```
-
-An observation is counted when it is recorded after the warm-up
-(`observe_for` in `src/engine/interp.rs`). Recorded at the hold's end, a
-request whose first token came before the warm-up and whose last after it
-is counted, and one still decoding at the horizon is not. The two rules of
-#501's decision, one lowering of `mark` and a report identical for every
-program, cannot both hold for `ttft` (*Open decisions*).
+The first draft of step 1 moved the vLLM programs' first-token
+observation into a mark the server read after the call, and that moved
+the `ttft` line of their reports, since the observation was then recorded
+when the request ended. #509 took the observation out of the programs:
+the time to first token is the client's, recorded at the first token
+([What the client sees](client-metrics.md)). Step 1 has no mark to move.
 
 ## What steps 2 and 3 move
 
@@ -327,7 +310,7 @@ high-water mark.
 **#454** (say what an engine takes at admission in the engine) is absorbed.
 Its `admits (known, hit) { reqs 1; kv …; }` is step 1's `taking`, on the
 statement whose moment it is; its `on vllm (bindings) { … } cache (…)` is
-the request's bindings, statements and `release cache`. Its one-spelling
+the request's `at admission`, statements and `cache`. Its one-spelling
 rule follows once every engine program is converted: a `hold` of a pool an
 engine admits is refused, and the engine's request is the only way to it.
 Its third question has an answer in the program itself: the vLLM hold takes
@@ -335,9 +318,9 @@ Its third question has an answer in the program itself: the vLLM hold takes
 its device that no engine admits, together.
 
 **#366** (the cache names its pool) is independent and composes. Step 1's
-`release cache (e)` lowers to the joint `cache (cost(reqs, kv, e))` the
-programs write today, every pool taken; #366's `cache kv (e)` is
-`release cache kv (e)` here, with #366's IR change and nothing more.
+`cache (e)` lowers to the joint `cache (cost(reqs, kv, e))` the programs
+write today, every pool taken; #366's `cache kv (e)` is the same item with
+the pool named, with #366's IR change and nothing more.
 
 ## Self-critique
 
@@ -369,9 +352,21 @@ the fallback.
 **`kept` as a language mechanism.** The engine would keep the request's
 high-water mark of `known` itself. The P/D decoders write a `known` without
 one, so the mark is a policy, and a program must be able to leave it out
-(criterion 2). `state kept = prompt;` and `set kept = known;` say it.
-`state` in an engine is a register of the engine, kept across iterations;
-in a request it is the request's, kept across its admissions.
+(criterion 2). `set kept = prompt;` before `at admission` and `set kept =
+known;` after it say it.
+
+**Three spellings of assignment.** A first draft wrote `state kept =
+prompt;`, a bare `known = …;` for a binding and `set kept = known;`.
+`state` already means an engine's register in the same block, and a bare
+binding reads as a one-time assignment though it is read at every
+admission. The request writes the kernel's words in the order they
+happen: `set`, `at admission { … }`, `set`, and `cache (e);`, the kernel's
+`} cache (…)`.
+
+**`release cache (e);` at engine level.** It read the request's
+parameters outside the request, and `release` is the kernel's word for
+giving a hold back. Rejected for `cache (e);` as the request's last item,
+where #366's `cache kv (…)` fits too.
 
 **`run vllm prefill (cost(vllm, …))` inside the request.** It is the kernel
 spelling and needs no new statement. Inside the engine it names the engine
@@ -392,29 +387,18 @@ vLLM's `Request`. `serve` is a queue's item and `handle` says nothing.
 
 **The mark recorded at the mark.** An `observe` after the call that reads
 `E.m` could be lowered to the same observation with `now` for `E.m`, at
-each `mark m;` the request reaches. It keeps today's IR and report. It is
-a second lowering of `mark` beside the queue's `set Q.m = now`, so one
-statement would mean two things by where it stands (criterion 0), and an
-observation written after the call would be recorded before it ends.
-Rejected (#501), with the cost above: the `ttft` count at the run's edges.
+each `mark m;` the request reaches. It is a second lowering of `mark`
+beside the queue's `set Q.m = now`, so one statement would mean two
+things by where it stands (criterion 0), and an observation written after
+the call would be recorded before it ends. Rejected (#501); the case that
+asked for it, the time to first token, is the client's (#509).
 
-**Byte-identical IR as the check.** It holds for step 1 only if the mark
-keeps its second lowering, and for no step that moves a statement to the
-client, since `sides` records who owns it. The report is what a program
+**Byte-identical IR as the check.** It holds for step 1, and for no step
+that moves a statement to the client, since `sides` records who owns it. The report is what a program
 claims; the IR may move where a step says it does.
 
 ## Open decisions
 
-1. **`ttft` at the run's edges.** With the mark a `set`, the observation
-   of `ttft` is recorded when the request ends, not when its first token
-   comes, and its count moves by one at a warm-up or horizon edge (*How a
-   step is checked*). Either the report check allows that one line for
-   step 1 (the measured `ttft` values are the same; which requests count
-   is when the observation is recorded); or the observation stays at the
-   mark, which takes a second lowering of `mark` (an `observe` of `E.m`
-   after the call recorded at the mark), refused above; or the request
-   records it itself, which needs the stamp `t0` passed to the engine as a
-   parameter (`vllm (prompt, o, t0)`), a client's value in the engine.
-2. **P/D.** Per-entry `taking` on `admit waiting` or `taking` in the entry;
+1. **P/D.** Per-entry `taking` on `admit waiting` or `taking` in the entry;
    and the parked decode's second admission. Decided with the P/D
    programs' conversion, its own step.
