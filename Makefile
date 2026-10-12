@@ -21,7 +21,8 @@ draw-golden:       ## regenerate docs/assets/*.deployment.svg (serq draw)
 	SERQ_BLESS=1 cargo test --release --test draw docs_assets_are_current
 metrics:           ## regenerate tools/metrics.json (the language's size; make check fails when it moves unrecorded)
 	scripts/metrics.py --report
-unused:            ## regenerate tools/unused.json (the IR variants no program uses; needs `cargo build --release`)
+unused:            ## regenerate tools/unused.json (the IR variants no program uses)
+	cargo build --release --locked --quiet
 	scripts/unused.py
 citations:         ## re-hash tools/citations.json after re-pointing a citation
 	scripts/fetch_vllm_ref.sh --sparse

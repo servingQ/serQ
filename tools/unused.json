@@ -32,5 +32,17 @@
   ],
   "Share": [
     "Bottleneck"
+  ],
+  "shared": [
+    "Branch",
+    "By",
+    "Cost",
+    "Exp",
+    "None",
+    "Pool",
+    "Queued",
+    "Set",
+    "Size",
+    "Stage"
   ]
 }

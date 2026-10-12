@@ -18,6 +18,8 @@ import sys
 from collections import Counter
 from pathlib import Path
 
+import unused
+
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "tools" / "metrics.json"
 
@@ -27,11 +29,8 @@ def read(rel):
 
 
 def enum_variants(src, name):
-    head = f"pub enum {name} {{"
-    assert head in src, f"src/ir.rs: `{head}` not found"
-    body = src[src.index(head):]
-    body = body[: body.index("\n}\n")]
-    return len(re.findall(r"^    [A-Z][A-Za-z]*", body, re.M))
+    """`src` is src/ir.rs; `unused.variants` reads it the one way."""
+    return len(unused.variants()[name])
 
 
 def array_len(src, name):
