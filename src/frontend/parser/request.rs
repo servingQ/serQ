@@ -425,12 +425,14 @@ impl Parser {
 
     /// Engine `engine` is read: write its request out as the kernel a
     /// server writes, a queue entry of the engine, and read it. `pools`
-    /// are the capacities it may take: its own and its device's.
+    /// are the capacities it may take: its own and its device's;
+    /// `registers` its `state`, which the request reads as the engine's.
     pub(super) fn engine_request(
         &mut self,
         engine: &str,
         request: Option<RequestSrc>,
         pools: &[String],
+        registers: Vec<String>,
     ) -> PResult<()> {
         let takings = std::mem::take(&mut self.takings);
         let written: Vec<(usize, &Vec<Token>)> = takings
@@ -506,6 +508,7 @@ impl Parser {
             nic: false,
             takes: None,
             engine: true,
+            registers,
             header_at: taking.as_ref().map(|t| t.at),
             at: request.at,
         });

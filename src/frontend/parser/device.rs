@@ -542,6 +542,7 @@ impl Parser {
             .chain(&self.devices[dev].caps)
             .map(|c| c.name.clone())
             .collect();
+        let registers: Vec<String> = s.state.iter().map(|(n, _)| n.clone()).collect();
         self.stages.push(name.clone());
         self.engines.push(EngineDecl {
             name: name.clone(),
@@ -557,7 +558,7 @@ impl Parser {
             array: dev_array,
             kind: StageKind::Step(Box::new(s)),
         });
-        self.engine_request(&name, request, &takeable)
+        self.engine_request(&name, request, &takeable, registers)
     }
 
     /// `{ let …; stmt* }` of engine `engine`'s `schedule`, written into `s`.

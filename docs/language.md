@@ -1052,7 +1052,7 @@ without `taking` holds nothing, and has no `at admission` and no `cache`.
 `taking` names the engine's capacities and its device's. Every `admit
 waiting` of the engine writes the same `taking`. The rules are a queue
 entry's: the admission reads the parameters, what the request sets before
-it, the engine's pools and stage, `cached`, `computed` and the
+it, the engine's pools, stage and `state` registers, `cached`, `computed` and the
 constants; the statements also read `now`, what the request sets and the
 `hidden` attributes; a request sets no parameter. Its names keep their
 spelling in the IR (`kept`, not `vllm.kept`), and the rest of the program

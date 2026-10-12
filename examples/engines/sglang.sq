@@ -52,11 +52,33 @@ fn main() {
     tokens cap B;
     state ratio = r0;
     state backlog = 0;    // requests were waiting when the last iteration ended
+    // A retracted request keeps its output tokens and recomputes them; only
+    // its prompt stays in the cache (`fin` is 0 until the request finishes).
+    request (prompt, output) {
+      set kept = prompt;
+      set fin = 0;
+      at admission {
+        known = max(kept, computed + 1);
+        hit = min(cachedin(kv), known - 1);
+      }
+      set kept = known;
+      set c = min(cached, known - 1);
+      prefill (known - c) growing kv;
+      decode (output - 1 - (known - prompt)) growing kv;
+      set fin = 1;
+      cache (fin == 1 ? prompt + output : prompt);
+    }
     schedule {
       // fully idle since the last iteration: no batch, and none waited
       branch (running.count == 0 && backlog == 0) { set ratio = r0; }
       advance running only (!decoding);                  // the chunked request
-      admit waiting;                                     // and new prefills, alone
+      // and new prefills, alone. The reservation grows with the running
+      // requests, as SGLang's test does; above the cap, the request waits
+      // for some to finish (#364).
+      admit waiting
+        taking reqs (1), kv (min(known, hit + budget_left(sglang)))
+          reserve (known - hit + min(M - (known - prompt), clip) + 1
+                   + ratio * min(M, clip) * holders(reqs));
       branch (batch.tokens == 0) {                       // no prefill: a decode batch
         advance running;
         branch (running.preempted > 0) {
@@ -90,24 +112,8 @@ fn main() {
     }
   }
 
-  // A retracted request keeps its output tokens and recomputes them; only its
-  // prompt stays in the cache (`fin` is 0 until the request finishes). The
-  // reservation grows with the running requests, as SGLang's test does; above
-  // the cap, the request waits for some to finish (#364).
   server {
     set prompt = K + n;
-    set kept = prompt;
-    set fin = 0;
-    hold reqs (cost(reqs, 1)), kv (cost(kv, min(known, hit + budget_left(sglang))))
-         reserve (cost(kv, known - hit + min(M - (known - prompt), clip) + 1
-                  + ratio * min(M, clip) * holders(reqs)))
-         at admission (known = max(kept, computed + 1),
-                       hit = min(cachedin(kv), known - 1)) {
-      set kept = known;
-      set c = min(cached, known - 1);
-      run sglang prefill (cost(sglang, known - c)) growing kv;
-      run sglang decode (cost(sglang, o - 1 - (known - prompt))) growing kv;
-      set fin = 1;
-    } cache (cost(reqs, kv, fin == 1 ? prompt + o : prompt));
+    sglang (prompt, o);
   }
 }
