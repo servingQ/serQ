@@ -756,6 +756,19 @@ fn a_def_names_the_predicate_advance_and_admit_share() {
     }
 }
 
+/// An aggregate's index may not take a register's name: the sum read the
+/// index where the register was meant, `sum r in 2 (r)` as `0 + 1`, though
+/// it may take neither an attribute's nor a constant's (#557 review).
+#[test]
+fn an_aggregate_index_is_no_register() {
+    let src = engine(
+        "set r = (sum r in 2 (r)) * 0; advance running; \
+         admit waiting while (running.preempted == 0);",
+    )
+    .replace("tokens cap 8;", "tokens cap 8; state r = 0;");
+    refused(&src, "`sum r in`: `r` is also an engine's register");
+}
+
 #[test]
 fn the_design_refuses_what_it_says() {
     let ok = "advance running; admit waiting while (running.preempted == 0);";
