@@ -20,10 +20,9 @@ fn main() {
     reqs cap 1;
     tokens cap 128;
     // One request: admitted with blocks for its whole sequence, so nothing
-    // grows; `id` is the client's, observed to show which lane was served.
-    request (prompt, output, id) {
-      observe selected = id;
-      observe admitted_at = now;
+    // grows; `admitted` is the moment it is admitted.
+    request (prompt, output) {
+      mark admitted;
       prefill (prompt);
       decode (output);
     }
@@ -39,6 +38,9 @@ fn main() {
   stage delay : delay;
   server {
     run delay (cost(delay, serial == 2 ? 0.001 : serial == 3 ? 0.002 : serial >= 4 ? 0.003 : 0));
-    llm (prompt, out, serial);
+    llm (prompt, out);
+    // which client was served, and when it was admitted
+    observe selected = serial;
+    observe admitted_at = llm.admitted;
   }
 }

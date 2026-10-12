@@ -44,7 +44,6 @@ fn main() {
     // reuse does not hold and decodes, and leaves every computed token
     // cached.
     request (prompt, output) {
-      at admission { hit = min(cachedin(kv), reusable(prompt, blocksize(kv))); }
       set c = min(cached, reusable(prompt, blocksize(kv)));
       prefill (prompt - c) growing kv;
       decode (output) growing kv;

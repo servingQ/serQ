@@ -10,8 +10,9 @@ fn main() {
   engine llm on npu {
     reqs cap 4;
     tokens cap 256;
-    // What the RBLN scheduler does with one request: vLLM's, a preempted
-    // request keeping its generated tokens (`kept`).
+    // What the RBLN scheduler does with one request, as vLLM does: prefill
+    // what the cache does not hold and decode. A preempted request keeps
+    // the tokens it generated (`kept`) and prefills them again.
     request (prompt, output) {
       set kept = prompt;
       at admission {
@@ -44,6 +45,5 @@ fn main() {
   server {
     llm (prompt, out);
   }
-
 
 }

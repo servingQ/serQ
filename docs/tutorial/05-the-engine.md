@@ -72,6 +72,10 @@ prefill in an iteration, and `advance running` takes an order and an
 
 ## What the engine does with one request
 
+`prompt` and `output` are the request's parameters: its prompt and output
+lengths in tokens, which the server passes when it calls the engine
+(below).
+
 ```serq
 request (prompt, output) {
   set hitmax = floor((prompt - 1) / bs) * bs;
