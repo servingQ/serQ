@@ -15,7 +15,7 @@ use rand::Rng;
 use rand::SeedableRng;
 use rand::rngs::StdRng;
 
-use crate::engine::cache::Trie;
+use crate::engine::cache::{Seg, Trie};
 use crate::engine::dist::Dist;
 use crate::engine::report::*;
 use crate::engine::stats::*;
@@ -229,7 +229,7 @@ struct Wanted<'p> {
 
 /// A hold's sequence as keyed segments (`prefix`), evaluated when it
 /// asks; `(serial, ∞)` without the clause.
-type Chain = Rc<[(f64, f64)]>;
+type Chain = Rc<[Seg]>;
 
 #[derive(Clone, Debug)]
 struct Pending<'p> {
@@ -786,9 +786,25 @@ pub struct Interp<'p> {
 /// every session serial.
 const DEAD_ENTRY: u64 = 1 << 62;
 
+/// What a segment's key names: the attribute it reads, or, for any other
+/// expression, the expression. Two keys are one when they name the same
+/// thing and have the same value: `prefix (system: S)` with `system = 3`
+/// is not the entry of the session whose serial is 3.
+fn key_space(k: &CExpr) -> u64 {
+    match k {
+        CExpr::Attr(a) => *a as u64,
+        _ => {
+            use std::hash::{Hash, Hasher};
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            format!("{k:?}").hash(&mut h);
+            h.finish() | 1 << 63
+        }
+    }
+}
+
 /// A chain of no `prefix`: the session's own, `(serial: ∞)`.
-fn own_chain(serial: u64) -> Chain {
-    Rc::from([(serial as f64, f64::INFINITY)])
+fn own_chain(p: &crate::ir::Program, serial: u64) -> Chain {
+    Rc::from([(p.slot_serial as u64, serial as f64, f64::INFINITY)])
 }
 
 /// Which pool a `hold` waits at: the first one listed.
@@ -2354,7 +2370,12 @@ impl<'p> Interp<'p> {
             let serial = self.sessions[sid].serial;
             for w in &mut pending.pools {
                 let chain = &pending.chain;
-                let (limit, _) = self.read_limit(w.pool, chain, reuse, serial);
+                let (limit, _) = self.read_limit(
+                    w.pool,
+                    chain,
+                    (reuse, self.round_up(w.pool, w.units)),
+                    serial,
+                );
                 w.shared = self.pools[w.pool].cache.locked_along(chain, limit, serial);
             }
         }
@@ -2369,20 +2390,19 @@ impl<'p> Interp<'p> {
     }
 
     /// What a hold with a `cache` clause reads of its chain's cached prefix
-    /// on `q` when admitted: the whole blocks of it, at most `reuse`.
-    /// Returns (that, the whole blocks cached).
+    /// on `q` when admitted: the whole blocks of it, at most `reuse`, and at
+    /// most what it allocates there (what it reads is part of its
+    /// allocation). Returns (that, the whole blocks cached).
     fn read_limit(
         &self,
         q: usize,
-        chain: &[(f64, f64)],
-        reuse: Option<f64>,
+        chain: &[Seg],
+        (reuse, alloc): (Option<f64>, f64),
         serial: u64,
     ) -> (f64, f64) {
         let full = self.round_down(q, self.pools[q].cache.matched(chain, serial));
-        (
-            reuse.map_or(full, |r| full.min(self.round_down(q, r))),
-            full,
-        )
+        let bound = reuse.map_or(alloc, |r| r.min(alloc));
+        (full.min(self.round_down(q, bound)), full)
     }
 
     /// Admit the selected waiting hold while every pool of its hold
@@ -2454,7 +2474,7 @@ impl<'p> Interp<'p> {
     /// A hold's chain: its `prefix`, evaluated now, or the session's own.
     fn chain_of(&mut self, prefix: Option<&'p [(CExpr, CExpr)]>, sid: usize) -> Chain {
         let Some(segs) = prefix else {
-            return own_chain(self.sessions[sid].serial);
+            return own_chain(self.p, self.sessions[sid].serial);
         };
         let ctx = Ctx::session(sid);
         let mut chain = Vec::with_capacity(segs.len());
@@ -2467,7 +2487,7 @@ impl<'p> Interp<'p> {
                      not negative"
                 ));
             }
-            chain.push((key, len.max(0.0)));
+            chain.push((key_space(k), key, len.max(0.0)));
         }
         Rc::from(chain)
     }
@@ -2479,7 +2499,7 @@ impl<'p> Interp<'p> {
         match (&s.pending, s.holds.last()) {
             (Some(p), _) => p.chain.clone(),
             (None, Some(h)) => h.chain.clone(),
-            (None, None) => own_chain(s.serial),
+            (None, None) => own_chain(self.p, s.serial),
         }
     }
 
@@ -2513,12 +2533,13 @@ impl<'p> Interp<'p> {
             // counted once however many holds read it (vLLM's `ref_cnt`).
             let (own, moved, path) = if pending.cache.is_some() {
                 let chain = &pending.chain;
-                let (limit, full) = self.read_limit(q, chain, reuse, serial);
+                let (limit, full) = self.read_limit(q, chain, (reuse, need), serial);
                 let (own, moved, path) = self.pools[q].cache.lock(chain, limit, serial);
                 if limit < full - EPS {
                     let tag = DEAD_ENTRY + self.next_dead;
                     self.next_dead += 1;
-                    self.pools[q].cache.cut(chain, own, tag);
+                    let snap = self.sessions[sid].attrs.clone();
+                    self.pools[q].cache.cut(chain, own, tag, serial, &snap);
                 }
                 (own, moved, path)
             } else {
@@ -2740,9 +2761,15 @@ impl<'p> Interp<'p> {
         // extend or create the tier entry
         let rseq = self.next_release;
         self.next_release += 1;
-        let added = self.pools[to]
-            .cache
-            .spill_in(owner, dead, units, snap, now, rseq);
+        let added = self.pools[to].cache.spill_in(
+            &own_chain(self.p, owner)[0],
+            owner,
+            dead,
+            units,
+            snap,
+            now,
+            rseq,
+        );
         self.pools[to].cached += added;
         self.pools[pl].spills += 1;
         self.start_job(sp.via, None, work, RunMode::Plain, None);
@@ -2818,7 +2845,7 @@ impl<'p> Interp<'p> {
         alloc: f64,
         computed: f64,
         cache: Option<&'p CExpr>,
-        (chain, shared, path): (&[(f64, f64)], f64, &[usize]),
+        (chain, shared, path): (&[Seg], f64, &[usize]),
     ) {
         let serial = self.sessions[sid].serial;
         // what no other hold reads any more is cached again, until the

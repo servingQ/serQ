@@ -1,14 +1,17 @@
 // vLLM v1 serving agents whose sessions begin with a system prompt (the
 // instructions and the tool schemas, S tokens) that other sessions of the
 // same product send too. vLLM's prefix cache is keyed by content: a block's
-// hash is its tokens and its parent's hash (kv_cache_utils.py:650-671), so
+// hash is its tokens and its parent's hash (kv_cache_utils.py:650-680), so
 // a session finds the blocks of a system prompt another session computed,
 // and a block several requests read is allocated once (`ref_cnt`,
 // block_pool.py:754-768) and goes back to the free queue only when the last
 // of them frees it (block_pool.py:776-796). The request's hold says what its
 // prompt is made of: `prefix (system: S, serial: inf)`, the product's system
-// prompt, then the session's own context. The engine and the workload are
-// `vllm.sq`'s, written as the hold its request lowers to.
+// prompt, then the session's own context. The workload is `vllm.sq`'s with
+// a system prompt in front. The engine is `vllm.sq`'s without its
+// `long_prefill_token_threshold` (`chunk_cap`, off there by default), and
+// its request is written out as the hold it lowers to: an engine's
+// `request` does not take a chain yet.
 use "std/args";
 
 let B = 8192;          // max_num_batched_tokens

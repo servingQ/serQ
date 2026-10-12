@@ -30,17 +30,24 @@ const EPS: f64 = 1e-9;
 /// run of the same segment.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum Edge {
-    Key(u64),
+    Key(u64, u64),
     Cont,
 }
 
-fn key(k: f64) -> Edge {
+/// A segment of a chain: what its key names (the attribute it reads, or
+/// the expression), the key's value, and the length.
+pub(super) type Seg = (u64, f64, f64);
+
+fn key(&(ns, k, _): &Seg) -> Edge {
     // -0 and 0 are one key
-    Edge::Key(if k == 0.0 {
-        0.0f64.to_bits()
-    } else {
-        k.to_bits()
-    })
+    Edge::Key(
+        ns,
+        if k == 0.0 {
+            0.0f64.to_bits()
+        } else {
+            k.to_bits()
+        },
+    )
 }
 
 #[derive(Clone, Debug)]
@@ -55,7 +62,8 @@ pub(super) struct Node {
     pub last: f64,
     pub seq: u64,
     pub snap: Vec<f64>,
-    /// The serial of the session that wrote it last.
+    /// The serial of the session that wrote it first: its session's entry,
+    /// or the session that computed a shared segment.
     pub owner: u64,
     /// Cut off by a `reuse` bound: no chain reaches it, and it stays cached,
     /// unusable, until it is evicted. Its tag names it to a spill tier.
@@ -87,12 +95,6 @@ impl Node {
 
     pub fn locked(&self) -> bool {
         !self.lockers.is_empty()
-    }
-
-    /// Locked by `viewer`'s holds alone: its consumed entry, which it does
-    /// not see.
-    fn hidden(&self, viewer: Option<u64>) -> bool {
-        viewer.is_some_and(|v| self.locked() && self.lockers.iter().all(|&s| s == v))
     }
 }
 
@@ -133,6 +135,29 @@ impl Default for Trie {
 impl Trie {
     pub fn node(&self, id: usize) -> &Node {
         &self.nodes[id]
+    }
+
+    /// Whether every node from `id` down is `owner`'s: its own entry, which
+    /// no other session's sequence passes through.
+    fn own_subtree(&self, id: usize, owner: u64) -> bool {
+        let mut stack = vec![id];
+        while let Some(n) = stack.pop() {
+            if self.nodes[n].owner != owner {
+                return false;
+            }
+            stack.extend(self.nodes[n].children.iter().map(|&(_, c)| c));
+        }
+        true
+    }
+
+    /// The session's consumed entry, which it does not see: a node of its
+    /// own, with nothing of another session's below, that its holds alone
+    /// read. A shared node is seen whoever reads it.
+    fn hidden(&self, id: usize, viewer: Option<u64>) -> bool {
+        let n = &self.nodes[id];
+        viewer.is_some_and(|v| {
+            n.locked() && n.lockers.iter().all(|&s| s == v) && self.own_subtree(id, v)
+        })
     }
 
     fn child(&self, n: usize, e: Edge) -> Option<usize> {
@@ -185,7 +210,7 @@ impl Trie {
 
     /// Walk `chain` from the root for at most `limit` units, as `viewer`
     /// sees it (`None`: every node).
-    fn walk(&self, chain: &[(f64, f64)], limit: f64, viewer: Option<u64>) -> Walk {
+    fn walk(&self, chain: &[Seg], limit: f64, viewer: Option<u64>) -> Walk {
         let mut w = Walk {
             steps: vec![],
             total: 0.0,
@@ -193,12 +218,13 @@ impl Trie {
             off: 0.0,
         };
         let mut at = 0;
-        for (i, &(k, n)) in chain.iter().enumerate() {
+        for (i, seg) in chain.iter().enumerate() {
+            let n = seg.2;
             w.seg = i;
             w.off = 0.0;
-            let mut next = self.child(at, key(k));
+            let mut next = self.child(at, key(seg));
             loop {
-                let Some(cur) = next.filter(|&c| !self.nodes[c].hidden(viewer)) else {
+                let Some(cur) = next.filter(|&c| !self.hidden(c, viewer)) else {
                     return w;
                 };
                 let node = &self.nodes[cur];
@@ -238,24 +264,24 @@ impl Trie {
 
     /// The node the chain continues into where the walk stopped, if the
     /// walk stopped at a node's end.
-    fn next_on(&self, chain: &[(f64, f64)], w: &Walk) -> Option<usize> {
+    fn next_on(&self, chain: &[Seg], w: &Walk) -> Option<usize> {
         match w.steps.last() {
-            None => self.child(0, key(chain.first()?.0)),
+            None => self.child(0, key(chain.first()?)),
             Some(s) if s.take < self.nodes[s.node].len - EPS => None,
             Some(s) if w.seg < chain.len() && w.off > EPS => self.child(s.node, Edge::Cont),
-            Some(s) => self.child(s.node, key(chain.get(w.seg)?.0)),
+            Some(s) => self.child(s.node, key(chain.get(w.seg)?)),
         }
     }
 
     /// The units of `chain` cached or read through, as `viewer` sees them.
-    pub fn matched(&self, chain: &[(f64, f64)], viewer: u64) -> f64 {
+    pub fn matched(&self, chain: &[Seg], viewer: u64) -> f64 {
         self.walk(chain, f64::INFINITY, Some(viewer)).total
     }
 
     /// Of the first `limit` units of `chain`, those another live hold reads
     /// through: allocated already, so an admission that reads them too
     /// does not ask for them again.
-    pub fn locked_along(&self, chain: &[(f64, f64)], limit: f64, viewer: u64) -> f64 {
+    pub fn locked_along(&self, chain: &[Seg], limit: f64, viewer: u64) -> f64 {
         self.walk(chain, limit, Some(viewer))
             .steps
             .iter()
@@ -292,12 +318,7 @@ impl Trie {
     /// that it sees cached: lock them. A node the match stops inside is
     /// split if no hold reads it, else locked whole. Returns (the units
     /// matched, those that were cached and are now allocated, the nodes).
-    pub fn lock(
-        &mut self,
-        chain: &[(f64, f64)],
-        limit: f64,
-        viewer: u64,
-    ) -> (f64, f64, Vec<usize>) {
+    pub fn lock(&mut self, chain: &[Seg], limit: f64, viewer: u64) -> (f64, f64, Vec<usize>) {
         let w = self.walk(chain, limit, Some(viewer));
         if let Some(last) = w.steps.last()
             && last.take < self.nodes[last.node].len - EPS
@@ -349,21 +370,24 @@ impl Trie {
         (back, gone)
     }
 
-    /// `reuse` bounded the match at `m`: what the chain held past it is not
-    /// this hold's sequence any more. Cut it off, cached and unusable, as a
-    /// dead node with its age; unless a live hold reads it.
-    pub fn cut(&mut self, chain: &[(f64, f64)], m: f64, tag: u64) {
+    /// `reuse` bounded `owner`'s match at `m`: what its own entry held past
+    /// it is not its sequence any more. Cut it off, cached and unusable, as
+    /// a dead node with its age and the attributes `snap` it is cut with;
+    /// unless a live hold reads it, or another session's sequence passes
+    /// through it: a bound on one hold's read is no word on another's cache.
+    pub fn cut(&mut self, chain: &[Seg], m: f64, tag: u64, owner: u64, snap: &[f64]) {
         let w = self.walk(chain, m, None);
         let Some(next) = self.next_on(chain, &w) else {
             return;
         };
-        if self.nodes[next].locked() {
+        if self.nodes[next].locked() || !self.own_subtree(next, owner) {
             return;
         }
         self.unlink(next);
         let mut stack = vec![next];
         while let Some(n) = stack.pop() {
             self.nodes[n].dead = Some(tag);
+            self.nodes[n].snap = snap.to_vec();
             stack.extend(self.nodes[n].children.iter().map(|&(_, c)| c));
         }
     }
@@ -377,7 +401,7 @@ impl Trie {
     #[allow(clippy::too_many_arguments)]
     pub fn write(
         &mut self,
-        chain: &[(f64, f64)],
+        chain: &[Seg],
         keep: f64,
         path: &[usize],
         owner: u64,
@@ -401,7 +425,7 @@ impl Trie {
         // the session's consumed entry stands where its chain goes on: the
         // write takes its place, and it stays its hold's until let go
         if let Some(next) = self.next_on(chain, &w)
-            && self.nodes[next].hidden(Some(owner))
+            && self.hidden(next, Some(owner))
         {
             self.unlink(next);
             self.nodes[next].displaced = true;
@@ -415,7 +439,6 @@ impl Trie {
             let n = &mut self.nodes[s.node];
             n.last = now;
             n.seq = seq;
-            n.owner = owner;
             n.snap = snap.to_vec();
             start += s.take;
         }
@@ -454,7 +477,7 @@ impl Trie {
                 self.split(s.node, s.take);
             }
             while keep > have + EPS && seg < chain.len() {
-                let (k, n) = chain[seg];
+                let n = chain[seg].2;
                 let add = (n - off).min(keep - have);
                 if add > EPS {
                     let node = &self.nodes[at];
@@ -462,7 +485,7 @@ impl Trie {
                     if same && !node.locked() && node.children.is_empty() && node.dead.is_none() {
                         self.nodes[at].len += add;
                     } else {
-                        let e = if same { Edge::Cont } else { key(k) };
+                        let e = if same { Edge::Cont } else { key(&chain[seg]) };
                         at = self.add_child(
                             at,
                             e,
@@ -472,7 +495,6 @@ impl Trie {
                     let n = &mut self.nodes[at];
                     n.last = now;
                     n.seq = seq;
-                    n.owner = owner;
                     n.snap = snap.to_vec();
                     delta += add;
                     have += add;
@@ -541,10 +563,12 @@ impl Trie {
 
     /// A spill from another pool: `units` of `owner`'s own entry (or of the
     /// dead node `dead`) arrive in this tier, which keeps them as that
-    /// session's entry, extended (its snapshot as it was). Returns the units
-    /// added.
+    /// session's entry (`own`: its chain's segment), extended (its snapshot
+    /// as it was). Returns the units added.
+    #[allow(clippy::too_many_arguments)]
     pub fn spill_in(
         &mut self,
+        own: &Seg,
         owner: u64,
         dead: Option<u64>,
         units: f64,
@@ -570,9 +594,9 @@ impl Trie {
             return units;
         }
         // the session's run, to its end, as the session sees it
-        let k = key(owner as f64);
+        let k = key(own);
         let mut cur = match self.child(0, k) {
-            Some(c) if self.nodes[c].hidden(Some(owner)) => {
+            Some(c) if self.hidden(c, Some(owner)) => {
                 self.unlink(c);
                 self.nodes[c].displaced = true;
                 None

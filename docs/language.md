@@ -628,7 +628,9 @@ what the chain held past them stays in the cache as a *dead* entry with
 the same age, unusable, until evicted. A hold's chain is its `prefix (k₁:
 n₁, …)`: the sequence as segments, each a key and a length, and two
 chains share the cached units of their equal leading keys, so a system
-prompt every session sends is computed once. A key names content: it and
+prompt every session sends is computed once. A key is what it reads (an
+attribute, or the expression) and its value. A hold reads at most what it
+allocates. A key names content: it and
 its length read attributes and numbers, not the state, the clock, a draw
 or `cached` (the linker refuses one). Without the clause the chain is
 `(serial: ∞)`, the session's own; written out, that chain does not link. A prefix several holds read is

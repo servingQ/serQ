@@ -29,8 +29,10 @@ hold reqs (cost(reqs, 1)), kv (…) prefix (system: S, serial: inf) … {
 
 A segment's key is an expression of attributes and numbers: here
 `system` is an attribute the workload draws (which product's system prompt
-the session sends), and `serial` is the session's own. Two holds share
-their first `j` segments when their first `j` keys are equal. The lookup
+the session sends), and `serial` is the session's own. A key is what it
+reads and its value: an attribute and its value, or any other expression
+and its value, so `system = 3` is not serial 3. Two holds share their
+first `j` segments when their first `j` keys are equal. The lookup
 finds the longest cached prefix, in whole blocks, along the chain of
 equal keys. `examples/multi-turn/vllm_system_prompt.sq` is `vllm.sq`
 serving `M` products this way.
@@ -53,7 +55,8 @@ serving `M` products this way.
   segment's runs follow one another; the next segment hangs off the run
   that ends where its segment ends, under its key.
 - Admission with `cache` reads the cached prefix of the chain, at most
-  `reuse` of it, and locks the nodes it read: they are allocated while the
+  `reuse` of it and at most what it allocates (what it reads is part of
+  its allocation), and locks the nodes it read: they are allocated while the
   hold lasts, counted once in the pool however many holds read them
   (vLLM's `ref_cnt`, `block_pool.py:754-768`), and an admission does not
   ask again for what another hold already reads. The run of a node the
@@ -64,20 +67,28 @@ serving `M` products this way.
   session wrote, and no hold reads, goes: the session's entry is replaced.
   With `ℓ = 0` the nodes the hold read go, unless another hold reads them
   or another session wrote them.
-- A prefix the session's own hold reads, and no other session's, is the
-  session's consumed entry: its other holds do not see it (#230: a hold
-  nested in one that consumed the prefix finds none), and a write of the
-  session's chain there displaces it, unreachable, until its hold lets it
-  go.
-- `reuse` bounding the match cuts what the chain held past the bound off,
-  cached and unusable, as a dead node with its age, unless a live hold
-  reads it.
+- A node's owner is the session that wrote it first: its entry, or the
+  session that computed a shared segment.
+- A node the session owns, with nothing of another session's below it,
+  that only the session's holds read is the session's consumed entry: its
+  other holds do not see it (#230: a hold nested in one that consumed the
+  prefix finds none), and a write of the session's chain there displaces
+  it, unreachable, until its hold lets it go. A shared node is seen by
+  whoever reads it.
+- `reuse` bounding the match cuts what the session's own entry held past
+  the bound off, cached and unusable, as a dead node with its age and the
+  attributes it is cut with, unless a live hold reads it or another
+  session's sequence passes through it: a bound on one hold's read says
+  nothing of another session's cache.
 - Eviction takes cached leaves, so no cached suffix outlives its prefix
   (SGLang's radix leaf eviction, TGI's LRU over leaves), one block at a
   time from the leaf's tail; `evict lru` and `evict by (…)` order the
   leaves, and a node a live hold reads is not evictable (SGLang's
   `lock_ref`).
-- `drop P` drops the cached leaves the session wrote, leaves first.
+- `drop P` drops the cached leaves the session owns, leaves first: its
+  entry, and a shared segment it computed once nothing hangs off it.
+- `evict by (…)` reads a node's owner while it lives, else the snapshot
+  of the last write.
 - `cachedin(P)` is the cached prefix of the session's waiting hold's
   chain, else of its innermost hold's, else of its own, in whole blocks.
 
@@ -148,12 +159,33 @@ serving `M` products this way.
   to publish the units its `growing` run has reached, and a reader would
   have to wait for units not yet computed. Left out: the sharing that
   matters for agent workloads is across turns and sessions, seconds apart.
-- **A segment's key namespaced by its position.** A key is a value at its
-  depth in the chain. A chain without `prefix` is `(serial: ∞)`, and a
-  program whose first key's value equals a session's serial shares with
-  that session's entry on the same pool. Namespacing the default would
-  make `prefix (serial: inf)` differ from no clause, two spellings with two
-  meanings; the program keeps its keys apart instead.
+- **A key as its value alone.** Then `prefix (system: S)` with `system =
+  3` shared the root with the entry of the session whose serial is 3, and
+  `prefix (tool: T)` with `system: S` of equal values, and a program whose
+  attributes count from 0 could not keep them apart. A key is what it
+  reads and its value; the default `(serial: ∞)` reads `serial`, and is
+  still the chain of no clause.
+- **The written default refused by value.** `prefix (serial: inf)` does
+  not link; `prefix (serial: 1e12)` does, and runs as no clause on any
+  sequence shorter than 10¹² units. Refusing every length a run cannot
+  reach would read the run; the literal default is the second spelling a
+  reader writes.
+- **The last writer as owner.** A shared system prompt's owner moved with
+  every session that wrote it, so whether `drop` took it, and whose
+  attributes `evict by` read, depended on which session came last. The
+  owner is the first writer.
+- **A `reuse` bound cuts the subtree past it.** One session's `reuse
+  (800)` inside a shared system prompt took the prompt's tail off the
+  trie, and every other session's context under it. A bound limits the
+  hold's read; it cuts only the session's own entry.
+- **A hold reads its whole match.** A hold allocating less than the cached
+  prefix it matched read all of it, and the pool's `used` went negative
+  when another hold read the same prefix. A read is part of the
+  allocation.
+- **Consumed means locked by the session alone.** A shared node read at
+  one moment by one session's holds alone was taken for that session's
+  entry: its nested hold displaced it, and the other sessions' contexts
+  below it went with it. A consumed entry is the session's own subtree.
 - **A run split where any hold's match stops.** Splitting a run a hold
   reads would leave that hold's nodes stale. Such a run is locked whole by
   the second reader; its units are allocated once either way.

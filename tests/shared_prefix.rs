@@ -172,3 +172,160 @@ fn a_key_reads_no_state() {
     let error = run_source(&common::main_source(&spills), &options(10.0), None).unwrap_err();
     assert!(error.contains("not supported yet"), "{error}");
 }
+
+/// Three sessions on the system prompt, one after another, then each a
+/// second request on its own context, in reverse order. `INNER` stands in
+/// the first request's body, `REUSE` bounds its read.
+fn two_requests(reuse: &str, inner: &str) -> String {
+    format!(
+        r#"
+        device gpu {{ kv cap 100000; }}
+        engine llm on gpu {{
+          tokens cap 8192;
+          schedule {{ advance running; admit waiting while (running.preempted == 0); }}
+          execute (batch.tokens * 1e-5 + 1e-4);
+        }}
+        pool kv on gpu {{ block 16; evict lru; }}
+        stage user : delay;
+        workload {{ arrive batch(3); init {{ set sys = 7; }} session {{ turn; }} }}
+        server {{
+          run user (cost(user, serial * 10));
+          hold kv (cost(kv, 1600)) {CHAIN} {reuse} {{
+            run llm prefill (cost(llm, 1600 - cached)) growing kv;
+            {inner}
+          }} cache (cost(kv, 1600));
+          run user (cost(user, 40 - serial * 10));
+          hold kv (cost(kv, 2000)) {CHAIN} {{
+            observe second = cached;
+            run llm prefill (cost(llm, 2000 - cached)) growing kv;
+          }} cache (cost(kv, 2000));
+        }}
+"#
+    )
+}
+
+/// One session's `reuse` bounds its own read, and no other session's cache.
+/// Session 2 reads at most 800 of the system prompt; the cut it makes past
+/// 800 used to take the system prompt's subtree off the trie, with the
+/// other sessions' own contexts in it, so their second requests found 1200,
+/// not 1600 (the review of #374). The cut takes only what the session wrote
+/// alone.
+#[test]
+fn a_reuse_bound_cuts_no_other_session() {
+    let r = run(
+        &two_requests("reuse (cost(kv, serial == 2 ? 800 : 1e9))", ""),
+        &options(200.0),
+    );
+    assert_eq!(
+        r.observe("second").unwrap().samples,
+        [1600.0, 1600.0, 1600.0],
+        "{}",
+        r.text()
+    );
+}
+
+/// A hold nested in one that reads the shared system prompt, of the same
+/// session, writing its chain. The system prompt is not the session's
+/// consumed entry (#230), though the session's holds alone read it at that
+/// moment: other sessions' contexts hang off it. Displacing it used to
+/// leave them unreachable, and session 0's second request found 1200; the
+/// nested hold read nothing (the review of #374). It reads the prompt, and
+/// the others keep theirs.
+#[test]
+fn a_shared_prefix_is_no_session_s_consumed_entry() {
+    let inner = "branch (serial == 1) {
+                   hold kv (cost(kv, 1216)) prefix (sys: 1200, serial: inf) {
+                     observe inner = cached;
+                   } cache (cost(kv, 1600));
+                 }";
+    let r = run(&two_requests("", inner), &options(200.0));
+    assert_eq!(
+        r.observe("inner").unwrap().samples,
+        [1200.0],
+        "{}",
+        r.text()
+    );
+    assert_eq!(
+        r.observe("second").unwrap().samples,
+        [1600.0, 1600.0, 1600.0],
+        "{}",
+        r.text()
+    );
+}
+
+/// What a hold reads is part of what it allocates. A request that
+/// allocates 160 on a pool whose cached system prompt (1200) another hold
+/// reads used to read all 1200 and add 160 - 1200 to the pool's `used`,
+/// which went negative (the review of #374). It reads what its allocation
+/// holds, in whole blocks.
+#[test]
+fn a_hold_reads_at_most_what_it_allocates() {
+    let src = r#"
+        device gpu { kv cap 100000; }
+        engine llm on gpu {
+          tokens cap 8192;
+          schedule { advance running; admit waiting while (running.preempted == 0); }
+          execute (batch.tokens * 1e-5 + 1e-4);
+        }
+        pool kv on gpu { block 16; evict lru; }
+        stage user : delay;
+        workload { arrive batch(3); init { set sys = 7; } session { turn; } }
+        server {
+          run user (cost(user, serial == 0 ? 0 : 10));
+          hold kv (cost(kv, serial == 0 ? 1600 : 160)) prefix (sys: 1200, serial: inf) {
+            observe got = cached;
+            run user (cost(user, 1));
+            observe u = used(kv);
+          } cache (cost(kv, serial == 0 ? 1600 : 16));
+        }
+"#;
+    let r = run(src, &options(200.0));
+    assert_eq!(
+        r.observe("got").unwrap().samples,
+        [0.0, 160.0, 160.0],
+        "{}",
+        r.text()
+    );
+    let used = &r.observe("u").unwrap().samples;
+    assert!(
+        used.iter().all(|&u| u >= 0.0),
+        "used {used:?}\n{}",
+        r.text()
+    );
+}
+
+/// A key is the attribute it reads and its value: `prefix (sys: 1200, …)`
+/// with `sys = 1` is not the entry of the session whose serial is 1, which
+/// it used to read (the review of #374).
+#[test]
+fn a_key_is_its_attribute_and_its_value() {
+    let src = format!(
+        r#"
+        device gpu {{ kv cap 100000; }}
+        engine llm on gpu {{
+          tokens cap 8192;
+          schedule {{ advance running; admit waiting while (running.preempted == 0); }}
+          execute (batch.tokens * 1e-5 + 1e-4);
+        }}
+        pool kv on gpu {{ block 16; evict lru; }}
+        stage user : delay;
+        workload {{ arrive batch(3); init {{ set sys = 1; }} session {{ turn; }} }}
+        server {{
+          run user (cost(user, serial * 10));
+          branch (serial == 1) {{
+            hold kv (cost(kv, 1600)) {{
+              run llm prefill (cost(llm, 1600)) growing kv;
+            }} cache (cost(kv, 1600));
+          }}
+          branch (serial == 2) {{
+            hold kv (cost(kv, 1600)) {CHAIN} {{
+              observe got = cached;
+              run llm prefill (cost(llm, 1600 - cached)) growing kv;
+            }} cache (cost(kv, 1600));
+          }}
+        }}
+"#
+    );
+    let r = run(&src, &options(100.0));
+    assert_eq!(r.observe("got").unwrap().samples, [0.0], "{}", r.text());
+}
