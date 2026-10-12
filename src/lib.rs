@@ -59,8 +59,7 @@ fn finish(prog: frontend::ast::Program, src: &str, ov: &Overrides) -> Result<ir:
     // `tokens` in a queue key), so a text program meets it too. An error
     // about a statement points at it in the text (#279).
     p.validate_located().map_err(|e| {
-        let span =
-            e.at.and_then(|(b, k)| spans.get(b)?.get(k).copied().flatten());
+        let span = e.at.and_then(|(b, k)| spans.get(b)?.get(k)?.of(&e.message));
         match span {
             Some(span) => span.render(src, &e.message),
             None => e.message,

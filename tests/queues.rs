@@ -1090,6 +1090,36 @@ fn self_names_nothing_a_program_declares() {
     );
 }
 
+/// A name read where it does not exist is pointed at where it is read, not
+/// at the statement: a hold's header that read `position` was shown at its
+/// `(` (#531). The position is found in the text, so the test holds
+/// however the program is laid out.
+#[test]
+fn a_refused_read_points_at_the_name() {
+    let src = "fn main() {
+  queue gw : gateway { route { E.decode (prompt); } }
+  queue E : decode {
+    device gpu { kv cap 100; }
+    pool kv on gpu { }
+    engine on gpu { tokens cap inf; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); }
+    decode (p) { hold kv (cost(kv, p + position)) { run E prefill (cost(E, p)) growing kv; } }
+  }
+  workload { arrive batch(1); init { set prompt = 3; } session { turn; end; } }
+  server { gw.route(); }
+}
+";
+    let at = src.find("position").unwrap();
+    let line = src[..at].matches('\n').count() + 1;
+    let col = at - src[..at].rfind('\n').map_or(0, |i| i + 1) + 1;
+    let e = compile_source(src, &common::horizon(100.0)).expect_err("refused");
+    assert!(
+        e.contains(&format!(
+            "{line}:{col}: session: `position` is read in a hold's header"
+        )),
+        "{e}"
+    );
+}
+
 /// Every context variable an entry reads, in its body or its hold's
 /// header, is the language's, refused where it does not exist and never an
 /// unknown name. The entry reads them from `CONTEXT_VARS`, which the test
