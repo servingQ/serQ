@@ -8,9 +8,16 @@ fn main() {
   engine llm on gpu {
     reqs cap 2;
     tokens cap 4;
+    request (prompt, t0, decodes) {
+      at admission { left = budget_left(llm); }
+      prefill (prompt) growing kv;
+      observe gated_ttft = now - t0;   // from the gate, B's arrival at the engine
+      branch (decodes) { decode (2) growing kv; }
+    }
     schedule {
       exclusive prefill each at most (4);
-      admit waiting while (running.preempted == 0) each at most (4);
+      admit waiting while (running.preempted == 0) each at most (4)
+        taking reqs (1), kv (min(prompt, left)) reserve (prompt);
     }
     execute (1);
   }
@@ -23,12 +30,7 @@ fn main() {
   server {
     run gate (cost(gate, serial));
     set t0 = now;
-    hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, left))) reserve (cost(kv, prompt))
-         at admission (left = budget_left(llm)) {
-      run llm prefill (cost(llm, prompt)) growing kv;
-      observe gated_ttft = now - t0;   // from the gate, B's arrival at the engine
-      branch (serial == 0) { run llm decode (cost(llm, 2)) growing kv; }
-    }
+    llm (prompt, t0, serial == 0);
     observe gated_response = now - t0;
   }
 }

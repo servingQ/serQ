@@ -25,6 +25,7 @@ fn main() {
   device gpu { }
   engine llm on gpu {
     tokens cap 1000000;    // every active request decodes one token per step
+    request (output) { decode (output); }
     schedule { advance running; admit waiting while (running.preempted == 0); }
     execute (1);           // one time unit per step
   }
@@ -32,9 +33,7 @@ fn main() {
   server {
     observe output_tokens = o;
     observe vol = s * o + floor((o * o + o) / 2);
-    hold kv (cost(kv, s + o)) {
-      run llm decode (cost(llm, o));
-    }
+    hold kv (cost(kv, s + o)) { llm (o); }
     observe response = now;
   }
 

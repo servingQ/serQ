@@ -3788,6 +3788,7 @@ impl Parser {
             nic: false,
             takes: None,
             engine: false,
+            registers: vec![],
             header_at: None,
             at,
         });
@@ -4261,6 +4262,7 @@ impl Parser {
                 || in_context(n)
                 || (!header && n == "now")
                 || seen.iter().any(|l| l == n)
+                || q.registers.iter().any(|r| r == n)
         };
         // an L2 queue's pool and stage are every entry's to read and copy
         // through (std/kvt's `l2_load`, `l2_store`)

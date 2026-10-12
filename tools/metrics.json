@@ -15,7 +15,6 @@
     "admit waiting while (running.preempted == 0) each at most (threshold)",
     "advance running each at most (threshold);",
     "at admission (known = max(kept, computed + 1)) {",
-    "at admission (known = max(kept, computed + 1),",
     "branch (more) { tool (~exp(Z)); } else { end; }",
     "decode (output - 1 - (known - prompt)) growing kv;",
     "device gpu { compute (t) = a * ceil(t / b0); }",

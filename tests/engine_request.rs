@@ -305,6 +305,39 @@ fn the_admission_reads_no_attribute_of_the_session() {
     );
 }
 
+/// The admission reads the engine's own registers, as SGLang's reservation
+/// reads its new-token ratio: the IR is the server hold that read it.
+#[test]
+fn the_admission_reads_the_engine_s_registers() {
+    let state = [("tokens cap 8;", "tokens cap 8;\n  state ratio = 2;")];
+    let sugar = compiled(&replaced(
+        &program(),
+        &[
+            state[0],
+            (
+                "    advance running;\n",
+                "    set ratio = ratio + 1;\n    advance running;\n",
+            ),
+            ("reserve (known);", "reserve (known + ratio);"),
+        ],
+    ));
+    let kernel = compiled(&replaced(
+        &format!("{DEVICE}{KERNEL}"),
+        &[
+            state[0],
+            (
+                "schedule { advance running;",
+                "schedule { set ratio = ratio + 1; advance running;",
+            ),
+            (
+                "reserve (cost(kv, known))",
+                "reserve (cost(kv, known + ratio))",
+            ),
+        ],
+    ));
+    assert_eq!(sugar.to_json(), kernel.to_json());
+}
+
 #[test]
 fn a_request_sets_no_parameter() {
     let src = replaced(
