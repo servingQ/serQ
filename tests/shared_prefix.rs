@@ -704,8 +704,9 @@ fn lpm_admits_the_longest_cached_chain_first() {
 "#
         )
     };
-    let start = |r: &serq::Report, s: u64| {
-        let o = r.observe("start").unwrap();
+    // session `s`'s observation `name`
+    let of = |r: &serq::Report, name: &str, s: u64| {
+        let o = r.observe(name).unwrap();
         o.records
             .iter()
             .zip(&o.samples)
@@ -714,17 +715,16 @@ fn lpm_admits_the_longest_cached_chain_first() {
             .unwrap()
     };
     let fifo = run(&src(""), &options(100.0));
-    assert!(start(&fifo, 1) < start(&fifo, 2), "{}", fifo.text());
+    assert!(
+        of(&fifo, "start", 1) < of(&fifo, "start", 2),
+        "{}",
+        fifo.text()
+    );
     let lpm = run(&src("queue by (-cachedin(kv));"), &options(100.0));
-    assert!(start(&lpm, 2) < start(&lpm, 1), "{}", lpm.text());
-    let got = |r: &serq::Report, s: u64| {
-        let o = r.observe("got").unwrap();
-        o.records
-            .iter()
-            .zip(&o.samples)
-            .find(|(rec, _)| rec.1 == s)
-            .map(|(_, v)| *v)
-            .unwrap()
-    };
-    assert_eq!(got(&lpm, 2), 1200.0, "{}", lpm.text());
+    assert!(
+        of(&lpm, "start", 2) < of(&lpm, "start", 1),
+        "{}",
+        lpm.text()
+    );
+    assert_eq!(of(&lpm, "got", 2), 1200.0, "{}", lpm.text());
 }

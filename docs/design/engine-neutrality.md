@@ -255,8 +255,9 @@ in its own design.
 - **SGLang's LPM waiting order** sorts by the prefix match in the shared
   tree. `queue by (-cachedin(kv))` matches along the waiting request's
   chain in the shared cache ([A shared prefix cache](shared-prefix-cache.md));
-  `engines/sglang.sq --lpm 1` writes it, with SGLang's fall back to FCFS
-  past 128 waiting.
+  `engines/sglang.sq --lpm 1` writes the order, with SGLang's fall back to
+  FCFS past 128 waiting, over its sessions' own chains: its kv pool has no
+  `block` (page size 1), on which no chain is shared.
 - **`granule` per run.** A prefill run could carry its own granule,
   `prefill on engine (n) granule g`. Rejected: TensorRT-LLM's chunk unit is
   an engine setting, and a per-run one would write a scheduler rule on the
