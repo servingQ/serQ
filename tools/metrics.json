@@ -3,12 +3,12 @@
   "ir": {
     "CStmt": 16,
     "CExpr": 11,
-    "Fun": 22,
+    "Fun": 21,
     "CtxVar": 23
   },
   "surface": {
     "keywords": 114,
-    "functions": 29,
+    "functions": 28,
     "context_variables": 23
   },
   "clones": [

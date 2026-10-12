@@ -1445,6 +1445,29 @@ fn a_def_may_not_be_named_each_or_most() {
     }
 }
 
+/// A power has one spelling, `x ^ y`: a `pow(x, y)` is told so, in a
+/// constant and in a statement alike, and a name that is no function is
+/// unknown, in a constant too (it read "not a constant function").
+#[test]
+fn a_power_is_written_with_a_caret() {
+    let src = std::fs::read_to_string(root().join("docs/tutorial/programs/01-queue.sq")).unwrap();
+    for (from, to) in [
+        ("let S = 1.0;", "let S = pow(1, 1);"),
+        ("set t0 = now;", "set t0 = pow(now, 1);"),
+    ] {
+        let prog = src.replacen(from, to, 1);
+        assert_ne!(prog, src);
+        refused(&prog, "unknown function `pow`: `pow(x, y)` is now `x ^ y`");
+    }
+    let prog = src.replacen("let S = 1.0;", "let S = foo(1);", 1);
+    refused(&prog, "unknown function `foo`");
+    let prog = src.replacen("let S = 1.0;", "let S = 1.0 ^ 1;", 1);
+    compile_source(&prog, &common::horizon(10.0)).unwrap();
+    // the name is free: only a call is told
+    let prog = src.replacen("let S = 1.0;", "let pow = 1.0;\nlet S = pow;", 1);
+    compile_source(&prog, &common::horizon(10.0)).unwrap();
+}
+
 /// A device's resource is a definition too, replaced token by token: its
 /// parameter may not be named like a distribution, as a `def`'s may not.
 #[test]

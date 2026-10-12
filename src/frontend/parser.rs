@@ -848,7 +848,7 @@ fn through_queue<'a>(queue: &str, name: &'a str) -> Option<&'a str> {
 }
 
 /// A function of the language: one the linker resolves or one it folds.
-fn is_function(name: &str) -> bool {
+pub(crate) fn is_function(name: &str) -> bool {
     Fun::from_name(name).is_some()
         || FOLDED.contains(&name)
         || AGGREGATES.iter().any(|(n, _)| *n == name)

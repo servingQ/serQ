@@ -4518,8 +4518,7 @@ impl<'p> Interp<'p> {
             | Fun::Ceil
             | Fun::Sqrt
             | Fun::Exp
-            | Fun::Ln
-            | Fun::Pow => unreachable!("an arithmetic function returned above"),
+            | Fun::Ln => unreachable!("an arithmetic function returned above"),
             Fun::Queue => {
                 let s = stage(self, 0);
                 self.stages[s].jobs.len() as f64

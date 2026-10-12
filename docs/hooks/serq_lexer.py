@@ -71,13 +71,13 @@ ENGINE_VALUES = (
 # A context variable's name is the language's: the linker refuses a `set`,
 # `choose` or `let` that takes one (#231), and the parser a `def`, `observe`,
 # `stage`, `pool`, `device`, `engine`, `queue`, `gauge` or `claim` (#460).
-# Arithmetic is not a role: `min`, `floor` and `pow` are how a program
+# Arithmetic is not a role: `min`, `floor` and `ln` are how a program
 # computes, not what it means, and they read as calls without help. Leaving
 # them plain is what lets the observable colour mean exactly one thing.
 # `tests/docs_lexer.rs` holds these lists to the linker's (`CONTEXT_VARS`,
 # `Fun::names`, `AGGREGATES`, `FOLDED`, `BUILTIN_ATTRS`); `ARITHMETIC` is
 # exactly `Fun::is_arithmetic`.
-ARITHMETIC = ("min", "max", "abs", "floor", "ceil", "sqrt", "exp", "ln", "pow")
+ARITHMETIC = ("min", "max", "abs", "floor", "ceil", "sqrt", "exp", "ln")
 
 BUILTINS = (
     # functions
