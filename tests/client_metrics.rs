@@ -66,6 +66,35 @@ server { run svc (cost(svc, 2)); }");
     assert_eq!(r.client("tpot").unwrap().count, 0);
 }
 
+/// A decode with no prefill before it: its first token is the client's
+/// first, at the end of the first iteration, and two tokens follow.
+#[test]
+fn a_decode_alone_samples_the_first_token() {
+    let r = run(&format!(
+        "{ENGINE}
+workload {{ arrive batch(1); }}
+server {{ run llm decode (cost(llm, 3)); }}"
+    ));
+    assert_eq!(samples(&r, "ttft"), [1.0]);
+    assert_eq!(samples(&r, "tpot"), [1.0]);
+    assert_eq!(samples(&r, "response"), [3.0]);
+}
+
+/// A leg forked in one turn and joined in the next works for the first:
+/// its tokens are no token of the second, which only waits for it.
+#[test]
+fn a_leg_works_for_the_turn_it_was_forked_in() {
+    let r = run(&format!(
+        "{ENGINE}
+workload {{ arrive batch(1); session {{ turn; turn; }} }}
+server {{
+  branch (turn_no == 1) {{ fork {{ run llm decode (cost(llm, 4)); }} }} else {{ join; }}
+}}"
+    ));
+    assert_eq!(samples(&r, "response"), [0.0, 4.0]);
+    assert_eq!(r.client("ttft").unwrap().count, 0);
+}
+
 /// One output token: a first token, and no time per token after it.
 #[test]
 fn one_output_token_has_no_tpot() {

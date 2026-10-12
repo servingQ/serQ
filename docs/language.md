@@ -496,8 +496,8 @@ pool its `from` names. That is the `hidden` rule
 at the queue's boundary: vLLM's scheduler knows `max_tokens`, not the length,
 so `o` is not a parameter of `decode` and the body alone reads it. What the
 body `set`s is the queue's (`D.known`); what it `observe`s is the program's;
-a moment the caller needs is `mark first_token;`, read afterwards as
-`D.first_token` — the request's attribute, so without a member index. The gateway is the exception on the session's side: its
+a moment the caller needs is `mark read_done;`, read afterwards as
+`D.read_done` — the request's attribute, so without a member index. The gateway is the exception on the session's side: its
 `route` reads the request's attributes as a `server` does and sets the ones
 the session reads back (`prompt`).
 
@@ -1091,22 +1091,26 @@ observes ([the design](design/client-metrics.md)):
 
 | Metric | Sample | Recorded |
 |---|---|---|
-| `ttft` | the turn's first output token less its start | at the first token |
-| `tpot` | (the turn's last output token less its first) / the output tokens after the first | when the turn is answered |
+| `ttft` | the turn's first output token less its start | when the first token is known |
+| `tpot` | (the turn's answer less its first token) / the output tokens after the first | when the turn is answered |
 | `response` | the turn's answer less its start | when the turn is answered |
 
 A turn starts at its `turn;`, and is answered when the server's statements
-for it are done. Its first output token is when its first `decode` run
-starts, on whichever engine. Its output tokens after the first are the
-decode tokens its engines commit and the token a resumed prefill samples
-after a preemption; a prefill before the first token samples one the
-client does not see (a P/D prefiller's, which the decoder recomputes). A
-turn that runs no `decode` has no `ttft` or `tpot`, and one with no
-output token after the first has no `tpot`. These are vLLM's
-`time_to_first_token`, `mean_time_per_output_token` and `e2e_latency`
-(`vllm/v1/metrics/stats.py`), with the turn's start for vLLM's arrival.
-A program's `observe` keeps its own name beside them: an `observe ttft`
-is the program's, reported in its own section.
+for it are done. Its first output token is the one sampled by the prefill
+that ended last before its first decode token, or that decode token when
+no prefill ended before it; with no decode token, its last prefill's (a
+request of one output token, which has a `ttft` and no `tpot`). Its output
+tokens after the first are the decode tokens its engines commit and the
+token a resumed prefill samples after a preemption. A turn that commits no
+token, at stations with no engine, has a `response` only. These follow
+vLLM's benchmark client and engine statistics (`vllm/benchmarks/serve.py`,
+`vllm/v1/metrics/stats.py`), with the turn's start for vLLM's arrival; a
+request vLLM refuses is no successful request to its client and no
+`e2e_latency` to its engine, and a turn the server refuses is still
+answered here, at once. A sample counts when it is recorded after the
+warm-up, so a turn at the warm-up's start or at the horizon can have a
+`ttft` and no `response`, or the opposite. A program's `observe` keeps its
+own name beside them, in its own table.
 
 ### Gauges
 

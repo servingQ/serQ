@@ -38,9 +38,9 @@ observe        count    mean   95% CI    cv2      p99
 wait          179174  3.8499  ±0.1644  1.497  20.9580
 service_time  179174  0.9993  ±0.0051  0.995   4.6129
 
-client     count    mean   95% CI    cv2      p99
---------  ------  ------  -------  -----  -------
-response  179174  4.8492  ±0.1681  0.985  22.1083
+client     count   mean  95% CI    cv2     p99
+--------  ------  -----  ------  -----  ------
+response  179174  4.849  ±0.168  0.985  22.108
 
 stage  number   util    done    thru    wait  service  iters
 -----  ------  -----  ------  ------  ------  -------  -----
@@ -49,7 +49,7 @@ svc     3.862  0.796  179174  0.7963  3.8499   0.9993      0
 
 That is an M/M/1 queue at 80 % utilisation. The closed form says the response
 time is \(S/(1-\rho) = 5.0\) seconds and the mean number in system is
-\(\rho/(1-\rho) = 4.0\); the run says `4.8492 ±0.1681` and `3.862`. The
+\(\rho/(1-\rho) = 4.0\); the run says `4.849 ±0.168` and `3.862`. The
 confidence interval covers the theoretical mean.
 
 ## Reading a report

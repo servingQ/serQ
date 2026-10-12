@@ -80,9 +80,9 @@ observe  count    mean   95% CI    cv2      p99
 -------  -----  ------  -------  -----  -------
 wait     75464  3.8237  ±0.3462  1.516  21.1774
 
-client    count    mean   95% CI    cv2      p99
---------  -----  ------  -------  -----  -------
-response  75464  4.8235  ±0.3537  0.995  22.2569
+client    count   mean  95% CI    cv2     p99
+--------  -----  -----  ------  -----  ------
+response  75464  4.823  ±0.354  0.995  22.257
 
 stage  number   util   done    thru    wait  service  iters
 -----  ------  -----  -----  ------  ------  -------  -----
@@ -102,7 +102,7 @@ This is M/M/1 with \(\lambda = 0.8\) and \(\mathbb{E}[S] = 1\), so
 
 | | closed form | run | |
 |---|---|---|---|
-| response | 5 | 4.8235 ±0.3537 | covered |
+| response | 5 | 4.823 ±0.354 | covered |
 | wait | 4 | 3.8237 ±0.3462 | covered |
 | number in system | 4 | 3.832 | |
 | utilisation | 0.8 | 0.794 | |

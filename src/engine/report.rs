@@ -359,21 +359,7 @@ impl Report {
             self.mean_live
         );
         if !self.observes.is_empty() {
-            let rows = self.observes.iter().map(|o| {
-                vec![
-                    o.name.clone(),
-                    o.count.to_string(),
-                    format!("{:.4}", o.mean),
-                    format!("±{:.4}", o.ci.half_width),
-                    format!("{:.3}", o.cv2),
-                    format!("{:.4}", o.p99),
-                ]
-            });
-            table(
-                &mut s,
-                &["observe", "count", "mean", "95% CI", "cv2", "p99"],
-                rows,
-            );
+            observe_table(&mut s, "observe", self.observes.iter(), false);
             for o in self.observes.iter().filter(|o| o.never_held()) {
                 let _ = writeln!(
                     s,
@@ -384,22 +370,18 @@ impl Report {
         }
         // the client's metrics that have a sample: a turn that runs no
         // engine has no first token
-        let seen: Vec<&ObserveReport> = self.client.iter().filter(|o| o.count > 0).collect();
-        if !seen.is_empty() {
-            let rows = seen.iter().map(|o| {
-                vec![
-                    o.name.clone(),
-                    o.count.to_string(),
-                    format!("{:.4}", o.mean),
-                    format!("±{:.4}", o.ci.half_width),
-                    format!("{:.3}", o.cv2),
-                    format!("{:.4}", o.p99),
-                ]
-            });
-            table(
+        if self.client.iter().any(|o| o.count > 0) {
+            observe_table(
                 &mut s,
-                &["client", "count", "mean", "95% CI", "cv2", "p99"],
-                rows,
+                "client",
+                self.client.iter().filter(|o| o.count > 0),
+                true,
+            );
+        } else if self.arrivals > 0 {
+            // a turn that never ends, a server that loops, answers nothing
+            let _ = writeln!(
+                s,
+                "\nnote: no turn was answered after warm-up: the client saw none"
             );
         }
         if !self.gauges.is_empty() {
@@ -589,39 +571,26 @@ impl Report {
             self.turns,
             f(self.mean_live)
         );
-        s.push_str(",\"observes\":{");
-        for (i, o) in self.observes.iter().enumerate() {
-            if i > 0 {
-                s.push(',');
+        for (key, list) in [("observes", &self.observes), ("client", &self.client)] {
+            let _ = write!(s, ",\"{key}\":{{");
+            for (i, o) in list.iter().enumerate() {
+                if i > 0 {
+                    s.push(',');
+                }
+                let _ = write!(
+                    s,
+                    "\"{}\":{{\"count\":{},\"mean\":{},\"ci\":{},\"cv2\":{},\"p99\":{}}}",
+                    o.name,
+                    o.count,
+                    f(o.mean),
+                    f(o.ci.half_width),
+                    f(o.cv2),
+                    f(o.p99)
+                );
             }
-            let _ = write!(
-                s,
-                "\"{}\":{{\"count\":{},\"mean\":{},\"ci\":{},\"cv2\":{},\"p99\":{}}}",
-                o.name,
-                o.count,
-                f(o.mean),
-                f(o.ci.half_width),
-                f(o.cv2),
-                f(o.p99)
-            );
+            s.push('}');
         }
-        s.push_str("},\"client\":{");
-        for (i, o) in self.client.iter().enumerate() {
-            if i > 0 {
-                s.push(',');
-            }
-            let _ = write!(
-                s,
-                "\"{}\":{{\"count\":{},\"mean\":{},\"ci\":{},\"cv2\":{},\"p99\":{}}}",
-                o.name,
-                o.count,
-                f(o.mean),
-                f(o.ci.half_width),
-                f(o.cv2),
-                f(o.p99)
-            );
-        }
-        s.push_str("},\"gauges\":{");
+        s.push_str(",\"gauges\":{");
         for (i, g) in self.gauges.iter().enumerate() {
             if i > 0 {
                 s.push(',');
@@ -733,6 +702,33 @@ fn label(name: &str, index: Option<u32>) -> String {
 /// One section of the text report: each column as wide as its widest cell,
 /// the name column left-aligned and the numbers right-aligned, a rule under
 /// the header, a blank line above. The width is measured in `char`s, so `±` counts as one.
+/// A table of observations, a program's (`observe`) with four decimals,
+/// or the client's (`digits`) with the mean's four significant digits: a
+/// time per output token is a fraction of a millisecond.
+fn observe_table<'a>(
+    s: &mut String,
+    title: &str,
+    list: impl Iterator<Item = &'a ObserveReport>,
+    digits: bool,
+) {
+    let rows = list.map(|o| {
+        let d = if digits && o.mean.is_finite() && o.mean != 0.0 {
+            (3 - o.mean.abs().log10().floor() as i32).clamp(0, 12) as usize
+        } else {
+            4
+        };
+        vec![
+            o.name.clone(),
+            o.count.to_string(),
+            format!("{:.d$}", o.mean),
+            format!("±{:.d$}", o.ci.half_width),
+            format!("{:.3}", o.cv2),
+            format!("{:.d$}", o.p99),
+        ]
+    });
+    table(s, &[title, "count", "mean", "95% CI", "cv2", "p99"], rows);
+}
+
 fn table(s: &mut String, header: &[&str], rows: impl Iterator<Item = Vec<String>>) {
     table_aligned(s, header, rows, false);
 }

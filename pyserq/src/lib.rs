@@ -110,7 +110,7 @@ impl Report {
     fn observes<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         let d = PyDict::new(py);
         for (i, o) in self.0.observes.iter().enumerate() {
-            d.set_item(&o.name, Observe(self.0.clone(), i, false))?;
+            d.set_item(&o.name, Observe(self.0.clone(), i, Table::Program))?;
         }
         Ok(d)
     }
@@ -121,7 +121,7 @@ impl Report {
     fn client<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         let d = PyDict::new(py);
         for (i, o) in self.0.client.iter().enumerate() {
-            d.set_item(&o.name, Observe(self.0.clone(), i, true))?;
+            d.set_item(&o.name, Observe(self.0.clone(), i, Table::Client))?;
         }
         Ok(d)
     }
@@ -173,7 +173,7 @@ impl Report {
     /// The observation `name`, or `None` (`serq::Report::observe`).
     fn observe(&self, name: &str) -> Option<Observe> {
         let i = self.0.observes.iter().position(|o| o.name == name)?;
-        Some(Observe(self.0.clone(), i, false))
+        Some(Observe(self.0.clone(), i, Table::Program))
     }
 
     /// The first stage named `name`, or `None`.
@@ -204,14 +204,22 @@ impl Report {
 /// them. Each access to `samples`, `times`, `sessions` or `turns` makes a
 /// new list: bind it once.
 #[pyclass(frozen, module = "pyserq")]
-struct Observe(Arc<serq::Report>, usize, bool);
+struct Observe(Arc<serq::Report>, usize, Table);
+
+/// The report's table an observation is in.
+#[derive(Clone, Copy)]
+enum Table {
+    /// The program's `observe`s.
+    Program,
+    /// What each turn's client saw.
+    Client,
+}
 
 impl Observe {
     fn get(&self) -> &serq::engine::report::ObserveReport {
-        if self.2 {
-            &self.0.client[self.1]
-        } else {
-            &self.0.observes[self.1]
+        match self.2 {
+            Table::Program => &self.0.observes[self.1],
+            Table::Client => &self.0.client[self.1],
         }
     }
 }

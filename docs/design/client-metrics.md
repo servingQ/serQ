@@ -47,52 +47,79 @@ not the engine's to say, nor the program's to rewrite.
 
 The IR has what they need: a turn is the `Turn` statement and the server
 statements spliced after it, which `sides` marks `Server`; a run's mode
-says whether it decodes; and the interpreter commits each output token.
+says whether it decodes; and the interpreter commits each output token, a
+decode's at every iteration and a prefill's at its end.
 
 | Metric | Sample | Recorded |
 |---|---|---|
-| `ttft` | first token − start | at the first token |
-| `tpot` | (last token − first token) / tokens after the first | when the turn is answered |
+| `ttft` | first token − start | when the first token is known (below) |
+| `tpot` | (answer − first token) / tokens after the first | when the turn is answered |
 | `response` | answer − start | when the turn is answered |
 
 - **start**: the session executes the turn's `Turn`.
 - **answered**: the session's frame reaches the first statement after the
   `Turn` on the workload's side, or the end of the `Turn`'s block: the
   server's statements are done.
-- **first token**: the turn's first `Decode` run starts, in the session or
-  one of its legs. The prefill before it ends at that instant and sampled
-  the token. A prefill-only engine, llm-d's prefiller with `max_tokens =
-  1`, runs no decode, so the first token is the decoder's.
-- **tokens after the first**: what the interpreter commits for the turn
-  after its first token: a decode's token at each iteration, and a
-  prefill's at its end, which after the first token is a resumed request's
-  re-prefill sampling the next token (vLLM keeps the outputs of a preempted
-  request and samples on, `scheduler.py:1560-1561`).
+- **first token**: the token the prefill sampled that ended last before
+  the turn's first decode token, or that decode token when no prefill
+  ended before it; when the turn commits no decode token, the token its
+  last prefill sampled (a `max_tokens = 1` request). Tokens of the session
+  and of its legs count, a leg's only while the session is on the turn the
+  leg was forked in. A P/D prefiller's prefill ends before the decoder's,
+  so the decoder's is the first, as llm-d's sidecar (`max_tokens = 1`)
+  makes it.
+- **recorded**: when a decode run starts at the instant a prefill of the
+  turn ended, the usual case, the first token is known then; otherwise at
+  the first decode token, or when the turn is answered for one with no
+  decode token.
+- **tokens after the first**: the tokens the interpreter commits for the
+  turn after its first: a decode's at each iteration, and a prefill's at
+  its end, which after the first token is a resumed request's re-prefill
+  sampling the next token (vLLM keeps the outputs of a preempted request
+  and samples on, `scheduler.py:1560-1561`).
 
-A turn that runs no decode, a station of `fifo`, `ps` or `delay` stages
+A turn that commits no token, a station of `fifo`, `ps` or `delay` stages
 (`examples/single-turn/mg1.sq`, the tutorial's first chapters, the
 papers), has a `response` and no `ttft` or `tpot`; one with a single
-output token has no `tpot`.
+output token has a `ttft` and no `tpot`.
 
-**vLLM.** The metrics are vLLM's request statistics at the pinned revision
-(`vllm/v1/metrics/stats.py`): the time to first token is the time since
-arrival when a request's first output comes back while it is prefilling
-(`metrics/stats.py:472-474`), and that output's time is its first-token
-time (`metrics/stats.py:499-505`); the end-to-end latency is the time since
-arrival when it finishes (`metrics/stats.py:541`); and the mean time per
-output token is the decode interval, from the first token to the last,
-over the generated tokens less the first (`metrics/stats.py:552,
-558-563`). Two differences: the start is the client's `turn`, where vLLM's
-is the frontend's arrival; serQ has no frontend between them unless the
-program writes one (`vllm_nixl_push.sq`'s `run front`). And a request with
-one output token has no `tpot` sample, where vLLM records 0: 0 over 0
-tokens is no time per token, and a 0 pulls the mean of the others down.
+**vLLM.** The engine's request statistics at the pinned revision: the
+time to first token is the time since arrival when a request's first
+output comes back while it is prefilling (`metrics/stats.py:472-474`),
+once (`output_processor.py:692-702`), so a request of one output token has
+one; that output's time is its first-token time
+(`metrics/stats.py:499-505`); the end-to-end latency is the time since
+arrival when it finishes (`metrics/stats.py:541`). The client is vLLM's
+benchmark (`benchmarks/serve.py`), which these follow where the two
+differ: its time per output token is the latency less the time to first
+token over the output tokens less one, and a request of one output token
+has none (`benchmarks/serve.py:625-628`), where the engine's divides the
+first-to-last-token interval and records 0 (`metrics/stats.py:552,
+558-563`). The answer and the last token are the same instant in every
+program here; a server that runs a stage after its decode charges it to
+`tpot`, as a client would see it. The start is the client's `turn`, where
+the engine's is the frontend's arrival; serQ has no frontend between them
+unless the program writes one (`vllm_nixl_push.sq`'s `run front`). The
+benchmark counts only the requests that succeed
+(`benchmarks/serve.py:604-605, 633`); serQ answers every turn, a refused
+one included (*Open*).
 
 **Where it is reported.** A section of its own, `client`, beside the
 program's `observe` table, in the text report, in the JSON (`client.ttft`,
-…), in `--dump` (`client/ttft.csv`) and in pyserq (`report.client`). A
-program's `observe ttft` keeps its name and its own table: it may measure
-something else, as `routing.sq`'s `response` does.
+…), in `--dump` (`client/ttft.csv`) and in pyserq (`report.client`). Its
+numbers are printed to four significant digits of the mean, since a time
+per token is a fraction of a millisecond. A run in which no turn was
+answered after the warm-up says so in a note. A program's `observe ttft`
+keeps its name and its own table, but a program that measures something
+else names it otherwise (`routing.sq`'s `later_response`).
+
+**The warm-up's edges.** A sample counts if it is recorded after the
+warm-up, so a turn's `ttft` (recorded at its first token) and its
+`response` (at its answer) can fall on two sides of it: a turn whose
+first token comes before the warm-up and whose answer after has a
+`response` and no `ttft`. At the horizon, a turn with its first token and
+no answer has a `ttft` and no `response`. Counts of the three differ by
+these turns.
 
 ## What changed in the programs
 
@@ -102,36 +129,53 @@ the Lean model and the draws are untouched. Programs whose hand-written
 `ttft` or `response` meant exactly the client's lose them, and with them a
 `set t0` or a `mark first_token` nothing else reads. Each was checked
 sample by sample: before (main's `serq` and text) and after (this one's),
-seeds 1 to 3 at horizons 200 and 1 000, the program's `observe` dump against
-the client's.
+seeds 1 to 3 at horizons 60 (no warm-up), 200 and 1 000, the program's
+`observe` dump against the client's, and every other line of the report.
 
 | Program | Removed | Before against after |
 |---|---|---|
-| `multi-turn/vllm.sq`, `vllm_chat.sq`, `single-turn/vllm_single_turn.sq`, `subagent/vllm_subagents.sq`, `engines/sglang.sq`, `tensorrt_llm.sq`, `tgi.sq`, `multi-turn/replica.sq`, `single-turn/separate_phases.sq`, `vendors/rbln.sq` | `ttft`, `response` | the same samples, at the same times |
+| `multi-turn/vllm.sq`, `vllm_chat.sq`, `single-turn/vllm_single_turn.sq`, `subagent/vllm_subagents.sq`, `engines/sglang.sq`, `tensorrt_llm.sq`, `tgi.sq`, `multi-turn/replica.sq`, `vendors/rbln.sq` | `ttft`, `response` | the same samples, at the same times |
 | `multi-turn/closed.sq`, `single-turn/fastertransformer.sq`, `mg1.sq`, `ps.sq`, `vendors/ascend.sq`, `pd-disaggregation/pd_open.sq`, the tutorial's five programs | `response` (and `ttft` in the fifth) | the same samples, at the same times |
-| `pd-disaggregation/llmd_nixl_pull.sq` | `ttft` and its marks | the same value for every turn; recorded at the first token, where the gateway recorded it at the end, so a turn on the warm-up's edge counts on the other side (two turns in six runs) |
+| `pd-disaggregation/llmd_nixl_pull.sq` | `ttft` and its marks | the same value for every turn; recorded at the first token, where the gateway recorded it at the end, so a turn at either edge counts on the other side (at the warm-up's start, or one with its first token and no answer at the horizon) |
 | `pd-disaggregation/vllm_nixl_push.sq` | `ttft`, `response` and its mark | `response` the same; `ttft` as llm-d's |
 
-Every other line of every report is the same.
+Kept, because they measure something else, renamed where the name was the
+client's:
 
-Kept, because they measure something else:
-
-- `llmd_nixl_pull.sq`'s `response`: only an accepted turn's. A turn vLLM
-  refuses (`too_long`) is answered at once, a client `response` of 0 (9 to
-  67 turns a run).
+- `separate_phases.sq`'s, now `gated_ttft` and `gated_response`: from the
+  end of its `gate`, B's arrival at the engine, where the client's start
+  at the `turn`. And B is prefill-only, a token the client counts at the
+  prefill's end: for A and B, client `ttft` [1, 2] and `response` [4, 2]
+  against the program's [1, 1] and [4, 1].
+- `routing.sq`'s, now `later_response`: not a session's first turn.
+- `pd_tandem.sq`'s, now `cycle`: one per pass of a server loop that never
+  ends its turn, a job of a closed tandem; the client answers no turn and
+  the report says so.
+- `llmd_nixl_pull.sq`'s `response`: only an accepted turn's (*Open*).
 - `pd_batching.sq`'s `ttft`, `tpot` and `response`: the same values (its
-  `tpot` divides by `o - 1`, the client's count), its `ttft` recorded at the
-  turn's end; kept because `tools/pd_batching/` reads them from the
+  `tpot` divides by `o - 1`, the client's count), its `ttft` recorded at
+  the turn's end; kept because `tools/pd_batching/` reads them from the
   reports it archives.
-- `routing.sq`'s `response`: not a session's first turn.
-- `pd_tandem.sq`'s `response`: one per pass of a server loop that never
-  ends its turn, a job of a closed tandem, not a turn.
 - `pd_ps.sq`'s `tpot`: its stages are `ps`, with no decode run.
 - `kong_svf.sq`'s `response`: its claim aggregates it (`total(response)`).
 - `replay/vllm_replay.sq`'s: the prefix-cache oracle and its Lean theorem
   read them (`tests/vllm_cache.rs`, `scripts/gen_lean_oracle.py`).
 - the papers' (`dai_*.sq`, `bari_rad.sq`): the Lean claims' programs,
   left with their claims.
+
+## Open
+
+**A refused turn.** vLLM refuses a prompt of `max_model_len` tokens or
+more before it schedules it (`input_processor.py:512-536`) and the
+benchmark does not count the failed request; `llmd_nixl_pull.sq`'s server
+writes the refusal as `branch (accepted) { gw.route(); }` and its session
+stops after the turn. The client answers that turn at once, a `response`
+of 0 (9 to 67 turns a run at the defaults), and the program's own
+`response` leaves it out. A server cannot end the session (`end` is the
+session's, refused in a `server`), so "a turn whose session ends in the
+server is not answered" has no program to say it. Either a server may
+`end;` a refused request, or a turn that runs nothing is not answered (a
+rule the program would not state), or the refusal stays a `response` of 0.
 
 ## Self-critique
 
@@ -144,29 +188,28 @@ client's.
 
 **Refusing `observe ttft`.** The names `ttft`, `tpot` and `response` could
 be the language's, refused as an `observe` name (#483, #487). A program
-that measures something else under the name, `routing.sq`'s `response`,
-would have to rename it, and the report would have one table. Rejected:
-a section of its own lets the program keep its names, and a reader sees in
-the section's title whose number it is.
+that measures something else under the name would have to rename it,
+which a reader of the report would want anyway, and one that measures the
+same would have to delete it. Rejected for a section of its own: a reader
+sees in the section's title whose number it is; the programs here that
+measured something else are renamed.
 
-**The turn's end as the last token.** `tpot` could divide the time from the
-first token to the turn's end. The two are the same instant in every
-program here, but a server that runs a stage after its decode (a
-detokenizer, a network hop) would charge that stage to every token. vLLM
-divides to the last token (`metrics/stats.py:552`).
+**The first token at the start of the first decode run.** It is the
+prefill's end in a turn that prefills, and it is wrong where no prefill
+ended then: a decode alone (`kong_svf.sq`) would have its first token
+before any iteration, and its decode tokens all after it. The committed
+tokens say it in every case.
+
+**`tpot` to the last token.** vLLM's engine divides the first-to-last
+token interval (`metrics/stats.py:552`); its benchmark client divides the
+latency less the time to first token (`benchmarks/serve.py:626-627`). The
+two agree when the answer is the last token, as in every program here;
+the client's is what a turn's client sees, so the report follows it.
 
 **Counting decode work.** The tokens after the first could be the work of
 the turn's decode runs. A request preempted while decoding resumes with a
 prefill that samples a token and a decode one shorter
 (`examples/multi-turn/vllm.sq`'s `known = max(kept, computed + 1)`), so
 the decode work would be one short per preemption. The committed tokens
-count it, as vLLM's `num_generation_tokens` does; `pd_batching.sq`'s `tpot`,
-which divides by `o - 1`, agrees sample by sample.
-
-**The first token at the prefill's end.** The interpreter already marks a
-prefill's end as a token (the inter-token gaps, `Interp::token`). In P/D a
-prefiller's prefill ends first and samples a token the client never sees,
-which the decoder recomputes; the turn's first decode run starts at the
-end of the prefill that sampled the token the client does see, in every
-program here. Choosing by the mode names that one without a rule about
-which prefill counts.
+count it, as vLLM's `num_generation_tokens` does; `pd_batching.sq`'s
+`tpot`, which divides by `o - 1`, agrees sample by sample.

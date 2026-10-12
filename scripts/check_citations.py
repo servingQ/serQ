@@ -55,6 +55,9 @@ PATHS = {
     "kv_cache_utils.py": "vllm/v1/core/kv_cache_utils.py",
     "sched/utils.py": "vllm/v1/core/sched/utils.py",
     "metrics/stats.py": "vllm/v1/metrics/stats.py",
+    "output_processor.py": "vllm/v1/engine/output_processor.py",
+    # vLLM's benchmark client: what a client counts of a request
+    "benchmarks/serve.py": "vllm/benchmarks/serve.py",
     "sched/interface.py": "vllm/v1/core/sched/interface.py",
     "input_processor.py": "vllm/v1/engine/input_processor.py",
     "nixl/push_worker.py": "vllm/distributed/kv_transfer/kv_connector/v1/nixl/push_worker.py",
