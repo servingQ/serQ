@@ -8,6 +8,8 @@ operational semantics, see [The language](../language.md).
 | Page | Contents |
 |---|---|
 | [Program](program.md) | `let`, `def`, `use`, `pool`, `stage`, `workload`, `session`, `server`, `gauge`, `claim` |
+| [std/args](std/args.md) | `args.number`, the program's inputs |
+| [std/kvt](std/kvt.md) | `kvt.nixl_pull`, `kvt.nixl_push`, `kvt.l2_load`, `kvt.l2_store` |
 | [Pool](pool.md) | the options of `pool` |
 | [Stage](stage.md) | `fifo`, `ps`, `delay` |
 | [Engine](engine.md) | `device`, `engine … on`, `tokens cap`, `schedule`, `execute`, `pool … on` |
@@ -67,6 +69,7 @@ constructs that say it and a program that uses them.
 | preemption and recompute | [`preempt lifo`](pool.md#preempt), `computed` ([attributes](attributes.md)) | `examples/multi-turn/vllm.sq` (`known = computed …`) |
 | the scheduler's waiting loop and its budget | [`pool … on`](engine.md#pools-on-a-device-or-an-engine), [`admit waiting`](engine.md#schedule), [`budget_left`](functions.md#engine) | `examples/multi-turn/vllm.sq` (`pool reqs on vllm`, `budget_left`) |
 | what the scheduler may not read | [`hidden`](workload.md#hidden) | every vLLM program hides the output length (`o`; `out` in the replay) |
-| prefill/decode disaggregation | [`lease`](statements.md#hold), [`release`](statements.md#release), [`load`](statements.md#load), [`transfer … from … to`](serving.md#transfer-from-to) | [the P/D use case](../use-cases/pd.md) |
+| prefill/decode disaggregation | [`lease`](statements.md#hold), [`release`](statements.md#release), [`load`](statements.md#load), [`transfer … from … to`](serving.md#transfer-from-to), [`kvt.nixl_pull`, `kvt.nixl_push`](std/kvt.md#kvtnixl_pull-and-kvtnixl_push) | [the P/D use case](../use-cases/pd.md) |
+| an L2 KV cache outside the engine (LMCache, Mooncake) | [`kvt.l2_load`, `kvt.l2_store`](std/kvt.md#kvtl2_load-and-kvtl2_store), the `l2` role ([Queues](../language.md#queues)) | `examples/multi-turn/vllm_lmcache.sq` |
 | a routing policy | [`choose`](statements.md#choose), [observables](functions.md#observables) | `examples/multi-turn/routing.sq` |
 | what to measure or check | [`observe`](statements.md#observe), [`gauge`](program.md#gauge), [`claim`](program.md#claim) | [the Kong use case](../use-cases/kong.md) |

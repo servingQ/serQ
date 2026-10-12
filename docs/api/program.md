@@ -17,7 +17,7 @@ finds its stage among the stages declared above it.
 |---|---|
 | `fn main()` | Construct the deployment and workload. |
 | [`let`](#let) | Declare a constant. |
-| [`args.number`](#stdargs) | Declare a numeric program input. |
+| [`args.number`](std/args.md) | Declare a numeric program input. |
 | [`def`](#def) | Define a reusable expression or statement body. |
 | [`use`](#use) | Import `std/args`, the program's inputs, or `std/kvt`, the KV-transfer vocabulary. |
 | [`pool`](#pool) | Declare resource capacity, cache and admission policy. |
@@ -43,48 +43,10 @@ program: CLI options and instances cannot replace it.
 | `NAME` | identifier | May not also be a session attribute: the linker rejects it. |
 | `expr` | `const` | May read earlier constants. |
 
-### `std/args`
-
-```serq
-use "std/args";
-
-fn main() {
-  let rate = args.number("arrival_rate", 0.3);
-  stage svc : delay;
-  workload {
-    arrive poisson(rate);  }
-  server {
-    run svc (cost(svc, 1));
-    }
-}
-```
-
-`args.number("name", default)` declares a numeric input as the entire
-initializer of a `let` inside `main`. Its external name is an identifier;
-its local binding may have a different name. Read each input once and reuse
-that binding. The default is a constant expression and may read earlier
-constants. Values are numbers (including `inf`), never NaN. Strings,
-positional arguments and implicit access to the host environment are not
-part of this numeric library.
-
-`serq run model.sq --horizon 10 -- --arrival_rate 0.5` supplies the value. The separator
-keeps the program's options apart from the interpreter's `--seed`,
-`--horizon`, and other run settings. `--arrival_rate=0.5` works too;
-repeated options use the last value. Unknown names, missing values and
-invalid numbers fail before simulation. `--set arrival_rate=0.5`,
-instances and Python `sets={"arrival_rate": 0.5}` bind the same declared
-input. `--set` and API strings can also supply a constant expression.
-
-The frontend provides `std/args` on every installation; it does not read a
-file or the process environment. Inputs become constants before IR is
-produced. Runtime expressions cannot call `args.number`. Array sizes are
-resolved during parsing, so supplying an input that affects an array size
-is refused, including through a derived constant.
-
 ### Instances
 
 An instance supplies the model's declared inputs and its execution conditions.
-It may contain `let NAME = expr;` for inputs declared with `args.number` and
+It may contain `let NAME = expr;` for inputs declared with [`args.number`](std/args.md) and
 one `run` configuration block with numeric values. It cannot declare pools,
 stages, workloads or definitions. The configuration block belongs only to
 an instance; a model's `run STAGE (cost(STAGE, work));` performs stage work.
@@ -106,54 +68,6 @@ apply in command-line order; later values win.
 Example commands state their execution conditions directly. An instance is
 optional: use one to name an experiment, and select it explicitly with
 `--instance`. Settings files are never auto-loaded.
-
-### `std/kvt`
-
-```serq
-use "std/kvt";
-
-share maxmin;
-kvt.nixl_pull (SOURCE, READER, latency = x);
-kvt.nixl_push (SOURCE, READER, latency = x);
-```
-
-The KV-transfer vocabulary: NIXL's two modes of one copy between two
-queues with a `nic`, declared above the call. `kvt.nixl_pull` is the
-*pull relation*: the KV goes from `SOURCE` to `READER`, and the reader's
-worker starts each read, waiting `x` before it (`READER.nic.latency`).
-`kvt.nixl_push` is the same copy written by the source (NIXL push): the
-source's worker posts the write and waits `x` before it
-(`SOURCE.nic.latency`). In both, an entry of the reader called `from
-SOURCE[i]` reads with a `transfer` without `on`, over both NICs.
-
-| Argument | Type | Description |
-|---|---|---|
-| `latency = x` | `const` | The wait before each copy; optional. |
-
-The source comes first in both, as the bytes go; a reader with no entry
-`from` the source is refused at the call. Concurrent copies divide the
-two NICs by the program's [`share`](#share), which a program with a
-relation must write. A program that imports `std/kvt` declares nothing
-named `kvt`. See
-[Queues](../language.md#queues).
-
-In a body, std/kvt copies through an L2 KV cache, a queue that plays
-`l2` (one pool and a `serve`):
-
-```serq
-kvt.l2_load (CACHE, POOL, n, per_token = r);
-kvt.l2_store (POOL, CACHE, n, per_token = r);
-```
-
-`kvt.l2_load` copies the KV of `n` tokens the cache holds into the
-enclosing hold on `POOL`, which counts them as computed; the cache keeps
-them. `kvt.l2_store` makes the session's entry in the cache hold `n`
-tokens and copies only the part it lacks. Both run at the cache's `serve`
-for `r` per token copied.
-
-| Argument | Type | Description |
-|---|---|---|
-| `per_token = r` | `expr` | The time a token takes at the cache's bandwidth; required. |
 
 ## `def`
 
@@ -219,9 +133,18 @@ use "std/args";
 use "std/kvt";
 ```
 
-Imports [`std/args`](#stdargs), the program's inputs, and
-[`std/kvt`](#stdkvt), the KV-transfer vocabulary; no other path is read. A program is one file: what several programs share, each writes, so
-a reader of one program reads all of it.
+Imports a library of the standard library: [`std/args`](std/args.md),
+the program's inputs, or [`std/kvt`](std/kvt.md), the KV-transfer
+vocabulary. The frontend provides both on every installation; no file and
+no other path is read. A program is one file: what several programs
+share, each writes, so a reader of one program reads all of it.
+
+A library is a namespace the parser defines: its functions are rewritten
+into the language's own constructs before the IR is produced, so a
+program that calls them links to the same IR as one that writes those
+constructs. Calling `args.…` or `kvt.…` without its `use` is an error,
+and so is declaring something named `args` or `kvt` (a `let`, a pool, a
+stage, a queue, a `def`) beside the import.
 
 ## `pool`
 
@@ -422,4 +345,5 @@ serq run model.sq --horizon 10 --seed 1
 ## See also
 
 [Pools](pool.md), [stages](stage.md), [workloads](workload.md),
+[`std/args`](std/args.md), [`std/kvt`](std/kvt.md),
 [`pyserq.compile`](../python/compile.md).
