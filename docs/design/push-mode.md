@@ -6,10 +6,10 @@ blocks while the prefill runs, and the prefiller writes the KV into them as
 soon as it has both its finished blocks and the decoder's registration. A
 serQ session waited at one place at a time, so the decoder's allocation
 could only be written after the prefill, which is the serial dispatch. This
-document is the design of `fork { … }`, `join;` and `kvt.nixl_push (P, D,
-…);`, issue #368: two IR statements and a parse-time relation. Since [the
-KV transfer module](kv-transfer.md) the relation is spelled through
-`std/kvt`; it was `P push D …;`, with the same meaning.
+document is the design of `fork { … }`, `join;` and `P push D …;`, issue
+#368: two IR statements and a parse-time relation. Since [the KV-transfer
+library](kv-transfer.md) the relation is spelled `kvt.nixl_push (P, D,
+latency = x);` beside the program's `share s;`.
 
 ## What vLLM does
 
@@ -84,7 +84,7 @@ queue D : decode {
     } cache (prompt + o);
   }
 }
-kvt.nixl_push (P, D, latency = x0, share = maxmin);
+P push D latency x0 share maxmin;
 ```
 
 ## The design
@@ -103,9 +103,8 @@ another queue, which reads only its own. The blocking point is a statement
 of its own, where the decoder's request waits, inside the hold of its
 blocks.
 
-**`kvt.nixl_push (P, D, …)` says who moves the bytes, not when the decoder
-is asked.** The same two NICs as `kvt.nixl_pull (D, P, …)`, the same
-`share`; the wait before each copy
+**`P push D` says who moves the bytes, not when the decoder is asked.**
+The same two NICs as `D pull P`, the same `share`; the wait before each copy
 is the poster's, so it is `P.nic.latency`, indexed by the source member.
 The dispatch is the gateway's, and `concurrent = 0` is llm-d's serial push
 with the same relation (criterion 2: the program states the opposite).
@@ -114,7 +113,7 @@ with the same relation (criterion 2: the program states the opposite).
 |---|---|
 | `fork { … }` | `CStmt::Fork(body)` |
 | `join;` | `CStmt::Join` |
-| `kvt.nixl_push (P, D, latency = x, share = s);` | `stage P.nic.latency[N] : delay; share s;`, `x` the constant `P.push.time` |
+| `P push D latency x share s;` | `stage P.nic.latency[N] : delay; share s;`, `x` the constant `P.push.time` |
 | `transfer (n) from P to kv (m)` in `D[j]`, called `from P[i]` | `run P.nic.latency[i] (x); run P.nic[i], D.nic[j] (n); load D.kv[j] (m); release P.kv[i];` |
 
 **Checks.** At link time: a leg may not `turn`, `end`, fork or `join`; a

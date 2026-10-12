@@ -179,7 +179,7 @@ struct Parser {
     entry_from: Option<String>,
     entry_gateway: bool,
     /// The verb of the relation that gave the program's `share`.
-    relation_share: Option<&'static str>,
+    relation: Option<(usize, String)>,
     /// The queues whose relation gives the wait before each copy they post.
     posters: Vec<String>,
     /// The token of the workload's first `tool` that found no stage `tool`
@@ -1574,7 +1574,7 @@ impl Parser {
             in_queue: None,
             entry_from: None,
             entry_gateway: false,
-            relation_share: None,
+            relation: None,
             posters: vec![],
             implicit_tool: None,
             latency_ok: false,
@@ -1983,20 +1983,26 @@ impl Parser {
                     _ => unreachable!("matched an identifier"),
                 };
                 let verb = if push { "push" } else { "pull" };
+                // the source first, as the bytes go
+                let (source, reader) = if push {
+                    (&first, &second)
+                } else {
+                    (&second, &first)
+                };
                 return self.err(format!(
-                    "`{first} {verb} {second} …;` is std/kvt's now: `use \"std/kvt\";` and \
-                     `kvt.nixl_{verb} ({first}, {second}, latency = …, share = …);`"
+                    "`{first} {verb} {second} …;` is std/kvt's now: `use \"std/kvt\";`, \
+                     `kvt.nixl_{verb} ({source}, {reader}, latency = …);` and the program's \
+                     `share maxmin;`"
                 ));
             } else if self.is_kw("share") {
                 let at = self.pos;
                 self.advance();
                 if let Some(first) = self.share_at {
                     let line = self.toks[first].line;
-                    let what = match self.relation_share {
-                        Some(function) => format!("`{function}` names it on line"),
-                        None => "the first is on line".into(),
-                    };
-                    return self.err_at(at, format!("`share` is given twice: {what} {line}"));
+                    return self.err_at(
+                        at,
+                        format!("`share` is given twice: the first is on line {line}"),
+                    );
                 }
                 self.share_at = Some(at);
                 prog.share = Some(if self.eat_kw("maxmin") {
@@ -2019,23 +2025,22 @@ impl Parser {
         if in_main {
             return self.err("unclosed `fn main()`; expected `}`");
         }
-        if self.kvt_imported
-            && (prog.lets.iter().any(|(n, _)| n == "kvt")
-                || prog.pools.iter().any(|p| p.name == "kvt")
-                || prog.stages.iter().any(|s| s.name == "kvt")
-                || self.queues.iter().any(|q| q.name == "kvt")
-                || self.defs.iter().any(|d| d.name == "kvt"))
+        if let Some((at, written)) = &self.relation
+            && prog.share.is_none()
         {
+            return self.err_at(
+                *at,
+                format!(
+                    "{written}: concurrent copies divide the NICs by the program's `share`; \
+                     write `share maxmin;` or `share bottleneck;`"
+                ),
+            );
+        }
+        if self.kvt_imported && self.declares(&prog, "kvt") {
             return self
                 .err("`kvt` names the imported std/kvt module; give the declaration another name");
         }
-        if self.args_imported
-            && (prog.lets.iter().any(|(n, _)| n == "args")
-                || prog.pools.iter().any(|p| p.name == "args")
-                || prog.stages.iter().any(|s| s.name == "args")
-                || self.queues.iter().any(|q| q.name == "args")
-                || self.defs.iter().any(|d| d.name == "args"))
-        {
+        if self.args_imported && self.declares(&prog, "args") {
             return self.err(
                 "`args` names the imported std/args module; give the declaration another name",
             );
@@ -2481,6 +2486,16 @@ impl Parser {
         Ok(())
     }
 
+    /// Whether the program declares something named `name`: a module it
+    /// imports names nothing else.
+    fn declares(&self, prog: &Program, name: &str) -> bool {
+        prog.lets.iter().any(|(n, _)| n == name)
+            || prog.pools.iter().any(|p| p.name == name)
+            || prog.stages.iter().any(|s| s.name == name)
+            || self.queues.iter().any(|q| q.name == name)
+            || self.defs.iter().any(|d| d.name == name)
+    }
+
     /// `use "std/args";`, the program's inputs, and `use "std/kvt";`, the
     /// KV-transfer vocabulary. A program is one file, so no other `use`
     /// reads anything.
@@ -2505,9 +2520,10 @@ impl Parser {
         Ok(())
     }
 
-    /// `kvt.nixl_pull (D, P, latency = x, share = maxmin);` and
-    /// `kvt.nixl_push (P, D, …);`: NIXL's two modes of one copy, from
-    /// std/kvt (`copy_relation`).
+    /// `kvt.nixl_pull (P, D, latency = x);` and `kvt.nixl_push (P, D, …);`:
+    /// NIXL's two modes of one copy from `P` to `D`, from std/kvt
+    /// (`copy_relation`). std/kvt is a namespace the parser defines, as
+    /// std/args is: a connector is a function here.
     fn kvt_call(&mut self, prog: &mut Program) -> PResult<()> {
         let at = self.pos;
         self.advance(); // `kvt`
@@ -2524,60 +2540,38 @@ impl Parser {
                 f_at,
                 format!(
                     "std/kvt has no function `{function}`; it has \
-                     `nixl_pull (READER, SOURCE, …)` and `nixl_push (SOURCE, READER, …)`"
+                     `nixl_pull (SOURCE, READER, …)` and `nixl_push (SOURCE, READER, …)`"
                 ),
             );
         }
         self.expect(&Tok::LParen)?;
         let a_at = self.pos;
-        let first = self.ident()?;
+        let source = self.ident()?;
         self.expect(&Tok::Comma)?;
         let b_at = self.pos;
-        let second = self.ident()?;
+        let reader = self.ident()?;
         let mut latency = None;
-        let mut share = None;
-        while self.eat(&Tok::Comma) {
+        if self.eat(&Tok::Comma) {
             let n_at = self.pos;
             let name = self.ident()?;
-            self.expect(&Tok::Assign)?;
-            match name.as_str() {
-                "latency" if latency.is_none() => latency = Some((self.pos, self.expr()?)),
-                "share" if share.is_none() => {
-                    share = Some(if self.eat_kw("maxmin") {
-                        crate::ir::Share::MaxMin
-                    } else if self.eat_kw("bottleneck") {
-                        crate::ir::Share::Bottleneck
+            if name != "latency" {
+                return self.err_at(
+                    n_at,
+                    if name == "share" {
+                        "`share` is the program's: write `share maxmin;` or `share bottleneck;` \
+                         once, beside the relations"
+                            .to_string()
                     } else {
-                        return self.err(format!(
-                            "`share` is `maxmin` or `bottleneck`, found {}",
-                            self.peek()
-                        ));
-                    })
-                }
-                "latency" | "share" => {
-                    return self.err_at(n_at, format!("`{name}` is given twice"));
-                }
-                _ => {
-                    return self.err_at(
-                        n_at,
-                        format!(
-                            "`kvt.{function}` takes `latency = …` and `share = …`, found `{name}`"
-                        ),
-                    );
-                }
+                        format!("`kvt.{function}` takes `latency = …`, found `{name}`")
+                    },
+                );
             }
+            self.expect(&Tok::Assign)?;
+            latency = Some((self.pos, self.expr()?));
         }
         self.expect(&Tok::RParen)?;
         self.expect(&Tok::Semi)?;
-        self.copy_relation(
-            prog,
-            at,
-            push,
-            (first, a_at),
-            (second, b_at),
-            latency,
-            share,
-        )
+        self.copy_relation(prog, at, push, (source, a_at), (reader, b_at), latency)
     }
 
     /// A declaration or a parameter may not take a name the language
@@ -5045,38 +5039,25 @@ impl Parser {
         Ok(binds)
     }
 
-    /// `kvt.nixl_pull (D, P, latency = x, share = maxmin);`: the KV the
-    /// entries of `D` take `from P` is read by `D`, over `P`'s NIC and `D`'s
-    /// at once, after `D` waits `x`; concurrent reads divide the two NICs by
-    /// the policy, which is the program's `share`. `kvt.nixl_push (P, D,
-    /// latency = x, share = maxmin);`: the same copy over the same two NICs,
-    /// written by `P` (NIXL's push mode), so the wait `x` before each write
-    /// is `P`'s.
-    #[allow(clippy::too_many_arguments)]
+    /// `kvt.nixl_pull (P, D, latency = x);`: the KV the entries of `D`
+    /// take `from P` is read by `D`, over `P`'s NIC and `D`'s at once, after
+    /// `D` waits `x`; concurrent reads divide the two NICs by the program's
+    /// `share`. `kvt.nixl_push (P, D, latency = x);`: the same copy over the
+    /// same two NICs, written by `P` (NIXL's push mode), so the wait `x`
+    /// before each write is `P`'s.
     fn copy_relation(
         &mut self,
         prog: &mut Program,
         at: usize,
         push: bool,
-        (first, f_at): (String, usize),
-        (second, s_at): (String, usize),
+        (source, s_at): (String, usize),
+        (reader, r_at): (String, usize),
         latency: Option<(usize, Expr)>,
-        share: Option<crate::ir::Share>,
     ) -> PResult<()> {
-        let span = Some(self.span_at(f_at));
-        let function = if push {
-            "kvt.nixl_push"
-        } else {
-            "kvt.nixl_pull"
-        };
-        let (reader, source) = if push {
-            (second.clone(), first.clone())
-        } else {
-            (first.clone(), second.clone())
-        };
-        let written = format!("`{function} ({first}, {second})`");
-        let copies = if push { "writes" } else { "reads" };
-        for (q, q_at) in [(&first, f_at), (&second, s_at)] {
+        let span = Some(self.span_at(s_at));
+        let verb = if push { "push" } else { "pull" };
+        let written = format!("`kvt.nixl_{verb} ({source}, {reader})`");
+        for (q, q_at) in [(&source, s_at), (&reader, r_at)] {
             let Some(d) = self.queues.iter().find(|d| d.name == *q) else {
                 return self.err_at(q_at, format!("{written}: no queue `{q}` is declared above"));
             };
@@ -5091,7 +5072,7 @@ impl Parser {
             }
         }
         if reader == source {
-            return self.err_at(s_at, format!("{written}: a queue copies the KV to another"));
+            return self.err_at(r_at, format!("{written}: a queue copies the KV to another"));
         }
         let qi = self
             .queues
@@ -5105,11 +5086,26 @@ impl Parser {
             .find(|e| e.from.as_ref().is_some_and(|f| *f != source))
         {
             return self.err_at(
-                if push { f_at } else { s_at },
+                s_at,
                 format!(
                     "{written}, and `{reader}.{} (…)` takes the KV `from {}`",
                     e.verb,
                     e.from.as_deref().unwrap_or("?")
+                ),
+            );
+        }
+        // and one of them takes it from here: two queues the wrong way round
+        // would otherwise link and fail at the call
+        if !self.queues[qi]
+            .entries
+            .iter()
+            .any(|e| e.from.as_deref() == Some(source.as_str()))
+        {
+            return self.err_at(
+                at,
+                format!(
+                    "{written}: `{reader}` has no entry `… from {source}`, so nothing reads \
+                     what this copies; the source comes first, then the reader"
                 ),
             );
         }
@@ -5129,7 +5125,6 @@ impl Parser {
             .iter()
             .position(|d| d.name == *poster)
             .expect("checked above");
-        let verb = if push { "push" } else { "pull" };
         let latency = if let Some((l_at, e)) = latency {
             let v = match self.const_or_clash(&e) {
                 Err(clash) => return self.err_at(l_at, clash),
@@ -5143,7 +5138,8 @@ impl Parser {
                 );
             };
             // a constant of its own (see the link's `latency`), and a delay
-            // stage of the side that posts, one per member
+            // stage of the side that posts, one per member; the constant
+            // keeps the name of the relation it came from (`D.pull.time`)
             let lname = format!("{poster}.{verb}.time");
             let sname = format!("{poster}.nic.latency");
             // the wait is the poster's, one delay stage per poster
@@ -5172,35 +5168,9 @@ impl Parser {
         } else {
             None
         };
-        // the policy is the relation's: written here, not left to a default
-        let Some(policy) = share else {
-            return self.err_at(
-                at,
-                format!(
-                    "{written} names how concurrent {copies} divide the NICs: \
-                     `share = maxmin` or `share = bottleneck`"
-                ),
-            );
-        };
-        match prog.share {
-            Some(p) if p != policy => {
-                return self.err_at(
-                    at,
-                    "the program divides shared stages by one policy: every relation and \
-                     `share` names the same",
-                );
-            }
-            Some(_) if self.relation_share.is_none() => {
-                return self.err_at(
-                    at,
-                    "`share` is declared on its own and on the relation: the relation names it",
-                );
-            }
-            _ => {}
-        }
-        prog.share = Some(policy);
-        self.relation_share = Some(function);
-        self.share_at.get_or_insert(at);
+        // concurrent copies divide the NICs by the program's `share`, which
+        // it writes (checked once the program is read)
+        self.relation.get_or_insert((at, written));
         self.queues[qi].takes = Some(queue::Takes {
             source,
             latency,

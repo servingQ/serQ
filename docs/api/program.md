@@ -112,8 +112,9 @@ optional: use one to name an experiment, and select it explicitly with
 ```serq
 use "std/kvt";
 
-kvt.nixl_pull (READER, SOURCE, latency = x, share = s);
-kvt.nixl_push (SOURCE, READER, latency = x, share = s);
+share maxmin;
+kvt.nixl_pull (SOURCE, READER, latency = x);
+kvt.nixl_push (SOURCE, READER, latency = x);
 ```
 
 The KV-transfer vocabulary: NIXL's two modes of one copy between two
@@ -128,10 +129,12 @@ SOURCE[i]` reads with a `transfer` without `on`, over both NICs.
 | Argument | Type | Description |
 |---|---|---|
 | `latency = x` | `const` | The wait before each copy; optional. |
-| `share = s` | `maxmin` or `bottleneck` | How concurrent copies divide the two NICs: the program's [`share`](#share); required. |
 
-The named arguments come in any order, each at most once. A program that
-imports `std/kvt` declares nothing named `kvt`. See
+The source comes first in both, as the bytes go; a reader with no entry
+`from` the source is refused at the call. Concurrent copies divide the
+two NICs by the program's [`share`](#share), which a program with a
+relation must write. A program that imports `std/kvt` declares nothing
+named `kvt`. See
 [Queues](../language.md#queues).
 
 ## `def`

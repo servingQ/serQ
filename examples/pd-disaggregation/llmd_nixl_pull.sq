@@ -173,7 +173,8 @@ fn main() {
   // prefiller's NIC and the decoder's at once. How concurrent reads divide the
   // two NICs is UCX's and the fabric's, not vLLM's: max-min fairness is the
   // model, not a measurement (docs/design/bandwidth-sharing.md).
-  kvt.nixl_pull (D, P, latency = x0, share = maxmin);
+  share maxmin;
+  kvt.nixl_pull (P, D, latency = x0);
 
   // The client: sessions arrive, each turn brings a prompt of n new tokens on
   // a context of K and wants o tokens back, and after a turn the session calls

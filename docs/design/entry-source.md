@@ -39,7 +39,7 @@ P[i]`). It is never a number, not in an index either.
 | Surface | Kernel |
 |---|---|
 | `D[j].decode (…) from P[i]`, to the entry `decode (…) from P` | the body, with `P` := `P.kv[i]` |
-| `transfer (n) from P to kv (m)` in it, under `kvt.nixl_pull (D, P, …)` | `run D.nic.latency[j] (x); run P.nic[i], D.nic[j] (n); load D.kv[j] (m); release P.kv[i];` |
+| `transfer (n) from P to kv (m)` in it, under `D pull P …` | `run D.nic.latency[j] (x); run P.nic[i], D.nic[j] (n); load D.kv[j] (m); release P.kv[i];` |
 
 **Checks, each where the fact is written.**
 
@@ -57,9 +57,8 @@ entry that needed the lease.
 ## Self-critique
 
 **`from P` is written twice.** The header and the `transfer` both name `P`,
-and under a relation the header and `kvt.nixl_pull (D, P, …)` do too. A
-`transfer (n) to kv (m)` with the source implied was considered: one word
-less, but a
+and under a relation the header and `D pull P` do too. A `transfer (n) to
+kv (m)` with the source implied was considered: one word less, but a
 `transfer` without `from` in a relation entry and with it everywhere else
 is two shapes of one statement, and the kernel's `transfer (X) from P to Q
 (n)` always names both ends. Each repetition is checked against the other,
