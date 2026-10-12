@@ -2261,13 +2261,22 @@ impl Constants for Linker<'_> {
 
     /// What else an aggregate's index names, read as `resolve` reads it: an
     /// index the expression would read as that instead is refused. A `let`
-    /// is asked of the program, since its value may not be folded yet.
+    /// and a register are asked of the program, since the constants are
+    /// folded, and the registers taken, one by one: whatever the order the
+    /// names are declared in, the index may not take one.
     fn index_clash(&self, j: &str) -> Option<&'static str> {
         if self.prog.lets.iter().any(|(n, _)| n == j) {
             return Some("a `let` constant");
         }
+        let a_register = self.prog.stages.iter().any(
+            |s| matches!(&s.kind, StageKind::Step(sp) if sp.state.iter().any(|(n, _)| n == j)),
+        );
+        if a_register {
+            return Some("an engine's register");
+        }
         match self.resolve(j) {
             Some(Meaning::Attr(_)) => Some("a session attribute"),
+            // a folded `let` or a register taken: both answered above
             Some(Meaning::Const(_)) => Some("a `let` constant"),
             Some(Meaning::Reg(_)) => Some("an engine's register"),
             Some(Meaning::Supplied(_)) => Some("a name the language supplies"),

@@ -756,17 +756,33 @@ fn a_def_names_the_predicate_advance_and_admit_share() {
     }
 }
 
-/// An aggregate's index may not take a register's name: the sum read the
-/// index where the register was meant, `sum r in 2 (r)` as `0 + 1`, though
-/// it may take neither an attribute's nor a constant's (#557 review).
+/// An aggregate's index may not take a register's name, as it may take
+/// neither an attribute's nor a constant's: the sum read the index where
+/// the register was meant, `sum r in 2 (r)` as `0 + 1` (#558). Whatever the
+/// order the names are declared in: a register's initial value or a `let`
+/// is folded before a later register is taken (#558 review).
 #[test]
 fn an_aggregate_index_is_no_register() {
+    let refusal = "is also an engine's register";
     let src = engine(
         "set r = (sum r in 2 (r)) * 0; advance running; \
          admit waiting while (running.preempted == 0);",
     )
     .replace("tokens cap 8;", "tokens cap 8; state r = 0;");
-    refused(&src, "`sum r in`: `r` is also an engine's register");
+    refused(&src, &format!("`sum r in`: `r` {refusal}"));
+    let ok = "set q = q; set s = s; advance running; admit waiting while (running.preempted == 0);";
+    for state in [
+        "state q = 0; state s = sum q in 2 (q);",
+        "state s = sum q in 2 (q); state q = 0;",
+    ] {
+        let src = engine(ok).replace("tokens cap 8;", &format!("tokens cap 8; {state}"));
+        refused(&src, &format!("`sum q in`: `q` {refusal}"));
+    }
+    let src = format!(
+        "let n = sum q in 2 (q);\n{}",
+        engine(ok).replace("tokens cap 8;", "tokens cap 8; state q = 0; state s = n;")
+    );
+    refused(&src, &format!("`sum q in`: `q` {refusal}"));
 }
 
 #[test]
