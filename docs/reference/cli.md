@@ -13,7 +13,7 @@ serq --version
 ```
 
 Append `[-- --name value ...]` to `run`, `check`, `ir`, `draw` or `target`
-to supply numeric inputs declared by `args.number`. The separator occurs once;
+to supply numeric inputs declared by [`args.number`](../api/std/args.md). The separator occurs once;
 all interpreter options precede it.
 
 `FILE` is program text (`.sq`) or IR (`.json`, as written by `serq ir`).

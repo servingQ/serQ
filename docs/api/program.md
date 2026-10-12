@@ -133,16 +133,15 @@ use "std/args";
 use "std/kvt";
 ```
 
-Imports a library of the standard library: [`std/args`](std/args.md),
+Imports one of the two standard libraries: [`std/args`](std/args.md),
 the program's inputs, or [`std/kvt`](std/kvt.md), the KV-transfer
 vocabulary. The frontend provides both on every installation; no file and
 no other path is read. A program is one file: what several programs
 share, each writes, so a reader of one program reads all of it.
 
-A library is a namespace the parser defines: its functions are rewritten
-into the language's own constructs before the IR is produced, so a
-program that calls them links to the same IR as one that writes those
-constructs. Calling `args.…` or `kvt.…` without its `use` is an error,
+A library is a namespace the parser defines: its calls are rewritten
+into the language's own constructs before the IR is produced, and the IR
+has no node of its own for them. Calling `args.…` or `kvt.…` without its `use` is an error,
 and so is declaring something named `args` or `kvt` (a `let`, a pool, a
 stage, a queue, a `def`) beside the import.
 

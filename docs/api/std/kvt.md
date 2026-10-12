@@ -65,9 +65,13 @@ copies only the part it lacks, `max(0, n - cached)`, at the cache's
 | Argument | Type | Description |
 |---|---|---|
 | `CACHE` | queue | A queue that plays `l2`, declared above. |
-| `POOL` | `pool` | The pool of the enclosing hold, written as the queue's own pool. |
-| `n` | `expr` | The tokens copied in (`l2_load`), or the tokens the entry comes to hold (`l2_store`). In `l2_store` it may not read `cached` or `computed`, which inside the copy are the cache's: read them above, `set c = cached;`. |
+| `POOL` | `pool` | In `l2_load`, the pool of the enclosing hold the KV arrives in; in `l2_store`, the pool it comes from, which the copy does not change. A pool of another queue is refused: only that queue's entries hold it. |
+| `n` | `expr` | The tokens copied in (`l2_load`), or the tokens the entry comes to hold (`l2_store`). See below for what it may not read. |
 | `per_token = r` | `expr` | The time a token takes at the cache's bandwidth; required. |
+
+In `l2_store`, `n` and `r` may not read `cached` or `computed`: inside the
+copy they are the cache's entry, not the enclosing hold's. Read them
+above the call, `set c = cached;`.
 
 The entry in the cache is the session's, as a pool's cache is. Used in
 `examples/multi-turn/vllm_lmcache.sq`.
