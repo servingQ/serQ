@@ -684,8 +684,6 @@ pub struct Program {
     pub definitions: Vec<(String, Span)>,
     /// Composite Cost names and resource fields; source-only namespace data.
     pub cost_records: Vec<(String, Vec<String>)>,
-    /// The libraries `use` read, for the spans that point into them.
-    pub libs: Vec<crate::frontend::diagnostic::Source>,
     pub lets: Vec<(String, Expr)>,
     pub pools: Vec<PoolDecl>,
     pub stages: Vec<StageDecl>,

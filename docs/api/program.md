@@ -20,7 +20,7 @@ finds its stage among the stages declared above it.
 | [`let`](#let) | Declare a constant. |
 | [`args.number`](#stdargs) | Declare a numeric program input. |
 | [`def`](#def) | Define a reusable expression or statement body. |
-| [`use`](#use) | Import a library relative to a source file. |
+| [`use`](#use) | Import `std/args`, the program's inputs. |
 | [`pool`](#pool) | Declare resource capacity, cache and admission policy. |
 | [`stage`](#stage) | Declare a server or step engine. |
 | [`workload`](#workload) | Define arrivals and request attributes. |
@@ -168,25 +168,12 @@ identify both the body and its use.
 ## `use`
 
 ```serq
-use "path";
+use "std/args";
 ```
 
-Reads the definitions of a library: `path` is a file of `def`s (and `use`s),
-relative to the file the `use` is in, and its definitions are the program's
-from here on. A library read once is not read again. An error in a library
-is reported in the library, with the uses it was expanded from.
-
-```serq
-use "lib/a.sq";        // def take(n) { hold kv (cost(kv, n)) { … } }
-…
-server { take(twice(k)); }
-```
-
-(`tests/library.rs`.) A program
-given as text rather than read from a file cannot `use`. The library's names
-are the program's, as for any [`def`](#def): what a statement definition
-sets is the session's attribute, and what it observes is the program's
-observation, so a library says in its comments which names it takes.
+Imports [`std/args`](#stdargs), the program's inputs; no other path is
+read. A program is one file: what several programs share, each writes, so
+a reader of one program reads all of it.
 
 ## `pool`
 

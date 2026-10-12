@@ -7,7 +7,7 @@ having to trace unrelated setup. These are writing conventions; the
 
 ## Place definitions by their dependencies
 
-Put imports first, then fixed constants and reusable `def` declarations,
+Put `use "std/args";` first, then fixed constants and reusable `def` declarations,
 then `fn main()`. Keep related constants beside the definitions using them.
 Prefer definitions outside `main` when they do not depend on its local names.
 Keep a definition inside when it depends on that experiment's inputs.
@@ -36,7 +36,6 @@ the workload where dependencies allow: a declaration that reads a request
 attribute, such as a `queue by` key, follows the workload that sets it.
 Do not enforce a rule that `main` contains only `workload`
 and `server`; input-dependent configuration belongs there too.
-Imported libraries contain `def` and `use`, not concrete resource declarations.
 
 ## Name the policy and keep its evidence nearby
 

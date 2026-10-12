@@ -98,7 +98,6 @@ fn made(tok: Tok, like: &Token) -> Token {
         tok,
         line: like.line,
         col: like.col,
-        file: like.file,
         leading: vec![],
     }
 }

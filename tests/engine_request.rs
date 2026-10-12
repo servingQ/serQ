@@ -6,16 +6,16 @@
 
 mod common;
 
-use serq::compile_source_at;
+use serq::compile_source;
 use serq::ir::{CExpr, CStmt, CtxVar, Program};
 
 fn compiled(src: &str) -> Program {
-    compile_source_at(&common::main_source(src), None, &common::horizon(10.0))
+    compile_source(&common::main_source(src), &common::horizon(10.0))
         .unwrap_or_else(|e| panic!("{e}\n{src}"))
 }
 
 fn refused(src: &str, fragment: &str) {
-    match compile_source_at(&common::main_source(src), None, &common::horizon(10.0)) {
+    match compile_source(&common::main_source(src), &common::horizon(10.0)) {
         Ok(_) => panic!("links:\n{src}"),
         Err(e) => assert!(e.contains(fragment), "missing {fragment:?}:\n{e}"),
     }

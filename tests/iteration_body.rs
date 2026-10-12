@@ -317,7 +317,7 @@ fn an_engines_shared_only_lowers_to_the_serve_only_body() {
     let file = "examples/papers/bari_rad.sq";
     let path = root.join(file);
     let text = std::fs::read_to_string(&path).unwrap();
-    let p = serq::compile_file(&common::main_source(&text), &path, &common::horizon(20.0))
+    let p = serq::compile_source(&common::main_source(&text), &common::horizon(20.0))
         .unwrap_or_else(|e| panic!("{file}: {e}"));
     let CStageKind::Step(st) = &p.stages[0].kind else {
         panic!("{file}: `E` is an engine")

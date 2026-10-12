@@ -524,12 +524,8 @@ fn no_false_positives_on_the_corpus() {
     ] {
         let path = program_path(name);
         let src = std::fs::read_to_string(&path).unwrap();
-        serq::compile_source_at(
-            &common::main_source(&src),
-            path.parent(),
-            &common::horizon(500.0),
-        )
-        .unwrap_or_else(|e| panic!("{name} is a real program and must link: {e}"));
+        serq::compile_source(&common::main_source(&src), &common::horizon(500.0))
+            .unwrap_or_else(|e| panic!("{name} is a real program and must link: {e}"));
     }
 }
 

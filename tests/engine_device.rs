@@ -12,18 +12,18 @@ use serq::ir::{
     BinOp, CArg, CExpr, CIter, CRef, CServe, CStageKind, CStep, CtxVar, Fun, Program, Register,
     UnOp,
 };
-use serq::{Overrides, compile_source_at};
+use serq::{Overrides, compile_source};
 
 fn root() -> &'static Path {
     Path::new(env!("CARGO_MANIFEST_DIR"))
 }
 
-fn compiled(src: &str, base: Option<&Path>, ov: &Overrides) -> Program {
-    compile_source_at(&common::main_source(src), base, ov).unwrap_or_else(|e| panic!("{e}\n{src}"))
+fn compiled(src: &str, ov: &Overrides) -> Program {
+    compile_source(&common::main_source(src), ov).unwrap_or_else(|e| panic!("{e}\n{src}"))
 }
 
 fn error(src: &str) -> String {
-    match compile_source_at(&common::main_source(src), None, &common::horizon(10.0)) {
+    match compile_source(&common::main_source(src), &common::horizon(10.0)) {
         Ok(_) => panic!("links:\n{src}"),
         Err(e) => e,
     }
@@ -197,7 +197,6 @@ fn reg(r: usize) -> CExpr {
 #[test]
 fn vllm_as_an_engine_is_the_procedure() {
     let text = std::fs::read_to_string(root().join("examples/multi-turn/vllm.sq")).unwrap();
-    let base = root().join("examples/multi-turn");
     let ov = common::horizon(100.0);
     let chunk = |cap: &str| {
         let src = replaced(
@@ -207,7 +206,7 @@ fn vllm_as_an_engine_is_the_procedure() {
                 &format!(r#"args.number("chunk_cap", {cap})"#),
             )],
         );
-        let p = compiled(&src, Some(&base), &ov);
+        let p = compiled(&src, &ov);
         let st = step(&p, "vllm");
         assert_eq!(Schedule::of(st).keys, Some(vec![]));
         assert_eq!(st.iteration, None);
@@ -245,11 +244,7 @@ fn vllm_as_an_engine_is_the_procedure() {
 fn sglang_and_tgi_as_engines_are_bodies() {
     let base = root().join("examples/engines");
     let ov = common::horizon(100.0);
-    let tgi = compiled(
-        &std::fs::read_to_string(base.join("tgi.sq")).unwrap(),
-        Some(&base),
-        &ov,
-    );
+    let tgi = compiled(&std::fs::read_to_string(base.join("tgi.sq")).unwrap(), &ov);
     let st = step(&tgi, "tgi");
     let e = stage(&tgi, "tgi", None);
     // `state just = 0;`
@@ -284,7 +279,6 @@ fn sglang_and_tgi_as_engines_are_bodies() {
 
     let sglang = compiled(
         &std::fs::read_to_string(base.join("sglang.sq")).unwrap(),
-        Some(&base),
         &ov,
     );
     let st = step(&sglang, "sglang");
@@ -390,7 +384,7 @@ pool kv on gpu {{ preempt lifo; }}
 
 /// The step `engine(schedule)` lowers to.
 fn lowered(schedule: &str) -> Schedule {
-    let p = compiled(&engine(schedule), None, &common::horizon(20.0));
+    let p = compiled(&engine(schedule), &common::horizon(20.0));
     Schedule::of(step(&p, "vllm"))
 }
 
@@ -402,7 +396,6 @@ fn lowered(schedule: &str) -> Schedule {
 fn the_stage_forms_are_schedules() {
     let p = compiled(
         &engine("advance running; admit waiting while (running.preempted == 0);"),
-        None,
         &common::horizon(20.0),
     );
     // the engine's clauses: `tokens cap` is the budget, `execute` the cost,
@@ -503,7 +496,7 @@ fn the_stage_forms_are_schedules() {
 fn an_engine_reads_its_lists_in_every_clause() {
     let ov = common::horizon(20.0);
     let ok = "advance running; admit waiting while (running.preempted == 0);";
-    let reqs = pool(&compiled(&engine(ok), None, &ov), "reqs", None);
+    let reqs = pool(&compiled(&engine(ok), &ov), "reqs", None);
     // each value as the kernel's context variable it reads: in `tokens
     // cap 8 + v`, the budget `8 + v`; in `execute (step_time(…) + v)`, the
     // cost `1 + v`
@@ -513,7 +506,6 @@ fn an_engine_reads_its_lists_in_every_clause() {
                 &engine(ok),
                 &[("tokens cap 8;", &format!("tokens cap 8 + {v};"))],
             ),
-            None,
             &ov,
         );
         let CExpr::Binary(BinOp::Add, _, e) = &step(&p, "vllm").budget else {
@@ -530,7 +522,6 @@ fn an_engine_reads_its_lists_in_every_clause() {
                     &format!("execute (step_time(batch.tokens) + {v});"),
                 )],
             ),
-            None,
             &ov,
         );
         let CExpr::Binary(BinOp::Add, _, e) = &step(&p, "vllm").cost else {
@@ -739,10 +730,7 @@ fn a_def_names_the_predicate_advance_and_admit_share() {
     };
     let ov = common::horizon(20.0);
     for src in [named, mixed] {
-        assert_eq!(
-            Schedule::of(step(&compiled(&src, None, &ov), "vllm")),
-            kernel
-        );
+        assert_eq!(Schedule::of(step(&compiled(&src, &ov), "vllm")), kernel);
     }
 }
 
@@ -1038,12 +1026,12 @@ fn an_engine_reads_the_programs_own_names() {
     let ov = common::horizon(10.0);
     assert_eq!(
         step(
-            &compiled(&format!("let attn = 1e-3;\n{}", with("attn")), None, &ov),
+            &compiled(&format!("let attn = 1e-3;\n{}", with("attn")), &ov),
             "vllm"
         )
         .cost,
         step(
-            &compiled(&format!("let attn = 1e-3;\n{}", with("1e-3")), None, &ov),
+            &compiled(&format!("let attn = 1e-3;\n{}", with("1e-3")), &ov),
             "vllm"
         )
         .cost,
@@ -1079,7 +1067,7 @@ pool kv on vllm.gpu {{ }}
         (new.clone(), true),
         (new.replace("on vllm.gpu", "on gpu"), false),
     ] {
-        let p = compiled(&src, None, &ov);
+        let p = compiled(&src, &ov);
         for i in [0, 1] {
             let (e, kv) = (stage(&p, "vllm", Some(i)), pool(&p, "kv", Some(i)));
             assert_eq!(step_at(&p, e).memory, Some(kv), "{src}");
@@ -1115,11 +1103,7 @@ pool kv on vllm.gpu {{ }}
 fn a_pool_names_the_engine_that_admits_it() {
     let ok = engine("advance running; admit waiting while (running.preempted == 0);");
     let ov = common::horizon(20.0);
-    let p = compiled(
-        &ok.replace("pool kv on gpu", "pool kv on vllm.gpu"),
-        None,
-        &ov,
-    );
+    let p = compiled(&ok.replace("pool kv on gpu", "pool kv on vllm.gpu"), &ov);
     assert_eq!(
         p.pools[pool(&p, "kv", None)].admit_via,
         Some(stage(&p, "vllm", None))
@@ -1163,7 +1147,7 @@ server { hold reqs[t] (cost(reqs[t], 1)), kv (cost(kv, n)) { run llm prefill (co
 #[test]
 fn an_engine_admits_a_family_of_queues() {
     let ov = common::horizon(100.0);
-    let p = compiled(QUEUES, None, &ov);
+    let p = compiled(QUEUES, &ov);
     let llm = stage(&p, "llm", None);
     for i in 0..2 {
         let q = &p.pools[pool(&p, "reqs", Some(i))];
@@ -1252,7 +1236,6 @@ fn a_queue_holds_its_engine() {
     let base = root().join("examples/pd-disaggregation");
     let p = compiled(
         &std::fs::read_to_string(base.join("llmd_nixl_pull.sq")).unwrap(),
-        Some(&base),
         &common::horizon(100.0),
     );
     for (q, kv_admitted) in [("P", false), ("D", true)] {
@@ -1294,12 +1277,10 @@ server {{ E.prefill (prompt); }}
     let ov = common::horizon(10.0);
     compiled(
         &pod(&format!("{device} {engine} pool kv on gpu {{ }}")),
-        None,
         &ov,
     );
     compiled(
         &pod(&format!("{device} {engine} pool kv on E.gpu {{ }}")),
-        None,
         &ov,
     );
     refused(
@@ -1418,7 +1399,7 @@ fn an_argument_its_definition_drops_is_resolved_where_the_use_stands() {
     let one = |s: String| format!("def one(x) {{ 1 }}\n{s}");
     let ok = "advance running; admit waiting while (running.preempted == 0);";
     let ov = common::horizon(10.0);
-    let ir = |src: &str| serde_json::to_string(&compiled(src, None, &ov)).unwrap();
+    let ir = |src: &str| serde_json::to_string(&compiled(src, &ov)).unwrap();
     // a value of the engine, read in `execute`
     let execute = |e: &str| {
         one(engine(ok)).replace(
@@ -1482,7 +1463,7 @@ server {{ hold kv[j] (cost(kv, {size})) {{ run E[j] prefill (cost(E, 1)) growing
         )
     };
     let ov = common::horizon(10.0);
-    compiled(&src("min(prompt, 1000)"), None, &ov);
+    compiled(&src("min(prompt, 1000)"), &ov);
     // a value may not share a stage's name, so a bare `E` is the stage (#470)
     let shared = error(&src("min(E, 1)").replace("set j = 0;", "set j = 0; set E = 3;"));
     assert!(

@@ -27,10 +27,9 @@ prefills in the compute its decode step leaves is a stage kind of its own
 program  := (constant | definition | import)* fn main ( ) { item* }
 constant := let NAME = expr ;
 definition := def NAME ( NAME , ... ) ( { expr } | block )
-import   := use "file.sq" ; | use "std/args" ;
+import   := use "std/args" ;                 -- a program is one file
 item     := let NAME = expr ;
           | let NAME = args.number ( "argument_name" , expr ) ;
-          | use "file.sq" ;                  -- the definitions of a library, next to this file
           | def NAME ( NAME , ... ) { expr }   -- a name for an expression: NAME ( arg , ... )
           | def NAME ( NAME , ... ) block      -- a name for statements: NAME ( arg , ... ) ;
           | pool NAME [ '[' N ']' ] { poolopt* }

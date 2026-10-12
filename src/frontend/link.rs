@@ -11,7 +11,6 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
 
 use crate::frontend::ast::*;
-use crate::frontend::diagnostic::Source;
 use crate::ir::{ArgKind, CIter, MAX_SESSIONS};
 
 #[derive(Debug, Clone)]
@@ -36,13 +35,8 @@ impl LinkError {
     }
 
     pub fn render(&self, source: &str) -> String {
-        self.render_in(source, &[])
-    }
-
-    /// Render against the program's text or the library the error is in.
-    pub fn render_in(&self, source: &str, libs: &[Source]) -> String {
         match self.span {
-            Some(span) => span.render_in(source, libs, &format!("link error: {}", self.message)),
+            Some(span) => span.render(source, &format!("link error: {}", self.message)),
             None => self.to_string(),
         }
     }
@@ -1293,12 +1287,9 @@ impl Linker<'_> {
         }
     }
 
-    /// `line:col`, with the library's path when the span is in one.
+    /// `line:col`.
     fn place(&self, span: Span) -> String {
-        match span.file.checked_sub(1).and_then(|i| self.prog.libs.get(i)) {
-            Some(lib) => format!("{}:{}:{}", lib.path, span.line, span.col),
-            None => format!("{}:{}", span.line, span.col),
-        }
+        format!("{}:{}", span.line, span.col)
     }
 
     fn duplicate(&self, kind: &str, name: &str, span: Option<Span>) -> LinkError {

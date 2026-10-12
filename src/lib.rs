@@ -38,26 +38,8 @@ pub use ir::Program;
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub fn compile_source(src: &str, ov: &Overrides) -> Result<ir::Program, String> {
-    compile_source_at(src, None, ov)
-}
-
-/// Compile `src`, the text of the program file `path`: its `use`s read
-/// next to it, and a library that `use`s it back does not read it again.
-pub fn compile_file(src: &str, path: &Path, ov: &Overrides) -> Result<ir::Program, String> {
-    let prog = frontend::parser::parse_file_with(src, path, &ov.defs, &overridden(ov))
-        .map_err(|e| e.render(src))?;
-    finish(prog, src, ov)
-}
-
-/// Compile the text of a program file in `base`, next to which its `use`s
-/// read their libraries.
-pub fn compile_source_at(
-    src: &str,
-    base: Option<&Path>,
-    ov: &Overrides,
-) -> Result<ir::Program, String> {
-    let prog = frontend::parser::parse_at_with(src, base, &ov.defs, &overridden(ov))
-        .map_err(|e| e.render(src))?;
+    let prog =
+        frontend::parser::parse_with(src, &ov.defs, &overridden(ov)).map_err(|e| e.render(src))?;
     finish(prog, src, ov)
 }
 
@@ -77,8 +59,7 @@ fn overridden(ov: &Overrides) -> Vec<String> {
 
 /// Link a parsed program and check its IR.
 fn finish(prog: frontend::ast::Program, src: &str, ov: &Overrides) -> Result<ir::Program, String> {
-    let (mut p, spans) =
-        frontend::link::link_located(&prog, ov).map_err(|e| e.render_in(src, &prog.libs))?;
+    let (mut p, spans) = frontend::link::link_located(&prog, ov).map_err(|e| e.render(src))?;
     if let Some(t) = &ov.trace {
         p.trace = Some(t.clone());
     }
@@ -90,7 +71,7 @@ fn finish(prog: frontend::ast::Program, src: &str, ov: &Overrides) -> Result<ir:
         let span =
             e.at.and_then(|(b, k)| spans.get(b)?.get(k).copied().flatten());
         match span {
-            Some(span) => span.render_in(src, &prog.libs, &e.message),
+            Some(span) => span.render(src, &e.message),
             None => e.message,
         }
     })?;
@@ -140,7 +121,7 @@ pub fn load(path: &Path, ov: &Overrides) -> Result<ir::Program, String> {
         p.validate()?;
         Ok(p)
     } else {
-        compile_file(&text, path, ov)
+        compile_source(&text, ov)
     }
 }
 
@@ -148,25 +129,14 @@ pub fn load(path: &Path, ov: &Overrides) -> Result<ir::Program, String> {
 /// request runs (the `server`, or a gateway's `route`) in place of the
 /// session. Whether a session comes back, and when it ends, belongs to the
 /// workload. A program with no unique request body is drawn whole.
-pub fn compile_drawn_file(src: &str, path: &Path, ov: &Overrides) -> Result<ir::Program, String> {
-    let prog = frontend::parser::parse_file_with(src, path, &ov.defs, &overridden(ov))
-        .map_err(|e| e.render(src))?;
-    finish(drawn(prog), src, &inspection_options(ov))
-}
-
-/// `compile_drawn_file` for the text of a program file in `base`.
-pub fn compile_drawn_source_at(
-    src: &str,
-    base: Option<&Path>,
-    ov: &Overrides,
-) -> Result<ir::Program, String> {
-    let prog = frontend::parser::parse_at_with(src, base, &ov.defs, &overridden(ov))
-        .map_err(|e| e.render(src))?;
+pub fn compile_drawn_source(src: &str, ov: &Overrides) -> Result<ir::Program, String> {
+    let prog =
+        frontend::parser::parse_with(src, &ov.defs, &overridden(ov)).map_err(|e| e.render(src))?;
     finish(drawn(prog), src, &inspection_options(ov))
 }
 
 /// `load`, for the deployment view: program text is compiled with
-/// `compile_drawn_file`; IR, which has no workload and server apart, is
+/// `compile_drawn_source`; IR, which has no workload and server apart, is
 /// drawn whole.
 pub fn load_drawn(path: &Path, ov: &Overrides) -> Result<ir::Program, String> {
     if path.extension().is_some_and(|e| e == "json") {
@@ -174,7 +144,7 @@ pub fn load_drawn(path: &Path, ov: &Overrides) -> Result<ir::Program, String> {
     }
     let text = std::fs::read_to_string(path)
         .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
-    compile_drawn_file(&text, path, ov)
+    compile_drawn_source(&text, ov)
 }
 
 /// The request in place of the session. What the server reads of the
@@ -251,7 +221,7 @@ pub fn inline_trace(p: ir::Program, base: Option<&Path>) -> Result<ir::Program, 
 
 /// Parse, link and run program text. `base` resolves a relative trace path.
 pub fn run_source(src: &str, ov: &Overrides, base: Option<&Path>) -> Result<Report, String> {
-    let p = compile_source_at(src, base, ov)?;
+    let p = compile_source(src, ov)?;
     run_ir(&p, if ov.trace.is_some() { None } else { base })
 }
 

@@ -49,7 +49,6 @@ IR serialization. Compilation does not simulate it.
 input, `sets` and `defs` are rejected; run overrides remain available.
 
 Text supplied with `source=` can import the built-in `std/args` library.
-For relative file imports, pass `path` so the source directory is known.
 A relative trace named in a source file is resolved beside that file.
 With `source=`, a `trace=` override, or `Program.from_json`, traces resolve
 from the current working directory. Trace contents are read when the

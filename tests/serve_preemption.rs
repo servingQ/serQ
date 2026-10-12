@@ -20,7 +20,7 @@
 
 mod common;
 
-use serq::{compile_source_at, program_path, run_ir};
+use serq::{compile_source, program_path, run_ir};
 
 const RUNNING: &str = "advance running each at most (threshold);";
 
@@ -55,7 +55,7 @@ fn a_served_resident_preempted_in_its_iteration_leaves_it() {
         .iter()
         .map(|&(p, o, a)| vec![("prompt", p), ("o", o), ("arrive", a)])
         .collect();
-    let ir = compile_source_at(&common::main_source(&src), path.parent(), &ov)
+    let ir = compile_source(&common::main_source(&src), &ov)
         .unwrap()
         .with_sessions(&sessions)
         .unwrap();
