@@ -503,6 +503,7 @@ impl Ctx<'_> {
                 reuse,
                 body,
                 cache,
+                prefix,
                 lease,
             } => Stmt::Hold {
                 pools: pools
@@ -518,6 +519,14 @@ impl Ctx<'_> {
                 reuse: reuse.as_ref().map(|e| self.expr(e)).transpose()?,
                 body: self.stmts(body)?,
                 cache: cache.as_ref().map(|e| self.expr(e)).transpose()?,
+                prefix: prefix
+                    .as_ref()
+                    .map(|segs| {
+                        segs.iter()
+                            .map(|(k, n)| Ok((self.expr(k)?, self.expr(n)?)))
+                            .collect::<Result<_, _>>()
+                    })
+                    .transpose()?,
                 lease: match lease {
                     None => None,
                     Some((r, t)) => Some((self.reference(r)?, self.expr(t)?)),

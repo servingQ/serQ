@@ -1161,6 +1161,7 @@ fn hidden_in_server(
                     reuse,
                     body,
                     cache: _,
+                    prefix,
                     lease,
                 } => {
                     // the header is read at admission, where `Program::validate`
@@ -1179,6 +1180,10 @@ fn hidden_in_server(
                     }
                     if let Some(e) = reuse {
                         check(e, "admission", &derived)?;
+                    }
+                    for (k, n) in prefix.iter().flatten() {
+                        check(k, "admission", &derived)?;
+                        check(n, "admission", &derived)?;
                     }
                     if let Some((_, e)) = lease {
                         check(e, "lease", t)?;
@@ -2017,6 +2022,7 @@ impl Linker<'_> {
                     reuse,
                     body,
                     cache,
+                    prefix,
                     lease,
                 } => {
                     let pools = pools
@@ -2031,6 +2037,14 @@ impl Linker<'_> {
                         .collect::<LResult<Vec<_>>>()?;
                     let reuse = reuse.as_ref().map(|c| self.expr(c)).transpose()?;
                     let cache = cache.as_ref().map(|c| self.expr(c)).transpose()?;
+                    let prefix = prefix
+                        .as_ref()
+                        .map(|segs| {
+                            segs.iter()
+                                .map(|(k, n)| Ok((self.expr(k)?, self.expr(n)?)))
+                                .collect::<LResult<Vec<_>>>()
+                        })
+                        .transpose()?;
                     let body = self.block(body)?;
                     let lease = match lease {
                         None => None,
@@ -2041,6 +2055,7 @@ impl Linker<'_> {
                         reuse,
                         body,
                         cache,
+                        prefix,
                         lease,
                     }
                 }

@@ -46,8 +46,10 @@ linker can check: reject a `Join` inside a `Hold`, or require the pool to be
 unbounded.
 
 **3. Cross-session cache sharing becomes mandatory.** A child's prompt starts
-with the parent's context. Today the cache is per session (§9 limitation 2),
-so a child always misses; vLLM is content-addressed, so it hits. The moment
+with the parent's context. A hold's `prefix` shares cached segments across
+sessions by key ([A shared prefix cache](shared-prefix-cache.md)), but a
+child arrives as a session of its own, with no key of its parent's to name,
+so it always misses; vLLM is content-addressed, so it hits. The moment
 subagents are modelled this limitation decides the result. That is where the
 "eligibility key" of [IR v4](ir-v4.md) §2 becomes real.
 

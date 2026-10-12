@@ -365,7 +365,7 @@ fn the_admission_reads_no_attribute_of_the_session() {
     );
     refused(
         &src,
-        "engine `llm`'s admission (its `taking` and `at admission`) reads `n`",
+        "engine `llm`'s admission (its request's `prefix`, its `taking` and `at admission`) reads `n`",
     );
 }
 

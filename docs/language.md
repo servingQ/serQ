@@ -100,6 +100,7 @@ stmt     := turn ;                           -- draw attributes, submit, wait fo
           | set NAME = expr ;
           | observe NAME = expr ;
           | hold POOL ( expr ) [reserve ( expr )] [, POOL ( expr ) [reserve ( expr )]]*
+                 [prefix ( expr : expr , ... )]   -- the sequence as keyed segments
                  [reuse ( expr )] [at admission ( NAME = expr , ... )]
                  block [ cache ( expr ) ] [ lease POOL ( expr ) ] [ ; ]
                                              -- lease: that pool's allocation outlives the scope,
@@ -566,7 +567,8 @@ continuation (a stack of block frames), status (ready, queued at a pool,
 at a stage, waiting to grow, at a `join`, ended), active holds and leases (allocations
 kept past their scope, with an expiry); for each pool its
 capacity, the allocations of its holders (in admission order), its cache
-(entries of units, release time and release order, per session or dead),
+(a trie of keyed segments, each node a run of units with its release time
+and release order and the holds that read it, or dead),
 its admission queue and its growers; for each stage its jobs.
 
 ### Events and settling
@@ -620,9 +622,33 @@ grows into its own reservation;
 cached prefixes still never block. The first that does not
 fit blocks the rest (head-of-line blocking). The `cache` clause is what
 makes a hold take part in the prefix cache. With it, on admission the
-session consumes at most `ρ` units of its own cached prefix (`cached :=`
-what it consumed); the rest of that entry stays in the cache as a *dead*
-entry with the same age, unusable, until evicted. Without it the hold is
+session reads at most `ρ` units of the cached prefix of its hold's chain
+(`cached :=` what it read) and keeps them allocated while the hold lasts;
+what the session's entry held past them stays in the cache as a *dead*
+entry with the same age, unusable, until evicted. A hold's chain is its
+`prefix (k₁: n₁, …)`: the sequence as segments, each a key and a length,
+and two chains share the cached units of their equal leading keys, so a
+system prompt every session sends is computed once. A key is what it
+reads (an attribute, or the expression) and its value; a segment of
+length 0 is left out. A key names content: it and its length read
+attributes and numbers, not the state, the clock, a draw or `cached`
+(the linker refuses one). Without the clause the chain is `(serial: ∞)`,
+the session's own; written out, that chain does not link. Only the last
+segment may be endless, and a hold with `prefix` has `cache` (else it
+reads and keeps nothing, and does not link). An engine's request writes
+its chain as its first item, `prefix (k: n, …);` (*An engine's
+request*). A session's *entry* is what hangs under the key of its own
+serial (`serial` is the run's number for the session, and no program sets it); the rest is shared, and no
+session's `reuse`, `cache`, `drop` or consumption takes it. A hold with
+`prefix` reads at most what it allocates; a hold without consumes its
+entry whole, and what its allocation does not hold of it is gone. A
+chain is cached on pools with `block`; on a slot pool the hold's chain is
+the session's own, and a hold with `prefix` and no pool with `block`
+does not link. A prefix several holds read is allocated once, and an
+admission does not ask again for what another hold already reads; the
+session's entry its own hold reads is consumed: the session's other holds
+do not see it. Without
+`cache` the hold is
 memory alone: it leaves the session's cached blocks where they are,
 evictable as before, and `cached` is 0 in its body (the linker rejects a
 body that reads it there, and a `reuse` there; `cache (0)` is the hold
@@ -630,7 +656,8 @@ that consumes the prefix and keeps nothing). `reuse (0) cache (ℓ)` skips reuse
 Other entries are evicted in the
 pool's order until allocations and cache fit; `u` units are allocated and
 the body runs. At the end of the body the units are released and
-`min(ℓ, computed)` units stay cached, rounded down to blocks (`computed`
+`min(ℓ, computed)` units stay cached along the chain, rounded down to
+blocks (`computed`
 is the allocation, or the position a `growing` run or a `load` reached; a
 `growing` run ends at the position it started at plus its work).
 `release m` inside the body does the same for `m` alone, at that point:
@@ -661,10 +688,12 @@ names each pool once: the same reference twice does not link, and two
 indices that name one member at run time fail the run. `end` releases every
 hold but *keeps* the session's cached prefixes:
 cached entries persist until explicitly dropped or evicted. A program that models dropping
-them writes `drop POOL;` before `end;`. Eviction is per entry, or per block
-from the tail of the entry when the pool has `block b`; `evict lru` orders
-by release time and then release order, `evict by (k₁, …)` by the keys and
-then release order. A request that can never fit — its units, or its
+them writes `drop POOL;` before `end;`. Eviction takes leaves of the cache's
+trie of segments, so no cached suffix outlives its prefix, and never one a
+live hold reads; it is per leaf, or per block from the tail of the leaf when
+the pool has `block b`; `evict lru` orders by release time and then release
+order, `evict by (k₁, …)` by the keys and then release order. With every
+chain `(serial: ∞)` a leaf is a session's entry. A request that can never fit — its units, or its
 `reserve` when that is larger, above the cap, as they evaluate when the
 session joins the queue — is rejected: the session ends, and the report
 says how many did. Each of the units and the `reserve` that reads only
@@ -1073,6 +1102,7 @@ own engine and no other, and a request writes its run `prefill (e);`, not
 |---|---|
 | the statements before `at admission` | the same statements, before the hold |
 | `taking P (u) reserve (r), …` | `hold P (cost(P, u)) reserve (cost(P, r)), …`, the pools in the order written |
+| `prefix (k: n, …);`, the request's first item | the hold's `prefix (k: n, …)`, after its pools |
 | `taking … reuse (e)` | the hold's `reuse (cost(P₁, …, e))` |
 | `at admission { x = e; … }` | the hold's `at admission (x = e, …)` |
 | the statements after it | the hold's body |
@@ -1359,6 +1389,7 @@ that program's paths ([use cases](use-cases/index.md), `docs/lean.md`).
 | `multi-turn/thunderagent.sq` | ThunderAgent's router in TR mode in front of two vLLM replicas, a fixed number of agents at once ([use case](use-cases/thunderagent.md)) | the source (ThunderAgent at 7ddc861), read; `tests/thunderagent.rs` against the router's default mode; no oracle |
 | `multi-turn/vllm.sq` | vLLM v1's engine under a multi-turn agent workload | its engine is the other vLLM workloads' (`tests/workloads.rs`) |
 | `multi-turn/vllm_lmcache.sq` | `vllm.sq` with an LMCache server as its L2 (`queue lmc : l2`, `kvt.l2_load`, `kvt.l2_store`) | the source (vLLM at 0c87a197); `tests/kvt_l2.rs`; no scheduler oracle |
+| `multi-turn/vllm_system_prompt.sq` | `vllm.sq` serving the sessions of `M` products, each with its own system prompt, shared across sessions (its request's `prefix (product: system, session: inf);`) | the source (vLLM at 0c87a197); `tests/shared_prefix.rs`; no scheduler oracle |
 | `single-turn/vllm_single_turn.sq`, `multi-turn/vllm_chat.sq`, `subagent/vllm_subagents.sq` | the same engine under a single-turn, a chat and an approximated subagent workload ([use case](use-cases/workloads.md)) | `tests/workloads.rs` |
 | `oracle/vllm_request.sq` | one vLLM v1 request on the step clock, compiled per scenario to `tools/oracle/{alone,chunked,hol,longchunk,mixed,preempt,seqcap}.ir.json` | the upstream oracle ([vLLM correspondence](#7-vllm-v1-as-a-serq-program)), `tests/vllm_oracle.rs`, the Lean theorems generated from the same IR |
 | `replay/vllm_replay.sq` | vLLM v1 on the A100 testbed replaying the short-context trace ([A100 testbed](#8-vllm-on-the-a100-testbed)) | the prefix-cache oracle `tools/oracle/cache_trace` (`tests/vllm_cache.rs`, theorem `vllm_cache_trace`) |
@@ -1420,7 +1451,8 @@ the same, `request_queue.py:159-164`, is `preempt by (-priority, -t0)
 requeue tail` beside `queue by (priority, t0)`, but no program here writes
 the policy and no oracle scenario checks it), the deferred free of in-flight
 blocks, asynchronous scheduling ([A100 testbed](#8-vllm-on-the-a100-testbed)), and cross-session prefix sharing
-(cache entries are per session, [limitations](#9-known-limitations)).
+in these programs (their chains are per session; a hold's `prefix` shares
+segments by key, [limitations](#9-known-limitations)).
 
 ### Admission
 
@@ -1486,8 +1518,18 @@ the A100 cost fit, calibration, comparison runs and their limitations.
   engine is discrete. A fluid server is an engine whose `tokens cap` is
   filled to the memory time; at ω = 0.2 ms that is 5 000 iterations
   per simulated second, so long horizons can be slow.
-* Cache entries are per session; cross-session prefix sharing (a common
-  system prompt) needs a content-addressed cache.
+* Cross-session prefix sharing is what a hold's `prefix` keys say, not
+  content: a program names who shares what (a system prompt's key), and
+  segments with one key are one content. A prefix is cached when its hold
+  releases it, not while it is being computed: vLLM caches a request's
+  blocks as it schedules them (`kv_cache_manager.py:602-606`), so a request
+  admitted after another has scheduled the same system prompt reads it,
+  and serQ's computes it again, and holds its own copy while it does. A
+  segment is shared in whole blocks only where the program says so, as
+  `floor(n, bs)`: vLLM's block that mixes the system prompt with a
+  session's text is the session's. A chain cannot be spilled to a tier yet.
+  The Lean model's cache is per session: a program with `prefix` is outside
+  its fragment.
 * A leg's lease does not expire when its session is slow to ask for it:
   vLLM's prefiller frees a pushed request's blocks after its lease
   duration when no decoder has registered, and the request fails; the

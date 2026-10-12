@@ -34,7 +34,8 @@
 //! block    := '{' stmt* '}'
 //! stmt     := 'turn' ';' | 'set' IDENT '=' expr ';' | 'observe' IDENT '=' expr ';'
 //!           | 'hold' ref '(' expr ')' ('reserve' '(' expr ')')?
-//!                 (',' ref '(' expr ')' ('reserve' '(' expr ')')?)* ('reuse' '(' expr ')')?
+//!                 (',' ref '(' expr ')' ('reserve' '(' expr ')')?)*
+//!                 ('prefix' '(' expr ':' expr (',' expr ':' expr)* ')')? ('reuse' '(' expr ')')?
 //!                 ('at' 'admission' '(' IDENT '=' expr (',' IDENT '=' expr)* ')')?
 //!                 block ('cache' '(' expr ')')? ('lease' ref '(' expr ')')? ';'?
 //!           | 'grow' ref '(' expr ')' ';' | 'drop' ref ';'
@@ -69,7 +70,7 @@ use std::fmt;
 use crate::frontend::ast::*;
 use crate::frontend::lexer::{LexError, Tok, Token, lex};
 use crate::frontend::link::{
-    AGGREGATES, BUILTIN_ATTRS, Constants, FOLDED, LISTS, LResult, LinkError, RENAMED,
+    AGGREGATES, BUILTIN_ATTRS, CONTEXT_VARS, Constants, FOLDED, LISTS, LResult, LinkError, RENAMED,
     SCHEDULER_ATTRS, Supplied, supplied, takes_supplied,
 };
 use crate::frontend::queue::{self, QueueDecl};
@@ -399,7 +400,7 @@ const MAX_FAMILY: usize = 10_000;
 /// parameter may not be one: a parameter is replaced token by token, and a
 /// keyword in the body is a token of the same spelling. `tests/docs_lexer.rs`
 /// keeps the list whole.
-pub const KEYWORDS: [&str; 115] = [
+pub const KEYWORDS: [&str; 116] = [
     "Cost",
     "Size",
     "admission",
@@ -479,6 +480,7 @@ pub const KEYWORDS: [&str; 115] = [
     "pool",
     "preempt",
     "prefill",
+    "prefix",
     "ps",
     "queue",
     "release",
@@ -987,13 +989,14 @@ fn stmt_reads(s: &Stmt, n: &str) -> bool {
     }
 }
 
-/// Does the header of this hold (its units, `reserve`, `reuse`, `cache`,
-/// `lease`) read `n`?
+/// Does the header of this hold (its units, `reserve`, `prefix`, `reuse`,
+/// `cache`, `lease`) read `n`?
 fn header_reads(s: &Stmt, n: &str) -> bool {
     let Stmt::Hold {
         pools,
         reuse,
         cache,
+        prefix,
         lease,
         ..
     } = s
@@ -1002,7 +1005,11 @@ fn header_reads(s: &Stmt, n: &str) -> bool {
     };
     pools.iter().any(|(r, u, f)| {
         ref_reads(r, n) || expr_reads(u, n) || f.as_ref().is_some_and(|f| expr_reads(f, n))
-    }) || reuse.as_ref().is_some_and(|e| expr_reads(e, n))
+    }) || prefix
+        .iter()
+        .flatten()
+        .any(|(k, l)| expr_reads(k, n) || expr_reads(l, n))
+        || reuse.as_ref().is_some_and(|e| expr_reads(e, n))
         || cache.as_ref().is_some_and(|e| expr_reads(e, n))
         || lease
             .as_ref()
@@ -1353,6 +1360,7 @@ fn split_reads<'a>(
                 reuse,
                 body,
                 cache,
+                prefix,
                 lease,
             } => {
                 for (r, e, f) in pools {
@@ -1361,6 +1369,10 @@ fn split_reads<'a>(
                     if let Some(f) = f {
                         headers.push((f, above.clone()));
                     }
+                }
+                for (k, n) in prefix.iter().flatten() {
+                    headers.push((k, above.clone()));
+                    headers.push((n, above.clone()));
                 }
                 if let Some(r) = reuse {
                     headers.push((r, above.clone()));
@@ -2110,12 +2122,19 @@ impl Parser {
                             .or_else(|| self.names_device(q, n).then(|| a_device(&q.name, &e.verb, n)))
                             .unwrap_or_else(|| {
                                 if q.engine {
+                                    // a context variable moves, and a parameter of it
+                                    // would be refused where the header reads it
+                                    let help = if CONTEXT_VARS.iter().any(|(c, _)| c == n) {
+                                        String::new()
+                                    } else {
+                                        format!(". Pass `{n}` as a parameter")
+                                    };
                                     format!(
-                                        "engine `{}`'s admission (its `taking` and `at admission`) \
-                                         reads `{n}`: it sees the request's parameters, what the \
-                                         request sets before `at admission`, its bindings, the \
-                                         engine's pools and stage and the constants. Pass `{n}` \
-                                         as a parameter",
+                                        "engine `{}`'s admission (its request's `prefix`, its \
+                                         `taking` and `at admission`) reads `{n}`: it sees the \
+                                         request's parameters, what the request sets before `at \
+                                         admission`, its bindings, the engine's pools and stage \
+                                         and the constants{help}",
                                         q.name
                                     )
                                 } else {
@@ -2671,6 +2690,7 @@ impl Parser {
                 Stmt::Load(kv.clone(), Expr::cost(std::slice::from_ref(&kv), new)),
             ],
             cache: Some(Expr::cost(&[kv], n)),
+            prefix: None,
             lease: None,
         }])
     }
@@ -5036,6 +5056,25 @@ impl Parser {
                 break;
             }
         }
+        // `prefix (k₁: n₁, …)`: the sequence as keyed segments
+        let mut prefix = if self.eat_kw("prefix") {
+            self.expect(&Tok::LParen)?;
+            let mut segs = vec![];
+            loop {
+                let k = self.expr()?;
+                self.expect(&Tok::Colon)?;
+                segs.push((k, self.expr()?));
+                if *self.peek() == Tok::Comma {
+                    self.advance();
+                } else {
+                    break;
+                }
+            }
+            self.expect(&Tok::RParen)?;
+            Some(segs)
+        } else {
+            None
+        };
         let mut reuse = if self.eat_kw("reuse") {
             Some(self.paren_expr()?)
         } else {
@@ -5062,6 +5101,10 @@ impl Parser {
             }
             if let Some(r) = &mut reuse {
                 r.substitute(&binds);
+            }
+            for (k, n) in prefix.iter_mut().flatten() {
+                k.substitute(&binds);
+                n.substitute(&binds);
             }
         }
         let bind_at = std::mem::take(&mut self.bind_at);
@@ -5119,6 +5162,7 @@ impl Parser {
             reuse,
             body,
             cache,
+            prefix,
             lease,
         })
     }

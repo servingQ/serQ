@@ -9,11 +9,13 @@
 
 use std::cmp::Ordering;
 use std::collections::{BTreeSet, BinaryHeap, HashMap, VecDeque};
+use std::rc::Rc;
 
 use rand::Rng;
 use rand::SeedableRng;
 use rand::rngs::StdRng;
 
+use crate::engine::cache::{Seg, Trie};
 use crate::engine::dist::Dist;
 use crate::engine::report::*;
 use crate::engine::stats::*;
@@ -120,6 +122,11 @@ struct Held {
     /// pool's `reserve held`, what it has not allocated of them counts
     /// against every later admission while the hold lasts.
     reserved: f64,
+    /// The cached prefix it reads through: the first `shared` units of its
+    /// chain, part of `alloc`, in the nodes `path` of the pool's trie, which
+    /// it keeps locked.
+    shared: f64,
+    path: Vec<usize>,
 }
 
 impl Held {
@@ -137,6 +144,7 @@ struct Hold<'p> {
     /// allocation, is what has been computed).
     grown: bool,
     cache: Option<&'p CExpr>,
+    chain: Chain,
     /// The pool whose allocation outlives the scope, and for how long.
     lease: Option<(usize, &'p CExpr)>,
     body: BlockId,
@@ -154,6 +162,11 @@ struct Lease<'p> {
     alloc: f64,
     computed: f64,
     cache: Option<&'p CExpr>,
+    /// The hold's chain and the prefix it read through, which the lease
+    /// keeps locked until it ends.
+    chain: Chain,
+    shared: f64,
+    path: Vec<usize>,
     /// When it expires (`inf`: only a `release` or the end takes it).
     expires: f64,
     /// The attributes of the leg that leased it, which `cache` reads when
@@ -209,13 +222,21 @@ struct Wanted<'p> {
     /// What the admission waits for: the units, or the reservation above
     /// them, as `pending_now` last evaluated them.
     need: f64,
+    /// Of `need`, the cached prefix another live hold reads through: it is
+    /// allocated already, and the admission does not ask for it again.
+    shared: f64,
 }
+
+/// A hold's sequence as keyed segments (`prefix`), evaluated when it
+/// asks; `(serial, ∞)` without the clause.
+type Chain = Rc<[Seg]>;
 
 #[derive(Clone, Debug)]
 struct Pending<'p> {
     pools: Vec<Wanted<'p>>,
     reuse: Option<&'p CExpr>,
     cache: Option<&'p CExpr>,
+    chain: Chain,
     lease: Option<(usize, &'p CExpr)>,
     body: BlockId,
     queued_at: f64,
@@ -380,16 +401,6 @@ struct LastToken {
 
 // ------------------------------------------------------------- pools ----
 
-#[derive(Clone, Debug)]
-struct CacheEntry {
-    size: f64,
-    last: f64,
-    /// Release order (breaks ties in `last`: entries released at the same
-    /// instant age in the order they were released).
-    seq: u64,
-    snap: Vec<f64>,
-}
-
 #[derive(Clone, Copy)]
 struct WaitingHold {
     sid: usize,
@@ -402,8 +413,8 @@ struct PoolState {
     used: f64,
     cached: f64,
     holders: Vec<usize>,
-    /// Cached prefixes by session serial (a session may have ended).
-    entries: HashMap<u64, CacheEntry>,
+    /// The prefix cache, by keyed segments (a writer may have ended).
+    cache: Trie,
     /// Waiting holds in enqueue order; policy keys are never cached.
     queue: VecDeque<WaitingHold>,
     growers: VecDeque<usize>,
@@ -771,9 +782,30 @@ pub struct Interp<'p> {
     events: u64,
 }
 
-/// Keys of dead cache entries (units past a `reuse` bound) start here, above
+/// Tags of dead cache nodes (units past a `reuse` bound) start here, above
 /// every session serial.
 const DEAD_ENTRY: u64 = 1 << 62;
+
+/// What a segment's key names: the attribute it reads, or, for any other
+/// expression, the expression. Two keys are one when they name the same
+/// thing and have the same value: `prefix (system: S)` with `system = 3`
+/// is not the entry of the session whose serial is 3.
+fn key_space(k: &CExpr) -> u64 {
+    match k {
+        CExpr::Attr(a) => *a as u64,
+        _ => {
+            use std::hash::{Hash, Hasher};
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            format!("{k:?}").hash(&mut h);
+            h.finish() | 1 << 63
+        }
+    }
+}
+
+/// A chain of no `prefix`: the session's own, `(serial: ∞)`.
+fn own_chain(p: &crate::ir::Program, serial: u64) -> Chain {
+    Rc::from([(p.slot_serial as u64, serial as f64, f64::INFINITY)])
+}
 
 /// Which pool a `hold` waits at: the first one listed.
 fn first_pool(pending: &Pending) -> usize {
@@ -792,7 +824,7 @@ impl<'p> Interp<'p> {
                 used: 0.0,
                 cached: 0.0,
                 holders: vec![],
-                entries: HashMap::new(),
+                cache: Trie::new(p.slot_serial as u64),
                 queue: VecDeque::new(),
                 growers: VecDeque::new(),
                 used_avg: TimeAverage::new(0.0, 0.0),
@@ -1210,33 +1242,43 @@ impl<'p> Interp<'p> {
             }
         }
         // Conservation (#277): a pool's `used` is what the sessions' holds
-        // and leases have allocated on it, and its `cached` the sizes of its
-        // entries. The counters are kept apart from those records, so an
-        // allocation released twice or never would otherwise pass unseen
-        // while the pool stays within its cap.
+        // and leases have allocated on it, a prefix several of them read
+        // counted once, and its `cached` the cached nodes of its trie. The
+        // counters are kept apart from those records, so an allocation
+        // released twice or never would otherwise pass unseen while the
+        // pool stays within its cap.
         #[cfg(debug_assertions)]
         for (k, (cp, pl)) in self.p.pools.iter().zip(&self.pools).enumerate() {
-            let held: f64 = self
+            // (allocated less what was read, the units of the nodes read)
+            let (private, read): (f64, f64) = self
                 .sessions
                 .iter()
-                .map(|s| {
-                    let holds: f64 = s
+                .flat_map(|s| {
+                    let holds = s
                         .holds
                         .iter()
                         .flat_map(|h| &h.pools)
                         .filter(|e| e.pool == k)
-                        .map(|e| e.alloc)
-                        .sum();
-                    let leases: f64 = s
+                        .map(|e| (e.alloc - e.shared, &e.path));
+                    let leases = s
                         .leases
                         .iter()
                         .filter(|l| l.pool == k)
-                        .map(|l| l.alloc)
-                        .sum();
-                    holds + leases
+                        .map(|l| (l.alloc - l.shared, &l.path));
+                    holds.chain(leases)
                 })
-                .sum();
-            let cached: f64 = pl.entries.values().map(|e| e.size).sum();
+                .fold((0.0, 0.0), |(a, r), (x, path)| {
+                    (a + x, r + pl.cache.units(path))
+                });
+            let (cached, locked, per_hold) = pl.cache.totals();
+            let held = private + locked;
+            debug_assert!(
+                (read - per_hold).abs() <= 1e-6 * read.max(1.0),
+                "pool `{}`: the holds' paths have {read} units, the trie's locks {per_hold}, \
+                 at t = {}",
+                cp.name,
+                self.now
+            );
             // sums of fractional units drift with the pool's size, not with
             // what is held at this instant
             let scale = if pl.cap.is_finite() {
@@ -2043,14 +2085,17 @@ impl<'p> Interp<'p> {
                     reuse,
                     body,
                     cache,
+                    prefix,
                     lease,
                 } => {
                     let wanted = self.wanted(pools, sid);
                     let lease = lease.as_ref().map(|(r, t)| (self.session_index(r, sid), t));
+                    let chain = self.chain_of(prefix.as_deref(), sid);
                     let pending = Pending {
                         pools: wanted,
                         reuse: reuse.as_ref(),
                         cache: cache.as_ref(),
+                        chain,
                         lease,
                         body: *body,
                         queued_at: self.now,
@@ -2068,7 +2113,8 @@ impl<'p> Interp<'p> {
                 CStmt::Drop(r) => {
                     let pl = self.session_index(r, sid);
                     let serial = self.sessions[sid].serial;
-                    self.remove_entry(pl, serial);
+                    let gone = self.pools[pl].cache.drop_owner(serial);
+                    self.pools[pl].cached -= gone;
                 }
                 CStmt::Release(r) => {
                     let pl = self.session_index(r, sid);
@@ -2219,6 +2265,7 @@ impl<'p> Interp<'p> {
                 expr: e,
                 reserve: f.as_ref(),
                 need: 0.0,
+                shared: 0.0,
             });
         }
         out
@@ -2318,7 +2365,67 @@ impl<'p> Interp<'p> {
                 None => u,
             };
         }
+        if pending.cache.is_some() {
+            let reuse = self.reuse_now(&pending, sid);
+            let serial = self.sessions[sid].serial;
+            for w in &mut pending.pools {
+                let chain = self.pool_chain(w.pool, &pending.chain, serial);
+                let alloc = self.round_up(w.pool, w.units);
+                let (limit, _) = self.read_limit(w.pool, &chain, (reuse, alloc), serial);
+                w.shared = self.pools[w.pool].cache.locked_along(&chain, limit, serial);
+            }
+        }
         pending
+    }
+
+    fn reuse_now(&mut self, pending: &Pending<'p>, sid: usize) -> Option<f64> {
+        pending
+            .reuse
+            .as_ref()
+            .map(|e| self.eval(e, &Ctx::session(sid), Which::Session).max(0.0))
+    }
+
+    /// What a hold with a `cache` clause reads of its chain's cached prefix
+    /// on `q` when admitted: the whole blocks of it, at most `reuse`. On a
+    /// chain of shared segments, also at most what it allocates there: what
+    /// it reads is part of its allocation, and a prefix another hold reads
+    /// cannot shrink to fit it. On the session's own chain it consumes its
+    /// whole entry, as the Lean model's `admitPool` does (`Exec.lean`), and
+    /// what its allocation does not hold of it is gone. Returns (that, the
+    /// whole blocks cached).
+    fn read_limit(
+        &self,
+        q: usize,
+        chain: &[Seg],
+        (reuse, alloc): (Option<f64>, f64),
+        serial: u64,
+    ) -> (f64, f64) {
+        let full = self.round_down(q, self.pools[q].cache.matched(chain, serial));
+        let alloc = if self.is_own_chain(chain, serial) {
+            f64::INFINITY
+        } else {
+            alloc
+        };
+        let bound = reuse.map_or(alloc, |r| r.min(alloc));
+        (full.min(self.round_down(q, bound)), full)
+    }
+
+    /// The session's own chain, `(serial: ∞)`: a hold without `prefix`.
+    fn is_own_chain(&self, chain: &[Seg], serial: u64) -> bool {
+        matches!(chain, [(ns, k, n)]
+            if *ns == self.p.slot_serial as u64 && *k == serial as f64 && n.is_infinite())
+    }
+
+    /// The chain a hold reads on pool `q`: its own on a pool without blocks
+    /// (a slot pool, whose `cache` holds a slot, not a sequence: shared, one
+    /// slot cached along a chain would be read by every hold as allocated
+    /// already, and the slots' cap would hold no more), else the hold's.
+    fn pool_chain(&self, q: usize, chain: &Chain, serial: u64) -> Chain {
+        if self.pools[q].block.is_none() && !self.is_own_chain(chain, serial) {
+            own_chain(self.p, serial)
+        } else {
+            chain.clone()
+        }
     }
 
     /// Admit the selected waiting hold while every pool of its hold
@@ -2345,7 +2452,7 @@ impl<'p> Interp<'p> {
         pending
             .pools
             .iter()
-            .all(|w| self.fits(w.pool, self.round_up(w.pool, w.need)))
+            .all(|w| self.fits(w.pool, self.round_up(w.pool, w.need) - w.shared))
     }
 
     /// The pools whose cap the head of a queue, evaluated as the run ends,
@@ -2387,11 +2494,48 @@ impl<'p> Interp<'p> {
         self.held_in(sid, pl) + leases
     }
 
+    /// A hold's chain: its `prefix`, evaluated now, or the session's own.
+    fn chain_of(&mut self, prefix: Option<&'p [(CExpr, CExpr)]>, sid: usize) -> Chain {
+        let Some(segs) = prefix else {
+            return own_chain(self.p, self.sessions[sid].serial);
+        };
+        let ctx = Ctx::session(sid);
+        let mut chain = Vec::with_capacity(segs.len());
+        for (j, (k, n)) in segs.iter().enumerate() {
+            let key = self.eval(k, &ctx, Which::Session);
+            let len = self.eval(n, &ctx, Which::Session);
+            let endless = len.is_infinite() && j + 1 < segs.len();
+            if (key.is_nan() || len.is_nan() || len < 0.0 || endless) && self.error.is_none() {
+                self.error = Some(format!(
+                    "a `prefix` segment is ({key}: {len}): a key is a number, a length is not \
+                     negative, and only the last segment is endless"
+                ));
+            }
+            // an empty segment holds nothing to share: `(tools: 0, …)`, a
+            // session without tools, is the chain without it
+            if len > 0.0 {
+                chain.push((key_space(k), key, len));
+            }
+        }
+        Rc::from(chain)
+    }
+
+    /// The chain `cachedin` reads for the session: its waiting hold's, else
+    /// its innermost hold's, else its own.
+    fn session_chain(&self, sid: usize) -> Chain {
+        let s = &self.sessions[sid];
+        match (&s.pending, s.holds.last()) {
+            (Some(p), _) => p.chain.clone(),
+            (None, Some(h)) => h.chain.clone(),
+            (None, None) => own_chain(self.p, s.serial),
+        }
+    }
+
+    /// The cached prefix of the session's chain in `pl`, in whole blocks.
     fn own_entry_size(&self, pl: usize, sid: usize) -> f64 {
-        self.pools[pl]
-            .entries
-            .get(&self.sessions[sid].serial)
-            .map_or(0.0, |e| e.size)
+        let serial = self.sessions[sid].serial;
+        let chain = self.pool_chain(pl, &self.session_chain(sid), serial);
+        self.round_down(pl, self.pools[pl].cache.matched(&chain, serial))
     }
 
     fn admit(&mut self, sid: usize, pending: Pending<'p>) {
@@ -2399,10 +2543,7 @@ impl<'p> Interp<'p> {
         let serial = self.sessions[sid].serial;
         let mut cached_first = None;
         let mut held = vec![];
-        let reuse = pending
-            .reuse
-            .as_ref()
-            .map(|e| self.eval(e, &Ctx::session(sid), Which::Session).max(0.0));
+        let reuse = self.reuse_now(&pending, sid);
         for w in &pending.pools {
             let q = w.pool;
             let need = self.round_up(q, w.units);
@@ -2416,36 +2557,32 @@ impl<'p> Interp<'p> {
             // session's cached blocks where they are (#230: an outer hold
             // around the request's used to consume them at its admission,
             // so the request found none, and had no clause to put them back).
-            let removed = if pending.cache.is_some() {
-                self.remove_entry(q, serial)
-            } else {
-                None
-            };
-            let mut own = removed.as_ref().map_or(0.0, |e| e.size);
-            if let Some(r) = reuse
-                && let Some(removed) = &removed
-            {
-                let r = self.round_down(q, r);
-                if own > r {
-                    let dead = own - r;
-                    own = r;
-                    let key = DEAD_ENTRY + self.next_dead;
+            // The prefix it reads is locked: allocated while it lasts, and
+            // counted once however many holds read it (vLLM's `ref_cnt`).
+            let (own, moved, path) = if pending.cache.is_some() {
+                let chain = self.pool_chain(q, &pending.chain, serial);
+                let (limit, full) = self.read_limit(q, &chain, (reuse, need), serial);
+                let (own, moved, path) = self.pools[q].cache.lock(&chain, limit, serial);
+                if limit < full - EPS {
+                    let tag = DEAD_ENTRY + self.next_dead;
                     self.next_dead += 1;
-                    let entry = CacheEntry {
-                        seq: removed.seq,
-                        size: dead,
-                        last: removed.last,
-                        snap: self.sessions[sid].attrs.clone(),
-                    };
-                    self.pools[q].entries.insert(key, entry);
-                    self.pools[q].cached += dead;
+                    let snap = self.sessions[sid].attrs.clone();
+                    self.pools[q].cache.cut(&chain, own, tag, serial, &snap);
                 }
-            }
+                (own, moved, path)
+            } else {
+                (0.0, 0.0, vec![])
+            };
+            // what another hold already reads is allocated already; the rest
+            // of what this one reads moves from the cache to the allocation
+            // with the units it takes
+            let read_already = own - moved;
+            self.pools[q].cached -= moved;
             // `cached`: the consumed prefix (the largest, if several pools
             // of the hold had one)
             cached_first = Some(cached_first.map_or(own, |c: f64| c.max(own)));
-            self.make_room(q, need);
-            self.pools[q].used += need;
+            self.make_room(q, need - read_already);
+            self.pools[q].used += need - read_already;
             self.pools[q].holders.push(sid);
             self.pools[q].admissions += 1;
             held.push(Held {
@@ -2455,6 +2592,8 @@ impl<'p> Interp<'p> {
                 // what the admission tested, held against later ones under
                 // `reserve held`
                 reserved: self.round_up(q, w.need),
+                shared: own,
+                path,
             });
         }
         let pl = first_pool(&pending);
@@ -2473,6 +2612,7 @@ impl<'p> Interp<'p> {
             pools: held,
             grown: false,
             cache: pending.cache,
+            chain: pending.chain,
             lease: pending.lease,
             body: pending.body,
         });
@@ -2491,23 +2631,25 @@ impl<'p> Interp<'p> {
         let short = self.pools[pl].used + self.pools[pl].cached + need - self.pools[pl].cap;
         let several = self.pools[pl].block.is_some_and(|b| short > b + EPS);
         if self.evict_static[pl] && several {
-            // The keys of the entries not evicted do not change within one
-            // call: key every entry once, then re-key only the one that
-            // shrank. The same victims, in the same order, as `evict_one`.
-            let serials: Vec<u64> = self.pools[pl].entries.keys().copied().collect();
-            let mut heap: BinaryHeap<std::cmp::Reverse<(KeyOrd, u64)>> = serials
+            // The keys of the leaves not evicted do not change within one
+            // call: key every leaf once, then re-key only the one that
+            // shrank, and key a parent that a leaf's going left a leaf. The
+            // same victims, in the same order, as `evict_one`.
+            let leaves: Vec<usize> = self.pools[pl].cache.leaves().collect();
+            let mut heap: BinaryHeap<std::cmp::Reverse<(KeyOrd, usize)>> = leaves
                 .into_iter()
-                .map(|s| std::cmp::Reverse((KeyOrd(self.entry_key(pl, s)), s)))
+                .map(|n| std::cmp::Reverse((KeyOrd(self.entry_key(pl, n)), n)))
                 .collect();
             while over(self) {
-                let Some(std::cmp::Reverse((_, serial))) = heap.pop() else {
+                let Some(std::cmp::Reverse((_, node))) = heap.pop() else {
                     break;
                 };
-                if self.evict_entry(pl, serial) {
-                    heap.push(std::cmp::Reverse((
-                        KeyOrd(self.entry_key(pl, serial)),
-                        serial,
-                    )));
+                let next = match self.evict_entry(pl, node) {
+                    (true, _) => Some(node),
+                    (false, parent) => parent,
+                };
+                if let Some(n) = next {
+                    heap.push(std::cmp::Reverse((KeyOrd(self.entry_key(pl, n)), n)));
                 }
             }
         } else {
@@ -2523,93 +2665,107 @@ impl<'p> Interp<'p> {
         );
     }
 
-    fn entry_key(&mut self, pl: usize, serial: u64) -> Vec<f64> {
-        if let CEvict::Lru = &self.p.pools[pl].evict {
-            let e = &self.pools[pl].entries[&serial];
-            return vec![e.last, e.seq as f64];
+    /// The session a cache node's eviction key and spill read: its writer,
+    /// while it lives, unless the node is dead (no session's any more).
+    fn node_writer(&self, pl: usize, node: usize) -> Option<usize> {
+        let n = self.pools[pl].cache.node(node);
+        match n.dead {
+            Some(_) => None,
+            None => self.by_serial.get(&n.owner).copied(),
         }
-        let e = self.pools[pl].entries[&serial].clone();
-        let live = self.by_serial.get(&serial).copied();
+    }
+
+    fn entry_key(&mut self, pl: usize, node: usize) -> Vec<f64> {
+        let n = self.pools[pl].cache.node(node);
+        if let CEvict::Lru = &self.p.pools[pl].evict {
+            return vec![n.last, n.seq as f64];
+        }
+        let (size, last, seq, snap) = (n.len, n.last, n.seq, n.snap.clone());
+        let live = self.node_writer(pl, node);
         let queued = live.is_some_and(|s| matches!(self.sessions[s].status, Status::Queued(_)));
         let ctx = Ctx {
             sid: live,
-            snap: if live.is_some() {
-                None
-            } else {
-                Some(e.snap.clone())
-            },
-            size: e.size,
-            age: self.now - e.last,
-            last: e.last,
+            snap: if live.is_some() { None } else { Some(snap) },
+            size,
+            age: self.now - last,
+            last,
             queued: if queued { 1.0 } else { 0.0 },
             ..Default::default()
         };
         let p = self.p;
         match &p.pools[pl].evict {
-            CEvict::Lru => vec![e.last, e.seq as f64],
+            CEvict::Lru => vec![last, seq as f64],
             CEvict::By(keys) => {
                 let mut v: Vec<f64> = keys
                     .iter()
                     .map(|k| self.eval(k, &ctx, Which::Evict))
                     .collect();
-                v.push(e.seq as f64);
+                v.push(seq as f64);
                 v
             }
         }
     }
 
-    /// Evict the entry (or its tail block) with the smallest key.
+    /// Evict the cached leaf (or its tail block) with the smallest key.
     fn evict_one(&mut self, pl: usize) -> bool {
-        let serials: Vec<u64> = self.pools[pl].entries.keys().copied().collect();
-        if serials.is_empty() {
+        let leaves: Vec<usize> = self.pools[pl].cache.leaves().collect();
+        if leaves.is_empty() {
             return false;
         }
-        let mut best: Option<(Vec<f64>, u64)> = None;
-        for s in serials {
-            let k = self.entry_key(pl, s);
+        let mut best: Option<(Vec<f64>, usize)> = None;
+        for n in leaves {
+            let k = self.entry_key(pl, n);
             let better = match &best {
                 None => true,
                 Some((bk, _)) => lex_less(&k, bk),
             };
             if better {
-                best = Some((k, s));
+                best = Some((k, n));
             }
         }
-        let (_, serial) = best.unwrap();
-        self.evict_entry(pl, serial);
+        let (_, node) = best.unwrap();
+        self.evict_entry(pl, node);
         true
     }
 
-    /// Evict entry `serial` (or its tail block); whether it is still cached.
-    fn evict_entry(&mut self, pl: usize, serial: u64) -> bool {
+    /// Evict leaf `node`'s tail block (or all of it): (whether it is still
+    /// cached, the parent its going left an evictable leaf).
+    fn evict_entry(&mut self, pl: usize, node: usize) -> (bool, Option<usize>) {
         let block = self.pools[pl].block;
-        let e = self.pools[pl].entries.get_mut(&serial).unwrap();
-        let removed = match block {
-            Some(b) => b.min(e.size),
-            None => e.size,
+        let n = self.pools[pl].cache.node(node);
+        let units = match block {
+            Some(b) => b,
+            None => n.len,
         };
-        e.size -= removed;
+        let (owner, dead, last, snap) = (n.owner, n.dead, n.last, n.snap.clone());
+        let live = self.node_writer(pl, node);
+        let (removed, parent, gone) = self.pools[pl].cache.evict_tail(node, units);
         if self.trace_evict {
-            eprintln!("EVICT {:.4} {serial} {removed}", self.now);
+            eprintln!("EVICT {:.4} {} {removed}", self.now, dead.unwrap_or(owner));
         }
-        let snap = e.snap.clone();
-        let last = e.last;
-        let gone = e.size <= EPS;
         if gone {
-            self.pools[pl].entries.remove(&serial);
             self.pools[pl].evicted_entries += 1;
         }
         self.pools[pl].cached -= removed;
         self.pools[pl].evicted_units += removed;
-        self.spill(pl, serial, removed, last, snap);
-        !gone
+        self.spill(pl, (owner, dead, live), removed, last, snap);
+        (!gone, parent)
     }
 
-    fn spill(&mut self, pl: usize, serial: u64, units: f64, last: f64, snap: Vec<f64>) {
+    /// `units` evicted from `pl` go to its spill tier, if its predicate
+    /// says so, as the entry of their writer (or of the dead node they
+    /// were): `(owner, dead, live)`.
+    fn spill(
+        &mut self,
+        pl: usize,
+        (owner, dead, live): (u64, Option<u64>, Option<usize>),
+        units: f64,
+        last: f64,
+        snap: Vec<f64>,
+    ) {
         let Some(sp) = self.p.pools[pl].spill.clone() else {
             return;
         };
-        let live = self.by_serial.get(&serial).copied();
         // the same context an eviction key sees (`queued` included: the
         // spec lists it for spill predicates, and this used to leave it 0)
         let queued = live.is_some_and(|s| matches!(self.sessions[s].status, Status::Queued(_)));
@@ -2636,31 +2792,25 @@ impl<'p> Interp<'p> {
         // extend or create the tier entry
         let rseq = self.next_release;
         self.next_release += 1;
-        let e = self.pools[to].entries.entry(serial).or_insert(CacheEntry {
-            seq: rseq,
-            size: 0.0,
-            last: now,
+        let added = self.pools[to].cache.spill_in(
+            &own_chain(self.p, owner)[0],
+            owner,
+            dead,
+            units,
             snap,
-        });
-        e.size += units;
-        e.last = now;
-        e.seq = rseq;
-        self.pools[to].cached += units;
+            now,
+            rseq,
+        );
+        self.pools[to].cached += added;
         self.pools[pl].spills += 1;
         self.start_job(sp.via, None, work, RunMode::Plain, None);
-    }
-
-    /// Remove a session's entry from a pool, and return it.
-    fn remove_entry(&mut self, pl: usize, serial: u64) -> Option<CacheEntry> {
-        let e = self.pools[pl].entries.remove(&serial)?;
-        self.pools[pl].cached -= e.size;
-        Some(e)
     }
 
     /// A preempted or ended hold gives everything back at once.
     fn release_hold(&mut self, sid: usize, h: &Hold<'p>) {
         for e in &h.pools {
-            self.release_units(sid, e.pool, e.alloc, e.computed(h.grown), h.cache);
+            let read = (&h.chain[..], e.shared, &e.path[..]);
+            self.release_units(sid, e.pool, e.alloc, e.computed(h.grown), h.cache, read);
         }
     }
 
@@ -2682,6 +2832,9 @@ impl<'p> Interp<'p> {
                         alloc,
                         computed,
                         cache: h.cache,
+                        chain: h.chain.clone(),
+                        shared: e.shared,
+                        path: e.path.clone(),
                         expires: self.now + t,
                         attrs: None,
                     });
@@ -2690,7 +2843,10 @@ impl<'p> Interp<'p> {
                         self.at(self.now + t, Ev::LeaseEnd { sid, serial, id });
                     }
                 }
-                _ => self.release_units(sid, q, alloc, computed, h.cache),
+                _ => {
+                    let read = (&h.chain[..], e.shared, &e.path[..]);
+                    self.release_units(sid, q, alloc, computed, h.cache, read)
+                }
             }
         }
     }
@@ -2702,14 +2858,17 @@ impl<'p> Interp<'p> {
         let saved = l
             .attrs
             .map(|a| std::mem::replace(&mut self.sessions[sid].attrs, a));
-        self.release_units(sid, l.pool, l.alloc, l.computed, l.cache);
+        let read = (&l.chain[..], l.shared, &l.path[..]);
+        self.release_units(sid, l.pool, l.alloc, l.computed, l.cache, read);
         if let Some(a) = saved {
             self.sessions[sid].attrs = a;
         }
     }
 
     /// Give `alloc` units of `q` back, keeping `min(cache, computed)` of them
-    /// cached (rounded down to blocks) for the session.
+    /// cached (rounded down to blocks) along the hold's chain. `read`: the
+    /// chain, the prefix of it the hold read through, and the nodes it
+    /// locked there, which it lets go.
     fn release_units(
         &mut self,
         sid: usize,
@@ -2717,34 +2876,37 @@ impl<'p> Interp<'p> {
         alloc: f64,
         computed: f64,
         cache: Option<&'p CExpr>,
+        (chain, shared, path): (&[Seg], f64, &[usize]),
     ) {
         let serial = self.sessions[sid].serial;
-        self.pools[q].used -= alloc;
+        let chain = self.pool_chain(q, &Rc::from(chain), serial);
+        // what no other hold reads any more is cached again, until the
+        // clause below says what of it stays (a node the session's own write
+        // displaced goes); what another hold still reads stays allocated
+        let (back, gone) = self.pools[q].cache.unlock(path, serial);
+        self.pools[q].used -= alloc - (shared - back - gone);
         // one entry per admission: a hold nested in another on the same pool
         // leaves the outer one's when it ends
         if let Some(i) = self.pools[q].holders.iter().position(|&s| s == sid) {
             self.pools[q].holders.remove(i);
         }
+        let mut delta = 0.0;
         if let Some(c) = cache {
             let want = self.eval(c, &Ctx::session(sid), Which::Session).max(0.0);
             let keep = self.round_down(q, want.min(computed));
+            let snap = self.sessions[sid].attrs.clone();
+            let rseq = self.next_release;
             if keep > 0.0 {
-                let snap = self.sessions[sid].attrs.clone();
-                self.remove_entry(q, serial);
-                let rseq = self.next_release;
                 self.next_release += 1;
-                self.pools[q].entries.insert(
-                    serial,
-                    CacheEntry {
-                        seq: rseq,
-                        size: keep,
-                        last: self.now,
-                        snap,
-                    },
-                );
-                self.pools[q].cached += keep;
             }
+            let now = self.now;
+            delta = self.pools[q]
+                .cache
+                .write(&chain, keep, path, serial, &snap, now, rseq);
         }
+        // one addition: on the session's own entry, `back + delta` is what
+        // it keeps
+        self.pools[q].cached += back + delta;
     }
 
     /// `release P`: the innermost hold on `pl` gives its allocation there
@@ -2763,7 +2925,15 @@ impl<'p> Interp<'p> {
         let e = h.pools.remove(k);
         let computed = e.computed(h.grown);
         let cache = h.cache;
-        self.release_units(sid, pl, e.alloc, computed, cache);
+        let chain = h.chain.clone();
+        self.release_units(
+            sid,
+            pl,
+            e.alloc,
+            computed,
+            cache,
+            (&chain, e.shared, &e.path),
+        );
         self.sessions[sid].preempt_pos.remove(&pl);
     }
 
@@ -3112,7 +3282,8 @@ impl<'p> Interp<'p> {
         while self.sessions[victim].holds.len() > hi {
             let h = self.sessions[victim].holds.pop().unwrap();
             for e in &h.pools {
-                self.release_units(victim, e.pool, e.alloc, e.pos, h.cache);
+                let read = (&h.chain[..], e.shared, &e.path[..]);
+                self.release_units(victim, e.pool, e.alloc, e.pos, h.cache, read);
             }
             // pop frames down to and including that hold's frame
             while let Some(f) = self.sessions[victim].frames.pop() {
@@ -3146,17 +3317,22 @@ impl<'p> Interp<'p> {
                 _ => None,
             }
         };
-        let (body, cache) = {
+        let (body, cache, prefix) = {
             let parent = self.sessions[victim].frames.last().cloned().unwrap();
             let p = self.p;
             match &p.blocks[parent.block][parent.pc - 1] {
                 CStmt::Hold {
-                    body, cache, reuse, ..
-                } => (*body, (cache.as_ref(), reuse.as_ref())),
+                    body,
+                    cache,
+                    reuse,
+                    prefix,
+                    ..
+                } => (*body, (cache.as_ref(), reuse.as_ref()), prefix.as_deref()),
                 _ => unreachable!(),
             }
         };
         let (cache, reuse) = cache;
+        let chain = self.chain_of(prefix, victim);
         self.pools[pl].preemptions += 1;
         self.preempted = true;
         self.preempted_now += 1.0;
@@ -3164,6 +3340,7 @@ impl<'p> Interp<'p> {
             pools: h_pools,
             reuse,
             cache,
+            chain,
             lease: lease_pool,
             body,
             queued_at: self.now,
@@ -4762,7 +4939,7 @@ impl<'p> Interp<'p> {
     fn debug_pools(&self) {
         for (pl, cp) in self.pools.iter().zip(self.p.pools.iter()) {
             let mut by: std::collections::BTreeMap<String, (usize, f64)> = Default::default();
-            for (serial, e) in pl.entries.iter().map(|(k, e)| (k, e.size)) {
+            for (serial, e) in pl.cache.live().map(|n| (&n.owner, n.len)) {
                 let st = match self.by_serial.get(serial) {
                     None => "gone".to_string(),
                     Some(&sid) => format!("{:?}", self.sessions[sid].status)

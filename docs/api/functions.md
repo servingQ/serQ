@@ -40,7 +40,7 @@ See [types](index.md#types) and [evaluation moments](context.md).
 |---|---|
 | [`used(p: pool)`](#used) | Units currently allocated in `p`. |
 | [`free(p: pool)`](#free) | `cap - used`. Cached units are reclaimable and are not subtracted. |
-| [`cachedin(p: pool)`](#cachedin) | This session's own cached units in `p`; 0 when evaluated without a session. |
+| [`cachedin(p: pool)`](#cachedin) | The cached units in `p` of this session's chain (its waiting hold's, else its innermost hold's, else its own), in whole blocks; 0 when evaluated without a session. |
 | [`allocated(p: pool)`](#allocated) | This session's own allocated units in `p`, in its holds and its leases; 0 when evaluated without a session. |
 | [`holders(p: pool)`](#holders) | Sessions holding units in `p`. |
 | [`queued(p: pool)`](#queued) | Sessions waiting in `p`'s admission queue. |
@@ -299,7 +299,7 @@ free(p: pool) -> number
 cachedin(p: pool) -> number
 ```
 
-**Returns:** This session's own cached units in `p`; 0 when evaluated without a session.
+**Returns:** The cached units in `p` of this session's chain (its waiting hold's, else its innermost hold's, else its own), in whole blocks; 0 when evaluated without a session.
 
 Read at admission for a prefix lookup that accounts for eviction while the session waited. See [`hold`](statements.md#hold).
 

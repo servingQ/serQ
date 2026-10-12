@@ -102,6 +102,7 @@ of the workload's own unless a stage `tool` is declared.
 
 ```serq
 hold POOL (units) [reserve (r)] [, POOL (units) [reserve (r)]]*
+     [prefix (key: n, …)]
      [reuse (ρ)]
      [at admission (NAME = expr, …)]
      block
@@ -116,14 +117,18 @@ what makes the hold take part in the prefix cache: with it the admission
 consumes the session's own cached prefix (`cached`); without it the hold
 leaves the session's cached blocks where they are and `cached` is 0 in its
 body (a body that reads it there, or a `reuse` there, does not link).
-`cache (0)` consumes the prefix and keeps nothing.
+`cache (0)` consumes the prefix and keeps nothing. The prefix is the cached
+part of the hold's chain: its `prefix`, or the session's own without one.
+Holds whose chains start with equal keys share those segments' cache, and
+a prefix several holds read is allocated once.
 
 | Argument | Type | Moment | Default | Description |
 |---|---|---|---|---|
 | `POOL` | `pool` | | | One or more. Admission needs room in every one; the hold waits in the first pool's queue. |
 | `units` | `Cost(POOL)` | `Admit` | | Units to allocate at admission. |
 | `reserve` | `Cost(POOL)` | `Admit` | `units` | Room required before admitting: `max(units, r)`, rounded up to blocks. It does not change the allocation. See [`reserve held`](pool.md#reserve-held) for outstanding reservations. |
-| `reuse` | `Cost(all held pools)` | `Admit` | no bound | At most this many units of the session's own cached prefix are consumed (rounded down to blocks); `cached` is set to what was. The rest stays as a dead entry until evicted. Without `reuse`, the whole own prefix is consumed. Only with `cache`: a hold without the clause consumes nothing. |
+| `prefix` | `key: n, …` | `Admit` | `(serial: inf)` | The sequence as segments, each a key and a length. Keys and lengths read attributes and numbers only (no state, clock, draw, `cached` or `computed`). A segment of length 0 is left out; only the last may be endless. The hold takes at least one pool with `block` (on one without, its chain is the session's own) and none that spills or is spilled to. |
+| `reuse` | `Cost(all held pools)` | `Admit` | no bound | At most this many units of the cached prefix of the hold's chain are read (rounded down to blocks), and with `prefix` never more than the hold allocates; `cached` is set to what was. What the session's entry held past them stays as a dead entry until evicted. Without `reuse`, the whole cached prefix is read: with `prefix` up to the allocation, without it the session's whole entry. Only with `cache`: a hold without the clause consumes nothing. |
 | `at admission` | `NAME = expr, …` | `Admit` | | Names used in the header and body; see below. |
 | `block` | `block` | `Session` | | The body. |
 | `cache` | `Cost(all held pools)` | `Session` | none | Units kept cached at the end, at most what was computed. Read when the session releases. Its presence is what makes the hold consume the session's prefix at admission; `cache (0)` consumes and keeps nothing, no clause leaves the prefix where it is. |
@@ -172,7 +177,8 @@ If it does not fit, the pool's [`preempt`](pool.md#preempt) applies.
 drop POOL;
 ```
 
-Discards the session's own cached prefix in `POOL`. `end` keeps the session's
+Discards the session's entry in `POOL`: what hangs under its serial's key, leaves
+first, and no shared segment. `end` keeps the session's
 cached prefixes (the cache does not know a session has left), so a program that
 models dropping them writes this before `end`.
 

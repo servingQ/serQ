@@ -489,6 +489,9 @@ class Lean:
             elif kind == "Hold":
                 if v.get("lease") is not None:
                     raise Fragment("a hold with a lease is outside the fragment")
+                if v.get("prefix") is not None:
+                    raise Fragment("a hold with a prefix chain: the model's cache is per "
+                                   "session, not a trie of shared segments")
                 ps = []
                 for r, u, fits in v["pools"]:
                     f = f" fits ({self.top(fits)})" if fits is not None else ""

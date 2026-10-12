@@ -126,7 +126,7 @@ fn format_with(
             // wrapped explanation under a `let`) belongs to that comment.
             original_indent
         } else if let Some(hold) = hold_base {
-            if matches!(first, "at" | "reuse" | "reserve") {
+            if matches!(first, "at" | "prefix" | "reuse" | "reserve") {
                 if first == "at" {
                     at_started = true;
                 }
