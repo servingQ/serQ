@@ -242,20 +242,19 @@ fn main() {
         }
         i += 1;
     }
-    // Checking and target extraction do not execute or export this IR.
-    if matches!(cmd, "check" | "target")
-        && ov.horizon.is_none()
-        && !file.extension().is_some_and(|e| e == "json")
-    {
-        ov.horizon = Some(f64::MAX);
-    }
+    // Checking, target extraction and drawing do not execute or export this IR.
+    let load = if matches!(cmd, "check" | "target" | "draw") {
+        serq::load_inspected
+    } else {
+        serq::load
+    };
     let base = if ov.trace.is_some() {
         None
     } else {
         file.parent()
     };
     if cmd == "target" {
-        let prog = serq::load(file, &ov).unwrap_or_else(|e| fail(file, e));
+        let prog = load(file, &ov).unwrap_or_else(|e| fail(file, e));
         let config = serq::target::vllm(&prog).unwrap_or_else(|e| fail(file, e));
         println!(
             "{}",
@@ -263,11 +262,6 @@ fn main() {
         );
         return;
     }
-    let load = if cmd == "draw" {
-        serq::load_drawn
-    } else {
-        serq::load
-    };
     let mut prog = load(file, &ov).unwrap_or_else(|e| fail(file, e));
     if inline {
         prog = serq::inline_trace(prog, base).unwrap_or_else(|e| fail(file, e));

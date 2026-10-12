@@ -10,7 +10,7 @@ mod common;
 use serq::ir::Program;
 use serq::view::deployment::{self, End};
 use serq::view::figure::{BoxStyle, Figure, StationKind};
-use serq::{compile_drawn_source, compile_source, program_path};
+use serq::{compile_source, program_path};
 
 const PROGRAMS: [&str; 8] = [
     "mg1",
@@ -26,7 +26,7 @@ const PROGRAMS: [&str; 8] = [
 fn program(name: &str) -> Program {
     let path = program_path(name);
     let src = std::fs::read_to_string(&path).unwrap();
-    compile_drawn_source(&src, &common::horizon(10.0)).unwrap_or_else(|e| panic!("{name}: {e}"))
+    compile_source(&src, &common::horizon(10.0)).unwrap_or_else(|e| panic!("{name}: {e}"))
 }
 
 fn stage(p: &Program, name: &str) -> usize {
@@ -733,6 +733,62 @@ fn drawn_stages(p: &Program, net: &deployment::Net) -> Vec<String> {
     v
 }
 
+/// A session whose requests run two different things, here one inside the
+/// workload's `live` and one outside it, has no one request to draw: the
+/// figure is the session's, with the workload's station.
+#[test]
+fn requests_that_run_different_things_draw_the_session() {
+    let p = compile(
+        "pool live { cap 2; }
+        stage A : fifo; stage tool : delay;
+        workload { arrive poisson(1);
+          session { turn; run tool (cost(tool, 1)); hold live (cost(live, 1)) { turn; } }
+        }
+        server { run A (cost(A, 1)); }
+        ",
+    );
+    assert!(deployment::request(&p).is_none());
+    let net = deployment::project(&p);
+    assert_eq!(drawn_stages(&p, &net), ["A", "tool"]);
+}
+
+/// The view reads what each request runs from the IR, not from the parser's
+/// splicing one server at every `turn`: an IR whose second request runs B
+/// where the first runs A has no one request, and B is drawn.
+#[test]
+fn requests_that_differ_in_the_ir_draw_the_session() {
+    let mut p = compile(
+        "stage A : fifo; stage B : fifo; stage C : delay;
+        workload { arrive poisson(1); session { turn; run C (cost(C, 1)); turn; } }
+        server { run A (cost(A, 1)); }
+        ",
+    );
+    let b = stage(&p, "B");
+    let server_runs: Vec<(usize, usize)> = (0..p.blocks.len())
+        .flat_map(|k| (0..p.blocks[k].len()).map(move |i| (k, i)))
+        .filter(|&(k, i)| {
+            p.sides[k][i] == serq::ir::Side::Server
+                && matches!(p.blocks[k][i], serq::ir::CStmt::Run { .. })
+        })
+        .collect();
+    assert_eq!(server_runs.len(), 2, "one run of the server at each turn");
+    let (k, i) = server_runs[1];
+    let serq::ir::CStmt::Run {
+        stage: s,
+        work: serq::ir::CExpr::Cost(t, _),
+        ..
+    } = &mut p.blocks[k][i]
+    else {
+        unreachable!("a run of a cost")
+    };
+    s.base = b;
+    *t = serq::ir::CostTarget::Stage { base: b, count: 1 };
+    let p = Program::from_json(&p.to_json()).unwrap();
+    assert!(deployment::request(&p).is_none());
+    let net = deployment::project(&p);
+    assert_eq!(drawn_stages(&p, &net), ["A", "B", "C"]);
+}
+
 /// A server's guard on a workload attribute is not decided by the figure:
 /// the server does not know what the workload set (`routing.sq`'s
 /// `branch (first)`).
@@ -748,7 +804,7 @@ fn a_server_guard_on_the_workload_draws_both_arms() {
         }
         server { branch (first) { run big (cost(big, n)); } else { run small (cost(small, n)); } }
         ";
-    let p = compile_drawn_source(&common::main_source(src), &common::horizon(100.0)).unwrap();
+    let p = compile_source(&common::main_source(src), &common::horizon(100.0)).unwrap();
     let net = deployment::project(&p);
     assert_eq!(drawn_stages(&p, &net), ["big", "small"]);
 }
@@ -973,7 +1029,8 @@ fn a_decision_is_named_by_its_leading_chooses() {
 }
 
 /// The pass that looks for the ways in leaves nothing behind: a body with a
-/// flow and a decision has the flow once and the decision once.
+/// flow and a decision has the flow once and the decision once. The runs
+/// are the session's, so the view draws the session and its loop.
 #[test]
 fn the_looking_pass_leaves_nothing() {
     let src = "stage A : delay; stage x : ps(1); stage y : ps(1);
@@ -983,14 +1040,12 @@ fn the_looking_pass_leaves_nothing() {
             loop {
               set c = ~bernoulli(0.5);
               branch (c) { end; } turn;
+              run x, y (cost(x, y, 1));
+              run A (cost(A, 1));
             }
-
           }
         }
-        server {
-          run x, y (cost(x, y, 1));
-          run A (cost(A, 1));
-        }
+        server {}
         ";
     let p = compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap();
     let net = deployment::project(&p);
@@ -1216,9 +1271,18 @@ fn docs_assets_are_current() {
             .pop()
             .unwrap_or_else(|| panic!("docs/assets/{name} has no program: {stem}.sq"));
         let src = std::fs::read_to_string(&src_path).unwrap();
-        let p = serq::compile_drawn_source(&src, &common::horizon(10.0))
+        let p = serq::compile_source(&src, &common::horizon(10.0))
             .unwrap_or_else(|e| panic!("{}: {e}", src_path.display()));
         let got = serq::view::svg::render(&deployment::figure(&p));
+        // the view reads the IR alone: the program read back from its JSON
+        // draws the same figure (#265)
+        let ir = Program::from_json(&p.to_json()).unwrap();
+        assert_eq!(
+            serq::view::svg::render(&deployment::figure(&ir)),
+            got,
+            "{}: its IR draws another figure",
+            src_path.display()
+        );
         if std::env::var("SERQ_BLESS").is_ok() {
             std::fs::write(&path, &got).unwrap();
         } else {
@@ -1827,7 +1891,7 @@ fn a_while_body_does_not_determine_its_continuation() {
       }
       ",
     );
-    let p = compile_drawn_source(&src, &common::horizon(10.0)).unwrap();
+    let p = compile_source(&src, &common::horizon(10.0)).unwrap();
     let net = deployment::project(&p);
     assert!(net.node_of(stage(&p, "c")).is_some(), "zero passes reach c");
 }

@@ -434,10 +434,8 @@ fn overriding(
 }
 
 /// `draw(path=None, *, source=None, sets={}, defs={}, format="tikz")`: the
-/// deployment view, as `serq draw` prints it. It takes the file or text and
-/// not a compiled `Program`: the view draws what one request runs, which
-/// program text compiled for the view says (`serq::load_drawn`), and a
-/// `Program` compiled to run has the whole session in its place.
+/// deployment view, as `serq draw` prints it: what one request runs
+/// (`serq::view::deployment::request`).
 #[pyfunction]
 #[pyo3(signature = (path=None, *, source=None, sets=HashMap::new(), defs=HashMap::new(), format="tikz"))]
 fn draw(
@@ -450,8 +448,8 @@ fn draw(
     let mut ov = serq::Overrides::default();
     overriding(&mut ov, sets, defs)?;
     let ir = match (&path, source) {
-        (Some(p), None) => serq::load_drawn(p, &ov),
-        (None, Some(src)) => serq::compile_drawn_source(src, &ov),
+        (Some(p), None) => serq::load_inspected(p, &ov),
+        (None, Some(src)) => serq::compile_inspected(src, &ov),
         _ => {
             return Err(PyValueError::new_err(
                 "draw takes exactly one of a path and a source",

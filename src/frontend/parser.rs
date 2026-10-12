@@ -1145,64 +1145,6 @@ fn live_read(e: &Expr, attrs: &[String], lets: &[String]) -> Option<String> {
     }
 }
 
-/// Find turn sites, wrapped in their session-wide holds, for the deployment view.
-/// The internal `Request` marker is inserted after each source turn and is
-/// replaced by the server before the linker sees the AST.
-fn request_sites(stmts: &[Stmt], holds: &[&Stmt], out: &mut Vec<Stmt>) {
-    // All turns use the same server. Two sites have the same serving path
-    // inside holds of the same pools; the units held do not change what the
-    // figure draws, so `hold live (1)` and `hold live (2)` are one.
-    fn same(a: &Stmt, b: &Stmt) -> bool {
-        match (a, b) {
-            (Stmt::Request, Stmt::Request) => true,
-            (
-                Stmt::Hold {
-                    pools: p, body: x, ..
-                },
-                Stmt::Hold {
-                    pools: q, body: y, ..
-                },
-            ) => {
-                p.len() == q.len()
-                    && p.iter().zip(q).all(|(a, b)| a.0.same_target(&b.0))
-                    && same(&x[0], &y[0])
-            }
-            _ => false,
-        }
-    }
-    for s in stmts {
-        match s {
-            Stmt::Request => {
-                let mut site = s.clone();
-                for &h in holds.iter().rev() {
-                    let mut h = h.clone();
-                    let Stmt::Hold { body, .. } = &mut h else {
-                        unreachable!("only holds are pushed")
-                    };
-                    *body = vec![site];
-                    site = h;
-                }
-                if !out.iter().any(|o| same(o, &site)) {
-                    out.push(site);
-                }
-            }
-            Stmt::Hold { body, .. } => {
-                let mut inner = holds.to_vec();
-                inner.push(s);
-                request_sites(body, &inner, out);
-            }
-            Stmt::Loop(body) | Stmt::While(_, body) | Stmt::Fork(body) => {
-                request_sites(body, holds, out)
-            }
-            Stmt::Branch(_, a, b) => {
-                request_sites(a, holds, out);
-                request_sites(b, holds, out);
-            }
-            _ => {}
-        }
-    }
-}
-
 /// Replace every internal request marker, at any depth, by the server's
 /// statements. Returns how many were replaced.
 fn splice(stmts: &mut Vec<Stmt>, server: &[Stmt]) -> usize {
@@ -2141,15 +2083,6 @@ impl Parser {
             }
             self.wl_session = Some((self.pos, vec![Stmt::Turn, Stmt::Request]));
         }
-        // what one request runs, before either side is expanded: the one
-        // thing every `request` of the workload's session names
-        let mut request = vec![];
-        if let Some((_, s)) = &self.wl_session {
-            request_sites(s, &[], &mut request);
-            if request.len() > 1 {
-                request.clear();
-            }
-        }
         // Queues first: every entry call in place, so the sides are plain
         // statements when they are put together.
         {
@@ -2291,7 +2224,6 @@ impl Parser {
             if let Some((_, s)) = &mut self.server {
                 expand(s)?;
             }
-            expand(&mut request)?;
         }
         if let Some((_, server)) = &self.server {
             assigned_in(server, &mut served.server);
@@ -2314,12 +2246,11 @@ impl Parser {
                         "the workload's session has no `turn;`: each turn uses the server",
                     );
                 }
-                splice(&mut request, &server);
                 if !matches!(session.last(), Some(Stmt::End)) {
                     session.push(Stmt::End);
                 }
                 prog.session = session;
-                prog.request = request;
+                prog.server = server;
                 Ok(())
             }
         }
@@ -6014,7 +5945,7 @@ mod tests {
         }
         let run = |s: &str| {
             let mut p = without_locations(parse(&main_source(s)).unwrap());
-            p.request.clear();
+            p.server.clear();
             executable(&mut p.session);
             p
         };

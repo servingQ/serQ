@@ -1500,6 +1500,8 @@ impl<'p> Interp<'p> {
             .last()
             .cloned()
             .expect("a turn runs in a frame");
+        // the request is the run of server statements after the turn, as
+        // the deployment view reads it (`view::deployment::request`)
         let sides = &p.sides[fr.block];
         let end = (fr.pc..sides.len())
             .find(|&i| sides[i] == Side::Workload)

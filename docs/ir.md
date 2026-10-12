@@ -148,7 +148,9 @@ or a permitted client `Cost`. Built-in trace/client slots are `Size`;
 `cached` and `computed` are `Value`. Explicit sessions may preset only sizes.
 Server control-flow bodies retain server authority. Inlined server statements
 inside a workload block retain `Server` in `sides`; there is no new runtime
-request frame or attribute reset.
+request frame or attribute reset. A request is the run of `Server`
+statements after a `Turn`, up to the next `Workload` statement: where the
+interpreter's client turn ends, and what the deployment view draws.
 
 `CostTarget` is `Pool {base, count}`, `Stage {base, count}`, or
 `Joint([targets])`. A joint target has at least two distinct, sorted,

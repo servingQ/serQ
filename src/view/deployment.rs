@@ -9,7 +9,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::ir::{CArrival, CExpr, CRef, CStageKind, CStmt, CtxVar, Program, RunMode, UnOp};
+use crate::ir::{CArrival, CExpr, CRef, CStageKind, CStmt, CtxVar, Program, RunMode, Side, UnOp};
 use crate::view::figure::{
     Anchor, BoxStyle, EdgeStyle, Figure, Item, Rect, StationKind, TextSize, pt,
 };
@@ -1008,8 +1008,147 @@ fn arrival_label(p: &Program) -> String {
     }
 }
 
-/// Project the session program onto the stages.
+/// A run of server statements in the session, at one `request`: the block
+/// and its range, inside the holds the workload has around it, outermost
+/// first.
+struct Site {
+    holds: Vec<CStmt>,
+    block: usize,
+    from: usize,
+    to: usize,
+}
+
+/// The server's runs in a block, each inside the workload's holds around it.
+/// A run ends at the first workload statement, where the interpreter ends
+/// the client turn too (`ClientTurn`).
+fn sites(p: &Program, block: usize, holds: &mut Vec<CStmt>, out: &mut Vec<Site>) {
+    let (stmts, sides) = (&p.blocks[block], &p.sides[block]);
+    let mut i = 0;
+    while i < stmts.len() {
+        if sides[i] == Side::Server {
+            let from = i;
+            while i < stmts.len() && sides[i] == Side::Server {
+                i += 1;
+            }
+            out.push(Site {
+                holds: holds.clone(),
+                block,
+                from,
+                to: i,
+            });
+            continue;
+        }
+        match &stmts[i] {
+            CStmt::Hold { body, .. } => {
+                holds.push(stmts[i].clone());
+                sites(p, *body, holds, out);
+                holds.pop();
+            }
+            CStmt::Branch(_, a, b) => {
+                sites(p, *a, holds, out);
+                sites(p, *b, holds, out);
+            }
+            CStmt::Loop(b) | CStmt::While(_, b) | CStmt::Fork(b) => sites(p, *b, holds, out),
+            _ => {}
+        }
+        i += 1;
+    }
+}
+
+/// Two statement lists that run the same thing, block ids aside.
+fn same_stmts(p: &Program, a: &[CStmt], b: &[CStmt]) -> bool {
+    let same_block = |x: usize, y: usize| same_stmts(p, &p.blocks[x], &p.blocks[y]);
+    // a statement with its blocks numbered 0, for comparing what is left
+    let shape = |s: &CStmt| {
+        let mut s = s.clone();
+        match &mut s {
+            CStmt::Hold { body, .. } => *body = 0,
+            CStmt::Branch(_, t, e) => (*t, *e) = (0, 0),
+            CStmt::Loop(b) | CStmt::While(_, b) | CStmt::Fork(b) => *b = 0,
+            _ => {}
+        }
+        serde_json::to_value(&s).expect("a statement serialises")
+    };
+    a.len() == b.len()
+        && a.iter().zip(b).all(|(x, y)| {
+            shape(x) == shape(y)
+                && match (x, y) {
+                    (CStmt::Hold { body: x, .. }, CStmt::Hold { body: y, .. })
+                    | (CStmt::Loop(x), CStmt::Loop(y))
+                    | (CStmt::While(_, x), CStmt::While(_, y))
+                    | (CStmt::Fork(x), CStmt::Fork(y)) => same_block(*x, *y),
+                    (CStmt::Branch(_, t, e), CStmt::Branch(_, u, f)) => {
+                        same_block(*t, *u) && same_block(*e, *f)
+                    }
+                    _ => true,
+                }
+        })
+}
+
+/// Two sites run the same serving path inside holds of the same pools; the
+/// units held do not change what the figure draws, so `hold live (1)` and
+/// `hold live (2)` are one.
+fn same_site(p: &Program, a: &Site, b: &Site) -> bool {
+    let pools = |h: &CStmt| -> Vec<CRef> {
+        match h {
+            CStmt::Hold { pools, .. } => pools.iter().map(|(r, _, _)| r.clone()).collect(),
+            _ => unreachable!("only holds are pushed"),
+        }
+    };
+    a.holds.len() == b.holds.len()
+        && a.holds
+            .iter()
+            .zip(&b.holds)
+            .all(|(x, y)| pools(x) == pools(y))
+        && same_stmts(
+            p,
+            &p.blocks[a.block][a.from..a.to],
+            &p.blocks[b.block][b.from..b.to],
+        )
+}
+
+/// What one request runs, in place of the session: the server's statements
+/// (`Side::Server`) inside the holds the workload has around them. Whether
+/// a session comes back, and when it ends, belongs to the workload. What the
+/// server reads of the workload's attributes is set by nothing here, so a
+/// server guard on one (`branch (first)`) draws both arms. `None`, and the
+/// session is drawn whole, when it runs no server statement or runs two
+/// different things at its requests.
+pub fn request(p: &Program) -> Option<Program> {
+    let mut found = vec![];
+    sites(p, p.session, &mut vec![], &mut found);
+    let mut distinct: Vec<Site> = vec![];
+    for s in found {
+        if !distinct.iter().any(|d| same_site(p, d, &s)) {
+            distinct.push(s);
+        }
+    }
+    let [site] = &distinct[..] else {
+        return None;
+    };
+    let mut q = p.clone();
+    let mut block = q.blocks.len();
+    q.blocks
+        .push(p.blocks[site.block][site.from..site.to].to_vec());
+    q.sides.push(vec![Side::Server; site.to - site.from]);
+    for h in site.holds.iter().rev() {
+        let mut h = h.clone();
+        if let CStmt::Hold { body, .. } = &mut h {
+            *body = block;
+        }
+        block = q.blocks.len();
+        q.blocks.push(vec![h]);
+        q.sides.push(vec![Side::Workload]);
+    }
+    q.session = block;
+    Some(q)
+}
+
+/// Project what one request runs (`request`) onto the stages, or the
+/// session program when it has no one request.
 pub fn project(p: &Program) -> Net {
+    let owned = request(p);
+    let p = owned.as_ref().unwrap_or(p);
     let mut w = Walker {
         p,
         net: Net {

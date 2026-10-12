@@ -53,6 +53,24 @@ fn the_server_may_not_decide_on_a_hidden_attribute() {
     );
 }
 
+/// The check reads the server, not what one request runs: a session whose
+/// requests differ (one inside the workload's `live`) was let through
+/// unchecked when the check read the request the view drew (#265).
+#[test]
+fn the_server_is_checked_when_the_requests_differ() {
+    let src = "pool live { cap 2; } stage A : fifo; stage B : fifo;
+        workload { arrive poisson(1); hidden o;
+          turn { set o = ~exp(10); }
+          session { turn; hold live (cost(live, 1)) { turn; } } }
+        server { branch (o > 5) { run A (cost(A, 1)); } else { run B (cost(B, 1)); } }
+        ";
+    let err = compile_source(&common::main_source(src), &common::horizon(100.0)).unwrap_err();
+    assert!(
+        err.contains("`o` is hidden from the scheduler, but the server's branch reads it"),
+        "{err}"
+    );
+}
+
 /// A hidden attribute passed bare to a function that takes a number is read
 /// as it is in a sum: `min(o, 1)` decides on `o` as `min(o + 0, 1)` does.
 #[test]

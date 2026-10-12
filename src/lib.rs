@@ -43,15 +43,6 @@ pub fn compile_source(src: &str, ov: &Overrides) -> Result<ir::Program, String> 
     finish(prog, src, ov)
 }
 
-/// Static inspection needs a valid IR but does not choose an experiment's duration.
-/// This placeholder is used only by drawing; executing/exporting IR requires a horizon.
-fn inspection_options(ov: &Overrides) -> Overrides {
-    Overrides {
-        horizon: ov.horizon.or(Some(f64::MAX)),
-        ..ov.clone()
-    }
-}
-
 /// The supplied inputs, which the parser checks cannot change an array size.
 fn overridden(ov: &Overrides) -> Vec<String> {
     ov.lets.iter().map(|(name, _)| name.clone()).collect()
@@ -81,6 +72,29 @@ fn finish(prog: frontend::ast::Program, src: &str, ov: &Overrides) -> Result<ir:
 /// Parse and link only (static checks).
 pub fn check_source(src: &str, ov: &Overrides) -> Result<Linked, String> {
     compile_source(src, ov)
+}
+
+/// `load`, for a command that inspects the program and neither runs nor
+/// exports it (`check`, `target`, `draw`): program text without a horizon
+/// is given a placeholder one, since nothing here chooses an experiment's
+/// duration. IR keeps its own.
+pub fn load_inspected(path: &Path, ov: &Overrides) -> Result<ir::Program, String> {
+    if path.extension().is_some_and(|e| e == "json") {
+        return load(path, ov);
+    }
+    load(path, &inspected(ov))
+}
+
+/// `compile_source`, for inspection (`load_inspected`).
+pub fn compile_inspected(src: &str, ov: &Overrides) -> Result<ir::Program, String> {
+    compile_source(src, &inspected(ov))
+}
+
+fn inspected(ov: &Overrides) -> Overrides {
+    Overrides {
+        horizon: ov.horizon.or(Some(f64::MAX)),
+        ..ov.clone()
+    }
 }
 
 /// Load a program file as IR: `.json` is read as IR (only the run
@@ -123,58 +137,6 @@ pub fn load(path: &Path, ov: &Overrides) -> Result<ir::Program, String> {
     } else {
         compile_source(&text, ov)
     }
-}
-
-/// The program the deployment view draws, from program text: what one
-/// request runs (the `server`, or a gateway's `route`) in place of the
-/// session. Whether a session comes back, and when it ends, belongs to the
-/// workload. A program with no unique request body is drawn whole.
-pub fn compile_drawn_source(src: &str, ov: &Overrides) -> Result<ir::Program, String> {
-    let prog =
-        frontend::parser::parse_with(src, &ov.defs, &overridden(ov)).map_err(|e| e.render(src))?;
-    finish(drawn(prog), src, &inspection_options(ov))
-}
-
-/// `load`, for the deployment view: program text is compiled with
-/// `compile_drawn_source`; IR, which has no workload and server apart, is
-/// drawn whole.
-pub fn load_drawn(path: &Path, ov: &Overrides) -> Result<ir::Program, String> {
-    if path.extension().is_some_and(|e| e == "json") {
-        return load(path, ov);
-    }
-    let text = std::fs::read_to_string(path)
-        .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
-    compile_drawn_source(&text, ov)
-}
-
-/// The request in place of the session. What the server reads of the
-/// workload's attributes (`prev`, the previous prompt) is declared ahead of
-/// it, set to `now`: a value the view cannot know, so a server guard on a
-/// workload attribute (`branch (first)`) draws both arms.
-fn drawn(mut prog: frontend::ast::Program) -> frontend::ast::Program {
-    use frontend::ast::{Expr, Stmt};
-    use frontend::parser::assigned_in;
-    if prog.request.is_empty() {
-        return prog;
-    }
-    let request = std::mem::take(&mut prog.request);
-    let (mut workload, mut own) = (vec![], vec![]);
-    assigned_in(&prog.session, &mut workload);
-    assigned_in(&request, &mut own);
-    let mut session: Vec<Stmt> = vec![];
-    for name in workload {
-        if !own.contains(&name)
-            && !session
-                .iter()
-                .any(|s| matches!(s, Stmt::Set(n, _) if *n == name))
-        {
-            session.push(Stmt::Set(name, Expr::Var("now".into())));
-        }
-    }
-    session.push(Stmt::Side(ir::Side::Server));
-    session.extend(request);
-    prog.session = session;
-    prog
 }
 
 /// Run an IR program. A relative trace path is resolved against `base`
