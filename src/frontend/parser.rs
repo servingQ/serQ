@@ -70,7 +70,7 @@ use std::fmt;
 use crate::frontend::ast::*;
 use crate::frontend::lexer::{LexError, Tok, Token, lex};
 use crate::frontend::link::{
-    AGGREGATES, BUILTIN_ATTRS, Constants, FOLDED, LISTS, LResult, LinkError, RENAMED,
+    AGGREGATES, BUILTIN_ATTRS, CONTEXT_VARS, Constants, FOLDED, LISTS, LResult, LinkError, RENAMED,
     SCHEDULER_ATTRS, Supplied, supplied, takes_supplied,
 };
 use crate::frontend::queue::{self, QueueDecl};
@@ -400,7 +400,7 @@ const MAX_FAMILY: usize = 10_000;
 /// parameter may not be one: a parameter is replaced token by token, and a
 /// keyword in the body is a token of the same spelling. `tests/docs_lexer.rs`
 /// keeps the list whole.
-pub const KEYWORDS: [&str; 115] = [
+pub const KEYWORDS: [&str; 116] = [
     "Cost",
     "Size",
     "admission",
