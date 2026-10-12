@@ -36,7 +36,7 @@ the paper's to the PDF in its `assets/paper/`.
 | After the response, the count is the response's usage, the answer included ([`scheduler/router.py#L493-L494`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L493-L494)) | `grow prog[home] (cost(prog, o))` after the engine's request |
 | Over capacity, pause the ACTING programs, the smallest first, then the REASONING ones ([`scheduler/router.py#L773-L805`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L773-L805)) | `preempt leases by (reasoning, prompt);` on `prog`: the growth ends idle programs' leases first, the smaller first |
 | A paused program's next request waits to be let in again, on any replica with room ([`scheduler/router.py#L411-L424`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L411-L424), [`#L807-L932`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L807-L932)) | `allocated(prog[home])` is 0: the program is placed as a new one, and may move |
-| Resume order: a program that has waited 30 minutes, then programs with a pending request, then new ones, each group smallest first ([`#L934-L956`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L934-L956), [`scheduler/router.py#L851-L866`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L851-L866)) | `queue by (waited < 1800, turn_no == 0, prompt)` on `prog` |
+| A program that has waited 30 minutes is let in whatever the capacity; otherwise, programs with a pending request, then new ones, each group smallest first ([`#L934-L956`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L934-L956), [`scheduler/router.py#L851-L866`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L851-L866)) | `queue by (waited < 1800, turn_no == 0, prompt)` on `prog` |
 | `/programs/release` at the end of the trajectory ([`scheduler/router.py#L514-L547`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L514-L547)) | the session's end ends the lease |
 | `--router default`: the replica with the fewest programs, no capacity ([`scheduler/router.py#L252-L271`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L252-L271)) | `tr = 0`: `cap inf` and `choose … by (0, holders(prog[j]))` |
 
@@ -210,6 +210,16 @@ figures except the printed ratios:
 | (e) OpenHands, Qwen3-235B | 24-96 | 162, 172, 122, 70 | 164, 173, 164, 168 | 2.43 | 97 → 38 % | 97 → 96 % |
 | (f) ScienceAgent, GLM-4.6 | 48-120 | 39.5 → 40 | 39.5 → 49.5 | 1.24 | 51 % | 52 → 60 % |
 
+The gain is a closed workload's, and it is paid in waiting. At 32 agents
+(seed 1), TR mode's mean time to first token is 52 s against default
+mode's 81 s, but its 99th percentile is 1 836 s against 147 s: a program
+the router holds back waits for room. Under open Poisson arrivals of
+programs (the same program with `arrive poisson`), at rates default mode
+keeps up with, 0.01-0.02 a second, the two serve the same turns and TR
+mode's TTFT is a little lower (0.54 s against 1.05 s at 0.02). At 0.05 a
+second default mode falls behind and its queue grows without bound,
+while TR mode keeps up, with a TTFT of 16 s (99th percentile 313 s).
+
 The example's ratio, 1.5, is below the paper's, and its hit rates are
 well below the paper's on both sides. The sections below find
 the reasons, one at a time.
@@ -218,8 +228,12 @@ the reasons, one at a time.
 
 Write the throughput by Little's law: steps/min = agents × 60 / (time a
 step takes, its wait included). At 32 agents on the example's scale (seed
-1), TR mode's step is 65 s: 63 s from request to answer, 47 s of it on
-average waiting to be let in again, and 3 s at the tool. Default mode's
+1), TR mode's step is 65 s: 63 s from request to answer, of which about
+50 s is the wait in the router's queue, and 3 s at the tool. Two thirds
+of that wait is the 15 % of returns that wait the full 30 minutes before
+the force-resume puts them first; without that rule a large paused
+program waited up to five hours, and throughput was 1-4 % higher only
+because those programs never answered. Default mode's
 is 99 s: 97 s at the replica, most of it waiting for blocks behind the
 requests that recompute, and 3 s at the tool. The replicas run about as
 many requests at once either way (a decode batch of 2.7 against 3.0); what
@@ -257,9 +271,9 @@ that is worth, and the program has an argument for each:
 
 Runs are 25 000 s long with 5 000 s of warm-up, four seeds a row. A
 shorter run measures the agents before the longest of them have grown,
-and reads default mode about a fifth too fast at the paper's scale. The
-seeds' ratios spread by about 0.2 at a point, so differences below that
-are noise. At the paper's scale (`tools/thunderagent/sweep.py --preset
+and reads default mode about a sixth too fast at the paper's scale. The
+seeds' ratios at one point spread over up to 0.5 (2.93-3.40 at N = 96),
+about 0.2 of standard deviation, so differences below that are noise. At the paper's scale (`tools/thunderagent/sweep.py --preset
 paper`), one factor at a time:
 
 | Setting | ratio at N = 96, 144, 192 | TR hit | default hit |
@@ -300,17 +314,21 @@ programs, with hit rates falling to 30 % and 93 %:
   evicted it: TR mode's hit rate is 0.73 and the ratio 2.2. Counted per
   program, the (k − 1) × S tokens the router never lets in are KV that
   holds paused prefixes: the hit rate is 0.91, the paper's 93-96 %, and the
-  ratio 3.1. The share of turns from paused programs barely moves (0.15
-  against 0.21); what moves is whether they recompute.
+  ratio 3.1, all of what the shared prompt adds: with S = 0 the ratio is
+  the same 2.2. Counted once, the share of turns from paused programs is
+  1.4 times as large (0.21 against 0.15), and each recomputes: prefill is
+  2.9 times as many tokens a turn.
 - **Default mode's hits are the shared prompt.** Its own prefix survives
-  in 1 % of turns. The rest is S over the mean prompt, 3 968 / 17 700 =
-  0.22, which matches the paper's 30-38 % only because S was chosen to;
-  the paper does not state its prompts' length.
-- **The tool time bounds the gain.** With 10 s tools the ratio is 2.0-2.1,
-  with 1 s tools 3.3. The paper's smallest gains are on its workloads with
+  in 1.5-4.5 % of turns. The rest is S over the mean prompt, 3 968 / 18 000
+  = 0.22, which S was chosen to bring near the paper's 30-38 %; the paper
+  does not state its prompts' length.
+- **The tool time bounds the gain.** With 10 s tools the ratio is 2.0-2.1;
+  with 1 s tools it is 3.3, within the seeds' spread of the preset's 3.1,
+  so the 10 s case is the evidence. With 10 s tools TR mode's decode batch
+  falls from 20 to 12 while default mode is unchanged. The paper's smallest gains are on its workloads with
   the longest and most variable tools, ScienceAgent (1.24) and
-  ToolOrchestra (1.48), though those also run other models on other
-  hardware (Qwen3-8B on an RTX 5090 for ToolOrchestra).
+  ToolOrchestra (1.48); ScienceAgent runs OpenHands on GLM-4.6 as the
+  coding agents do, and ToolOrchestra runs Qwen3-8B on an RTX 5090.
 - **The headline ratio rests on two estimates.** 3.1 is with `g` at the
   pessimistic end of its range and `S` chosen; with `g` 1.1 ns it is 1.9.
   The paper's ratios are 2.43-3.58 on the coding agents. The program
@@ -318,8 +336,13 @@ programs, with hit rates falling to 30 % and 93 %:
   reproduces a panel.
 - **The absolute steps/min** are within a fifth of Fig. 4a's for TR mode
   (307-310 against 370-382) and about a third below for default mode
-  (99-101 against 140-162). The preset's constants are estimates, so this
-  agreement is not a check.
+  (99-101 against 140-162), with `g` at 3.3 ns; at 1.1 ns default mode is
+  above the paper's (183-187). The preset's constants are estimates, so
+  this agreement is not a check.
+- **A few trajectories end at a preemption.** At the example's scale a
+  preempted request that has grown past what the replica's KV holds
+  cannot be let in again and its session ends (the replica pool's `rej`,
+  1-3 a run); at the paper's scale none does.
 
 What the program does not reproduce:
 

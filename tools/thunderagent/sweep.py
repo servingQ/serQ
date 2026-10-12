@@ -52,7 +52,7 @@ PRESETS = {
 
 def run(n, tr, seed, sets):
     args = [SERQ, "run", str(PROGRAM), "--horizon", str(HORIZON), "--warmup", str(WARMUP),
-            "--seed", str(seed), "--json", "--", "--tr", str(tr), "--N", str(n)]
+            "--seed", str(seed), "--json", "--tr", str(tr), "--N", str(n)]
     for k, v in sets.items():
         args += [f"--{k}", str(v)]
     r = json.loads(subprocess.run(args, capture_output=True, text=True, check=True).stdout)
