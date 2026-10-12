@@ -46,3 +46,54 @@ fn with_room_for_every_agent_the_two_modes_serve_alike() {
         off.turns
     );
 }
+
+/// At the paper's scale (`tools/thunderagent/sweep.py --preset paper`, one
+/// seed, a shorter run), the two causes `docs/design/thunderagent.md` gives
+/// for the paper's larger numbers: a recompute that costs the square of
+/// its context (`g`) is what makes default mode lose, and the KV the
+/// router's count leaves free (`slack`) is what keeps paused prefixes.
+fn paper(tr: &str, more: &[&str]) -> serq::Report {
+    let mut sets = vec![
+        tr,
+        "N=96",
+        "blocks=31250",
+        "a=1.6e-5",
+        "omega=0.015",
+        "beta=1.4e-8",
+    ];
+    sets.extend_from_slice(more);
+    run_program("thunderagent", &sets, Some(1), Some(1500.0))
+}
+
+fn token_hit(r: &serq::Report) -> f64 {
+    let total = |k: &str| {
+        let o = r.observe(k).unwrap();
+        o.mean * o.count as f64
+    };
+    total("reused_tokens") / (total("reused_tokens") + total("prefill_tokens"))
+}
+
+#[test]
+fn the_square_of_a_recompute_is_what_default_mode_loses() {
+    let ratio = |g: &str| {
+        let (on, off) = (paper("tr=1", &[g]), paper("tr=0", &[g]));
+        on.turns as f64 / off.turns as f64
+    };
+    let (linear, square) = (ratio("g=0"), ratio("g=3.3e-9"));
+    // 1.29 and 1.67 at this horizon, with no warm-up; 1.30 and 2.01 in the
+    // sweep, which warms up for 500 s of 3 000
+    assert!(
+        linear < 1.4 && square > 1.25 * linear,
+        "ratio: g = 0 {linear}, g = 3.3e-9 {square}"
+    );
+}
+
+#[test]
+fn the_kv_the_count_leaves_free_keeps_paused_prefixes() {
+    let hit = |slack: &str| token_hit(&paper("tr=1", &["g=1.1e-9", slack]));
+    let (tight, loose) = (hit("slack=0"), hit("slack=0.2"));
+    assert!(
+        tight < 0.75 && loose > 0.8,
+        "TR hit: slack 0 {tight}, slack 0.2 {loose}"
+    );
+}

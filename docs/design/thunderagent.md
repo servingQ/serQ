@@ -33,6 +33,7 @@ the paper's to the PDF in its `assets/paper/`.
 | A new program goes to the replica with the fewest active tokens among those where it fits, and waits when none has room ([`scheduler/router.py#L330-L362`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L330-L362)) | `choose j in J by (free(prog[j]) >= prompt + buffer ? 0 : 1, used(prog[j]))`, then a `hold` of `prog[j]` |
 | The program's tokens are counted while it reasons and while it calls a tool, at `acting_token_weight` 1.0, the default ([`backend/state.py#L104-L107`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/backend/state.py#L104-L107), [`__main__.py#L30`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/__main__.py#L30)) | `lease prog[home] (inf)`: the allocation outlives the hold |
 | A running program's next request is let through without a capacity check; its count becomes the new prompt's estimate ([`scheduler/router.py#L384-L389`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L384-L389), [`#L450-L458`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L450-L458)) | `grow prog[home] (cost(prog, prompt + buffer - allocated(prog[home])))`, on the lease |
+| After the response, the count is the response's usage, the answer included ([`scheduler/router.py#L493-L494`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L493-L494)) | `grow prog[home] (cost(prog, o))` after the engine's request |
 | Over capacity, pause the ACTING programs, the smallest first, then the REASONING ones ([`scheduler/router.py#L773-L805`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L773-L805)) | `preempt leases by (reasoning, prompt);` on `prog`: the growth ends idle programs' leases first, the smaller first |
 | A paused program's next request waits to be let in again, on any replica with room ([`scheduler/router.py#L411-L424`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L411-L424), [`#L807-L932`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L807-L932)) | `allocated(prog[home])` is 0: the program is placed as a new one, and may move |
 | Resume order: programs with a pending request, then new ones, each group smallest first ([`scheduler/router.py#L851-L866`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L851-L866)) | `queue by (turn_no == 0, prompt)` on `prog` |
@@ -164,72 +165,136 @@ since the grower is a candidate itself (`tests/lease_preemption.rs`).
 
 ## What the program shows, against the paper
 
-The program runs on two replicas of 64 000 tokens each. A task's first
-prompt is 4 000-8 000 tokens, and each step adds about 1 000 tokens of
-observation and 300 of answer. The model's constants are of the order of
-a 32B model on one GPU (an iteration of 20 ms), not a fit. Each row is
-three seeds, with a horizon of 3 000 s and a warm-up of 500 s. Steps/min
-are turns per minute after warm-up, the paper's unit (a reasoning and an
-acting period, p. 9). The hit rate is reused tokens over prompt tokens,
-vLLM's `prefix_cache_hits / prefix_cache_queries`:
+`tools/thunderagent/sweep.py` runs both modes over the agent counts, three
+seeds each by default, with a horizon of 3 000 s and a warm-up of 500 s.
+Steps/min are turns per minute after warm-up, the paper's unit (a
+reasoning and an acting period, p. 9). The hit rate is reused tokens over
+prompt tokens, vLLM's `prefix_cache_hits / prefix_cache_queries`.
+"Resumed" is the share of TR mode's turns that a paused program sends.
 
-| N | TR steps/min | default steps/min | ratio | TR hit | default hit |
-|---|---|---|---|---|---|
-| 4 | 20.9 | 20.8 | 1.00 | 0.90 | 0.88 |
-| 8 | 29.4 | 24.9 | 1.18 | 0.85 | 0.54 |
-| 12 | 30.2 | 21.6 | 1.40 | 0.82 | 0.16 |
-| 16 | 32.4 | 20.4 | 1.59 | 0.79 | 0.03 |
-| 24 | 33.6 | 20.7 | 1.63 | 0.76 | 0.02 |
-| 32 | 33.3 | 21.8 | 1.53 | 0.76 | 0.02 |
-| 48 | 35.4 | 22.4 | 1.58 | 0.72 | 0.02 |
+At the example's own scale (`tools/thunderagent/sweep.py`), each replica
+holds 64 000 tokens. A task's first prompt is 4 000-8 000 tokens, and each
+step adds about 1 000 tokens of observation and 300 of answer:
+
+| N | TR steps/min | default steps/min | ratio | TR hit | default hit | TR resumed/turn |
+|---|---|---|---|---|---|---|
+| 4 | 20.9 | 20.8 | 1.00 | 0.90 | 0.88 | 0.005 |
+| 8 | 29.2 | 24.9 | 1.17 | 0.85 | 0.54 | 0.054 |
+| 16 | 32.2 | 20.4 | 1.58 | 0.79 | 0.02 | 0.091 |
+| 32 | 34.4 | 21.8 | 1.58 | 0.73 | 0.02 | 0.119 |
+| 48 | 35.2 | 22.4 | 1.57 | 0.73 | 0.02 | 0.129 |
 
 The paper's Fig. 4 and Fig. 5 (p. 9-10), with values read from the
 figures except the printed ratios:
 
 | Panel | N | vLLM steps/min | ThunderAgent steps/min | ratio at the largest N | hit, vLLM | hit, ThunderAgent |
 |---|---|---|---|---|---|---|
-| (a) SWE-agent, GLM-4.6 | 24-96 | 218 → 140 | 220 → 370 | 2.65 | 98 → 30 % | 98 → 93 % |
-| (b) OpenHands, GLM-4.6 | 24-96 | 152 → 52 | 155 → 186 | 3.58 | 98 → 32 % | 98 → 94 % |
+| (a) SWE-agent, GLM-4.6 | 24-96 | 218, 275, 162, 140 | 220, 350, 382, 370 | 2.65 | 98 → 30 % | 98 → 93 % |
+| (b) OpenHands, GLM-4.6 | 24-96 | 152, 55, 47, 52 | 155, 190, 188, 186 | 3.58 | 98 → 32 % | 98 → 94 % |
 | (c) ToolOrchestra, Qwen3-8B | 24-48 | 5.05 → 4.75 | 6.05 → 7.05 | 1.48 | 13 → 12 % | 28 → 18 % |
-| (d) SWE-agent, Qwen3-235B | 144-192 | 83 → 125 | 333 → 378 | 3.02 | 45 → 73 % | 96 % |
-| (e) OpenHands, Qwen3-235B | 24-96 | 162 → 70 | 164 → 168 | 2.43 | 97 → 38 % | 97 → 96 % |
+| (d) SWE-agent, Qwen3-235B | 144-192 | 83, 145, 125 | 333, 388, 378 | 3.02 | 45 → 73 % | 96 % |
+| (e) OpenHands, Qwen3-235B | 24-96 | 162, 172, 122, 70 | 164, 173, 164, 168 | 2.43 | 97 → 38 % | 97 → 96 % |
 | (f) ScienceAgent, GLM-4.6 | 48-120 | 39.5 → 40 | 39.5 → 49.5 | 1.24 | 51 % | 52 → 60 % |
 
-What agrees:
+The example's ratio, 1.6, is at the low end of the paper's, and its hit
+rates are well below the paper's on both sides. The sections below find
+the reasons, one at a time.
 
-- **The shape.** Both systems serve alike while the contexts fit. Past
-  that, the baseline's hit rate falls and its throughput stops growing,
-  while ThunderAgent's throughput levels off at a higher value.
-- **The ratio.** Ours is 1.53-1.63 at 16 agents and more. The paper's is
-  1.24-3.58 at its largest N, so ours is at the low end, near the
-  SWE-agent and ToolOrchestra panels.
-- **The pause is what earns it.** Without the pause (the approximation
-  above), the ratio was 1.22.
+### Why the numbers differ
 
-What does not, and why:
+Write the throughput as the agents that run times the steps each makes:
+steps/min = active agents × 60 / (time in the engine + tool + wait). At
+32 agents the example's TR mode keeps about three requests per replica
+in the engine (its decode batch is 3.1), at 13 s a step. Default mode
+keeps all 16, at 85 s a step. The engine-time ratio, 6.5, is the paper's
+order: at 96 agents Fig. 10 (p. 28) gives vLLM 48-56 s against
+ThunderAgent 9-13 s.
+TR mode loses most of that gain in the wait for room. Four things decide
+how much it keeps, and the program now has an argument for each:
 
-- **The hit rates are lower on both sides.** The paper's are ≈ 93-96 % for
-  ThunderAgent and ≈ 30 % for vLLM. Ours are 0.72-0.79 and 0.02. The
-  paper's programs share a system prompt (p. 7: "the shared prompt across
-  programs"). serQ's cache is per session (`docs/language.md`, Known
-  limitations; `shared-prefix-cache.md`), so a first turn has nothing
-  cached, and nothing is shared between programs. ThunderAgent's own
-  number also falls in ours as N grows: more programs are paused, and a
-  paused one comes back to a cache that no longer holds it. The 100-token
-  buffer does not cover a 300-token answer either, so the replica's LRU
-  evicts a little more than the router counts.
-- **Our baseline does not collapse.** The paper's vLLM loses up to two
-  thirds of its throughput as N grows (b: 152 → 52), with decode
-  dominating its latency (Fig. 6a, p. 11: 54 s of 58). Ours stays at 21-25
-  steps/min. Dropping vLLM's full-prompt reservation, so that more
-  requests are admitted and preempted while decoding, did not make it
-  collapse either (22 steps/min at 48 agents). The paper does not state
-  its vLLM version, its KV capacity, its context lengths or its node count
-  per panel, so the cause cannot be checked from it.
-- **The absolute numbers are not comparable.** The paper runs GLM-4.6 and
-  Qwen3-235B in FP8 on 8×H100 nodes. The program's two replicas, their
-  capacity and the agents' contexts are choices. The ratio and the shape
-  are the comparison; the steps/min are not.
+1. **The scale.** A replica of the example holds four of the agents'
+   contexts, so TR mode's batch is tiny. The paper's node runs a GLM-4.6
+   class model in FP8 on 8×H100: about 500 000 tokens of KV, which holds
+   dozens of 20 000-token contexts (Fig. 3, p. 5). The `paper` preset is
+   that node, twice over: `blocks` 31 250, `a` 1.6e-5 s (64 GFLOP a token
+   at about 4 PFLOP/s), `omega` 15 ms, `beta` 14 ns a context token.
+2. **The cost of a recompute.** The example's prefill costs `a` per token,
+   whatever the context. The paper's argument is that a recompute costs
+   the square of the context (Eq. 8, p. 7), because each token attends to
+   all those before it. `g` is that attention, per token pair:
+   `compute(batch.tokens) + g * batch.attention`. At 4 PFLOP/s, 92 layers
+   and 96 heads of 128 dimensions, it is about 1.1 ns; at a third of
+   that rate, 3.3 ns. The two bound a range; neither is measured.
+3. **What the router's count leaves free.** The program's count of a
+   program's tokens is exactly what vLLM holds for it. A real one counts
+   more than vLLM holds: a system prompt every program shares is counted
+   per program and stored once, and `shared_tokens` is never subtracted
+   (above). The KV the count leaves free keeps paused programs' prefixes
+   cached until they come back. `slack` is that share.
+4. **The tool time.** While a program calls a tool its KV is held and the
+   GPU does not run it. The longer the call, the fewer programs TR mode
+   keeps running for the same KV.
+
+At the paper's scale (`tools/thunderagent/sweep.py --preset paper`, two
+seeds), one factor at a time:
+
+| Setting | ratio at N = 96, 144, 192 | TR hit | default steps/min, N = 48 → 96 |
+|---|---|---|---|
+| `g` 0 (the example's cost) | 1.29, 1.30, 1.31 | 0.66-0.67 | 320 → 258 |
+| `g` 1.1e-9 | 1.66, 1.62, 1.60 | 0.65-0.66 | 290 → 174 |
+| `g` 3.3e-9 | 2.06, 2.01, 1.89 | 0.64-0.66 | 245 → 107 |
+| `g` 1.1e-9, `slack` 0.2 | 1.71, 1.71, 1.67 | 0.85-0.86 | 290 → 174 |
+| `g` 3.3e-9, `slack` 0.2 | 2.56, 2.47, 2.37 | 0.85-0.86 | 245 → 107 |
+| `g` 1.1e-9, `slack` 0.2, `Z` 1 s | 2.03, 2.01, 1.98 | 0.85-0.87 | 318 → 175 |
+| `g` 1.1e-9, `slack` 0.2, `Z` 10 s | 1.10, 1.11, 1.06 | 0.80-0.81 | 192 → 177 |
+
+The last full sweep, `g` 3.3e-9 with `slack` 0.2:
+
+| N | TR steps/min | default steps/min | ratio | TR hit | default hit | TR resumed/turn |
+|---|---|---|---|---|---|---|
+| 24 | 171.1 | 171.3 | 1.00 | 0.91 | 0.91 | 0.000 |
+| 48 | 270.1 | 245.1 | 1.10 | 0.89 | 0.85 | 0.091 |
+| 96 | 273.3 | 106.6 | 2.56 | 0.86 | 0.01 | 0.154 |
+| 144 | 285.4 | 115.5 | 2.47 | 0.85 | 0.01 | 0.157 |
+| 192 | 288.6 | 121.8 | 2.37 | 0.85 | 0.01 | 0.161 |
+
+What each factor explains:
+
+- **The shape** comes with the scale. The two modes serve alike while the
+  contexts fit. TR mode's throughput then grows and levels off, while
+  default mode's rises, falls and stays down, as in Fig. 4a.
+- **The ratio** is the cost of a recompute. Without `g`, default mode
+  loses a fifth of its throughput past the knee and the ratio is 1.3.
+  With `g` at 3.3 ns it loses more than half, 245 → 107, as the paper's
+  vLLM does (a: 275 → 140, b: 152 → 52, e: 172 → 70), and the ratio is
+  2.4-2.6, beside panels (a) 2.65 and (e) 2.43.
+- **TR mode's hit rate** is the slack. A sixth of TR mode's turns come
+  from a paused program at every setting, whatever the slack. Without
+  slack such a turn recomputes the whole context, and the hit rate is
+  0.65. With a fifth of the KV left free, the paused prefixes survive
+  and the hit rate is 0.85-0.86, first turns included, which have
+  nothing cached. The paper reports 93-96 %. The slack moves the
+  ratio little: TR mode then lets fewer programs in.
+- **The tool time** bounds the gain, as in the paper. With 10 s tools the
+  ratio is 1.1. The paper's smallest gains are on the workloads with the
+  longest and most variable tools: ScienceAgent, 1.24, and ToolOrchestra,
+  1.48, whose tools reach tens to hundreds of seconds (Fig. 9, p. 28).
+
+What the program still does not reproduce:
+
+- **Default mode's hit rate** is 0.01 past the knee, against the paper's
+  vLLM's 30-38 %. The paper's programs share a system prompt and tool
+  descriptions, which vLLM's cache keeps for all of them. serQ's cache is
+  per session (`docs/language.md`, Known limitations), so this needs a
+  shared prefix cache (`shared-prefix-cache.md`).
+- **The largest ratios**, 3.02 (d) and 3.58 (b), are above every setting
+  here. The paper does not state its KV capacity, its context lengths, its
+  output lengths, its coding tools' times or the vLLM version, so the
+  program cannot be fitted to a panel. Its `g` is a range, not a
+  measurement.
+- **The absolute steps/min** depend on all of these. At the `paper` preset
+  they are within a factor of 1.5 of Fig. 4a's (TR 270-290 against
+  350-382), but that agreement is chosen, not checked.
 
 ## What the program still does not write
 
@@ -255,9 +320,9 @@ What does not, and why:
 6. **Token estimates.** ThunderAgent estimates a request's tokens from the
    payload's characters by a ratio it learns
    ([`scheduler/router.py#L479-L491`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L479-L491))
-   and counts the answer once it arrives. The program counts the exact
-   prompt, and the answer from the next turn, since its length is
-   `hidden`.
+   and counts the answer as it streams. The program counts the exact
+   prompt, and the answer when the response has arrived, since its length
+   is `hidden` until then.
 7. **Acting weight and decay.** A weight below 1 is a second, smaller
    lease. A decay `2^-t` is an allocation that shrinks with time, which no
    allocation is. The paper's ablation of the decay base moves throughput
