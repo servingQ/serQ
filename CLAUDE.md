@@ -1,7 +1,7 @@
 # serQ
 
 A language in which an LLM serving deployment is a program. `docs/language.md`
-is the spec, `docs/ir.md` the definition, `docs/review.md` the design record.
+is the spec, `docs/ir.md` the definition, `docs/design/` the design record.
 
 ## The thing that is easy to get wrong
 
@@ -33,8 +33,8 @@ make lean         # the Lean model: oracle theorems current, lake build, no sorr
 ```
 
 `make check` is the gate. Generated files (`tools/oracle/*.ir.json`,
-`docs/assets/*.deployment.svg`) are committed, so regenerate
-them in the change that moves them.
+`docs/assets/*.deployment.svg`, `tools/metrics.json`) are committed, so
+regenerate them in the change that moves them.
 
 ## Design criteria
 
@@ -49,15 +49,38 @@ product. Argued in #8, in the order they bite:
 2. **Policy is written in the program, not in the language.** The test: for every
    construct, can a program state the opposite? The language may supply a
    *mechanism* a program selects and parameterises, not a *rule* it would
-   otherwise write. Four shipped constructs fail this today (#8) — apply it to
-   them before using it against something new.
+   otherwise write.
 3. **Checkability.** A claim the program makes should be mechanically checkable.
    This is what earns an IR change.
 
-Cost is not a criterion, it is a budget: sugar that rewrites to the kernel at
-parse time costs nothing (the serving vocabulary of `docs/language.md`), a new
-IR node costs every consumer. Prefer narrowing an existing form to adding one,
-and price the handshake above.
+Cost is not a criterion, it is a budget. A new IR node costs every consumer.
+Sugar that rewrites to the kernel at parse time costs no consumer of the IR,
+but it is not free: it costs the frontend, which nothing verifies.
+
+## Keeping the frontend small
+
+From v0.1.4 to #521 the IR did not grow and `src/frontend` grew by a third,
+with 24 `fix(frontend)` commits, most of them one name read two ways. The
+Lean theorems are about the IR; every line between the text and the IR is
+trusted, not proved. Three rules:
+
+- **One meaning, one spelling.** A new form that lowers to the IR of a form
+  the language already has says which one it replaces, or why both stay (the
+  serving vocabulary of `docs/language.md` stays for criterion 1). Check it:
+  write both, diff `serq ir`. Writing a default (`queue fifo;`) and leaving it
+  out are two spellings too.
+- **One list, one place.** A name the language supplies (a context
+  variable, a function, a distribution, a built-in attribute, a keyword) is
+  spelt once, in its table, and every other site reads the table:
+  `CONTEXT_VARS`, `Fun`, `DistKind`, `BUILTIN_ATTRS` and `SCHEDULER_ATTRS`,
+  `KEYWORDS`. No `"cached"` in a check. A copy that cannot read the table
+  (`docs/hooks/serq_lexer.py`) is held equal to it by a test, both ways. The
+  entry check's copy of the context variables lacked six (#528), and a `def`
+  parameter could be named like a distribution because four checks of "a
+  word of the language" kept their own lists (#530).
+- **A construct some program uses.** A construct no example, tutorial or
+  companion program (`serving-queue-theory/programs`) uses is a path only
+  tests exercise. Add the program that needs it, or do not add it.
 
 ## The vLLM reference: read the code, not the memory of it
 
@@ -66,31 +89,12 @@ Every claim about what vLLM does is checked against the source in `ref/vllm`
 so that `scripts/check_citations.py` can catch the line moving. Not the
 paper, not the docs, not what a model remembers of the scheduler: open
 `vllm/v1/core/sched/scheduler.py`, `kv_cache_manager.py`, `block_pool.py` and
-read the function. The recovery after a preemption is the standing example:
-"abort the scope and re-execute" *sounded* like `_preempt_request`, and it is
-only for a request still in prefill — the function resets
-`num_computed_tokens` and keeps the generated tokens, which the program did
-not, and no oracle scenario exercised the path (#41 §5). If `ref/vllm` is not
-checked out, fetch it before answering; if the question is about a version
-other than the pinned one, say so and check out that revision.
-
-## Documentation
-
-Follow [Writing readable programs](docs/writing-programs.md) when writing or reorganizing `.sq` programs.
-Follow [.github/documentation.md](.github/documentation.md) when editing the site.
-See [.github/contributing.md](.github/contributing.md) for adding examples and oracle scenarios.
-
-## Design documents
-
-`docs/design/` holds the design record: the philosophy, the frontend sketch,
-the IR v4 RFC and the subagent review. The IR is expected to keep evolving; a
-design change adds a document there, and a rejected idea stays in that
-document's self-critique with the reason.
-
-Everything under `docs/` is written in English (the site is); issues and pull
-request descriptions are written in Korean. A nav title that contains `#`
-must be quoted in `mkdocs.yml`, or YAML reads it as a comment and the strict
-build aborts.
+read the function. The standing example: "abort the scope and re-execute"
+*sounded* like `_preempt_request`, but that function resets
+`num_computed_tokens` and keeps the generated tokens, and no oracle scenario
+exercised the path (#41 §5). If `ref/vllm` is not checked out, fetch it
+before answering; for a version other than the pinned one, say so and check
+out that revision.
 
 ## When a bug is found
 
@@ -98,81 +102,75 @@ A fix is not done until two more questions are answered, in the pull request
 or in the comment that reports the fix:
 
 1. **Why did it happen?** Name the assumption that was wrong, not just the
-   line that was wrong. #263 had two bugs. In the first, a serve predicate
-   read the resident totals from before the iteration, so a request admitted
-   in that same iteration was judged by totals that left it out. In the
-   second, an engine whose residents `only` all excluded waited for an
-   event, and nothing re-read a predicate that depended on `now`.
+   line that was wrong (#263: a serve predicate read the resident totals from
+   before the iteration, so a request admitted in it was judged by totals
+   that left it out). Then look for the same rule written elsewhere: a rule
+   kept in two places was fixed in one, and the other is the next bug.
 2. **Should the language have refused the program?** Ask whether the bad
    state is reachable only by a class of programs that a check could
    recognise before the run: in the linker or `Program::validate`, from what
    an expression reads at its moment (`docs/ir.md`, Moments). If so, add the
    check with its own test and its reason in the error message. A program
-   that can only stall, loop or read a value it cannot see should not link.
-   Examples: a serve key may not draw, and since #259 a hold's header may not either; `only` may not
-   read `now` or `work(…)` (#263); a `Loop` that can pass without letting
-   time pass is refused (11).
-   If no static check can tell, the run must still fail loudly (a run-time
-   error, a report note, a `stuck` counter), never silently. If the program
-   was right and the interpreter wrong, as in the first #263 bug, say that
-   no check applies and why.
+   that can only stall, loop or read a value it cannot see should not link
+   (a serve key or a hold's header may not draw, #259; `only` may not read
+   `now` or `work(…)`, #263). If no static check can tell, the run must
+   still fail loudly (a run-time error, a report note, a `stuck` counter),
+   never silently. If the program was right and the interpreter wrong, say
+   that no check applies and why.
 
-A stricter check does not bump `IR_VERSION` (`docs/ir.md` §Stability). The
-regression test reproduces the bug as it was found. A rule rejected on the
-way goes in the design document's self-critique.
+A stricter check does not bump `IR_VERSION`. The regression test reproduces
+the bug as it was found. A rule rejected on the way goes in the design
+document's self-critique.
 
 ## Reviewing a change
 
 `.github/copilot-instructions.md` is the review checklist, for Copilot and
 for anyone else: the IR rules, the four design criteria, and six questions
-answered in order (purpose kept, simpler possible, complexity not grown,
-intention plainer, evidence is the code, one change). A review that does not
-answer all six is not done. A review that finds a bug also asks the two
-questions of §When a bug is found. Comments are in Korean, short: the
-finding and the evidence.
+answered in order. A review that does not answer all six is not done; one
+that finds a bug also asks the two questions above. Comments are in Korean,
+short: the finding and the evidence.
 
 Copilot reviews a pull request; when its review limit is reached, the
-subagents in `.claude/agents/` review instead, at most two in parallel.
-`design-reviewer` takes the checklist above and the readability of the
-code, and `sim-reviewer` — called only when the PR moves a number — whether
-the numbers reproduce and support the claim. The session merges their
-findings into one comment on the pull request, where Copilot's would be.
+subagents in `.claude/agents/` review instead, at most two in parallel:
+`design-reviewer` for the checklist and the code, `sim-reviewer` — only
+when the PR moves a number — for whether the numbers reproduce and support
+the claim. The session merges their findings into one comment on the pull
+request.
+
+## Writing
+
+Follow [Writing readable programs](docs/writing-programs.md) for `.sq`
+programs, [.github/documentation.md](.github/documentation.md) for the site,
+and [.github/contributing.md](.github/contributing.md) for examples and
+oracle scenarios. A design change adds a document to `docs/design/`, and a
+rejected idea stays in that document's self-critique with the reason.
+
+Everything under `docs/` is in English (the site is); issues and pull
+request descriptions are in Korean. A nav title that contains `#` must be
+quoted in `mkdocs.yml`, or YAML reads it as a comment and the strict build
+aborts.
 
 ## Working with GitHub here
 
-`gh pr edit` and `gh issue edit` fail on this repository:
+`gh pr edit` and `gh issue edit` fail on this repository (`GraphQL:
+Projects (classic) is being deprecated`). Use the REST API: `gh api -X PATCH
+repos/servingQ/serQ/pulls/N --input -` with a JSON body, or `.../issues/N`.
 
-```
-GraphQL: Projects (classic) is being deprecated ... (repository.pullRequest.projectCards)
-```
-
-`gh` queries `projectCards` when it edits, and that field now errors. Use the
-REST API instead — `gh api -X PATCH repos/servingQ/serQ/pulls/N --input -` with a
-JSON body, or `.../issues/N`. Creating works; only editing is affected.
-
-PR titles are Conventional Commits, `type(scope): subject`, and the subject is
-written in English; CI checks the form (`.github/workflows/pr-title.yml`).
+PR titles are Conventional Commits, `type(scope): subject`, with the subject
+in English; CI checks the form (`.github/workflows/pr-title.yml`).
 
 Branch from `origin/main`, not from whatever `main` points at locally:
-`git fetch && git checkout -b <name> origin/main`. Three branches were built
-on a stale `main` in one sitting, and one of them would have reverted a rename
-that had landed in between.
+`git fetch && git checkout -b <name> origin/main`. A branch built on a stale
+`main` once nearly reverted a rename that had landed in between.
 
 ## Issues
 
 **Every design issue carries a Before/After** — the code as it is today next to
 the code as it would be, and the same for any generated artefact (a figure
-label, a report line) the change touches.
+label, a report line) the change touches. **Copy the Before from the
+repository, and run the After**: #14's Before was paraphrased and got the
+line wrong, and #12's After was a parse error.
 
-**Copy the Before from the repository, and run the After.** Half the value of a
-Before is that the reader can check it; an After that does not compile costs
-more than none. Both rules were broken in the first hour they existed — #14's
-Before was paraphrased and got the line wrong in a way that weakened its own
-argument, and #12's After was a parse error.
-
-**Write issues in Korean, short, and unwrapped** — one paragraph per line, no
-hard wrap at a column, so the browser sets the width. Say the finding and the
-evidence; leave out the argument for the argument.
-
-Keep an issue to one change. An issue that needs several Before/Afters for
-unrelated things is several issues.
+Write issues in Korean, short, and unwrapped — one paragraph per line, so
+the browser sets the width. Say the finding and the evidence. Keep an issue
+to one change.
