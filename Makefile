@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 export PATH := $(HOME)/.cargo/bin:$(PATH)
 
-.PHONY: check lean drt oracle-ir claims-ir draw-golden citations citation-drift metrics
+.PHONY: check lean drt oracle-ir claims-ir draw-golden citations citation-drift metrics unused
 check:   ## fmt, clippy, tests, every program links, the oracles agree
 	scripts/check_rust.sh
 lean:              ## the Lean model (lean/, docs/lean.md): oracle theorems current, lake build, no sorry, axiom audit
@@ -21,6 +21,8 @@ draw-golden:       ## regenerate docs/assets/*.deployment.svg (serq draw)
 	SERQ_BLESS=1 cargo test --release --test draw docs_assets_are_current
 metrics:           ## regenerate tools/metrics.json (the language's size; make check fails when it moves unrecorded)
 	scripts/metrics.py --report
+unused:            ## regenerate tools/unused.json (the IR variants no program uses; needs `cargo build --release`)
+	scripts/unused.py
 citations:         ## re-hash tools/citations.json after re-pointing a citation
 	scripts/fetch_vllm_ref.sh --sparse
 	scripts/check_citations.py --bless

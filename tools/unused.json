@@ -1,0 +1,36 @@
+{
+  "BinOp": [
+    "Pow"
+  ],
+  "CtxVar": [
+    "Age",
+    "Last",
+    "Remaining"
+  ],
+  "Fun": [
+    "Abs",
+    "Sqrt",
+    "Ln",
+    "Pow",
+    "Queue",
+    "Busy",
+    "Price",
+    "EstLambda",
+    "EstRho",
+    "EstWait"
+  ],
+  "DistKind": [
+    "Det"
+  ],
+  "Agg": [
+    "Count",
+    "Largest",
+    "Smallest"
+  ],
+  "CStmt": [
+    "Grow"
+  ],
+  "Share": [
+    "Bottleneck"
+  ]
+}
