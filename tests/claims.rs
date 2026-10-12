@@ -16,12 +16,17 @@ let c = 1128;
 let a = 3547;
 let b0 = 128;
 device gpu { }
-engine llm on gpu { tokens cap bmax; schedule { SCHEDULE } execute (c + a * ceil(batch.tokens / b0)); }
+engine llm on gpu {
+  tokens cap bmax;
+  request () { prefill (290); decode (990); }
+  schedule { SCHEDULE }
+  execute (c + a * ceil(batch.tokens / b0));
+}
 workload { arrive renewal(46750); init { set t0 = now; }
   session { turn; end;
   }
 }
-server { run llm prefill (cost(llm, 290)); run llm decode (cost(llm, 990)); observe response = now - t0;
+server { llm (); observe response = now - t0;
 }
 claim work_conserving: every iteration of llm (demand < bmax || tokens == bmax);
 claim token_rate: every iteration of llm (served * (c + a * ceil(bmax / b0)) <= bmax * now);
@@ -116,6 +121,7 @@ const BATCH: &str = "
         device gpu { }
         engine llm on gpu {
           tokens cap 4;
+          request (n) { prefill (n); }
           schedule { advance running; admit waiting while (running.preempted == 0); }
           execute (1);
         }
@@ -123,7 +129,7 @@ const BATCH: &str = "
           session { turn; end;
           }
         }
-        server { run llm prefill (cost(llm, n)); observe x = n;
+        server { llm (n); observe x = n;
         }
 
 ";
@@ -221,6 +227,7 @@ fn arrived_counts_the_sessions_started_by_the_iteration() {
         device gpu { }
         engine llm on gpu {
           tokens cap 4;
+          request () { prefill (3); }
           schedule { advance running; admit waiting while (running.preempted == 0); }
           execute (1);
         }
@@ -228,7 +235,7 @@ fn arrived_counts_the_sessions_started_by_the_iteration() {
           session { turn; end;
           }
         }
-        server { run llm prefill (cost(llm, 3));
+        server { llm ();
         }
 
         claim at_20: some iteration of llm (now == 20 && arrived == 2);
@@ -312,21 +319,26 @@ fn a_claim_reads_only_what_its_moment_supplies() {
     assert!(e.contains("read only by a claim `at end`"), "{e}");
 }
 
-/// An iteration claim may name a member of an engine array.
+/// An iteration claim may name a member of an engine array: a family of
+/// queues, each with its engine, the server calling a member's entry (an
+/// engine family has no request, so a server cannot run one directly).
 #[test]
 fn a_claim_over_a_member_of_an_array() {
     let src = "
-        device gpu[2] { }
-        engine llm[2] on gpu {
-          tokens cap 4;
-          schedule { advance running; admit waiting while (running.preempted == 0); }
-          execute (1);
+        queue llm[2] : prefill {
+          device gpu { }
+          engine on gpu {
+            tokens cap 4;
+            schedule { advance running; admit waiting while (running.preempted == 0); }
+            execute (1);
+          }
+          prefill (prompt) { run llm prefill (cost(llm, prompt)); }
         }
         workload { arrive batch(2);
           session { turn; end;
           }
         }
-        server { run llm[serial] prefill (cost(llm, 3));
+        server { llm[serial].prefill (3);
         }
         claim one: every iteration of llm[1] (tokens == 3);
         ";
