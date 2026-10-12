@@ -603,7 +603,11 @@ impl Walker<'_> {
                     self.frontier = saved;
                     self.arm = Some("else".into());
                     self.walk(e);
-                    self.holds.retain(|h| then_held.contains(h));
+                    // a pool both arms hold stays held, whichever hold took
+                    // it in each (a lease grown in one arm, held anew in the
+                    // other: ThunderAgent's router)
+                    self.holds
+                        .retain(|&(q, _, e)| then_held.iter().any(|&(p, _, f)| p == q && f == e));
                     if self.last_flow != then_flow {
                         self.last_flow = None;
                     }
@@ -704,6 +708,21 @@ impl Walker<'_> {
                 // a turn draws the attributes of the `turn` block again
                 CStmt::Turn => self.known.clear(),
                 CStmt::Observe(..) => {}
+                // a `grow` of a pool held in no scope grows the session's
+                // lease of it: from here the request holds that pool
+                CStmt::Grow(r, _) if !self.holds.iter().any(|&(q, _, _)| q == r.base) => {
+                    let id = self.next_hold;
+                    self.next_hold += 1;
+                    self.net.holds.push(HoldSpan {
+                        queue: r.base,
+                        visits: vec![],
+                    });
+                    self.holds.push((r.base, id, true));
+                    if r.index.is_some() {
+                        let k = self.instance(r.index.as_deref());
+                        own(&mut self.pool_owners, r.base, k);
+                    }
+                }
                 CStmt::Grow(..) | CStmt::Drop(..) => {}
             }
         }
