@@ -28,7 +28,6 @@ fn main() {
   }
 
   server {
-    set t0 = now;
     set sp = prefill_work();
     set sd = decode_work();
     set kv = kv_tokens();
@@ -39,7 +38,6 @@ fn main() {
       run link (cost(link, kv / bnet));
       run decode (cost(decode, sd / gD));
     }
-    observe response = now - t0;
   }
 
 

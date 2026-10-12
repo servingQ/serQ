@@ -93,7 +93,7 @@ fn main() {
     run rep[j] (cost(rep, S));
     set home = j;
     branch (!first) {
-      observe response = now - t0;
+      observe later_response = now - t0;
       observe hit = S == S_hit;
       observe context = K;
     }

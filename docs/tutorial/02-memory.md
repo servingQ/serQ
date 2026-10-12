@@ -46,7 +46,10 @@ run: horizon 100000 end 100000 warmup 5000 seed 1 events 158921 arrivals 79460 e
 observe     count    mean   95% CI     cv2     p99
 ----------  -----  ------  -------  ------  ------
 admit_wait  75462  0.0961  ±0.0056  13.711  1.8797
-response    75462  1.0958  ±0.0137   0.943  4.8861
+
+client    count   mean  95% CI    cv2    p99
+--------  -----  -----  ------  -----  -----
+response  75462  1.096  ±0.014  0.943  4.886
 
 stage  number   util   done    thru    wait  service  iters
 -----  ------  -----  -----  ------  ------  -------  -----

@@ -222,6 +222,10 @@ struct Parser {
     in_engine: Option<&'static str>,
     /// The queue whose body is being read: its `device gpu` is `Q.gpu`.
     device_scope: Option<String>,
+    /// The `hold`s and `fork`s the statement being parsed is inside: a
+    /// server's `end` is refused there.
+    holds_open: usize,
+    forks_open: usize,
 }
 
 /// What a declaration declares.
@@ -1630,6 +1634,8 @@ impl Parser {
             pools_on: vec![],
             in_engine: None,
             device_scope: None,
+            holds_open: 0,
+            forks_open: 0,
         }
     }
 
@@ -4598,11 +4604,31 @@ impl Parser {
                 Ok(Stmt::Turn)
             }
             "end" => {
+                // a server may refuse the request and end the session there,
+                // as vLLM refuses a prompt it cannot hold: the turn is not
+                // answered (docs/design/client-metrics.md). Not from inside
+                // what the request holds or a leg beside it, and not from a
+                // queue's entry, which is a station, not the deployment.
                 if self.side == Side::Server {
-                    return self.err(
-                        "`end` is the session's: a server is done with a request when its \
-                         block is, and whether the session goes on is the workload's",
-                    );
+                    if self.in_queue.is_some() {
+                        return self.err(
+                            "`end` in a queue's entry: an entry is what a station does with a \
+                             request; the `server` refuses a request, with `end;` there",
+                        );
+                    }
+                    if self.holds_open > 0 {
+                        return self.err(
+                            "`end` inside a `hold` in a server: the request would end while it \
+                             holds what it was admitted with, before the hold releases it and \
+                             caches; refuse it before the hold",
+                        );
+                    }
+                    if self.forks_open > 0 {
+                        return self.err(
+                            "`end` inside a `fork` in a server: a leg runs beside the request and \
+                             cannot end the session it is a leg of",
+                        );
+                    }
                 }
                 self.advance();
                 self.expect(&Tok::Semi)?;
@@ -4736,7 +4762,10 @@ impl Parser {
             // same request; `join;` waits for every leg forked so far
             "fork" => {
                 self.advance();
-                Ok(Stmt::Fork(self.block()?))
+                self.forks_open += 1;
+                let body = self.block();
+                self.forks_open -= 1;
+                Ok(Stmt::Fork(body?))
             }
             "join" => {
                 self.advance();
@@ -4834,7 +4863,10 @@ impl Parser {
             }
         }
         let bind_at = std::mem::take(&mut self.bind_at);
-        let mut body = self.block()?;
+        self.holds_open += 1;
+        let body = self.block();
+        self.holds_open -= 1;
+        let mut body = body?;
         // an unread argument reads nothing, and sees the binding as written
         bind_unread(&mut body, &binds);
         // A binding the body reads is set at the top of the body, to the
@@ -6420,9 +6452,15 @@ mod tests {
             &format!("stage s : fifo; {WL} server {{ turn; }}"),
             "`turn` is the session's",
         );
+        // a server's `end` refuses the request, but not from inside a hold
+        // or a leg
         refused(
-            &format!("stage s : fifo; {WL} server {{ end; }}"),
-            "`end` is the session's",
+            &format!("pool p {{ cap 1; }} {WL} server {{ hold p (cost(p, 1)) {{ end; }} }}"),
+            "`end` inside a `hold` in a server",
+        );
+        refused(
+            &format!("{WL} server {{ fork {{ end; }} join; }}"),
+            "`end` inside a `fork` in a server",
         );
         refused(
             &format!("stage s : fifo; {WL} server {{ request; }}"),

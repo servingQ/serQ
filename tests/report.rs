@@ -26,6 +26,9 @@ fn the_report_has_the_shape_its_version_names() {
         ";
     let p = compile_source(&common::main_source(src), &common::horizon(100.0)).unwrap();
     let j: serde_json::Value = serde_json::from_str(&run_ir(&p, None).unwrap().json()).unwrap();
+    // the client's metrics, each shaped as an observation
+    assert_eq!(keys(&j["client"]), vec!["response", "tpot", "ttft"]);
+    assert_eq!(keys(&j["client"]["response"]), keys(&j["observes"]["x"]));
     let shape = (
         keys(&j),
         keys(&j["observes"]["x"]),
@@ -36,6 +39,7 @@ fn the_report_has_the_shape_its_version_names() {
     let want = (
         vec![
             "arrivals",
+            "client",
             "end",
             "ended",
             "events",

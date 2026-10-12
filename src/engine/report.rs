@@ -260,6 +260,10 @@ pub struct Report {
     pub turns: u64,
     pub mean_live: f64,
     pub observes: Vec<ObserveReport>,
+    /// What each turn's virtual client saw, `ttft`, `tpot` and `response`
+    /// in that order, whatever the program observes
+    /// (`docs/design/client-metrics.md`).
+    pub client: Vec<ObserveReport>,
     pub gauges: Vec<GaugeReport>,
     /// The program's claims, in order; empty (and absent from the JSON)
     /// when it has none.
@@ -270,16 +274,25 @@ pub struct Report {
 
 impl Report {
     /// Write every observation as `<name>.csv` with columns
-    /// `time,session,turn,value` into `dir`, and every gauge's change points
-    /// as `gauge/<name>.csv` with columns `time,value`.
+    /// `time,session,turn,value` into `dir`, the client's metrics as
+    /// `client/<name>.csv` alike, and every gauge's change points as
+    /// `gauge/<name>.csv` with columns `time,value`.
     pub fn dump(&self, dir: &std::path::Path) -> std::io::Result<()> {
         std::fs::create_dir_all(dir)?;
-        for o in &self.observes {
+        let samples = |o: &ObserveReport| {
             let mut s = String::from("time,session,turn,value\n");
             for (rec, v) in o.records.iter().zip(&o.samples) {
                 s.push_str(&format!("{},{},{},{}\n", rec.0, rec.1, rec.2, v));
             }
-            std::fs::write(dir.join(format!("{}.csv", o.name)), s)?;
+            s
+        };
+        for o in &self.observes {
+            std::fs::write(dir.join(format!("{}.csv", o.name)), samples(o))?;
+        }
+        let cdir = dir.join("client");
+        std::fs::create_dir_all(&cdir)?;
+        for o in &self.client {
+            std::fs::write(cdir.join(format!("{}.csv", o.name)), samples(o))?;
         }
         if !self.gauges.is_empty() {
             let gdir = dir.join("gauge");
@@ -297,6 +310,11 @@ impl Report {
 
     pub fn observe(&self, name: &str) -> Option<&ObserveReport> {
         self.observes.iter().find(|o| o.name == name)
+    }
+
+    /// The client's metric `name`: `ttft`, `tpot` or `response`.
+    pub fn client(&self, name: &str) -> Option<&ObserveReport> {
+        self.client.iter().find(|o| o.name == name)
     }
 
     pub fn gauge(&self, name: &str) -> Option<&GaugeReport> {
@@ -341,21 +359,7 @@ impl Report {
             self.mean_live
         );
         if !self.observes.is_empty() {
-            let rows = self.observes.iter().map(|o| {
-                vec![
-                    o.name.clone(),
-                    o.count.to_string(),
-                    format!("{:.4}", o.mean),
-                    format!("±{:.4}", o.ci.half_width),
-                    format!("{:.3}", o.cv2),
-                    format!("{:.4}", o.p99),
-                ]
-            });
-            table(
-                &mut s,
-                &["observe", "count", "mean", "95% CI", "cv2", "p99"],
-                rows,
-            );
+            observe_table(&mut s, "observe", self.observes.iter(), false);
             for o in self.observes.iter().filter(|o| o.never_held()) {
                 let _ = writeln!(
                     s,
@@ -363,6 +367,22 @@ impl Report {
                     o.name, o.count
                 );
             }
+        }
+        // the client's metrics that have a sample: a turn that runs no
+        // engine has no first token
+        if self.client.iter().any(|o| o.count > 0) {
+            observe_table(
+                &mut s,
+                "client",
+                self.client.iter().filter(|o| o.count > 0),
+                true,
+            );
+        } else if self.arrivals > 0 {
+            // a turn that never ends, a server that loops, answers nothing
+            let _ = writeln!(
+                s,
+                "\nnote: no turn was answered after warm-up: the client saw none"
+            );
         }
         if !self.gauges.is_empty() {
             let rows = self.gauges.iter().map(|g| {
@@ -551,23 +571,26 @@ impl Report {
             self.turns,
             f(self.mean_live)
         );
-        s.push_str(",\"observes\":{");
-        for (i, o) in self.observes.iter().enumerate() {
-            if i > 0 {
-                s.push(',');
+        for (key, list) in [("observes", &self.observes), ("client", &self.client)] {
+            let _ = write!(s, ",\"{key}\":{{");
+            for (i, o) in list.iter().enumerate() {
+                if i > 0 {
+                    s.push(',');
+                }
+                let _ = write!(
+                    s,
+                    "\"{}\":{{\"count\":{},\"mean\":{},\"ci\":{},\"cv2\":{},\"p99\":{}}}",
+                    o.name,
+                    o.count,
+                    f(o.mean),
+                    f(o.ci.half_width),
+                    f(o.cv2),
+                    f(o.p99)
+                );
             }
-            let _ = write!(
-                s,
-                "\"{}\":{{\"count\":{},\"mean\":{},\"ci\":{},\"cv2\":{},\"p99\":{}}}",
-                o.name,
-                o.count,
-                f(o.mean),
-                f(o.ci.half_width),
-                f(o.cv2),
-                f(o.p99)
-            );
+            s.push('}');
         }
-        s.push_str("},\"gauges\":{");
+        s.push_str(",\"gauges\":{");
         for (i, g) in self.gauges.iter().enumerate() {
             if i > 0 {
                 s.push(',');
@@ -679,6 +702,33 @@ fn label(name: &str, index: Option<u32>) -> String {
 /// One section of the text report: each column as wide as its widest cell,
 /// the name column left-aligned and the numbers right-aligned, a rule under
 /// the header, a blank line above. The width is measured in `char`s, so `±` counts as one.
+/// A table of observations, a program's (`observe`) with four decimals,
+/// or the client's (`digits`) with the mean's four significant digits: a
+/// time per output token is a fraction of a millisecond.
+fn observe_table<'a>(
+    s: &mut String,
+    title: &str,
+    list: impl Iterator<Item = &'a ObserveReport>,
+    digits: bool,
+) {
+    let rows = list.map(|o| {
+        let d = if digits && o.mean.is_finite() && o.mean != 0.0 {
+            (3 - o.mean.abs().log10().floor() as i32).clamp(0, 12) as usize
+        } else {
+            4
+        };
+        vec![
+            o.name.clone(),
+            o.count.to_string(),
+            format!("{:.d$}", o.mean),
+            format!("±{:.d$}", o.ci.half_width),
+            format!("{:.3}", o.cv2),
+            format!("{:.d$}", o.p99),
+        ]
+    });
+    table(s, &[title, "count", "mean", "95% CI", "cv2", "p99"], rows);
+}
+
 fn table(s: &mut String, header: &[&str], rows: impl Iterator<Item = Vec<String>>) {
     table_aligned(s, header, rows, false);
 }

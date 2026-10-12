@@ -34,9 +34,7 @@ fn main() {
   }
 
   server {
-    set t0 = now;
     run engine (cost(engine, a * (K + n) + d * o));
-    observe response = now - t0;
   }
 
 

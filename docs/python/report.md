@@ -18,6 +18,7 @@ Its attributes are read-only.
 | `turns` | `int` | Turns counted by the run. |
 | `mean_live` | `float` | Time-average number of live sessions after warm-up. |
 | `observes` | `dict[str, Observe]` | Observations in program order. A new dictionary on each access. |
+| `client` | `dict[str, Observe]` | What each turn's client saw: `ttft`, `tpot` and `response`, in that order, whatever the program observes ([client metrics](../language.md#what-the-client-sees)). A new dictionary on each access. |
 | `gauges` | `dict[str, Gauge]` | Gauges in program order. A new dictionary on each access. |
 | `claims` | `dict[str, Claim]` | Claims in program order; empty when the program has none. A new dictionary on each access. |
 | `stages` | `list[Stage]` | One row per stage or array member. A new list on each access. |

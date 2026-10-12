@@ -27,10 +27,10 @@ fn main() {
     hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, left))) reserve (cost(kv, prompt))
          at admission (left = budget_left(llm)) {
       run llm prefill (cost(llm, prompt)) growing kv;
-      observe ttft = now - t0;
+      observe gated_ttft = now - t0;   // from the gate, B's arrival at the engine
       branch (serial == 0) { run llm decode (cost(llm, 2)) growing kv; }
     }
-    observe response = now - t0;
+    observe gated_response = now - t0;
   }
 
 }

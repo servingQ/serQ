@@ -71,10 +71,13 @@ serq run docs/tutorial/programs/03-sessions.sq --horizon 20000 --warmup 2000 --s
 ```text
 run: horizon 20000 end 20000 warmup 2000 seed 1 events 97969 arrivals 9905 ended 8905 turns 43952 mean live 6.295
 
-observe   count       mean    95% CI    cv2         p99
---------  -----  ---------  --------  -----  ----------
-response  43953     0.1784   ±0.0049  0.465      0.6027
-context   43953  4962.0292  ±93.0588  0.460  17100.8941
+observe  count       mean    95% CI    cv2         p99
+-------  -----  ---------  --------  -----  ----------
+context  43953  4962.0292  ±93.0588  0.460  17100.8941
+
+client    count    mean   95% CI    cv2     p99
+--------  -----  ------  -------  -----  ------
+response  43953  0.1784  ±0.0049  0.465  0.6027
 
 stage   number   util   done    thru    wait  service  iters
 ------  ------  -----  -----  ------  ------  -------  -----

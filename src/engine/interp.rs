@@ -21,6 +21,7 @@ use crate::engine::stats::*;
 use crate::frontend::ast::{BinOp, RunMode, UnOp};
 use crate::frontend::link::*;
 use crate::ir::Preempt;
+use crate::ir::Side;
 use crate::ir::trace::Corpus;
 use crate::ir::{CIter, ClaimKind};
 
@@ -264,6 +265,8 @@ struct Session<'p> {
     /// keeps becoming ready without time passing is a loop that never
     /// blocks (`READIES_PER_INSTANT`).
     readies: (f64, u64),
+    /// The turn in progress, as the session's client sees it.
+    client: Option<ClientTurn>,
     /// Whether this is a leg (`fork`), and of which session.
     leg: Leg,
     /// Legs forked and not yet ended, and forks so far (the key of a leg's
@@ -320,6 +323,38 @@ const STEPS_PER_INSTANT: u64 = 1_000_000;
 /// without time passing. Per session, so that an instant with many
 /// sessions (a `batch` arrival) is not mistaken for one.
 const READIES_PER_INSTANT: u64 = 1_000;
+
+/// A turn as the virtual client that sent it sees it
+/// (`docs/design/client-metrics.md`): sent at its `Turn`, answered when
+/// the server statements spliced after the `Turn` are done. Its first
+/// output token is the prefill's that ended just before its first decode
+/// token, or that decode token when no prefill did; its tokens after the
+/// first are the ones committed after it.
+#[derive(Clone, Copy, Debug)]
+struct ClientTurn {
+    /// The turn number (`slot_turn`): a leg's tokens count for this turn
+    /// only while the leg is of it.
+    turn: f64,
+    start: f64,
+    /// The turn's latest prefill end before its first token: the token it
+    /// sampled is the client's first if a decode follows.
+    prefill_end: Option<f64>,
+    first: Option<f64>,
+    /// The output tokens committed after the first.
+    after: u64,
+    /// The turn is answered when the frame at this depth, on this block,
+    /// reaches this statement: the first after the `Turn` on the workload's
+    /// side, or the block's end.
+    depth: usize,
+    block: BlockId,
+    end: usize,
+}
+
+/// The client's metrics, in the report's order.
+pub const CLIENT: [&str; 3] = ["ttft", "tpot", "response"];
+const TTFT: usize = 0;
+const TPOT: usize = 1;
+const RESPONSE: usize = 2;
 
 #[derive(Clone, Copy, Debug)]
 struct LastToken {
@@ -621,6 +656,35 @@ struct ObserveStat {
     records: Vec<(f64, u64, u32)>,
 }
 
+impl ObserveStat {
+    fn new() -> Self {
+        ObserveStat {
+            w: Welford::new(),
+            samples: vec![],
+            records: vec![],
+        }
+    }
+
+    /// The report of the observation `name`, a program's or the client's.
+    fn report(&self, name: &str, is_test: bool) -> ObserveReport {
+        ObserveReport {
+            name: name.to_string(),
+            is_test,
+            count: self.w.count(),
+            mean: self.w.mean(),
+            cv2: self.w.cv2(),
+            ci: if self.samples.len() >= CI_MIN_SAMPLES {
+                batch_means(&self.samples, 20)
+            } else {
+                Estimate::nan()
+            },
+            p99: quantile(&self.samples, 0.99),
+            samples: self.samples.clone(),
+            records: self.records.clone(),
+        }
+    }
+}
+
 pub struct Interp<'p> {
     p: &'p Linked,
     /// First error raised by the running program. The event loop stops before
@@ -652,6 +716,8 @@ pub struct Interp<'p> {
     rng_trace: StdRng,
     trace: Option<Corpus>,
     observes: Vec<ObserveStat>,
+    /// The client's `ttft`, `tpot` and `response` (`CLIENT`).
+    client: Vec<ObserveStat>,
     /// Per gauge: its change points `(time, value)`, the value from that
     /// time on, one point per instant (the state after the instant's last
     /// event).
@@ -810,15 +876,8 @@ impl<'p> Interp<'p> {
                 .collect(),
             trace_evict: std::env::var_os("SERQ_TRACE_EVICT").is_some(),
             trace_iter: std::env::var_os("SERQ_TRACE_ITER").is_some(),
-            observes: p
-                .observes
-                .iter()
-                .map(|_| ObserveStat {
-                    w: Welford::new(),
-                    samples: vec![],
-                    records: vec![],
-                })
-                .collect(),
+            observes: p.observes.iter().map(|_| ObserveStat::new()).collect(),
+            client: CLIENT.iter().map(|_| ObserveStat::new()).collect(),
             gauges: p.gauges.iter().map(|_| vec![]).collect(),
             claims: p.claims.iter().map(|_| ClaimState::default()).collect(),
             served: vec![0.0; p.stages.len()],
@@ -1306,6 +1365,7 @@ impl<'p> Interp<'p> {
             stuck: false,
             leases: vec![],
             last_token: None,
+            client: None,
             rng_wl: substream(self.p.seed, serial, 0, STREAM_WORKLOAD),
             rng: substream(self.p.seed, serial, 0, STREAM_SESSION),
             turn_count: 0,
@@ -1427,6 +1487,125 @@ impl<'p> Interp<'p> {
         }
         let turn = p.turn;
         self.exec_workload_block(sid, turn);
+        // the server's statements follow the `Turn` in its block
+        let fr = self.sessions[sid]
+            .frames
+            .last()
+            .cloned()
+            .expect("a turn runs in a frame");
+        let sides = &p.sides[fr.block];
+        let end = (fr.pc..sides.len())
+            .find(|&i| sides[i] == Side::Workload)
+            .unwrap_or(sides.len());
+        self.sessions[sid].client = Some(ClientTurn {
+            turn: self.sessions[sid].attrs[p.slot_turn],
+            start: self.now,
+            prefill_end: None,
+            first: None,
+            after: 0,
+            depth: self.sessions[sid].frames.len(),
+            block: fr.block,
+            end,
+        });
+    }
+
+    /// If the session's frame has passed the turn's server statements, the
+    /// turn is answered: the client records `tpot` and `response`.
+    fn answer_if_done(&mut self, sid: usize) {
+        let s = &self.sessions[sid];
+        let Some(c) = s.client else { return };
+        if s.frames.len() != c.depth {
+            return;
+        }
+        let fr = &s.frames[c.depth - 1];
+        if fr.block != c.block || fr.pc < c.end {
+            return;
+        }
+        self.sessions[sid].client = None;
+        // a turn whose only output token a prefill sampled (`max_tokens =
+        // 1`): its first token is that prefill's end (vLLM records its TTFT,
+        // output_processor.py:692-702)
+        if c.first.is_none()
+            && let Some(at) = c.prefill_end
+        {
+            self.client_sample(sid, TTFT, at - c.start);
+        }
+        // as vLLM's benchmark client: the answer less the first token, over
+        // the tokens after it (benchmarks/serve.py:625-628)
+        if let Some(first) = c.first
+            && c.after > 0
+        {
+            self.client_sample(sid, TPOT, (self.now - first) / c.after as f64);
+        }
+        self.client_sample(sid, RESPONSE, self.now - c.start);
+    }
+
+    /// A sample of the client's metric `k`, recorded now.
+    fn client_sample(&mut self, sid: usize, k: usize, v: f64) {
+        if self.warm {
+            let s = &self.sessions[sid];
+            let rec = (self.now, s.serial, s.attrs[self.p.slot_turn] as u32);
+            self.client[k].w.push(v);
+            self.client[k].samples.push(v);
+            self.client[k].records.push(rec);
+        }
+    }
+
+    /// The turn `sid` works for, in its session's slot: a leg's only while
+    /// the session is still on the turn the leg was forked in.
+    fn client_turn(&mut self, sid: usize) -> Option<(usize, &mut ClientTurn)> {
+        let r = match self.sessions[sid].leg {
+            Leg::No => sid,
+            Leg::Of(r) => r,
+            Leg::Orphan => return None,
+        };
+        let turn = self.sessions[sid].attrs[self.p.slot_turn];
+        let c = self.sessions[r].client.as_mut()?;
+        (c.turn == turn).then_some((r, c))
+    }
+
+    /// The turn's first token is `at`, which the client sees now.
+    fn first_token(&mut self, sid: usize, at: f64) {
+        let Some((r, c)) = self.client_turn(sid) else {
+            return;
+        };
+        c.first = Some(at);
+        let start = c.start;
+        self.client_sample(r, TTFT, at - start);
+    }
+
+    /// A decode-mode run of `sid`'s turn starts. If a prefill of the turn
+    /// ended now, the token it sampled is the client's first, known now.
+    fn decode_starts(&mut self, sid: usize) {
+        let now = self.now;
+        let Some((_, c)) = self.client_turn(sid) else {
+            return;
+        };
+        if c.first.is_none() && c.prefill_end == Some(now) {
+            self.first_token(sid, now);
+        }
+    }
+
+    /// A token of `sid`'s turn committed now: a decode's, or a prefill's
+    /// at its end. Before the first token, a decode's is the first, or
+    /// makes the prefill's before it the first; after it, it counts.
+    fn client_token(&mut self, sid: usize, decode: bool) {
+        let now = self.now;
+        let Some((_, c)) = self.client_turn(sid) else {
+            return;
+        };
+        match (c.first, decode) {
+            (Some(_), _) => c.after += 1,
+            (None, false) => c.prefill_end = Some(now),
+            (None, true) => {
+                let first = c.prefill_end.unwrap_or(now);
+                // the decode's own token is after the prefill's
+                if c.prefill_end.is_some() {
+                    c.after += 1;
+                }
+                self.first_token(sid, first);
+            }
+        }
     }
 
     fn end_session(&mut self, sid: usize) {
@@ -1496,6 +1675,7 @@ impl<'p> Interp<'p> {
             stuck: false,
             leases: vec![],
             last_token: None,
+            client: None,
             rng_wl: s.rng_wl.clone(),
             rng: substream(p.seed, s.serial, n, STREAM_LEG),
             turn_count: s.turn_count,
@@ -1707,6 +1887,7 @@ impl<'p> Interp<'p> {
                 ));
                 return;
             }
+            self.answer_if_done(sid);
             let Some(fr) = self.sessions[sid].frames.last().cloned() else {
                 self.end_session(sid);
                 return;
@@ -1905,6 +2086,9 @@ impl<'p> Interp<'p> {
                         return;
                     }
                     let g = growing.as_ref().map(|r| self.session_index(r, sid));
+                    if *mode == RunMode::Decode {
+                        self.decode_starts(sid);
+                    }
                     self.start_job(st, Some(sid), w, *mode, g);
                     return;
                 }
@@ -4157,6 +4341,7 @@ impl<'p> Interp<'p> {
     /// token less its first.
     fn token(&mut self, st: usize, sid: usize, decode: bool) {
         let now = self.now;
+        self.client_token(sid, decode);
         let turn = self.sessions[sid].attrs[self.p.slot_turn];
         let last = self.sessions[sid].last_token.filter(|t| t.turn == turn);
         let decoded = last.is_some_and(|t| t.decoded);
@@ -4466,21 +4651,13 @@ impl<'p> Interp<'p> {
             .iter()
             .zip(&p.observes)
             .enumerate()
-            .map(|(k, (o, name))| ObserveReport {
-                name: name.clone(),
-                is_test: p.observe_is_test(k),
-                count: o.w.count(),
-                mean: o.w.mean(),
-                cv2: o.w.cv2(),
-                ci: if o.samples.len() >= CI_MIN_SAMPLES {
-                    batch_means(&o.samples, 20)
-                } else {
-                    Estimate::nan()
-                },
-                p99: quantile(&o.samples, 0.99),
-                samples: o.samples.clone(),
-                records: o.records.clone(),
-            })
+            .map(|(k, (o, name))| o.report(name, p.observe_is_test(k)))
+            .collect();
+        let client = self
+            .client
+            .iter()
+            .zip(CLIENT)
+            .map(|(o, name)| o.report(name, false))
             .collect();
         let gauges = self
             .gauges
@@ -4574,6 +4751,7 @@ impl<'p> Interp<'p> {
             turns: self.turns,
             mean_live: self.live_avg.mean(now),
             observes,
+            client,
             gauges,
             claims,
             stages,

@@ -36,6 +36,5 @@ fn main() {
       run llm prefill (cost(llm, prompt));
       run llm decode (cost(llm, out));
     }
-    observe response = now;
   }
 }
