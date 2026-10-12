@@ -369,12 +369,35 @@ impl Parser {
             before = &body[..i];
             after = &body[close..];
         }
-        // `cache (e);`, the last item, after a statement's `;`
+        // `cache (e);`, the last item, after a statement's `;` or a block's
+        // `}`, though not a hold's: `} cache (…)` there is the hold's own
         let mut cache = None;
         let offset = body.len() - after.len();
-        if let Some(&i) = starts.iter().rev().find(|&&i| {
-            i >= offset && is_word(body.get(i), "cache") && (i == 0 || body[i - 1].tok == Tok::Semi)
-        }) && body.get(i + 1).is_some_and(|t| t.tok == Tok::LParen)
+        // where a statement starts: after a `;`, or after a `}` that no
+        // `else`, `cache` or `lease` continues
+        let starts_statement = |j: usize| {
+            j == 0
+                || body[j - 1].tok == Tok::Semi
+                || body[j - 1].tok == Tok::RBrace
+                    && !["else", "cache", "lease"]
+                        .iter()
+                        .any(|w| is_word(body.get(j), w))
+        };
+        let ends_a_statement = |i: usize| {
+            i == 0
+                || body[i - 1].tok == Tok::Semi
+                || body[i - 1].tok == Tok::RBrace
+                    && !starts
+                        .iter()
+                        .rev()
+                        .find(|&&s| s < i && starts_statement(s))
+                        .is_some_and(|&s| is_word(body.get(s), "hold"))
+        };
+        if let Some(&i) = starts
+            .iter()
+            .rev()
+            .find(|&&i| i >= offset && is_word(body.get(i), "cache") && ends_a_statement(i))
+            && body.get(i + 1).is_some_and(|t| t.tok == Tok::LParen)
         {
             let (e, close) = group(body, i + 1).expect("balanced");
             if close + 1 != body.len() || body.get(close).is_none_or(|t| t.tok != Tok::Semi) {
@@ -736,7 +759,10 @@ impl Parser {
     /// pool, one `on DEVICE`) is held anywhere.
     pub(super) fn check_engine_runs(&self, prog: &Program) -> PResult<()> {
         let admitter = |pool: &str| -> Option<String> {
-            let po = self.pools_on.iter().find(|po| prog.pools[po.pool].name == pool)?;
+            let po = self
+                .pools_on
+                .iter()
+                .find(|po| prog.pools[po.pool].name == pool)?;
             if self.engines.iter().any(|e| e.name == po.on.owner) {
                 Some(po.on.owner.clone())
             } else {
@@ -785,7 +811,14 @@ fn engine_use(
     for s in stmts {
         let found = match s {
             Stmt::Run { stage, mode, .. } if *mode != RunMode::Plain && is_engine(&stage.name) => {
-                let (e, m) = (&stage.name, if *mode == RunMode::Prefill { "prefill" } else { "decode" });
+                let (e, m) = (
+                    &stage.name,
+                    if *mode == RunMode::Prefill {
+                        "prefill"
+                    } else {
+                        "decode"
+                    },
+                );
                 Some((
                     stage.span,
                     format!(
@@ -811,7 +844,9 @@ fn engine_use(
                 .or_else(|| engine_use(body, admitter, is_engine, who)),
             Stmt::Branch(_, a, b) => engine_use(a, admitter, is_engine, who)
                 .or_else(|| engine_use(b, admitter, is_engine, who)),
-            Stmt::Loop(b) | Stmt::While(_, b) | Stmt::Fork(b) => engine_use(b, admitter, is_engine, who),
+            Stmt::Loop(b) | Stmt::While(_, b) | Stmt::Fork(b) => {
+                engine_use(b, admitter, is_engine, who)
+            }
             _ => None,
         };
         if found.is_some() {

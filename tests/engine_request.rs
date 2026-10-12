@@ -293,6 +293,22 @@ fn the_cache_is_the_request_s_last_item() {
     refused(&src, "a request's `cache (e);` is its last item");
 }
 
+/// The cache follows any statement, one that ends in a block too: it read
+/// as an unknown statement after a `branch`'s `}`, which only a hold's own
+/// `} cache (…)` clause should be.
+#[test]
+fn the_cache_follows_a_block() {
+    let src = replaced(
+        &program(),
+        &[(
+            "    decode (output - 1 - (known - prompt)) growing kv;\n",
+            "    branch (prompt > 1) { decode (output - 1 - (known - prompt)) growing kv; }\n",
+        )],
+    );
+    let p = compiled(&src);
+    assert!(p.to_json().contains("\"Branch\""));
+}
+
 #[test]
 fn the_admission_reads_no_attribute_of_the_session() {
     let src = replaced(

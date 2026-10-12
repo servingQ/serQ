@@ -1074,8 +1074,8 @@ fn hidden_in_server(
             _ => None,
         };
         LinkError::new(format!(
-            "{why}, but the server's {what} reads it before a run reveals it\nhelp: the server \
-             may run work by a hidden attribute (`run E decode (cost(E, o))`: the model ends the run), cache by \
+            "{why}, but the server's {what} reads it before a run reveals it\nhelp: an engine's \
+             request may run work by a hidden attribute (`decode (o);`: the model ends the run), cache by \
              it at release and observe it, and decide on it once that run has ended; before, a \
              decision on it is the scheduler reading what it cannot see"
         ))
