@@ -245,10 +245,12 @@ one run (a KV transfer) or that is not the engine's (a tool call). They are
 sugar: the parser rewrites each to the kernel statement it stands for, so
 the IR (`serq ir` prints the kernel), the interpreter and the Lean model
 know nothing of them. Prefill and decode are not forms: on a step engine
-they are the mode of the run, `run E prefill (cost(E, T));` and
-`run E decode (cost(E, T));`, which names the engine the request uses,
-except in an engine's `request`, where `prefill (e)` is `run E prefill
-(cost(E, e))` on that engine (*An engine's request*).
+they are the mode of the run, written only where the engine's own work is.
+In an engine's `request`, `prefill (e)` is `run E prefill (cost(E, e))` on
+that engine (*An engine's request*); a queue's entry runs its queue's
+engine as `run P prefill (cost(P, T))`. The server, a gateway's `route`
+and the session call the engine's request (`E (…);`) and do not run an
+engine themselves.
 
 | Serving form | Kernel |
 |---|---|
@@ -736,9 +738,8 @@ and position, not what its body set: `kept` set at the top of the body is
 there when the hold executes again. The
 vLLM programs `set kept = prompt;` above the hold, write `known = max(kept,
 computed + 1)` (the token sampled at `computed` is the request's too) and
-`set kept = known;` at the top of the body, then `run vllm prefill
-(cost(vllm, known - c))` and `run vllm decode (cost(vllm, o - 1 - (known -
-prompt)))`. The decoders of `examples/pd-disaggregation/` carry it the same
+`set kept = known;` at the top of the body, then `prefill (known - c)`
+and `decode (output - 1 - (known - prompt))` in the engine's request. The decoders of `examples/pd-disaggregation/` carry it the same
 way: an entry's header reads what the entry sets above the hold (#475). A
 program that recomputes from the prompt alone says so by not reading
 `computed`.
@@ -1032,9 +1033,16 @@ engine vllm on gpu {
 }
 ```
 
-It is parse-time sugar for the hold a server writes, and the call
+It is parse-time sugar for a hold of the engine's pools, and the call
 `vllm (prompt, o);` is replaced by it, each parameter substituted by its
-argument (one that draws is refused):
+argument (one that draws is refused). It is the only way to that hold: the
+server, a gateway's `route` and the session may not run an engine's
+prefill or decode, nor hold a pool an engine admits (`pool P on E`, `pool
+kv on E.gpu`, an engine's capacity); each is refused with the `request`
+and the `taking` to write instead (#539). A pool no engine admits (a
+top-level pool, one `on DEVICE`) is held anywhere, around the call too, as
+`examples/single-turn/fastertransformer.sq` holds its `reqs`. A queue's
+entries run the queue's own engine.
 
 | Request | Kernel at the call |
 |---|---|
@@ -1353,10 +1361,10 @@ from the cache alone rather than from the previous prompt, and caches `prompt + 
 | FCFS, head-of-line blocking (`if new_blocks is None: break`) | pool queue `fifo`; the first request that does not fit blocks | `scheduler.py:1228-1235` |
 | admission needs blocks for the whole prompt (`scheduler_reserve_full_isl = True`), but only the first chunk is allocated | `kv (reused + min(known − reused, budget_left(vllm))) reserve (known)` | `kv_cache_manager.py:515-531`, `config/scheduler.py:191` |
 | a waiting request's prefix is looked up and its blocks touched only when it is scheduled | units evaluated at admission; the queue served by the engine | `scheduler.py:932-939`, `block_pool.py:754-770` |
-| chunked prefill, `long_prefill_token_threshold` | `run vllm prefill (cost(vllm, n)) growing kv`, `each at most (threshold)` with `let threshold = running.count + waiting.count > 1 ? c : inf;`: the cap only while more than one request is running or waiting; `waiting.count` counts the queues the engine admits, as vLLM counts `waiting`, whose `skipped_waiting` these programs leave empty; a constant cap is not vLLM's, and `serq target` refuses it | `scheduler.py:606-616, 675-676, 1115-1128` |
+| chunked prefill, `long_prefill_token_threshold` | `prefill (n) growing kv` in the request, `each at most (threshold)` with `let threshold = running.count + waiting.count > 1 ? c : inf;`: the cap only while more than one request is running or waiting; `waiting.count` counts the queues the engine admits, as vLLM counts `waiting`, whose `skipped_waiting` these programs leave empty; a constant cap is not vLLM's, and `serq target` refuses it | `scheduler.py:606-616, 675-676, 1115-1128` |
 | `allocate_slots` block by block as the request advances | `growing kv` | `kv_cache_manager.py:371-608` |
 | preemption of `running[-1]`, `waiting.prepend_request`, `num_computed_tokens = 0`, no admission in a step that preempted | `preempt lifo`, re-queued at the head, hold re-executed; `admit waiting while (running.preempted == 0)` | `scheduler.py:742-813, 869, 1539-1582` |
-| a preempted request keeps its output tokens: it is rescheduled with `num_tokens = prompt + outputs`, reserves and recomputes that many, and generates the rest | `computed` read by the re-executed hold, and `kept`, the most an earlier attempt had: `known = max(kept, computed + 1)`, `run vllm prefill (cost(vllm, known - c))`, `run vllm decode (cost(vllm, o - 1 - (known - prompt)))` | `scheduler.py:1560-1561`, `request.py:295-296`, `kv_cache_manager.py:515-531` |
+| a preempted request keeps its output tokens: it is rescheduled with `num_tokens = prompt + outputs`, reserves and recomputes that many, and generates the rest | `computed` read by the re-executed hold, and `kept`, the most an earlier attempt had: `known = max(kept, computed + 1)`, `prefill (known - c)`, `decode (output - 1 - (known - prompt))` | `scheduler.py:1560-1561`, `request.py:295-296`, `kv_cache_manager.py:515-531` |
 | the scheduler reserves by `num_tokens` (prompt and generated so far), never by the final length: it knows `max_tokens` and learns the length when `check_stop` sees EOS or the cap | `hidden o;`: no header, key or budget reads `o` | `kv_cache_manager.py:517, 533-534`, `config/scheduler.py:191`, `scheduler.py:639, 2426`, `sched/utils.py:98-119` |
 | the prefix cache holds every *computed* full block, generated tokens included; a hit is the longest run of cached full blocks, at most `num_tokens − 1` | `cache (prompt + out − 1)`; `reuse (floor(min(prev prompt, prompt − 1), bs))`; the unmatched blocks stay cached, dead | `kv_cache_manager.py:289-300, 602-606`, `single_type_kv_cache_manager.py:743-838` |
 | the free queue: freed blocks appended tail first (LRU), in the order requests finish | `evict lru` per block from the tail, ties by release order | `block_pool.py:776-805`, `single_type_kv_cache_manager.py:557-585` |

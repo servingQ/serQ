@@ -305,6 +305,10 @@ fn main() {
   device gpu { }
   engine llm on gpu {
     tokens cap 8;
+    request () {
+      prefill (8);
+      decode (2);
+    }
     schedule { advance running; admit waiting while (running.preempted == 0); }
     execute (1);
   }
@@ -312,8 +316,7 @@ fn main() {
     arrive batch(2);
   }
   server {
-    run llm prefill (cost(llm, 8));
-    run llm decode (cost(llm, 2));
+    llm ();
     observe finished = now;
   }
 }

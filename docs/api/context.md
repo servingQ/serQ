@@ -80,6 +80,7 @@ fn main() {
   device gpu { }
   engine llm on gpu {
     tokens cap 8;
+    request () { prefill (8); }
     schedule { advance running by (remaining); admit waiting while (running.preempted == 0); }
     execute (1 + 0.1 * batch.tokens);
   }
@@ -87,7 +88,7 @@ fn main() {
     arrive batch(2);
   }
   server {
-    run llm prefill (cost(llm, 8));
+    llm ();
     observe finished = now;
   }
 }
