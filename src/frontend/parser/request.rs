@@ -81,6 +81,8 @@ struct RequestItems<'a> {
     after: &'a [Token],
     /// `cache (e);`: its position and `e`.
     cache: Option<(usize, Vec<Token>)>,
+    /// `prefix (k: n, …);`: its position and the segments.
+    prefix: Option<(usize, Vec<Token>)>,
 }
 
 /// An engine's request's own names, which the rest of the program does not
@@ -332,7 +334,34 @@ impl Parser {
 
     /// The request's items, in the order they happen.
     fn request_items<'a>(&self, r: &'a RequestSrc) -> PResult<RequestItems<'a>> {
-        let body = &r.body;
+        // `prefix (k: n, …);`, the first item: what the request's sequence
+        // is made of, which the hold of its admission reads
+        let mut prefix = None;
+        let mut skip = 0;
+        if is_word(r.body.first(), "prefix") && r.body.get(1).is_some_and(|t| t.tok == Tok::LParen)
+        {
+            let (segs, close) = group(&r.body, 1).expect("balanced");
+            if r.body.get(close).is_none_or(|t| t.tok != Tok::Semi) || segs.is_empty() {
+                return self.err_at(
+                    r.body_at,
+                    "a request's `prefix (k: n, …);` names its segments and ends with `;`",
+                );
+            }
+            prefix = Some((r.body_at, segs));
+            skip = close + 1;
+        }
+        if let Some(i) = top_level(&r.body)
+            .into_iter()
+            .find(|&i| i >= skip && is_word(r.body.get(i), "prefix"))
+        {
+            return self.err_at(
+                r.body_at + i,
+                "a request's `prefix (k: n, …);` is its first item: what its sequence is made \
+                 of, before anything it does",
+            );
+        }
+        let body = &r.body[skip..];
+        let body_at = r.body_at + skip;
         let starts = top_level(body);
         // `at admission { … }`: the admission, once
         let mut admission = None;
@@ -346,12 +375,12 @@ impl Parser {
             }
             if admission.is_some() {
                 return self.err_at(
-                    r.body_at + i,
+                    body_at + i,
                     "a request is admitted once: one `at admission`",
                 );
             }
             let (inner, close) = group(body, i + 2).expect("balanced");
-            admission = Some((r.body_at + i, self.bindings_of(&inner, r.body_at + i)?));
+            admission = Some((body_at + i, self.bindings_of(&inner, body_at + i)?));
             before = &body[..i];
             after = &body[close..];
         }
@@ -388,17 +417,17 @@ impl Parser {
             let (e, close) = group(body, i + 1).expect("balanced");
             if close + 1 != body.len() || body.get(close).is_none_or(|t| t.tok != Tok::Semi) {
                 return self.err_at(
-                    r.body_at + i,
+                    body_at + i,
                     "a request's `cache (e);` is its last item: what the release leaves cached",
                 );
             }
             if e.is_empty() {
                 return self.err_at(
-                    r.body_at + i,
+                    body_at + i,
                     "`cache ()` needs what the request leaves cached",
                 );
             }
-            cache = Some((r.body_at + i, e));
+            cache = Some((body_at + i, e));
             after = &body[offset..i];
         }
         Ok(RequestItems {
@@ -406,6 +435,7 @@ impl Parser {
             admission,
             after,
             cache,
+            prefix,
         })
     }
 
@@ -494,6 +524,9 @@ impl Parser {
             }
             if let Some((at, _)) = items.cache {
                 return self.err_at(at, without("`cache`"));
+            }
+            if let Some((at, _)) = items.prefix {
+                return self.err_at(at, without("`prefix`"));
             }
         }
         // the engine's own run is `prefill (e)` here, its kernel spelling the
@@ -593,6 +626,13 @@ impl Parser {
                 out.push(word("reserve", &p.pool));
                 out.extend(paren(cost(&[&p.pool], r, &p.pool), &p.pool));
             }
+        }
+        if let Some((p, segs)) = &items.prefix {
+            let p = self.toks[*p].clone();
+            out.push(word("prefix", &p));
+            out.push(made(Tok::LParen, &p));
+            out.extend(segs.iter().cloned());
+            out.push(made(Tok::RParen, &p));
         }
         if let Some(e) = &t.reuse {
             out.push(word("reuse", &at));
