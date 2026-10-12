@@ -611,7 +611,7 @@ impl Program {
             if let CEvict::By(keys) = &p.evict {
                 es.extend(keys);
             }
-            if let Preempt::By { keys, .. } = &p.preempt {
+            if let Some(keys) = p.preempt.keys() {
                 es.extend(keys);
             }
             if let Some(spill) = &p.spill {

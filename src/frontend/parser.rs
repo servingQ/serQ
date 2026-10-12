@@ -399,7 +399,7 @@ const MAX_FAMILY: usize = 10_000;
 /// parameter may not be one: a parameter is replaced token by token, and a
 /// keyword in the body is a token of the same spelling. `tests/docs_lexer.rs`
 /// keeps the list whole.
-pub const KEYWORDS: [&str; 114] = [
+pub const KEYWORDS: [&str; 115] = [
     "Cost",
     "Size",
     "admission",
@@ -457,6 +457,7 @@ pub const KEYWORDS: [&str; 114] = [
     "join",
     "latency",
     "lease",
+    "leases",
     "let",
     "lifo",
     "link",
@@ -3524,6 +3525,16 @@ impl Parser {
                             keys: vec![Expr::Unary(UnOp::Neg, Box::new(admission))],
                             tail: false,
                         }
+                    } else if self.eat_kw("leases") {
+                        self.expect_kw("by")?;
+                        self.expect(&Tok::LParen)?;
+                        let mut keys = vec![self.expr()?];
+                        while *self.peek() == Tok::Comma {
+                            self.advance();
+                            keys.push(self.expr()?);
+                        }
+                        self.expect(&Tok::RParen)?;
+                        PreemptOrder::Leases(keys)
                     } else if self.eat_kw("by") {
                         self.expect(&Tok::LParen)?;
                         let mut keys = vec![self.expr()?];

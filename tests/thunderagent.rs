@@ -25,7 +25,7 @@ fn admitting_programs_by_capacity_keeps_their_prefixes_and_serves_more_turns() {
         hit(&off)
     );
     assert!(
-        on.turns as f64 > 1.1 * off.turns as f64,
+        on.turns as f64 > 1.3 * off.turns as f64,
         "turns: tr {} default {}",
         on.turns,
         off.turns

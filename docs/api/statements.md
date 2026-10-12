@@ -19,7 +19,7 @@ indices and predicates remain ordinary quantities.
 | [`observe`](#observe) | records a sample |
 | [`turn`](#turn) | draws attributes and waits for the turn's response |
 | [`hold`](#hold) | takes units of pools for the scope of a block |
-| [`grow`](#grow) | enlarges the innermost hold |
+| [`grow`](#grow) | enlarges the innermost hold, or the session's lease |
 | [`drop`](#drop) | discards the session's cached prefix |
 | [`release`](#release) | gives the innermost hold's units back now |
 | [`load`](#load) | the KV of some tokens arrived from outside |
@@ -127,7 +127,7 @@ body (a body that reads it there, or a `reuse` there, does not link).
 | `at admission` | `NAME = expr, …` | `Admit` | | Names used in the header and body; see below. |
 | `block` | `block` | `Session` | | The body. |
 | `cache` | `Cost(all held pools)` | `Session` | none | Units kept cached at the end, at most what was computed. Read when the session releases. Its presence is what makes the hold consume the session's prefix at admission; `cache (0)` consumes and keeps nothing, no clause leaves the prefix where it is. |
-| `lease` | `pool`, `expr` | `Session` | none | That pool's allocation outlives the scope: neither evictable nor a preemption victim until `release` of it, `t` clock units, or the session's end; `cache` applies then. |
+| `lease` | `pool`, `expr` | `Session` | none | That pool's allocation outlives the scope: neither evictable nor a preemption victim (unless the pool says [`preempt leases by`](pool.md#preempt)) until `release` of it, `t` clock units, or the session's end; `cache` applies then. |
 
 ### Admission bindings
 
@@ -161,8 +161,8 @@ grow POOL (d);
 
 | Argument | Type | Description |
 |---|---|---|
-| `POOL` | `pool` | A pool the session holds. |
-| `d` | `Cost(POOL)` | Units added to the innermost hold on `POOL`, rounded to blocks. |
+| `POOL` | `pool` | A pool the session holds, or leases. |
+| `d` | `Cost(POOL)` | Units added to the innermost hold on `POOL`, or outside every hold of it to the session's latest lease of it, rounded to blocks. |
 
 If it does not fit, the pool's [`preempt`](pool.md#preempt) applies.
 

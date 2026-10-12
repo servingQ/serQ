@@ -41,6 +41,7 @@ See [types](index.md#types) and [evaluation moments](context.md).
 | [`used(p: pool)`](#used) | Units currently allocated in `p`. |
 | [`free(p: pool)`](#free) | `cap - used`. Cached units are reclaimable and are not subtracted. |
 | [`cachedin(p: pool)`](#cachedin) | This session's own cached units in `p`; 0 when evaluated without a session. |
+| [`allocated(p: pool)`](#allocated) | This session's own allocated units in `p`, in its holds and its leases; 0 when evaluated without a session. |
 | [`holders(p: pool)`](#holders) | Sessions holding units in `p`. |
 | [`queued(p: pool)`](#queued) | Sessions waiting in `p`'s admission queue. |
 
@@ -301,6 +302,16 @@ cachedin(p: pool) -> number
 **Returns:** This session's own cached units in `p`; 0 when evaluated without a session.
 
 Read at admission for a prefix lookup that accounts for eviction while the session waited. See [`hold`](statements.md#hold).
+
+#### `allocated` {#allocated}
+
+```text
+allocated(p: pool) -> number
+```
+
+**Returns:** This session's own allocated units in `p`, in its holds and its leases; 0 when evaluated without a session.
+
+A growth on a pool that is no engine's memory may preempt a lease of it, which then ends while its session goes on. `allocated` is how the session finds out: `examples/multi-turn/thunderagent.sq` grows a program's lease when it still has one and lets the program in again when it does not.
 
 #### `holders` {#holders}
 
