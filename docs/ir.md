@@ -68,7 +68,7 @@ runs identically (`tests/ir.rs`).
 | `name`, `index?` | Resource name and optional array-member label. `index` is present even for a one-member array; it labels reports and does not affect execution. |
 | `cap`, `block` | Capacity in units and optional allocation granularity. |
 | `evict` | `Lru` or `By([keys])`, read at `Evict`. |
-| `preempt` | `None` or `By {keys, tail}`. The least keys at `Victim` select the victim; ties select the last admitted. `tail` defaults to false (requeue at the head); true requeues as a newcomer. |
+| `preempt` | `None`, `By {keys, tail}` or `Leases {keys}`. The least keys at `Victim` select the victim; ties select the last admitted. Under `By`, the victim is a hold, which runs again; `tail` defaults to false (requeue at the head); true requeues as a newcomer. Under `Leases`, the candidates are the sessions that lease the pool and hold it in no scope, and the victim's lease ends while its session goes on. |
 | `queue` | `null` for FIFO, otherwise nonempty pure selection keys, read at `Select`. |
 | `spill` | Optional `CSpill {to, via, work, when}`: destination pool, transfer stage, work and predicate. |
 | `admit_via` | Optional index of the step stage serving this pool's queue; a stage of another kind is refused, since nothing would admit the queue. |
@@ -131,8 +131,8 @@ between simulation checks and proofs.
 |---|---|
 | `Turn` | draw the next turn's attributes (workload `turn` block or trace); the source `turn;` also expands the server statements immediately after this node |
 | `Set(slot, e)`, `Observe(k, e)` | assign an attribute, record an observation |
-| `Hold {pools: [(pool, units, reserve?)], reuse?, body, cache?, lease?}` | acquire units of every pool (admission gate `reserve` if given), run `body`, release; with `cache` the admission consumes the own cached prefix, `reuse` bounds how much, and `cache` is the units left cached; without `cache` the hold leaves the session's cached prefix where it is; `lease: (pool, t)` keeps that pool's allocation past the scope, neither evictable nor a preemption victim, until the session's `Release` of it, `t` seconds, or its end (vLLM's `delay_free_blocks`) |
-| `Grow(pool, e)`, `Drop(pool)` | grow the current hold, drop the own cached entry |
+| `Hold {pools: [(pool, units, reserve?)], reuse?, body, cache?, lease?}` | acquire units of every pool (admission gate `reserve` if given), run `body`, release; with `cache` the admission consumes the own cached prefix, `reuse` bounds how much, and `cache` is the units left cached; without `cache` the hold leaves the session's cached prefix where it is; `lease: (pool, t)` keeps that pool's allocation past the scope, neither evictable nor a preemption victim except under the pool's `Leases`, until the session's `Release` of it, `t` seconds, or its end (vLLM's `delay_free_blocks`) |
+| `Grow(pool, e)`, `Drop(pool)` | grow the current hold, or outside every hold of the pool the session's latest lease of it; drop the own cached entry |
 | `Release(pool)` | give the innermost enclosing hold's allocation on the pool back now, or end the session's lease of it, caching per the hold's `cache`; nothing held or leased there is a no-op. A KV transfer between instances is `Run` (the link), `Load` (the destination) and `Release` (the source's lease) |
 | `Load(pool, e)` | the KV of `e` tokens arrived from outside the engine (a NIXL read): the innermost enclosing hold's computed position on the pool advances by `e`, within its allocation |
 | `Run {stage, mode, work, growing?, also?}` | work at a stage; `mode` `Plain`, `Prefill`, `Decode` (step stages); `growing` the pool that grows with the tokens computed, whose innermost hold's position, when the run ends, is its position at the run's start plus `work`; `also` further stages the same job holds at once (a flow of `share`), omitted when empty |
@@ -181,7 +181,7 @@ attributes must be ready at hold entry, including for early release paths.
 `Admission`, `Remaining`, `Position`, `Admitted`, `Preempted`, `Demand`,
 `Served`, `Arrived`: availability is defined by the moments below), `Sample(dist, args)`,
 `Reg(register)` (a stage register by index), `Call(fun, args)` (arithmetic functions, pool and stage queries such as
-`CachedIn(pool)`, `BudgetLeft(stage)`), `Unary`, `Binary`, `Cond`, and
+`CachedIn(pool)`, `Allocated(pool)`, `BudgetLeft(stage)`), `Unary`, `Binary`, `Cond`, and
 `Agg(agg, observation)`: `Total`, `Count`, `Largest`, `Smallest` (0 when
 none) or `PrefixTotal` (`Σ_k Σ_{i≤k} v_i` over the values sorted
 ascending) of every value the run observed under the observation, warm-up
@@ -206,7 +206,7 @@ text and directly constructed IR meet the same rules. Validation covers:
   indexed family.
 - **Ownership.** `Grow`, `Load`, `Release` and a run's `growing` require an
   enclosing hold with the same `CRef` (base, count and index expression);
-  `Release` may also end a lease. A hold leases only its own pool, names
+  `Grow` and `Release` may instead act on a lease of it. A hold leases only its own pool, names
   each reference once, and cannot change attributes its index reads.
   An index read again inside the hold cannot depend on state or time.
   Preemptible holds cannot use such indices or `cached`/`computed` in
@@ -255,7 +255,7 @@ predicates and iteration-body guards, admission gates and assignments:
 | `Serve` | a step stage's `serve by` keys and `only`, evaluated for one resident at its turn, the totals as the residents stand then (a session the iteration admitted included) | `Decoding`, `Admission`, `Remaining`, `Nres`, `Ndec`, `Kvb`, `Kvp`, `Now` (`only` not `Now`) |
 | `Victim` | a pool's preemption keys, evaluated for each candidate when growth cannot fit | `Decoding`, `Admission`, `Position`, `Now` |
 | `Plan` | iteration-body branch guards, admission gates and register assignments (no `Attr`) | `Nres`, `Ndec`, `Kvb`, `Kvp`, `Ntok`, `Npre`, `Admitted`, `Preempted` |
-| `Gauge` | a gauge, evaluated on the state an instant ends with and held until the next, with no session (an `Attr`, a `Sample`, `CachedIn`, `Now`, `Work` or `BudgetLeft` is rejected, and an index is a `Num` in range, so reading it cannot fail the run) | none |
+| `Gauge` | a gauge, evaluated on the state an instant ends with and held until the next, with no session (an `Attr`, a `Sample`, `CachedIn`, `Allocated`, `Now`, `Work` or `BudgetLeft` is rejected, and an index is a `Num` in range, so reading it cannot fail the run) | none |
 | `Given` | a claim's `given`, evaluated for each session once its `init` has run (and its preset attributes are set), on its attributes (`hidden` ones included: a claim is no scheduler) and the constants; no `Sample`, no `Call` but arithmetic | none (not `Now`) |
 | `Iteration` | a claim over the iterations of a step stage, evaluated when an iteration starts, after its batch is scheduled (where the cost is read); no `Attr`, no `Sample`, of the calls only arithmetic, `Queue`, `Busy`, `Used`, `Free`, `Holders`, `Queued`, an index a `Num` in range | `Ntok`, `Ndec`, `Npre`, `Nres`, `Kvb`, `Kvp`, `Attn`, `Demand`, `Served`, `Arrived`, `Now` |
 | `End` | a claim `at end`, evaluated once when the run ends, when no session is live; no `Attr`, no `Sample`, no `Call` but arithmetic; the only moment that reads `Agg` | `Now` |

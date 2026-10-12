@@ -5,9 +5,11 @@
 // replica at its first request and stays there, and it counts against that
 // replica's KV capacity while it reasons and while it calls a tool, so that
 // a program coming back from its tool still finds its prefix in the
-// replica's cache. A program is let in only where its tokens fit; otherwise
-// it waits. docs/design/thunderagent.md has the correspondence and what this
-// program does not write.
+// replica's cache. A new program is let in only where its tokens fit;
+// otherwise it waits. A running program whose tokens outgrow the replica
+// pauses idle ones, which are let in again at their next request.
+// docs/design/thunderagent.md has the correspondence, the paper's results
+// beside this program's, and what this program does not write.
 //
 // `--tr 0` is the router's `default` mode: the replica with the fewest
 // programs, no capacity. The model's constants are of the order of a 32B
@@ -52,6 +54,7 @@ fn main() {
         set kept = known;
         set c = min(cached, floor(known - 1, bs));
         observe hit = c > 0;
+        observe reused_tokens = c;               // vLLM's prefix_cache_hits; with prefill_tokens, its queries
         observe prefill_tokens = known - c;
         run E prefill (cost(E, known - c)) growing kv;
         run E decode (cost(E, o - 1 - (known - prompt))) growing kv;
@@ -83,29 +86,47 @@ fn main() {
   // The router's picture of a replica: the tokens of the programs placed on
   // it, against vLLM's KV capacity (cache_config.total_tokens_capacity).
   // Waiting programs that already have a step go before new ones, the
-  // smaller first in each (_greedy_resume's groups).
-  pool prog[J] { cap tr ? blocks * bs : inf; queue by (turn_no == 0, prompt); }
+  // smaller first in each (_greedy_resume's groups). A program whose
+  // tokens grow past the capacity pauses others: those calling a tool
+  // first, then those reasoning, the smaller first in each
+  // (_pause_until_safe). A paused program's tokens are no longer counted,
+  // and its next request waits to be let in again.
+  pool prog[J] {
+    cap tr ? blocks * bs : inf;
+    queue by (turn_no == 0, prompt);
+    preempt leases by (reasoning, prompt);
+  }
 
-  // The router. A new program goes to the replica with the fewest program
-  // tokens among those it fits (_select_backend_for_new_program), and waits
-  // there when none has room; in default mode, to the one with the fewest
-  // programs. A program's tokens are its prompt, the router's estimate
+  // The router. A program's tokens are its prompt, the router's estimate
   // before the request (update_program_before_request), and they stay
-  // counted until its next request, through the tool call
-  // (acting_token_weight 1, the default): the lease. The program is released
-  // when the session ends (/programs/release).
+  // counted through the tool call (acting_token_weight 1, the default): a
+  // lease of `prog`. A running program's next request goes to its replica
+  // at once, its count grown to the new prompt. A new or a paused program
+  // goes to the replica with the fewest program tokens among those it fits
+  // (_select_backend_for_new_program; a paused one may move,
+  // _greedy_resume), and waits there when none has room; in default mode a
+  // new one goes to the replica with the fewest programs. The program is
+  // released when the session ends (/programs/release).
   server {
     set prompt = K + n;
-    branch (K == 0) {
+    // vLLM refuses a prompt its KV cannot hold (max_model_len is at most
+    // the KV, as in examples/pd-disaggregation/llmd_nixl_pull.sq): the
+    // agent's trajectory ends there, in either mode
+    branch (prompt + buffer >= blocks * bs) { end; }
+    set reasoning = 1;
+    set placed = K > 0 && allocated(prog[home]) > 0;
+    branch (placed) {
+      grow prog[home] (cost(prog, prompt + buffer - allocated(prog[home])));
+    } else {
       choose j in J by (tr ? (free(prog[j]) >= prompt + buffer ? 0 : 1) : 0,
                         tr ? used(prog[j]) : holders(prog[j]));
       set home = j;
+      set t_q = now;
+      hold prog[home] (cost(prog, prompt + buffer)) {
+        branch (K > 0) { observe resume_wait = now - t_q; }
+      } lease prog[home] (inf);
     }
-    set t_q = now;
-    release prog[home];    // the tokens it had, from the last step
-    hold prog[home] (cost(prog, prompt + buffer)) {
-      branch (K > 0) { observe resume_wait = now - t_q; }
-      E[home].decode (prompt);
-    } lease prog[home] (inf);
+    E[home].decode (prompt);
+    set reasoning = 0;
   }
 }

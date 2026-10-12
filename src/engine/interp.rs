@@ -144,7 +144,9 @@ struct Hold<'p> {
 
 /// An allocation that outlived its scope (`lease P (t)`): the session's
 /// until its `release` of the pool, the expiry or its end, then cached per
-/// `cache`. Not a hold: no `grow`, no `growing`, no preemption.
+/// `cache`. Not a hold: no `growing` run. A `grow` outside every hold of
+/// the pool grows it, and under `preempt leases by` another growth may end
+/// it (`Interp::revoke`).
 #[derive(Clone, Debug)]
 struct Lease<'p> {
     id: u64,
@@ -158,6 +160,14 @@ struct Lease<'p> {
     /// the lease ends: a leg's attributes are its own, and its lease passes
     /// to the session when it ends.
     attrs: Option<Vec<f64>>,
+}
+
+/// The allocation a `grow` enlarges: a hold's entry (the hold, the pool's
+/// place in it) or a lease (its place in the session's leases).
+#[derive(Clone, Copy, Debug)]
+enum Grown {
+    Hold(usize, usize),
+    Lease(usize),
 }
 
 /// Whether the session waits to grow in pool `pool`.
@@ -2365,6 +2375,18 @@ impl<'p> Interp<'p> {
         over
     }
 
+    /// `allocated(p)`: what `sid` has allocated in `pl`, in its holds and its
+    /// leases.
+    fn allocated_by(&self, pl: usize, sid: usize) -> f64 {
+        let leases: f64 = self.sessions[sid]
+            .leases
+            .iter()
+            .filter(|l| l.pool == pl)
+            .map(|l| l.alloc)
+            .sum();
+        self.held_in(sid, pl) + leases
+    }
+
     fn own_entry_size(&self, pl: usize, sid: usize) -> f64 {
         self.pools[pl]
             .entries
@@ -2732,7 +2754,7 @@ impl<'p> Interp<'p> {
     /// hold re-executed after a preemption reaches the statement again).
     fn release_early(&mut self, sid: usize, pl: usize) {
         let Some((hi, k)) = self.sessions[sid].innermost(pl) else {
-            if let Some(i) = self.sessions[sid].leases.iter().position(|l| l.pool == pl) {
+            if let Some(i) = self.lease_of(sid, pl) {
                 self.end_lease(sid, i);
             }
             return;
@@ -2769,39 +2791,101 @@ impl<'p> Interp<'p> {
         h.grown = true;
     }
 
-    /// Allocate `units` more for the innermost hold of `sid` on `pl`.
-    /// Returns false if the session blocked (or was preempted).
+    /// The session's lease of `pl` that `release`, `grow` and `preempt
+    /// leases by` act on, when it has several (a leg's passed to it): the
+    /// earliest.
+    fn lease_of(&self, sid: usize, pl: usize) -> Option<usize> {
+        self.sessions[sid].leases.iter().position(|l| l.pool == pl)
+    }
+
+    /// What a `grow` of `pl` enlarges for `sid`: the innermost hold of
+    /// it, or, outside every hold of it, the session's lease of it.
+    fn grown(&self, sid: usize, pl: usize) -> Option<Grown> {
+        self.sessions[sid]
+            .innermost(pl)
+            .map(|(hi, k)| Grown::Hold(hi, k))
+            .or_else(|| self.lease_of(sid, pl).map(Grown::Lease))
+    }
+
+    fn grown_alloc(&self, sid: usize, g: Grown) -> f64 {
+        match g {
+            Grown::Hold(hi, k) => self.sessions[sid].holds[hi].pools[k].alloc,
+            Grown::Lease(i) => self.sessions[sid].leases[i].alloc,
+        }
+    }
+
+    /// Whether `need` more units of `pl` fit for `sid`'s allocation `g`.
+    fn fits_grown(&self, pl: usize, need: f64, sid: usize, g: Grown) -> bool {
+        let own = match g {
+            Grown::Hold(hi, k) => Some((sid, hi, k)),
+            Grown::Lease(_) => None,
+        };
+        self.fits_for(pl, need, own)
+    }
+
+    fn add_alloc(&mut self, sid: usize, pl: usize, g: Grown, need: f64) {
+        self.make_room(pl, need);
+        self.pools[pl].used += need;
+        match g {
+            Grown::Hold(hi, k) => self.sessions[sid].holds[hi].pools[k].alloc += need,
+            Grown::Lease(i) => self.sessions[sid].leases[i].alloc += need,
+        }
+    }
+
+    /// Allocate `units` more for the innermost hold of `sid` on `pl`, or
+    /// for its lease of `pl` outside every hold of it. Returns false if the
+    /// session blocked (or its hold was preempted); a lease the growth
+    /// preempts is the session's no more, and the session goes on.
     fn grow(&mut self, sid: usize, pl: usize, units: f64) -> bool {
-        let Some((hi, k)) = self.sessions[sid].innermost(pl) else {
+        let Some(g) = self.grown(sid, pl) else {
+            let name = &self.p.pools[pl].name;
             self.error = Some(format!(
-                "grow outside a hold of pool `{}`",
-                self.p.pools[pl].name
+                "`grow {name}`: the session holds no `{name}` and leases none; a lease \
+                 ends at its `release`, its expiry, or under `preempt leases by` \
+                 (`allocated({name})` is 0 then)"
             ));
             return false;
         };
-        let alloc_now = self.sessions[sid].holds[hi].pools[k].alloc;
+        let alloc_now = self.grown_alloc(sid, g);
         let target = self.round_up(pl, alloc_now + units);
         let need = target - alloc_now;
         if need <= 0.0 {
             return true;
         }
+        if matches!(g, Grown::Lease(_)) && target > self.pools[pl].cap + EPS {
+            // ending every lease would not make room: the growth would end
+            // its own and go on with nothing, unseen
+            let name = &self.p.pools[pl].name;
+            self.error = Some(format!(
+                "`grow {name}`: the lease would hold {target} of a cap of {}; no \
+                 preemption makes room for it",
+                self.pools[pl].cap
+            ));
+            return false;
+        }
         loop {
-            if self.fits_for(pl, need, Some((sid, hi, k))) {
-                self.make_room(pl, need);
-                self.pools[pl].used += need;
-                self.sessions[sid].holds[hi].pools[k].alloc += need;
+            if self.fits_grown(pl, need, sid, g) {
+                self.add_alloc(sid, pl, g, need);
                 return true;
             }
             let p = self.p;
             let victim = match &p.pools[pl].preempt {
                 Preempt::None => None,
-                Preempt::By { keys, .. } => self.victim(pl, keys),
+                Preempt::By { keys, .. } => self.victim(pl, keys, self.candidates(pl)),
+                Preempt::Leases { keys } => self.victim(pl, keys, self.lessees(pl)),
             };
             match victim {
-                Some(victim) => {
+                Some(victim) if p.pools[pl].preempt.preempts_holds() => {
                     self.preempt(victim, pl);
                     if victim == sid {
                         return false;
+                    }
+                }
+                Some(victim) => {
+                    self.revoke(victim, pl);
+                    if victim == sid {
+                        // its own lease is gone: nothing left to grow
+                        return true;
                     }
                 }
                 // `preempt none`, or nobody to preempt: wait for room
@@ -2863,6 +2947,22 @@ impl<'p> Interp<'p> {
         c
     }
 
+    /// `preempt leases by`: the sessions that lease `pl` and hold it in no
+    /// scope, in the order the pool admitted them.
+    fn lessees(&self, pl: usize) -> Vec<usize> {
+        let mut c: Vec<usize> = vec![];
+        for &s in &self.pools[pl].holders {
+            let ss = &self.sessions[s];
+            if ss.innermost(pl).is_none()
+                && ss.leases.iter().any(|l| l.pool == pl)
+                && !c.contains(&s)
+            {
+                c.push(s);
+            }
+        }
+        c
+    }
+
     /// `preempt by (keys)`: the candidate with the least keys, read for
     /// each (`Moment::Victim`: its attributes, `admission`, its place in
     /// the candidates' admission order, `decoding`, and its `position` on
@@ -2871,12 +2971,18 @@ impl<'p> Interp<'p> {
     /// (-admission)`, is the last candidate on a pool that is no engine's
     /// memory too, where the order is the pool's and a session's latest
     /// admission may have been to another pool.
-    fn victim(&mut self, pl: usize, keys: &[CExpr]) -> Option<usize> {
+    fn victim(&mut self, pl: usize, keys: &[CExpr], candidates: Vec<usize>) -> Option<usize> {
         let mut best: Option<(KeyOrd, usize)> = None;
-        for (place, s) in self.candidates(pl).into_iter().enumerate() {
-            let position = self.sessions[s]
-                .innermost(pl)
-                .map_or(0.0, |(hi, k)| self.sessions[s].holds[hi].pools[k].pos);
+        for (place, s) in candidates.into_iter().enumerate() {
+            let position = match self.sessions[s].innermost(pl) {
+                Some((hi, k)) => self.sessions[s].holds[hi].pools[k].pos,
+                None => self.sessions[s]
+                    .leases
+                    .iter()
+                    .rev()
+                    .find(|l| l.pool == pl)
+                    .map_or(0.0, |l| l.computed),
+            };
             let decoding = match self.sessions[s].status {
                 Status::InStage(st, j) => self.stages[st]
                     .jobs
@@ -2909,18 +3015,16 @@ impl<'p> Interp<'p> {
                 self.pools[pl].growers.pop_front();
                 continue;
             };
-            let (hi, k) = self.sessions[sid]
-                .innermost(pl)
-                .expect("a growing session holds the pool");
-            let alloc_now = self.sessions[sid].holds[hi].pools[k].alloc;
+            let g = self
+                .grown(sid, pl)
+                .expect("a growing session holds or leases the pool");
+            let alloc_now = self.grown_alloc(sid, g);
             let need = self.round_up(pl, alloc_now + units) - alloc_now;
-            if !self.fits_for(pl, need, Some((sid, hi, k))) {
+            if !self.fits_grown(pl, need, sid, g) {
                 break;
             }
             self.pools[pl].growers.pop_front();
-            self.make_room(pl, need);
-            self.pools[pl].used += need;
-            self.sessions[sid].holds[hi].pools[k].alloc += need;
+            self.add_alloc(sid, pl, g, need);
             match resume {
                 // a growing job: the growth covers the tokens it stalled
                 // on, which move the position when they are computed (#482)
@@ -3068,6 +3172,20 @@ impl<'p> Interp<'p> {
         // tail` at the back, a newcomer to the queue's keys and `waited`
         let tail = matches!(self.p.pools[pl].preempt, Preempt::By { tail: true, .. });
         self.enqueue_hold(victim, pending, !tail);
+    }
+
+    /// A growth on `pl` under `preempt leases by` takes `victim`'s lease
+    /// of it, which `victim` holds in no scope: the lease ends, its units
+    /// go back and `cache` applies, and the session, which is elsewhere (at
+    /// a tool, at another queue, at an engine), goes on. `allocated` is then
+    /// 0, and a `grow` of the pool fails the run: what the session does next
+    /// is the program's. No session waits to grow a lease under this rule,
+    /// since the grower is a candidate itself. ThunderAgent pauses an idle
+    /// program this way (`docs/design/thunderagent.md`).
+    fn revoke(&mut self, victim: usize, pl: usize) {
+        let i = self.lease_of(victim, pl).expect("victim leases the pool");
+        self.pools[pl].preemptions += 1;
+        self.end_lease(victim, i);
     }
 
     // -------------------------------------------------------- stages ----
@@ -4586,6 +4704,13 @@ impl<'p> Interp<'p> {
                 let p = pool(self, 0);
                 match ctx.sid {
                     Some(sid) => self.own_entry_size(p, sid),
+                    None => 0.0,
+                }
+            }
+            Fun::Allocated => {
+                let p = pool(self, 0);
+                match ctx.sid {
+                    Some(sid) => self.allocated_by(p, sid),
                     None => 0.0,
                 }
             }

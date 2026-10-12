@@ -2340,6 +2340,13 @@ fn pool_notes(p: &Program, i: usize, cached: bool) -> Vec<String> {
                 .join(", "),
             if *tail { " requeue tail" } else { "" }
         )),
+        crate::ir::Preempt::Leases { keys } => parts.push(format!(
+            "preempt leases by ({})",
+            keys.iter()
+                .map(|k| p.show_expr(k))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
     }
     // the title says `on S` only for a pool that is no memory
     if let (Some(_), Some(s)) = (memory_of(p, i), pool.admit_via) {

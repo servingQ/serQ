@@ -231,8 +231,8 @@ fn grow_and_growing_need_an_enclosing_hold() {
             .unwrap_or_else(|| panic!("`{stmt}` linked"));
         assert!(e.contains("outside a hold of `llm.kv`"), "{stmt}: {e}");
     }
-    // a lease is not a hold: `grow` there is refused, and the hint does
-    // not blame the index, which is the same
+    // outside every hold, `grow` grows the session's lease
+    // (`tests/lease_preemption.rs`)
     let src = "pool kv { cap 64; } stage d : delay;
         workload { arrive batch(1);
           session { turn; end;
@@ -241,11 +241,7 @@ fn grow_and_growing_need_an_enclosing_hold() {
         server { hold kv (cost(kv, 16)) { run d (cost(d, 1)); } lease kv (5); grow kv (cost(kv, 16));
         }
         ";
-    let e = check_source(&common::main_source(src), &common::horizon(10.0)).unwrap_err();
-    assert!(
-        e.contains("it acts on an enclosing hold's allocation"),
-        "{e}"
-    );
+    check_source(&common::main_source(src), &common::horizon(10.0)).unwrap();
     // inside one, both link: the request's admission is its hold
     let src = "device gpu { kv cap 64; } pool kv on gpu { }
         engine llm on gpu {

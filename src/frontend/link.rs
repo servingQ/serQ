@@ -554,6 +554,9 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
                 keys: keys.iter().map(|k| lk.expr(k)).collect::<LResult<_>>()?,
                 tail: *tail,
             },
+            PreemptOrder::Leases(keys) => crate::ir::Preempt::Leases {
+                keys: keys.iter().map(|k| lk.expr(k)).collect::<LResult<_>>()?,
+            },
         };
         let queue = match &p.queue {
             QueueOrder::Fifo => None,

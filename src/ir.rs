@@ -25,7 +25,9 @@ use serde::{Deserialize, Serialize};
 /// a guarded loop that continues after its body when the guard becomes zero.
 /// IR 12 also adds resource cost conversions and mandatory attribute types
 /// and workload/server statement authority. 13 removes `CStageKind::Delay`,
-/// which meant `Ps(present)` (`CStageKind::delay`).
+/// which meant `Ps(present)` (`CStageKind::delay`); 13 also adds
+/// `Preempt::Leases`, `Fun::Allocated`, and `Grow` of a lease outside
+/// every hold of its pool (`docs/design/thunderagent.md`).
 pub const IR_VERSION: u32 = 13;
 
 /// A reason `Program::validate` refuses a program, and the statement it is
@@ -95,9 +97,30 @@ pub enum Preempt {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         tail: bool,
     },
+    /// A failed growth ends the lease with the least `keys` (read at
+    /// `Moment::Victim`; ties to the latest admitted). The candidates are
+    /// the sessions that lease the pool and hold it in no scope, in the
+    /// order the pool admitted them; the victim's units go back, its
+    /// `cache` applies, and the session goes on wherever it is. No hold is
+    /// preempted. ThunderAgent's pause of an idle program
+    /// (`docs/design/thunderagent.md`).
+    Leases { keys: Vec<CExpr> },
 }
 
 impl Preempt {
+    /// The victim keys of `preempt by` or `preempt leases by`.
+    pub fn keys(&self) -> Option<&[CExpr]> {
+        match self {
+            Preempt::None => None,
+            Preempt::By { keys, .. } | Preempt::Leases { keys } => Some(keys),
+        }
+    }
+
+    /// Whether a failed growth preempts a hold, which then runs again.
+    pub fn preempts_holds(&self) -> bool {
+        matches!(self, Preempt::By { .. })
+    }
+
     /// `preempt lifo`: the latest admitted, re-queued at the head.
     pub fn lifo() -> Self {
         Preempt::By {
@@ -376,6 +399,8 @@ pub enum Fun {
     Free,
     /// this session's cached units in a pool
     CachedIn,
+    /// this session's allocated units in a pool: its holds and its leases
+    Allocated,
     Holders,
     /// sessions waiting at a pool
     Queued,
@@ -1118,7 +1143,7 @@ impl Program {
                 {
                     ": write the pool as the hold does, index included"
                 } else if or_leased {
-                    ": it takes an enclosing hold's allocation, or a lease of it"
+                    ": it acts on an enclosing hold's allocation, or on the session's lease of it"
                 } else {
                     ": it acts on an enclosing hold's allocation"
                 };
@@ -1151,7 +1176,7 @@ impl Program {
                         .map(|(h, _)| *h)
                         .chain(pools.iter().map(|(r, _, _)| r))
                         .flat_map(|r| &self.pools[r.base..r.base + r.count])
-                        .find(|q| q.preempt != Preempt::None);
+                        .find(|q| q.preempt.preempts_holds());
                     if let Some(q) = preempter
                         && let Some((r, _, _)) = pools.iter().find(|(r, _, _)| {
                             r.index.as_ref().is_some_and(|i| {
@@ -1199,7 +1224,7 @@ impl Program {
                     self.enclosed(*body, held, leased)?;
                     held.truncate(depth);
                 }
-                CStmt::Grow(r, _) => need(held, r, "grow", false).map_err(here)?,
+                CStmt::Grow(r, _) => need(held, r, "grow", true).map_err(here)?,
                 CStmt::Load(r, _) => need(held, r, "load", false).map_err(here)?,
                 CStmt::Release(r) => need(held, r, "release", true).map_err(here)?,
                 CStmt::Run {
@@ -1216,7 +1241,7 @@ impl Program {
                     if let Some(q) = held
                         .iter()
                         .flat_map(|(r, _)| &self.pools[r.base..r.base + r.count])
-                        .find(|q| q.preempt != Preempt::None)
+                        .find(|q| q.preempt.preempts_holds())
                     {
                         return Err(here(format!(
                             "`fork` inside a hold of `{}`, which may preempt it: the hold runs \
@@ -1542,7 +1567,7 @@ impl Program {
             if let CEvict::By(keys) = &p.evict {
                 exprs.extend(keys);
             }
-            if let Preempt::By { keys, .. } = &p.preempt {
+            if let Some(keys) = p.preempt.keys() {
                 exprs.extend(keys);
             }
             if let Some(s) = &p.spill {
@@ -1626,10 +1651,46 @@ impl Program {
         Ok(())
     }
 
+    /// `preempt leases by` names a pool whose leases it may take: one that
+    /// some hold leases, and no engine's memory, where a lease is KV another
+    /// instance has still to read (a prefiller's blocks before the
+    /// decoder's transfer) and the engine's own rule is `preempt by`.
+    fn validate_lease_preemption(&self) -> Result<(), String> {
+        for (pi, p) in self.pools.iter().enumerate() {
+            if !matches!(p.preempt, Preempt::Leases { .. }) {
+                continue;
+            }
+            let at = |e: &str| format!("pool `{}`: `preempt leases by` {e}", p.name);
+            let memory = self
+                .stages
+                .iter()
+                .any(|st| matches!(&st.kind, CStageKind::Step(s) if s.memory == Some(pi)));
+            if memory {
+                return Err(at(
+                    "on an engine's memory: a lease there is KV another instance has still \
+                     to read, which taking would lose; the engine preempts its residents by \
+                     `preempt by`",
+                ));
+            }
+            let leased = self.blocks.iter().flatten().any(|s| {
+                matches!(s, CStmt::Hold { lease: Some((r, _)), .. }
+                    if (r.base..r.base + r.count.max(1)).contains(&pi))
+            });
+            if !leased {
+                return Err(at(
+                    "on a pool no hold leases: it has nothing to take, and a growth there \
+                     waits as under `preempt none`",
+                ));
+            }
+        }
+        Ok(())
+    }
+
     /// The checks of the declarations and the run.
     fn validate_declarations(&self) -> Result<(), String> {
         let v = Validator { p: self };
         self.validate_flows()?;
+        self.validate_lease_preemption()?;
         for p in &self.pools {
             let at = |e| format!("pool `{}`: {e}", p.name);
             if let Some(keys) = &p.queue {
@@ -1645,9 +1706,13 @@ impl Program {
                     }
                 }
             }
-            if let Preempt::By { keys, .. } = &p.preempt {
+            if let Some(keys) = p.preempt.keys() {
                 if keys.is_empty() {
-                    return Err(at("preempt by needs at least one key".to_string()));
+                    let form = match p.preempt {
+                        Preempt::Leases { .. } => "preempt leases by",
+                        _ => "preempt by",
+                    };
+                    return Err(at(format!("{form} needs at least one key")));
                 }
                 for key in keys {
                     v.expr(key, Moment::Victim).map_err(at)?;
@@ -2275,6 +2340,9 @@ impl Validator<'_> {
             CExpr::Call(Fun::CachedIn, _) if m == Moment::Gauge => Err(
                 "`cachedin` is the session's own cached prefix, and a gauge has no session".into(),
             ),
+            CExpr::Call(Fun::Allocated, _) if m == Moment::Gauge => Err(
+                "`allocated` is the session's own allocation, and a gauge has no session".into(),
+            ),
             // a claim reads and does not act: no draw, and what its moment
             // supplies (a `given` the session, an iteration claim the stage
             // as the iteration starts, a claim `at end` the run)
@@ -2781,7 +2849,7 @@ use ArgKind::{Expr as E, Pool as P, Stage as S};
 
 /// Every function a call may name, for lookup by name; `Fun::entry` is
 /// the definition and a match, so a new `Fun` without one does not compile.
-const FUNS: [Fun; 21] = [
+const FUNS: [Fun; 22] = [
     Fun::Min,
     Fun::Max,
     Fun::Abs,
@@ -2796,6 +2864,7 @@ const FUNS: [Fun; 21] = [
     Fun::Used,
     Fun::Free,
     Fun::CachedIn,
+    Fun::Allocated,
     Fun::Holders,
     Fun::Queued,
     Fun::Price,
@@ -2825,6 +2894,7 @@ impl Fun {
             | Fun::Used
             | Fun::Free
             | Fun::CachedIn
+            | Fun::Allocated
             | Fun::Holders
             | Fun::Queued
             | Fun::Price
@@ -2870,6 +2940,7 @@ impl Fun {
             Fun::Used => ("used", &[P]),
             Fun::Free => ("free", &[P]),
             Fun::CachedIn => ("cachedin", &[P]),
+            Fun::Allocated => ("allocated", &[P]),
             Fun::Holders => ("holders", &[P]),
             Fun::Queued => ("queued", &[P]),
             Fun::Price => ("price", &[S, E, E]),

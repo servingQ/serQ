@@ -61,6 +61,7 @@ poolopt  := cap expr ;                       -- capacity in units (default inf)
           | evict lru ; | evict by ( expr , ... ) ;   -- eviction order (ascending keys)
           | preempt none ; | preempt lifo ;  -- what a failed growth does
           | preempt by ( expr , ... ) [requeue head | requeue tail] ;   -- the victim: least keys
+          | preempt leases by ( expr , ... ) ;   -- the victim: the lease with the least keys, which ends
           | queue fifo ; | queue by ( expr (, expr)* ) ; -- waiting selection
           | reserve held ;                   -- a hold's unallocated reservation counts against later admissions
           | spill POOL via STAGE ( expr ) when ( expr ) ;  -- write evicted prefixes to a tier
@@ -103,7 +104,7 @@ stmt     := turn ;                           -- draw attributes, submit, wait fo
                  block [ cache ( expr ) ] [ lease POOL ( expr ) ] [ ; ]
                                              -- lease: that pool's allocation outlives the scope,
                                              -- until a release/transfer takes it, expr seconds, or the end
-          | grow POOL ( expr ) ;             -- the enclosing hold's allocation on POOL grows
+          | grow POOL ( expr ) ;             -- the enclosing hold's allocation on POOL grows, or the session's lease of it
           | drop POOL ;                      -- discard the own cached prefix
           | release POOL ;                   -- give the enclosing hold's allocation on POOL back now, or end a lease of it
           | load POOL ( expr ) ;             -- the KV of expr tokens arrived: the enclosing hold's computed position advances
@@ -302,7 +303,7 @@ use `run` directly to model link work without a KV copy.
 
 `lease P (t)` names one of the hold's pools whose allocation stays the
 session's after the scope's end, neither evictable nor a preemption
-victim, until the session's `release P` (a `transfer … from P` contains
+victim (unless the pool says `preempt leases by`, below), until the session's `release P` (a `transfer … from P` contains
 one), `t` seconds, or the session's end, and then `cache` applies (`inf`
 keeps the lease until an explicit release or the session's end). `release P` with a hold on `P` gives the innermost
 enclosing hold's allocation there back now, caching per that hold's `cache`,
@@ -635,8 +636,8 @@ is the allocation, or the position a `growing` run or a `load` reached; a
 the innermost enclosing hold on `m` gives its allocation there back,
 caching per its clause, and holds `m` no longer. A hold's `lease m (t)`
 keeps its allocation on `m` past the scope's end, neither evictable nor a
-preemption victim, until the session's `release m`, `t` seconds, or the
-session's end, and `cache` applies then; a `release m` outside any hold on
+preemption victim (but see `preempt leases by` below), until the session's
+`release m`, `t` seconds, or the session's end, and `cache` applies then; a `release m` outside any hold on
 `m` ends the lease. A session that holds and leases nothing on `m` releases
 nothing (a hold re-executed after a preemption reaches the statement
 again). `load m (cost(m, n))` advances the innermost
@@ -644,8 +645,10 @@ enclosing hold's position on `m` by `n` tokens, which its allocation must
 cover; the KV of a transfer counts as computed from then on. `grow`,
 `growing`, `load` and `release` stand inside a hold of the same pool
 reference, index included, as the linker resolves it (`kv[k]` with `let k
-= 1` is `kv[1]`; `kv[i]` is not `kv[j]`), or `release` in a session that
-leases it; elsewhere the program does not link. A hold's index is read at
+= 1` is `kv[1]`; `kv[i]` is not `kv[j]`), or `grow` and `release` in a
+session that leases it, where outside every hold of the pool they grow
+or end the session's latest lease of it; elsewhere the program does not
+link. A hold's index is read at
 admission, at such a statement and after a preemption, and the readings
 must name one member: the hold's body does not change an attribute its
 index reads (`set`, `choose`, `turn`), and an index read again inside
@@ -740,6 +743,27 @@ and `decode (output - 1 - (known - prompt))` in the engine's request. The decode
 way: an entry's header reads what the entry sets above the hold (#475). A
 program that recomputes from the prompt alone says so by not reading
 `computed`.
+
+`preempt leases by (k₁, …)` takes leases instead of holds. A growth that
+does not fit ends the lease with the least keys among the sessions that
+lease the pool and hold it in no scope, read for each as `preempt by`
+reads them (its attributes, `admission` its place in the pool's order,
+`position` the lease's computed position), ties to the one admitted
+last. The lease's units go back and its `cache` applies; the session is
+not interrupted, wherever it is (at a tool, in another queue, at an
+engine), and no hold runs again. The grower is a candidate too: when its
+own lease has the least keys, the growth ends it and goes on with nothing
+to grow. What the session does next is the program's: `allocated (m)` is
+what it has allocated there, 0 once its lease is gone, and a `grow` of `m`
+with nothing held or leased there fails the run. A growth of a lease past
+the pool's cap fails the run too, since no preemption makes room for it.
+A session with several leases of one pool (a leg's, passed to it) has
+`release`, `grow` and this rule act on the earliest. The rule does not
+link on an engine's memory, where a lease is KV another instance has still
+to read, nor on a pool no hold leases. The pool report's `preempt` counts
+the leases it ended. `examples/multi-turn/thunderagent.sq` pauses an idle
+program this way: its lease ends, and its next request is let in anew
+(`docs/design/thunderagent.md`).
 
 ### Waiting selection
 

@@ -5,7 +5,7 @@ pool NAME [ '[' N ']' ] {
   cap expr;
   block expr;
   evict lru;  |  evict by (expr, …);
-  preempt none;  |  preempt lifo;  |  preempt by (expr, …) [requeue head | tail];
+  preempt none;  |  preempt lifo;  |  preempt by (expr, …) [requeue head | tail];  |  preempt leases by (expr, …);
   queue fifo;  |  queue by (key, …);
   reserve held;
   spill POOL via STAGE (expr) when (expr);
@@ -21,7 +21,7 @@ queues the sessions that do not yet fit. Every option is optional.
 | [`cap`](#cap) | `const` | `inf` | capacity in units |
 | [`block`](#block) | `const` | none | allocation and caching granularity |
 | [`evict`](#evict) | `lru` \| `by (expr, …)` | `lru` | which cache entry goes first |
-| [`preempt`](#preempt) | `none` \| `by (expr, …) [requeue head \| tail]` \| `lifo` | `none` | what a failed `grow` does: whom it preempts, and where the victim goes back |
+| [`preempt`](#preempt) | `none` \| `by (expr, …) [requeue head \| tail]` \| `lifo` \| `leases by (expr, …)` | `none` | what a failed `grow` does: whom it preempts, and where the victim goes back |
 | [`queue`](#queue) | `fifo` \| `by (expr, …)` | `fifo` | admission order |
 | [`reserve held`](#reserve-held) | — | off | a hold's unallocated `reserve` counts against later admissions |
 | [`spill`](#spill) | `pool`, `stage`, `expr`, `expr` | none | evicted prefixes are written to a tier |
@@ -73,6 +73,7 @@ last release after it has ended. The smallest key goes first.
 preempt none;
 preempt by (key, …) [requeue head | requeue tail];
 preempt lifo;
+preempt leases by (key, …);
 ```
 
 What a [`grow`](statements.md#grow) (or a `growing` run) does when the pool has no room.
@@ -82,10 +83,20 @@ What a [`grow`](statements.md#grow) (or a `growing` run) does when the pool has 
 | `none` | Wait for room, then resume. |
 | `by (k, …)` | Preempt the candidate with the least keys, compared in order; ties go to the last admitted. |
 | `lifo` | Shorthand for `by (-admission) requeue head`: preempt the last admitted. |
+| `leases by (k, …)` | End the lease with the least keys, compared in order; ties go to the last admitted. No hold is preempted. |
 
 Candidates are holders resident in the stage whose `memory` is this pool.
 If no stage names it as memory, candidates are holders with an active hold
 scope. Leases are not candidates; the grower can be its own victim.
+
+Under `leases by`, the candidates are the sessions that lease the pool and
+hold it in no scope, in the order the pool admitted them. The victim's
+lease ends: its units go back, its `cache` applies, and the session goes
+on wherever it is, its [`allocated`](functions.md#allocated) there now 0,
+and the report's `preempt` counts it. A grower whose own lease is the
+victim goes on with nothing to grow; a growth past the cap fails the run.
+The form does not link on an engine's memory, nor on a pool no hold
+leases.
 
 The victim leaves its stage, releases its hold and caches its computed prefix.
 It re-enters the hold's first pool's queue to execute the hold again with
