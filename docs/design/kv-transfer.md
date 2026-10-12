@@ -98,13 +98,98 @@ connector does not have to repeat it and agree.
 `pull` and `push` are no longer keywords; a program may name a thing with
 either.
 
-## What comes next
+## The L2 cache
 
-The L2 cache of #522 is the second connector: a queue that holds KV and
-serves copies at its bandwidth, an engine that reads it at admission and
-writes it when a request ends. It goes into `std/kvt` beside NIXL, with the
-`cache` role and the engine's read of a cache queue's pool in the
-language.
+Issue #522. An LMCache server, or a Mooncake store behind it, holds KV
+outside the engine for every engine that talks to it. At `ref/vllm`
+0c87a197, LMCache's multi-process connector:
+
+- is asked, when the scheduler admits a request, how much of the prompt it
+  holds past the GPU's prefix hit (`scheduler.py:940-952`), and answers in
+  whole chunks, and nothing for a preempted request
+  (`lmcache_mp_connector.py:758`, `:775`, `:788`);
+- copies that KV in while the request keeps its blocks and waits outside
+  the batch (`scheduler.py:1069-1072`, `:1267`);
+- stores each step's full chunks as they are computed
+  (`lmcache_mp_connector.py:296-366`).
+
+### Before
+
+A link queue with a pool links, and every use of it is refused: an
+engine's request reading it (`` `vllm.request` reads `lmc.kv`, which is
+not a pool or stage of `vllm` ``), the server holding it (`` `kv` is a
+pool of queue `lmc`, and only `lmc`'s entries hold it ``), and a link's
+entry, which only moves (`` a transfer names the pool it takes from and
+the pool it fills ``).
+
+### After
+
+`examples/multi-turn/vllm_lmcache.sq`:
+
+```serq
+  queue lmc : cache {
+    device host { kv cap l2; }
+    pool kv on host { block chunk; evict lru; }
+    serve ps(1);
+  }
+  …
+      kvt.l2_load (lmc, kv, got, per_token = r);
+      …
+      kvt.l2_store (kv, lmc, floor(prompt + output, chunk), per_token = r);
+```
+
+| Surface | Kernel |
+|---|---|
+| `queue C : cache { pool kv …; serve …; }` | the pool `C.kv` and the stage `C` |
+| `kvt.l2_load (C, P, n, per_token = r);` | `run C (cost(C, n * r)); load P (cost(P, n));` |
+| `kvt.l2_store (P, C, n, per_token = r);` | `hold C.kv (cost(C.kv, cachedin(C.kv))) { grow C.kv (cost(C.kv, m)); run C (cost(C, m * r)); load C.kv (cost(C.kv, m)); } cache (cost(C.kv, n));`, `m = max(0, n - cached)` |
+| `…, on = S)` | `run S, C (cost(S, C, …))` |
+
+The language gains the role and one reach across the queue boundary: an
+entry or an engine's request reads a cache queue's pool and copies through
+its stage. The library gains the two copies. No IR changes: both lower to
+`hold`, `grow`, `run`, `load` and `cache`, so the Lean generator sees
+nothing new.
+
+**A cache is a queue.** It is a station with memory and bandwidth of its
+own, as LMCache's server is a process of its own, so it is declared as
+one, not as a pool beside the engine's. The `serve` is its bandwidth, and
+`ps` makes loads and stores divide it.
+
+**The store holds what the cache has and grows by the rest.** A header is
+read at its hold's admission, and a request's length is hidden from the
+scheduler: a store whose header read `prompt + output` would be refused.
+Taking `cachedin(C.kv)` in the header and growing in the body reads the
+length where a body may.
+
+**The program says what the scheduler asks.** How much to load, from
+which tokens, and that a preempted request loads nothing are the
+program's: `vllm_lmcache.sq` writes them as one `def` its admission and
+its body both read. The body reads the cache again rather than the
+admission's binding (a body sees only bindings over attributes and
+constants), at the instant the body starts, which is the admission's.
+
+**What the model leaves out**, in the program's header as well:
+
+- a store is one copy when the request ends, where LMCache stores each
+  step's chunks; the request keeps its slot and blocks while it copies;
+- the copies do not slow the iteration they overlap (HBM is not shared);
+- a lookup is never deferred to a later step;
+- the cache's entry is the session's, as a pool's is: a prompt shared by
+  sessions is not found (#374);
+- the cache is one queue; Mooncake's shards are one pool and one
+  bandwidth.
+
+**The numbers.** `vllm_lmcache.sq` at `--horizon 600` with 2000 GPU
+blocks: 740 prompt tokens computed per turn, against 4334 in `vllm.sq`
+with the same blocks; the time to first token is 0.153 s against 0.131 s,
+since a request keeps its slot while it stores and a load divides the
+server's bandwidth with the stores.
+
+**Checks.** A cache queue with an engine, a `nic`, an entry, another role,
+more than one pool or no `serve`, or as a family; a `kvt.l2_…` naming
+something that is not a cache queue declared above; no `per_token`; an
+argument the statement does not take, or one twice.
 
 ## Self-critique
 
@@ -140,3 +225,25 @@ the relation nor its order.
 only way to pull. vLLM registers NIXL's two modes as connectors of their
 own (`factory.py:184-192`), and naming the connector keeps the library
 open to a second one with the same direction.
+
+**`l2 P { … }` and `store kv to P;`, with `CPool.store` in the IR.** The
+first draft of #522. A write-through on every iteration needs the engine
+to wait for its copies, an IR change; the request-level store is the
+kernel's, and the iteration is left alone.
+
+**Copies inside the iteration.** A draft made loads and stores
+synchronous, the iteration waiting for them. LMCache copies on its own
+stream, so a load is the request's wait outside the batch, which a run in
+the request already is.
+
+**A `copy` form, or `transfer … keep`.** A copy that does not release is
+what `kvt.l2_load` lowers to; a new core form for it would be a second
+`transfer`. `keep` is retired (#136).
+
+**A `link` with a pool.** It links today, and every use of it is refused;
+admitting them for links would let any NIC hold KV. A role says what the
+queue is.
+
+**A family of caches.** Mooncake shards a store across nodes. The program
+would pick the shard of a session, a key the store chooses; one pool is
+what the scheduler sees.

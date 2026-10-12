@@ -75,6 +75,7 @@ PATHS = {
     "kv_connector/v1/base.py": "vllm/distributed/kv_transfer/kv_connector/v1/base.py",
     "kv_connector/factory.py": "vllm/distributed/kv_transfer/kv_connector/factory.py",
     "factory.py": "vllm/distributed/kv_transfer/kv_connector/factory.py",
+    "lmcache_mp_connector.py": "vllm/distributed/kv_transfer/kv_connector/v1/lmcache_mp_connector.py",
     "disagg_proxy_pushconnector_demo.py": "examples/disaggregated/disaggregated_serving/disagg_proxy_pushconnector_demo.py",
     # the proxy vLLM's NIXL tests put in front of a prefiller and a decoder
     "nixl_integration/toy_proxy_server.py": "tests/v1/kv_connector/nixl_integration/toy_proxy_server.py",

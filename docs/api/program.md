@@ -137,6 +137,25 @@ relation must write. A program that imports `std/kvt` declares nothing
 named `kvt`. See
 [Queues](../language.md#queues).
 
+In a body, std/kvt copies through an L2 KV cache, a queue that plays
+`cache` (one pool and a `serve`):
+
+```serq
+kvt.l2_load (CACHE, POOL, n, per_token = r);
+kvt.l2_store (POOL, CACHE, n, per_token = r);
+```
+
+`kvt.l2_load` copies the KV of `n` tokens the cache holds into the
+enclosing hold on `POOL`, which counts them as computed; the cache keeps
+them. `kvt.l2_store` makes the session's entry in the cache hold `n`
+tokens and copies only the part it lacks. Both run at the cache's `serve`
+for `r` per token copied.
+
+| Argument | Type | Description |
+|---|---|---|
+| `per_token = r` | `expr` | The time a token takes at the cache's bandwidth; required. |
+| `on = S` | stage | A stage of the path held with the cache's at once (a GPU's PCIe); optional. |
+
 ## `def`
 
 ```serq
