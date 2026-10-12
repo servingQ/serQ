@@ -13,7 +13,12 @@ fn aging_source(bound: bool, key: &str) -> String {
         engine llm on gpu {
           reqs cap 1;
           tokens cap 2;
-          schedule { advance running; admit waiting while (running.preempted == 0); }
+          request (s) {
+            observe selected = s;
+            observe admitted_at = now;
+            decode (s == 0 ? 4 : 1);
+          }
+          schedule { advance running; admit waiting while (running.preempted == 0) taking reqs (1); }
           execute (1);
         }",
             "pool reqs on llm",
@@ -22,7 +27,17 @@ fn aging_source(bound: bool, key: &str) -> String {
         ("stage llm : fifo;", "pool reqs")
     };
     let cap = if bound { "" } else { "cap 1; " };
-    let run = if bound { "run llm decode" } else { "run llm" };
+    // the engine admits its slot in its request; the fifo stage runs in the
+    // server's hold of a pool no engine admits
+    let serve = if bound {
+        "llm (serial);"
+    } else {
+        "hold reqs (cost(reqs, 1)) {
+            observe selected = serial;
+            observe admitted_at = now;
+            run llm (cost(llm, serial == 0 ? 4 : 1));
+          }"
+    };
     format!(
         r#"
         {stage}
@@ -39,11 +54,7 @@ fn aging_source(bound: bool, key: &str) -> String {
           set immediate = serial == 4;
           run delay (cost(delay, serial == 2 ? 1 : serial == 3 ? 2 : serial >= 4 ? 3 : 0));
           set queued = now;
-          hold reqs (cost(reqs, 1)) {{
-            observe selected = serial;
-            observe admitted_at = now;
-            {run} (cost(llm, serial == 0 ? 4 : 1));
-          }}
+          {serve}
         }}
 
 "#
@@ -103,7 +114,13 @@ fn each_selection_reads_the_current_remaining_iteration_budget() {
         engine llm on gpu {
           reqs cap 4;
           tokens cap 5;
-          schedule { advance running; admit waiting while (running.preempted == 0); }
+          request (s) {
+            observe selected = s;
+            observe admitted_at = now;
+            branch (s == 0) { decode (1); }
+            else { prefill (s == 2 ? 1 : s == 1 ? 2 : 3); }
+          }
+          schedule { advance running; admit waiting while (running.preempted == 0) taking reqs (1); }
           execute (1);
         }
         pool reqs on llm { queue by (budget_left(llm) >= 4 ? serial : -serial); }
@@ -116,12 +133,7 @@ fn each_selection_reads_the_current_remaining_iteration_budget() {
         }
         server {
           run delay (cost(delay, serial == 0 ? 0 : 0.25));
-          hold reqs (cost(reqs, 1)) {
-            observe selected = serial;
-            observe admitted_at = now;
-            branch (serial == 0) { run llm decode (cost(llm, 1)); }
-            else { run llm prefill (cost(llm, serial == 2 ? 1 : serial == 1 ? 2 : 3)); }
-          }
+          llm (serial);
         }
 
 "#;
@@ -255,9 +267,23 @@ fn resumed_holds_keep_prepend_priority_over_recomputed_keys() {
         engine llm on gpu {
           reqs cap 2;
           tokens cap 4;
+          request (s) {
+            at admission {
+              known = s == 2 ? 0 : max(2, computed);
+              left = budget_left(llm);
+            }
+            observe selected = s;
+            observe admitted_at = now;
+            branch (s == 2) { decode (1); }
+            else {
+              prefill (known) growing kv;
+              decode (3 - (known - 2)) growing kv;
+            }
+          }
           schedule {
             exclusive prefill each at most (2);
-            admit waiting while (running.preempted == 0) each at most (2);
+            admit waiting while (running.preempted == 0) each at most (2)
+              taking reqs (1), kv (min(known, left)) reserve (known);
           }
           execute (1);
         }
@@ -272,16 +298,7 @@ fn resumed_holds_keep_prepend_priority_over_recomputed_keys() {
         }
         server {
           run delay (cost(delay, serial == 2 ? 3.25 : 0));
-          hold reqs (cost(reqs, 1)), kv (cost(kv, min(known, left))) reserve (cost(kv, known))
-          at admission (known = serial == 2 ? 0 : max(2, computed), left = budget_left(llm)) {
-            observe selected = serial;
-            observe admitted_at = now;
-            branch (serial == 2) { run llm decode (cost(llm, 1)); }
-            else {
-              run llm prefill (cost(llm, known)) growing kv;
-              run llm decode (cost(llm, 3 - (known - 2))) growing kv;
-            }
-          }
+          llm (serial);
         }
 
 "#;

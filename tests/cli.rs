@@ -19,7 +19,14 @@ const STUCK: &str = r#"
         engine llm on gpu {
           reqs cap 4;
           tokens cap 1000;
-          schedule { advance running; admit waiting while (running.preempted == 0); }
+          request () {
+            prefill (100) growing kv;
+            decode (100) growing kv;
+          }
+          schedule {
+            advance running;
+            admit waiting while (running.preempted == 0) taking reqs (1), kv (100) reserve (100);
+          }
           execute (1);
         }
         pool reqs on llm { }
@@ -30,12 +37,7 @@ const STUCK: &str = r#"
 
           }
         }
-        server {
-          hold reqs (cost(reqs, 1)), kv (cost(kv, 100)) reserve (cost(kv, 100)) {
-            run llm prefill (cost(llm, 100)) growing kv;
-            run llm decode (cost(llm, 100)) growing kv;
-          }
-        }
+        server { llm (); }
 
 "#;
 
