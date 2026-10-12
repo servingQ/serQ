@@ -24,6 +24,11 @@ compiled `pyserq.Program` draw
 the same figure. Two requests are the same when they run the same
 statements inside workload holds of the same pools, whatever the units;
 when the session's requests differ, the figure shows the full session.
+A pool the request holds encloses the stations it reaches while it holds
+it: in a hold's scope, past it while a `lease` lasts, until the `release`
+that ends it, and after a `grow` of a pool held in no scope, which grows
+the session's lease. After a branch or a loop a pool stays held where
+every way through holds it, whichever hold took it on each.
 
 | Element | Meaning |
 |---|---|

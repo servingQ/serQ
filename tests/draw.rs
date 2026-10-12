@@ -12,7 +12,7 @@ use serq::view::deployment::{self, End};
 use serq::view::figure::{BoxStyle, Figure, StationKind};
 use serq::{compile_source, program_path};
 
-const PROGRAMS: [&str; 8] = [
+const PROGRAMS: [&str; 10] = [
     "mg1",
     "ps",
     "closed",
@@ -21,6 +21,8 @@ const PROGRAMS: [&str; 8] = [
     "vllm",
     "vllm_request",
     "llmd_nixl_pull",
+    "vllm_nixl_push",
+    "thunderagent",
 ];
 
 fn program(name: &str) -> Program {
@@ -560,6 +562,62 @@ fn a_lease_keeps_the_pool_on_the_stations_until_its_release() {
     assert_eq!(pools_of(&p, &net, "s1"), ["p"]);
     assert_eq!(pools_of(&p, &net, "s2"), ["p"]);
     assert!(pools_of(&p, &net, "s3").is_empty());
+}
+
+/// A pool both arms of a branch hold stays held after it, whichever hold
+/// took it in each: here a lease grown in one arm (`grow` outside every
+/// hold grows the session's lease, docs/language.md, Pools) and held anew
+/// in the other, as ThunderAgent's router does (#568).
+#[test]
+fn a_pool_both_arms_hold_stays_held_whichever_hold_took_it() {
+    let shapes = [
+        // a lease grown in one arm, held anew in the other
+        "branch (turn_no > 1) { grow p (cost(p, 1)); } else { hold p (cost(p, 1)) { run s1 (cost(s1, 1)); } lease p (inf); }",
+        // a lease each arm takes by a hold of its own
+        "branch (turn_no > 1) { hold p (cost(p, 1)) { run s1 (cost(s1, 1)); } lease p (inf); } else { hold p (cost(p, 2)) { run s3 (cost(s3, 1)); } lease p (inf); }",
+    ];
+    for shape in shapes {
+        let p = compile(&format!(
+            "pool p {{ cap 10; }} stage s1 : delay; stage s2 : delay; stage s3 : delay;
+            workload {{ arrive batch(1); session {{ turn; turn; }} }}
+            server {{ {shape} run s2 (cost(s2, 1)); }}
+            "
+        ));
+        let net = deployment::project(&p);
+        assert_eq!(pools_of(&p, &net, "s2"), ["p"], "{shape}");
+    }
+}
+
+/// A loop that leases its pool anew in each pass leaves it held after it,
+/// as the branch does.
+#[test]
+fn a_pool_leased_anew_in_a_loop_stays_held_after_it() {
+    let p = compile(
+        "pool p { cap 10; } stage s1 : delay; stage s2 : delay; stage s3 : delay;
+        workload { arrive batch(1); session { turn; } }
+        server {
+          set m = 0;
+          hold p (cost(p, 1)) { run s1 (cost(s1, 1)); } lease p (inf);
+          while (m < 2) { set m = m + 1; release p; hold p (cost(p, 1)) { run s3 (cost(s3, 1)); } lease p (inf); }
+          run s2 (cost(s2, 1));
+        }
+        ",
+    );
+    let net = deployment::project(&p);
+    assert_eq!(pools_of(&p, &net, "s2"), ["p"]);
+}
+
+/// `examples/multi-turn/thunderagent.sq`: the router's `prog`, which a
+/// program holds as a lease it grows, encloses the replica (#568).
+#[test]
+fn thunderagents_router_pool_is_drawn() {
+    let t = texts("thunderagent");
+    assert!(t.iter().any(|x| x == "pool prog"), "{t:?}");
+    assert!(
+        t.iter()
+            .any(|x| x.contains("preempt leases by (reasoning, prompt)")),
+        "{t:?}"
+    );
 }
 
 /// `examples/pd-disaggregation/llmd_nixl_pull.sq`: the prompt's KV is in the prefiller's pool
