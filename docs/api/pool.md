@@ -92,9 +92,11 @@ scope. Leases are not candidates; the grower can be its own victim.
 Under `leases by`, the candidates are the sessions that lease the pool and
 hold it in no scope, in the order the pool admitted them. The victim's
 lease ends: its units go back, its `cache` applies, and the session goes
-on wherever it is, its [`allocated`](functions.md#allocated) there now 0.
-A grower whose own lease is the victim goes on with nothing to grow. With
-no lease to take, the grower waits.
+on wherever it is, its [`allocated`](functions.md#allocated) there now 0,
+and the report's `preempt` counts it. A grower whose own lease is the
+victim goes on with nothing to grow; a growth past the cap fails the run.
+The form does not link on an engine's memory, nor on a pool no hold
+leases.
 
 The victim leaves its stage, releases its hold and caches its computed prefix.
 It re-enters the hold's first pool's queue to execute the hold again with

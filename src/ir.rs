@@ -1143,7 +1143,7 @@ impl Program {
                 {
                     ": write the pool as the hold does, index included"
                 } else if or_leased {
-                    ": it takes an enclosing hold's allocation, or a lease of it"
+                    ": it acts on an enclosing hold's allocation, or on the session's lease of it"
                 } else {
                     ": it acts on an enclosing hold's allocation"
                 };
@@ -1651,10 +1651,46 @@ impl Program {
         Ok(())
     }
 
+    /// `preempt leases by` names a pool whose leases it may take: one that
+    /// some hold leases, and no engine's memory, where a lease is KV another
+    /// instance has still to read (a prefiller's blocks before the
+    /// decoder's transfer) and the engine's own rule is `preempt by`.
+    fn validate_lease_preemption(&self) -> Result<(), String> {
+        for (pi, p) in self.pools.iter().enumerate() {
+            if !matches!(p.preempt, Preempt::Leases { .. }) {
+                continue;
+            }
+            let at = |e: &str| format!("pool `{}`: `preempt leases by` {e}", p.name);
+            let memory = self
+                .stages
+                .iter()
+                .any(|st| matches!(&st.kind, CStageKind::Step(s) if s.memory == Some(pi)));
+            if memory {
+                return Err(at(
+                    "on an engine's memory: a lease there is KV another instance has still \
+                     to read, which taking would lose; the engine preempts its residents by \
+                     `preempt by`",
+                ));
+            }
+            let leased = self.blocks.iter().flatten().any(|s| {
+                matches!(s, CStmt::Hold { lease: Some((r, _)), .. }
+                    if (r.base..r.base + r.count.max(1)).contains(&pi))
+            });
+            if !leased {
+                return Err(at(
+                    "on a pool no hold leases: it has nothing to take, and a growth there \
+                     waits as under `preempt none`",
+                ));
+            }
+        }
+        Ok(())
+    }
+
     /// The checks of the declarations and the run.
     fn validate_declarations(&self) -> Result<(), String> {
         let v = Validator { p: self };
         self.validate_flows()?;
+        self.validate_lease_preemption()?;
         for p in &self.pools {
             let at = |e| format!("pool `{}`: {e}", p.name);
             if let Some(keys) = &p.queue {
@@ -1672,7 +1708,11 @@ impl Program {
             }
             if let Some(keys) = p.preempt.keys() {
                 if keys.is_empty() {
-                    return Err(at("preempt by needs at least one key".to_string()));
+                    let form = match p.preempt {
+                        Preempt::Leases { .. } => "preempt leases by",
+                        _ => "preempt by",
+                    };
+                    return Err(at(format!("{form} needs at least one key")));
                 }
                 for key in keys {
                     v.expr(key, Moment::Victim).map_err(at)?;

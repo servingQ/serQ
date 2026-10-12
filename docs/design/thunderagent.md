@@ -120,11 +120,18 @@ draws the 30 programs and runs the oracles as before. No other program's
 IR or report moves: `preempt by` keeps its candidates, and a `grow`
 outside every hold of its pool did not link before.
 
-The linker's rules stay as they were otherwise. The keys are a preempt
-key's: they may not draw, nor read `computed`. Leases that all wait to grow, each
-for room the others hold, are named at the end of the run, by the note
-that already names holds waiting on each other
-(`tests/lease_preemption.rs`).
+The keys are a preempt key's: they may not draw, nor read `computed`.
+Two checks are new, both stricter, so neither bumps: `preempt leases by`
+does not link on an engine's memory, where a lease is KV another
+instance has still to read (a prefiller's blocks before the decoder's
+transfer), nor on a pool no hold leases, where it would take nothing.
+Two run errors are new: a `grow` of a pool the session neither holds nor
+leases any more, and a growth of a lease past the pool's cap, which would
+otherwise end every lease, its own last, and go on as if it had grown.
+Under `preempt none`, leases that all wait to grow for room the others
+hold are named at the end of the run by the note that already names
+holds waiting on each other; under `preempt leases by` no growth waits,
+since the grower is a candidate itself (`tests/lease_preemption.rs`).
 
 ### Rejected on the way
 
@@ -259,7 +266,10 @@ What does not, and why:
 8. **A program larger than a replica.** ThunderAgent force-resumes after
    30 minutes
    ([`scheduler/router.py#L934-L956`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L934-L956));
-   serQ refuses a hold that can never fit (the pool report's `rej`).
+   and a waiting program longer than any replica can wait that long. The
+   program ends a trajectory whose prompt the replica's KV cannot hold, as
+   vLLM refuses a prompt of `max_model_len` tokens, which is at most the
+   KV; the force-resume of a program that fits is not written.
 9. **Weight sync**, the RL trainer's pause of every request while it
    broadcasts weights, and the tool lifecycle (sandbox garbage collection,
    p. 8), are not part of the serving deployment the program writes.

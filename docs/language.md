@@ -750,14 +750,19 @@ lease the pool and hold it in no scope, read for each as `preempt by`
 reads them (its attributes, `admission` its place in the pool's order,
 `position` the lease's computed position), ties to the one admitted
 last. The lease's units go back and its `cache` applies; the session is
-not interrupted, wherever it is (at a tool, in another queue, in its own
-growth of that lease, which then goes on with nothing to grow), and no
-hold runs again. What the session does next is the program's: `allocated
-(m)` is what it has allocated there, 0 once its lease is gone. A growth
-that finds no lease to take waits, as under `preempt none`; leases that
-all wait to grow for room the others hold are named at the end of the
-run. `examples/multi-turn/thunderagent.sq` pauses an idle program this
-way: its lease ends, and its next request is let in anew
+not interrupted, wherever it is (at a tool, in another queue, at an
+engine), and no hold runs again. The grower is a candidate too: when its
+own lease has the least keys, the growth ends it and goes on with nothing
+to grow. What the session does next is the program's: `allocated (m)` is
+what it has allocated there, 0 once its lease is gone, and a `grow` of `m`
+with nothing held or leased there fails the run. A growth of a lease past
+the pool's cap fails the run too, since no preemption makes room for it.
+A session with several leases of one pool (a leg's, passed to it) has
+`release`, `grow` and this rule act on the earliest. The rule does not
+link on an engine's memory, where a lease is KV another instance has still
+to read, nor on a pool no hold leases. The pool report's `preempt` counts
+the leases it ended. `examples/multi-turn/thunderagent.sq` pauses an idle
+program this way: its lease ends, and its next request is let in anew
 (`docs/design/thunderagent.md`).
 
 ### Waiting selection

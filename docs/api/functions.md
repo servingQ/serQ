@@ -311,7 +311,7 @@ allocated(p: pool) -> number
 
 **Returns:** This session's own allocated units in `p`, in its holds and its leases; 0 when evaluated without a session.
 
-A growth on a pool that is no engine's memory may preempt a lease of it, which then ends while its session goes on. `allocated` is how the session finds out: `examples/multi-turn/thunderagent.sq` grows a program's lease when it still has one and lets the program in again when it does not.
+Under the pool's [`preempt leases by`](pool.md#preempt), a growth may end another session's lease, while that session goes on. `allocated` is how the session finds out: `examples/multi-turn/thunderagent.sq` grows a program's lease when it still has one and lets the program in again when it does not.
 
 #### `holders` {#holders}
 

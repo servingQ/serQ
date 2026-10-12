@@ -12,7 +12,7 @@ use serq::{check_source, run_source};
 /// Two programs take 4 of 10 units each and lease them. Serial 1 comes
 /// back first, at t = 2, and grows its lease by 4, which does not fit
 /// beside serial 0's. Serial 0, at its tool until t = 11, then finds its
-/// lease gone and is let in again when serial 1 has ended.
+/// lease gone and is let in again at once: serial 1 ended at t = 3.
 fn two(preempt: &str) -> String {
     format!(
         r#"
@@ -49,7 +49,7 @@ fn a_growth_takes_back_another_sessions_lease() {
         "{}",
         r.text()
     );
-    // serial 0's second request finds no lease, and waits for serial 1's end (t = 3)
+    // serial 0's second request finds no lease, and is let in anew at t = 11
     assert_eq!(
         r.observe("again").unwrap().samples,
         vec![0.0],
@@ -134,4 +134,117 @@ fn a_lease_key_may_not_draw() {
     )
     .unwrap_err();
     assert!(e.contains("a preempt key may not draw"), "{e}");
+}
+
+/// A growth of a lease past the cap fails the run: ending every lease,
+/// its own last, would make no room, and it would go on as if it had grown.
+#[test]
+fn a_growth_of_a_lease_past_the_cap_fails_the_run() {
+    let src = two("preempt leases by (serial);").replace(
+        "cost(prog, 4));\n            observe grown",
+        "cost(prog, 20));\n            observe grown",
+    );
+    let e = run_source(&common::main_source(&src), &common::horizon(100.0), None).unwrap_err();
+    assert!(e.contains("no preemption makes room"), "{e}");
+}
+
+/// A `grow` with nothing held or leased fails the run and says why.
+#[test]
+fn a_grow_after_the_lease_ended_says_why() {
+    let src = r#"
+        stage svc : fifo;
+        pool prog { cap 10; }
+        workload { arrive batch(1); session { turn; turn; } }
+        server {
+          branch (turn_no > 1) { grow prog (cost(prog, 1)); }
+          hold prog (cost(prog, 4)) { } lease prog (0.5);
+          run svc (cost(svc, 1));
+        }
+"#;
+    let e = run_source(&common::main_source(src), &common::horizon(10.0), None).unwrap_err();
+    assert!(e.contains("holds no `prog` and leases none"), "{e}");
+}
+
+/// The rule does not link where it cannot take a lease safely or at all.
+#[test]
+fn preempt_leases_by_is_refused_on_an_engines_memory_and_on_a_pool_nobody_leases() {
+    let engine = r#"
+        queue E : decode {
+          device gpu { kv cap 64; }
+          engine on gpu { reqs cap 4; tokens cap 8; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); }
+          pool reqs on E { }
+          pool kv on E.gpu { preempt leases by (serial); }
+          decode (prompt) {
+            hold kv (cost(kv, prompt)), reqs (cost(reqs, 1)) { run E prefill (cost(E, prompt)) growing kv; } lease kv (inf);
+          }
+        }
+        workload { arrive batch(1); session { turn; } }
+        server { E.decode (4); }
+"#;
+    let e = check_source(&common::main_source(engine), &common::horizon(10.0)).unwrap_err();
+    assert!(e.contains("on an engine's memory"), "{e}");
+    let unleased = r#"
+        stage svc : fifo;
+        pool prog { cap 10; preempt leases by (serial); }
+        workload { arrive batch(1); session { turn; } }
+        server { hold prog (cost(prog, 4)) { run svc (cost(svc, 1)); } }
+"#;
+    let e = check_source(&common::main_source(unleased), &common::horizon(10.0)).unwrap_err();
+    assert!(e.contains("on a pool no hold leases"), "{e}");
+}
+
+/// A session whose lease is taken while it runs at a stage is not
+/// interrupted: serial 0's run ends at t = 10 as it would have.
+#[test]
+fn a_lease_taken_while_its_session_runs_leaves_the_run_alone() {
+    let src = r#"
+        stage svc : fifo(2);
+        pool prog { cap 10; preempt leases by (serial); }
+        workload { arrive batch(2); session { turn; } }
+        server {
+          hold prog (cost(prog, 4)) { } lease prog (inf);
+          branch (serial == 1) { run svc (cost(svc, 1)); grow prog (cost(prog, 4)); }
+          else { run svc (cost(svc, 10)); observe left = allocated(prog); observe done = now; }
+        }
+"#;
+    let r = run_source(&common::main_source(src), &common::horizon(100.0), None).unwrap();
+    assert_eq!(
+        r.observe("done").unwrap().samples,
+        vec![10.0],
+        "{}",
+        r.text()
+    );
+    assert_eq!(r.observe("left").unwrap().samples, vec![0.0]);
+    assert_eq!(r.pool("prog").unwrap().preemptions, 1);
+}
+
+/// A lease a leg left to its session can be taken like the session's own.
+#[test]
+fn a_lease_passed_from_a_leg_can_be_taken() {
+    let src = r#"
+        stage svc : fifo(2);
+        pool prog { cap 10; preempt leases by (serial); }
+        workload { arrive batch(2); session { turn; } }
+        server {
+          branch (serial == 0) {
+            fork { hold prog (cost(prog, 4)) { } lease prog (inf); }
+            join;
+            run svc (cost(svc, 5));
+            observe left = allocated(prog);
+          } else {
+            hold prog (cost(prog, 4)) { } lease prog (inf);
+            run svc (cost(svc, 1));
+            grow prog (cost(prog, 4));
+            observe grown = allocated(prog);
+          }
+        }
+"#;
+    let r = run_source(&common::main_source(src), &common::horizon(100.0), None).unwrap();
+    assert_eq!(
+        r.observe("grown").unwrap().samples,
+        vec![8.0],
+        "{}",
+        r.text()
+    );
+    assert_eq!(r.observe("left").unwrap().samples, vec![0.0]);
 }

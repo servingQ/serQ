@@ -2378,21 +2378,13 @@ impl<'p> Interp<'p> {
     /// `allocated(p)`: what `sid` has allocated in `pl`, in its holds and its
     /// leases.
     fn allocated_by(&self, pl: usize, sid: usize) -> f64 {
-        let s = &self.sessions[sid];
-        let holds: f64 = s
-            .holds
-            .iter()
-            .flat_map(|h| h.pools.iter())
-            .filter(|e| e.pool == pl)
-            .map(|e| e.alloc)
-            .sum();
-        let leases: f64 = s
+        let leases: f64 = self.sessions[sid]
             .leases
             .iter()
             .filter(|l| l.pool == pl)
             .map(|l| l.alloc)
             .sum();
-        holds + leases
+        self.held_in(sid, pl) + leases
     }
 
     fn own_entry_size(&self, pl: usize, sid: usize) -> f64 {
@@ -2762,7 +2754,7 @@ impl<'p> Interp<'p> {
     /// hold re-executed after a preemption reaches the statement again).
     fn release_early(&mut self, sid: usize, pl: usize) {
         let Some((hi, k)) = self.sessions[sid].innermost(pl) else {
-            if let Some(i) = self.sessions[sid].leases.iter().position(|l| l.pool == pl) {
+            if let Some(i) = self.lease_of(sid, pl) {
                 self.end_lease(sid, i);
             }
             return;
@@ -2799,18 +2791,20 @@ impl<'p> Interp<'p> {
         h.grown = true;
     }
 
+    /// The session's lease of `pl` that `release`, `grow` and `preempt
+    /// leases by` act on, when it has several (a leg's passed to it): the
+    /// earliest.
+    fn lease_of(&self, sid: usize, pl: usize) -> Option<usize> {
+        self.sessions[sid].leases.iter().position(|l| l.pool == pl)
+    }
+
     /// What a `grow` of `pl` enlarges for `sid`: the innermost hold of
-    /// it, or, outside every hold of it, the session's latest lease of it.
+    /// it, or, outside every hold of it, the session's lease of it.
     fn grown(&self, sid: usize, pl: usize) -> Option<Grown> {
-        let s = &self.sessions[sid];
-        s.innermost(pl)
+        self.sessions[sid]
+            .innermost(pl)
             .map(|(hi, k)| Grown::Hold(hi, k))
-            .or_else(|| {
-                s.leases
-                    .iter()
-                    .rposition(|l| l.pool == pl)
-                    .map(Grown::Lease)
-            })
+            .or_else(|| self.lease_of(sid, pl).map(Grown::Lease))
     }
 
     fn grown_alloc(&self, sid: usize, g: Grown) -> f64 {
@@ -2844,9 +2838,11 @@ impl<'p> Interp<'p> {
     /// preempts is the session's no more, and the session goes on.
     fn grow(&mut self, sid: usize, pl: usize, units: f64) -> bool {
         let Some(g) = self.grown(sid, pl) else {
+            let name = &self.p.pools[pl].name;
             self.error = Some(format!(
-                "grow outside a hold or a lease of pool `{}`",
-                self.p.pools[pl].name
+                "`grow {name}`: the session holds no `{name}` and leases none; a lease \
+                 ends at its `release`, its expiry, or under `preempt leases by` \
+                 (`allocated({name})` is 0 then)"
             ));
             return false;
         };
@@ -2855,6 +2851,17 @@ impl<'p> Interp<'p> {
         let need = target - alloc_now;
         if need <= 0.0 {
             return true;
+        }
+        if matches!(g, Grown::Lease(_)) && target > self.pools[pl].cap + EPS {
+            // ending every lease would not make room: the growth would end
+            // its own and go on with nothing, unseen
+            let name = &self.p.pools[pl].name;
+            self.error = Some(format!(
+                "`grow {name}`: the lease would hold {target} of a cap of {}; no \
+                 preemption makes room for it",
+                self.pools[pl].cap
+            ));
+            return false;
         }
         loop {
             if self.fits_grown(pl, need, sid, g) {
@@ -3170,24 +3177,15 @@ impl<'p> Interp<'p> {
     /// A growth on `pl` under `preempt leases by` takes `victim`'s lease
     /// of it, which `victim` holds in no scope: the lease ends, its units
     /// go back and `cache` applies, and the session, which is elsewhere (at
-    /// a tool, at another queue), goes on. Its next `grow` of the pool finds
-    /// nothing to grow, and `allocated` is 0: what it does then is the
-    /// program's. A session waiting to grow that lease goes on without it.
-    /// ThunderAgent pauses an idle program this way
-    /// (`docs/design/thunderagent.md`).
+    /// a tool, at another queue, at an engine), goes on. `allocated` is then
+    /// 0, and a `grow` of the pool fails the run: what the session does next
+    /// is the program's. No session waits to grow a lease under this rule,
+    /// since the grower is a candidate itself. ThunderAgent pauses an idle
+    /// program this way (`docs/design/thunderagent.md`).
     fn revoke(&mut self, victim: usize, pl: usize) {
-        let i = self.sessions[victim]
-            .leases
-            .iter()
-            .rposition(|l| l.pool == pl)
-            .expect("victim holds or leases the pool");
+        let i = self.lease_of(victim, pl).expect("victim leases the pool");
         self.pools[pl].preemptions += 1;
         self.end_lease(victim, i);
-        if grows_in(&self.sessions[victim], pl) && self.grown(victim, pl).is_none() {
-            self.pools[pl].growers.retain(|&s| s != victim);
-            self.sessions[victim].status = Status::Ready;
-            self.ready.push_back(victim);
-        }
     }
 
     // -------------------------------------------------------- stages ----

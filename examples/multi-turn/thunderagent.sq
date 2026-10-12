@@ -109,6 +109,10 @@ fn main() {
   // released when the session ends (/programs/release).
   server {
     set prompt = K + n;
+    // vLLM refuses a prompt its KV cannot hold (max_model_len is at most
+    // the KV, as in examples/pd-disaggregation/llmd_nixl_pull.sq): the
+    // agent's trajectory ends there, in either mode
+    branch (prompt + buffer >= blocks * bs) { end; }
     set reasoning = 1;
     set placed = K > 0 && allocated(prog[home]) > 0;
     branch (placed) {
