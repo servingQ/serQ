@@ -71,7 +71,7 @@ fn main() {
     // never the whole prompt (the last token is recomputed for its logits)
     // a forced turn carries a nonce at its head: nothing matches, and the
     // old prefix stays in the cache, unusable, until it is evicted
-    set hitmax = forced ? 0 : floor(min(prev, prompt - 1) / bs) * bs;
+    set hitmax = forced ? 0 : floor(min(prev, prompt - 1), bs);
     // the header is evaluated when the scheduler admits: the prefix still
     // cached then, plus the chunk the step's remaining budget allows
     // the admission needs room for the whole sequence (scheduler_reserve_full_isl,
@@ -86,7 +86,7 @@ fn main() {
     hold reqs (cost(reqs, 1)), kv (cost(kv, hit + min(known - hit, budget_left(vllm)))) reserve (cost(kv, known))
          reuse (cost(reqs, kv, max(hitmax, own)))
          at admission (known = max(kept, computed + 1),
-                       own = floor(max(kept > prompt ? kept - 1 : 0, computed) / bs) * bs,
+                       own = floor(max(kept > prompt ? kept - 1 : 0, computed), bs),
                        hit = min(cachedin(kv), max(hitmax, own))) {
       set kept = known;
       set c = cached;
