@@ -14,5 +14,4 @@ fn main() {
     run worker (cost(worker, service_time(units)));
     observe elapsed = now;
   }
-
 }

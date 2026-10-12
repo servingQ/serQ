@@ -83,6 +83,4 @@ fn main() {
     set prompt = K + n;
     trtllm (prompt, o);
   }
-
-
 }

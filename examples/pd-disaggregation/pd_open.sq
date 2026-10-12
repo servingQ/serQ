@@ -39,6 +39,4 @@ fn main() {
       run decode (cost(decode, sd / gD));
     }
   }
-
-
 }

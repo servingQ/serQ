@@ -41,7 +41,6 @@ fn main() {
       set vp = bcol * floor(~uniform(1, vpmax + 1));
       set vd = min(floor(~exp(200)) + 1, vdmax);
     }
-
   }
 
   server {
@@ -62,6 +61,4 @@ fn main() {
   // b_col of them do.
   claim optimal_tiling given (vp == bcol * floor(vp / bcol)):
     every iteration of E (tokens == bcol || decoders == residents);
-
-
 }

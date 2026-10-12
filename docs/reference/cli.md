@@ -32,7 +32,7 @@ to 0 and `seed` to 1. JSON IR contains all resolved settings already.
 | `ir` | print the program's [IR](../ir.md) as JSON |
 | `draw` | render the program as a figure ([visualization](../visualization/index.md)) |
 | `target` | synthesise the program for [vLLM's scheduler](#the-vllm-target): print the configuration that runs it, or refuse with the construct vLLM cannot run (exit 1) |
-| `fmt` | format one or more `.sq` files in place; comments, blank lines, number spellings, and aligned trailing comments are preserved |
+| `fmt` | format one or more `.sq` files in place; comments, number spellings, and aligned trailing comments are preserved; a run of blank lines becomes one, and none is kept at the start or end of the file or of a block (inside a block comment they are kept) |
 | `--version` (or `-V`) | print `serq X.Y.Z`, the interpreter's version, for the record of a run; `run --json` writes the same as `serq_version` |
 
 ## Options

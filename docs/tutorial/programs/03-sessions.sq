@@ -36,6 +36,4 @@ fn main() {
   server {
     run engine (cost(engine, a * (K + n) + d * o));
   }
-
-
 }

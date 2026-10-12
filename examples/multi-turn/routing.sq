@@ -99,6 +99,4 @@ fn main() {
     }
     observe service = S;
   }
-
-
 }

@@ -82,6 +82,4 @@ fn main() {
     } cache (cost(reqs, kv, K + n + o));
     branch (!cold) { observe hit = warm; }
   }
-
-
 }

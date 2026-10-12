@@ -44,6 +44,4 @@ fn main() {
   }
 
   gauge pending = holders(reqs) + queued(reqs);
-
-
 }
