@@ -487,6 +487,21 @@ impl Parser {
                 return self.err_at(at, without("`cache`"));
             }
         }
+        // a parameter is substituted where it is read, so one named like a
+        // register would turn the engine's register into the caller's value
+        if let Some(p) = request.params.iter().find_map(|t| match &t.tok {
+            Tok::Ident(n) if registers.contains(n) => Some(n),
+            _ => None,
+        }) {
+            return self.err_at(
+                request.at,
+                format!(
+                    "engine `{engine}`'s request names a parameter `{p}`, which is also its \
+                     register: one name would read the caller's value in one place and the \
+                     engine's in another\nhelp: name the parameter otherwise"
+                ),
+            );
+        }
         let text = self.kernel_text(&request, &items, taking.as_ref());
         // read it where the engine ends, as a queue's entry
         let at = self.pos;

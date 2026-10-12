@@ -25,9 +25,9 @@ fn main() {
   def in_phase() { running.decoding > 0 ? decoding : !decoding }
   engine fastertransformer on gpu {
     tokens cap bmax;
-    request () {
-      prefill (vp);
-      decode (vd);
+    request (prompt, output) {
+      prefill (prompt);
+      decode (output);
     }
     schedule {
       advance running only (in_phase());
@@ -41,7 +41,7 @@ fn main() {
   }
 
   server {
-    hold reqs (cost(reqs, 1)) { fastertransformer (); }
+    hold reqs (cost(reqs, 1)) { fastertransformer (vp, vd); }
   }
 
   gauge pending = holders(reqs) + queued(reqs);

@@ -18,9 +18,9 @@ fn main() {
   device gpu { compute (t) = a * ceil(t / b0); }
   engine sarathi on gpu {
     tokens cap bmax;
-    request () {
-      prefill (vp);
-      decode (vd);
+    request (prompt, output) {
+      prefill (prompt);
+      decode (output);
     }
     schedule {
       // admission order: decodes first, then the oldest prefills (no chunk cap)
@@ -36,7 +36,7 @@ fn main() {
   }
 
   server {
-    sarathi ();
+    sarathi (vp, vd);
     observe response = now - t0;
   }
 

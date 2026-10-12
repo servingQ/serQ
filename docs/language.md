@@ -1052,8 +1052,10 @@ without `taking` holds nothing, and has no `at admission` and no `cache`.
 `taking` names the engine's capacities and its device's. Every `admit
 waiting` of the engine writes the same `taking`. The rules are a queue
 entry's: the admission reads the parameters, what the request sets before
-it, the engine's pools, stage and `state` registers, `cached`, `computed` and the
-constants; the statements also read `now`, what the request sets and the
+it, the engine's pools and stage, `cached`, `computed` and the constants;
+`taking`, its `reserve` and `reuse` also read the engine's `state`
+registers, at the engine's admission (a binding does not: the hold sets it at
+its body's top, a session statement); a parameter may not be named like a register; the statements also read `now`, what the request sets and the
 `hidden` attributes; a request sets no parameter. Its names keep their
 spelling in the IR (`kept`, not `vllm.kept`), and the rest of the program
 neither reads nor sets them: the caller reads what it marks. An engine has
