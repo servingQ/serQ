@@ -347,7 +347,7 @@ impl Program {
                             server_pools[r.base..r.base + r.count].fill(true);
                         }
                     }
-                    CStmt::Grow(r, _) | CStmt::Load(r, _) => {
+                    CStmt::Grow(r, _) | CStmt::Shrink(r, _) | CStmt::Load(r, _) => {
                         server_pools[r.base..r.base + r.count].fill(true);
                     }
                     CStmt::Run {
@@ -520,7 +520,9 @@ impl Program {
                             }
                         }
                     }
-                    CStmt::Grow(r, e) | CStmt::Load(r, e) => amount(e, CostTarget::pool(r))?,
+                    CStmt::Grow(r, e) | CStmt::Shrink(r, e) | CStmt::Load(r, e) => {
+                        amount(e, CostTarget::pool(r))?
+                    }
                     CStmt::Observe(_, e) => {
                         expression(e)?;
                     }
@@ -683,7 +685,10 @@ impl Program {
                         read(e, ready)?;
                         ready[*a] = true;
                     }
-                    CStmt::Observe(_, e) | CStmt::Grow(_, e) | CStmt::Load(_, e) => read(e, ready)?,
+                    CStmt::Observe(_, e)
+                    | CStmt::Grow(_, e)
+                    | CStmt::Shrink(_, e)
+                    | CStmt::Load(_, e) => read(e, ready)?,
                     CStmt::Run { work, .. } => read(work, ready)?,
                     CStmt::Hold {
                         pools,
@@ -781,7 +786,11 @@ fn references(st: &CStmt) -> Vec<&CRef> {
             .map(|(r, _, _)| r)
             .chain(lease.iter().map(|(r, _)| r))
             .collect(),
-        CStmt::Grow(r, _) | CStmt::Load(r, _) | CStmt::Drop(r) | CStmt::Release(r) => vec![r],
+        CStmt::Grow(r, _)
+        | CStmt::Shrink(r, _)
+        | CStmt::Load(r, _)
+        | CStmt::Drop(r)
+        | CStmt::Release(r) => vec![r],
         _ => vec![],
     }
 }

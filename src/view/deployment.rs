@@ -737,7 +737,7 @@ impl Walker<'_> {
                         own(&mut self.pool_owners, r.base, k);
                     }
                 }
-                CStmt::Grow(..) | CStmt::Drop(..) => {}
+                CStmt::Grow(..) | CStmt::Shrink(..) | CStmt::Drop(..) => {}
             }
         }
     }

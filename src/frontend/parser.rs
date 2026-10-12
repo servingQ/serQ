@@ -400,7 +400,7 @@ const MAX_FAMILY: usize = 10_000;
 /// parameter may not be one: a parameter is replaced token by token, and a
 /// keyword in the body is a token of the same spelling. `tests/docs_lexer.rs`
 /// keeps the list whole.
-pub const KEYWORDS: [&str; 116] = [
+pub const KEYWORDS: [&str; 117] = [
     "Cost",
     "Size",
     "admission",
@@ -497,6 +497,7 @@ pub const KEYWORDS: [&str; 116] = [
     "session",
     "set",
     "share",
+    "shrink",
     "some",
     "spill",
     "stage",
@@ -951,7 +952,9 @@ fn stmt_reads(s: &Stmt, n: &str) -> bool {
             // a nested hold that binds `n` itself gives its body its own `n`
             header_reads(s, n) || (!binds_in_body(body, n) && block(body))
         }
-        Stmt::Grow(r, e) | Stmt::Load(r, e) => ref_reads(r, n) || expr_reads(e, n),
+        Stmt::Grow(r, e) | Stmt::Shrink(r, e) | Stmt::Load(r, e) => {
+            ref_reads(r, n) || expr_reads(e, n)
+        }
         Stmt::Drop(r) | Stmt::Release(r) => ref_reads(r, n),
         Stmt::Run {
             stage,
@@ -1350,7 +1353,7 @@ fn split_reads<'a>(
             }
             Stmt::Observe(_, e) => bodies.push(e),
             Stmt::Unread(args) => unread.extend(args),
-            Stmt::Grow(r, e) | Stmt::Load(r, e) => {
+            Stmt::Grow(r, e) | Stmt::Shrink(r, e) | Stmt::Load(r, e) => {
                 index(r, indices);
                 bodies.push(e);
             }
@@ -1469,7 +1472,11 @@ fn always_leases(stmts: &[Stmt]) -> bool {
 fn pools_named<'a>(stmts: &'a [Stmt], out: &mut Vec<&'a Ref>) {
     for s in stmts {
         match s {
-            Stmt::Grow(r, _) | Stmt::Load(r, _) | Stmt::Drop(r) | Stmt::Release(r) => out.push(r),
+            Stmt::Grow(r, _)
+            | Stmt::Shrink(r, _)
+            | Stmt::Load(r, _)
+            | Stmt::Drop(r)
+            | Stmt::Release(r) => out.push(r),
             Stmt::Hold {
                 pools, body, lease, ..
             } => {
@@ -4881,6 +4888,13 @@ impl Parser {
                 let e = self.paren_expr()?;
                 self.expect(&Tok::Semi)?;
                 Ok(Stmt::Grow(r, e))
+            }
+            "shrink" => {
+                self.advance();
+                let r = self.own_pool("shrink")?;
+                let e = self.paren_expr()?;
+                self.expect(&Tok::Semi)?;
+                Ok(Stmt::Shrink(r, e))
             }
             "drop" => {
                 self.advance();

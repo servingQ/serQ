@@ -909,7 +909,7 @@ fn stmt_span(s: &Stmt) -> Option<Span> {
         Stmt::Hold { pools, .. } => pools
             .first()
             .and_then(|(r, e, _)| r.span.or_else(|| expr_span(e))),
-        Stmt::Grow(r, e) | Stmt::Load(r, e) => r.span.or_else(|| expr_span(e)),
+        Stmt::Grow(r, e) | Stmt::Shrink(r, e) | Stmt::Load(r, e) => r.span.or_else(|| expr_span(e)),
         Stmt::Drop(r) | Stmt::Release(r) => r.span,
         Stmt::Run { stage, work, .. } => stage.span.or_else(|| expr_span(work)),
         Stmt::Set(_, e) | Stmt::Observe(_, e) | Stmt::Branch(e, _, _) => expr_span(e),
@@ -1284,7 +1284,7 @@ fn hidden_in_server(
                     }
                     walk(body, t)?;
                 }
-                Stmt::Grow(r, e) | Stmt::Load(r, e) => {
+                Stmt::Grow(r, e) | Stmt::Shrink(r, e) | Stmt::Load(r, e) => {
                     if let Some(i) = index(r) {
                         check(i, "choice of a pool", t)?;
                     }
@@ -2157,6 +2157,7 @@ impl Linker<'_> {
                     }
                 }
                 Stmt::Grow(r, e) => CStmt::Grow(self.pool_ref(r)?, self.expr(e)?),
+                Stmt::Shrink(r, e) => CStmt::Shrink(self.pool_ref(r)?, self.expr(e)?),
                 Stmt::Drop(r) => CStmt::Drop(self.pool_ref(r)?),
                 Stmt::Release(r) => CStmt::Release(self.pool_ref(r)?),
                 Stmt::Load(r, e) => CStmt::Load(self.pool_ref(r)?, self.expr(e)?),

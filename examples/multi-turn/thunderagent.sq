@@ -43,6 +43,8 @@ fn main() {
   // 1: the router counts the shared prompt in every program, as the code
   // does; 0: once, as the wiki's capacity, with shared_tokens subtracted
   let count_shared = args.number("count_shared", 1);
+  // --acting-token-weight: a program calling a tool counts w of its tokens
+  let w = args.number("w", 1);
   let room = blocks * bs - (count_shared ? 0 : S);   // the router's capacity
 
   // A replica: vLLM's engine on one device, its prefix cache in the blocks,
@@ -153,6 +155,12 @@ fn main() {
     // up to what a replica holds
     branch (allocated(prog[home]) > 0) {
       grow prog[home] (cost(prog, min(o, room - allocated(prog[home]))));
+    }
+    // calling its tool now, the program counts at the acting weight, its
+    // buffer whole (active_program_tokens, remaining_capacity); its next
+    // request grows it back
+    branch (w < 1 && allocated(prog[home]) > 0) {
+      shrink prog[home] (cost(prog, (1 - w) * (allocated(prog[home]) - buffer)));
     }
     set reasoning = 0;
   }

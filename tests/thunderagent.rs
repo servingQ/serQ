@@ -108,3 +108,24 @@ fn a_shared_system_prompt_keeps_paused_prefixes_and_gives_default_mode_its_hits(
         "TR hit: S 0 {alone}, S 3968 {shared}, counted once {once}; default hit {default}"
     );
 }
+
+/// `w`, ThunderAgent's acting weight: a program calling a tool gives back
+/// (1 - w) of its tokens and grows them back at its next request, which
+/// pauses others. The claim is the mechanism: at `w` 0.5 more of the turns
+/// come from paused programs, and fewer turns are served than at the
+/// code's default, 1 (docs/design/thunderagent.md, item 7).
+#[test]
+fn counting_idle_programs_for_less_pauses_more_and_serves_less() {
+    let run = |w: &str| paper("tr=1", &["g=3.3e-9", "S=3968", w]);
+    let resumed =
+        |r: &serq::Report| r.observe("resume_wait").map_or(0, |o| o.count) as f64 / r.turns as f64;
+    let (whole, half) = (run("w=1"), run("w=0.5"));
+    assert!(
+        resumed(&half) > 2.0 * resumed(&whole) && whole.turns > half.turns,
+        "resumed/turn: w 1 {}, w 0.5 {}; turns: {} against {}",
+        resumed(&whole),
+        resumed(&half),
+        whole.turns,
+        half.turns
+    );
+}
