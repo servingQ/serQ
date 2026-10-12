@@ -729,12 +729,13 @@ fn lpm_admits_the_longest_cached_chain_first() {
     assert_eq!(of(&lpm, "got", 2), 1200.0, "{}", lpm.text());
 }
 
-/// A queue's entry keys the session's own context by the request's
-/// identity, `serial`, as an engine's request id: its header may read it,
-/// and no other session attribute (examples/multi-turn/thunderagent.sq).
+/// A queue's entry keys the session's own context by the session's
+/// number, `serial`: a `prefix` key reads it, and no other session
+/// attribute, and no other part of the header
+/// (examples/multi-turn/thunderagent.sq).
 #[test]
 fn an_entry_keys_its_prefix_by_the_requests_serial() {
-    let entry = |key: &str| {
+    let entry = |key: &str, units: &str| {
         format!(
             r#"
         queue E : decode {{
@@ -743,7 +744,7 @@ fn an_entry_keys_its_prefix_by_the_requests_serial() {
           pool reqs on E {{ }}
           pool kv on E.gpu {{ block 16; }}
           decode (prompt) {{
-            hold kv (cost(kv, prompt)), reqs (cost(reqs, 1)) prefix (0: 32, {key}: inf) {{
+            hold kv (cost(kv, {units})), reqs (cost(reqs, 1)) prefix (0: 32, {key}: inf) {{
               run E prefill (cost(E, prompt)) growing kv;
             }} cache (cost(kv, reqs, prompt));
           }}
@@ -754,14 +755,26 @@ fn an_entry_keys_its_prefix_by_the_requests_serial() {
         )
     };
     serq::check_source(
-        &common::main_source(&entry("serial")),
+        &common::main_source(&entry("serial", "prompt")),
         &common::horizon(10.0),
     )
     .unwrap();
-    let e = serq::check_source(
-        &common::main_source(&entry("other")),
-        &common::horizon(10.0),
-    )
-    .unwrap_err();
-    assert!(e.contains("other"), "{e}");
+    let refused = |key: &str, units: &str| {
+        serq::check_source(
+            &common::main_source(&entry(key, units)),
+            &common::horizon(10.0),
+        )
+        .unwrap_err()
+    };
+    let e = refused("other", "prompt");
+    assert!(
+        e.contains("the header reads `other`") && e.contains("mark `other` `hidden`"),
+        "{e}"
+    );
+    let e = refused("serial", "prompt + serial");
+    assert!(
+        e.contains("the header reads `serial`")
+            && e.contains("A `prefix` key reads `serial` as it is"),
+        "{e}"
+    );
 }

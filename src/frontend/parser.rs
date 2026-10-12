@@ -70,8 +70,8 @@ use std::fmt;
 use crate::frontend::ast::*;
 use crate::frontend::lexer::{LexError, Tok, Token, lex};
 use crate::frontend::link::{
-    AGGREGATES, BUILTIN_ATTRS, CONTEXT_VARS, Constants, FOLDED, LISTS, LResult, LinkError, RENAMED,
-    SCHEDULER_ATTRS, Supplied, supplied, takes_supplied,
+    AGGREGATES, BUILTIN_ATTRS, CONTEXT_VARS, Constants, FOLDED, KEY_ATTRS, LISTS, LResult,
+    LinkError, RENAMED, SCHEDULER_ATTRS, Supplied, supplied, takes_supplied,
 };
 use crate::frontend::queue::{self, QueueDecl};
 use crate::ir::{DistKind, Fun};
@@ -1317,6 +1317,32 @@ fn collect_entry(
     }
 }
 
+/// How an entry that reads `n` from outside it gets it: as a parameter, or,
+/// when the entry is its role's and the role fixes the parameters, from a
+/// `hidden` attribute; a `prefix` key reads the `KEY_ATTRS` as they are.
+fn pass_help(q: &QueueDecl, e: &queue::Entry, n: &str, header: bool) -> String {
+    let fixed = queue::role_of_verb(&e.verb, e.from.is_some())
+        .is_some_and(|r| q.roles.iter().any(|x| x == r.name));
+    let mut help = match (fixed, header) {
+        (false, true) => format!("Pass `{n}` as a parameter"),
+        (false, false) => {
+            format!("pass `{n}` as a parameter or `mark` a moment for the caller to read")
+        }
+        (true, true) => format!(
+            "`{}`'s parameters are its role's: mark `{n}` `hidden` and set a local from it above the hold",
+            e.verb
+        ),
+        (true, false) => format!(
+            "`{}`'s parameters are its role's: mark `{n}` `hidden` or `mark` a moment for the caller to read",
+            e.verb
+        ),
+    };
+    if KEY_ATTRS.contains(&n) {
+        help.push_str(&format!(". A `prefix` key reads `{n}` as it is"));
+    }
+    help
+}
+
 /// The expressions of an entry's body, the holds' headers apart from the
 /// rest: the header is the admission and sees less. Each header comes with
 /// the locals set above its hold (`set kept = prompt;` before it, in the
@@ -1324,6 +1350,8 @@ fn collect_entry(
 /// `fork` that may not have run), the only ones it reads. The index of every reference the body
 /// names (`run nic[k]`, `hold kv`, `release src`) is in `indices`: read as
 /// the body reads, and the only place a `from` name may stand as a number.
+/// A `prefix` key also sees the `KEY_ATTRS`, the session's number by which
+/// it keys the session's own context.
 /// A `Stmt::Unread`'s arguments are in `unread`.
 fn split_reads<'a>(
     stmts: &'a [Stmt],
@@ -1374,7 +1402,9 @@ fn split_reads<'a>(
                     }
                 }
                 for (k, n) in prefix.iter().flatten() {
-                    headers.push((k, above.clone()));
+                    let mut keyed = above.clone();
+                    keyed.extend(KEY_ATTRS.map(String::from));
+                    headers.push((k, keyed));
                     headers.push((n, above.clone()));
                 }
                 if let Some(r) = reuse {
@@ -2147,8 +2177,10 @@ impl Parser {
                                 } else {
                                     format!(
                                         "`{}.{}`: the header reads `{n}`; an entry's header sees its \
-                                         parameters and the queue's pools and stage. Pass `{n}` as a parameter",
-                                        q.name, e.verb
+                                         parameters and the queue's pools and stage. {}",
+                                        q.name,
+                                        e.verb,
+                                        pass_help(q, e, n, true)
                                     )
                                 }
                             });
@@ -2202,9 +2234,10 @@ impl Parser {
                             format!(
                                 "`{}.{}` reads `{n}`, a session attribute set outside the queue: an \
                                  entry sees its parameters, the queue's pools, the context and the \
-                                 request's `hidden` attributes; pass `{n}` as a parameter or `mark` \
-                                 a moment for the caller to read",
-                                q.name, e.verb
+                                 request's `hidden` attributes; {}",
+                                q.name,
+                                e.verb,
+                                pass_help(q, e, n, false)
                             ),
                         );
                     }
@@ -4247,9 +4280,6 @@ impl Parser {
                 || in_context(n)
                 || (!header && n == "now")
                 || q.registers.iter().any(|r| r == n)
-                // the request's identity, which an engine has as its request
-                // id: a `prefix` keys the session's own context by it
-                || n == "serial"
         };
         // an L2 queue's pool and stage are every entry's to read and copy
         // through (std/kvt's `l2_load`, `l2_store`)

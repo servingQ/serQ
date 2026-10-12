@@ -536,12 +536,13 @@ none may draw.
 
 An entry sees its own. Its header — the units, `reserve`, `reuse`, the
 `at admission` bindings, the `prefix` — reads the parameters, the queue's
-pools and stage, the constants, `cached` and `computed`, the request's
-identity `serial` (an engine's request id, by which a `prefix` keys the
-session's own context), and what the entry sets above the
+pools and stage, the constants, `cached` and `computed`, and what the
+entry sets above the
 hold, as a server's header reads an attribute set before it (`set kept =
 prompt;` before it, or in both arms of a `branch`; not in a loop or `fork`
-that may not have run). A local set only in the hold's body or after it is
+that may not have run); a `prefix` key also reads `serial`, the session's
+number, so that an entry keys the session's own context (`prefix (system:
+S, serial: inf)`) whose role fixes its parameters. A local set only in the hold's body or after it is
 refused; one also set above is read at its latest value: after a
 preemption, the one the body set (this is what `kept` relies on). Its body
 also reads `now`, what it
@@ -636,7 +637,9 @@ reads (an attribute, or the expression) and its value; a segment of
 length 0 is left out. A key names content: it and its length read
 attributes and numbers, not the state, the clock, a draw or `cached`
 (the linker refuses one). Without the clause the chain is `(serial: ∞)`,
-the session's own; written out, that chain does not link. Only the last
+the session's own; written out, that chain does not link, and a chain
+whose other segments are of length 0 in a run is the session's own there
+(`prefix (system: S, serial: inf)` with `S` 0). Only the last
 segment may be endless, and a hold with `prefix` has `cache` (else it
 reads and keeps nothing, and does not link). An engine's request writes
 its chain as its first item, `prefix (k: n, …);` (*An engine's
@@ -1402,9 +1405,9 @@ that program's paths ([use cases](use-cases/index.md), `docs/lean.md`).
 | `multi-turn/thunderagent.sq` | ThunderAgent's router in TR mode in front of two vLLM replicas, a fixed number of agents at once ([use case](use-cases/thunderagent.md)) | the source (ThunderAgent at 7ddc861), read; `tests/thunderagent.rs` against the router's default mode; no oracle |
 | `multi-turn/vllm.sq` | vLLM v1's engine under a multi-turn agent workload | its engine is the other vLLM workloads' (`tests/workloads.rs`) |
 | `multi-turn/vllm_lmcache.sq` | `vllm.sq` with an LMCache server as its L2 (`queue lmc : l2`, `kvt.l2_load`, `kvt.l2_store`) | the source (vLLM at 0c87a197); `tests/kvt_l2.rs`; no scheduler oracle |
-| `multi-turn/vllm_system_prompt.sq` | `vllm.sq` serving the sessions of `M` products, each with its own system prompt, shared across sessions (its request's `prefix (product: system, session: inf);`) | the source (vLLM at 0c87a197); `tests/shared_prefix.rs`; no scheduler oracle |
+| `multi-turn/vllm_system_prompt.sq` | `vllm.sq` serving the sessions of `M` products, each with its own system prompt, shared across sessions (its request's `prefix (product: system, serial: inf);`) | the source (vLLM at 0c87a197); `tests/shared_prefix.rs`; no scheduler oracle |
 | `single-turn/vllm_single_turn.sq`, `multi-turn/vllm_chat.sq`, `subagent/vllm_subagents.sq` | the same engine under a single-turn, a chat and an approximated subagent workload ([use case](use-cases/workloads.md)) | `tests/workloads.rs` |
-| `oracle/vllm_shared_prompt.sq` | `vllm_replay.sq` with a system prompt every session shares (its request's `prefix (product: system, session: inf);`), on the scenario `tools/oracle/shared_trace` | the upstream oracle, `tests/vllm_cache.rs`; no Lean theorem |
+| `oracle/vllm_shared_prompt.sq` | `vllm_replay.sq` with a system prompt every session shares (its request's `prefix (product: system, serial: inf);`), on the scenario `tools/oracle/shared_trace` | the upstream oracle, `tests/vllm_cache.rs`; no Lean theorem |
 | `oracle/vllm_request.sq` | one vLLM v1 request on the step clock, compiled per scenario to `tools/oracle/{alone,chunked,hol,longchunk,mixed,preempt,seqcap}.ir.json` | the upstream oracle ([vLLM correspondence](#7-vllm-v1-as-a-serq-program)), `tests/vllm_oracle.rs`, the Lean theorems generated from the same IR |
 | `replay/vllm_replay.sq` | vLLM v1 on the A100 testbed replaying the short-context trace ([A100 testbed](#8-vllm-on-the-a100-testbed)) | the prefix-cache oracle `tools/oracle/cache_trace` (`tests/vllm_cache.rs`, theorem `vllm_cache_trace`) |
 | `pd-disaggregation/llmd_nixl_pull.sq` | llm-d's prefill/decode disaggregation with the NIXL connector, two prefill and two decode instances ([use case](use-cases/pd.md)) | the source (llm-d at 8a2f37d, the router at 13eebdb, vLLM at 0c87a197), `tests/pd_semantics.rs`; no scheduler oracle |

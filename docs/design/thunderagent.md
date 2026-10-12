@@ -263,11 +263,20 @@ that is worth, and the program has an argument for each:
    replica its count is (k − 1) × S above what vLLM holds. The wiki's
    capacity subtracts it (`count_shared` 0), but the code never computes
    that subtraction. `S` is its length. The replica's request names its
-   prompt as two segments, `prefix (0: S, serial: inf)`: the system prompt
-   every program shares, then the program's own context. Its cache keeps
-   the first once, allocated once however many requests read it (vLLM's
-   `ref_cnt`), and evicts it like any block when nobody does
-   (`examples/multi-turn/vllm_system_prompt.sq`).
+   prompt as two segments, `prefix (system: S, serial: inf)`: the system
+   prompt every program shares, then the program's own context
+   (`examples/multi-turn/vllm_system_prompt.sq`). Its cache keeps the
+   first once, allocated once however many requests read it (vLLM's
+   `ref_cnt`), from the first request on a replica that ends: serQ's
+   cache takes a hold's blocks when it ends, vLLM's when it allocates
+   them, so the requests a replica admits before then each compute their
+   own copy (a dozen in the first second of a run, inside the warm-up).
+   Once cached it is never evicted here: every request's chain starts
+   with it, an admission reads it before it evicts, and the cache evicts
+   a chain's last blocks first, so it outlives every context cached
+   after it (no request missed it in any run of the tables below, nor
+   with `blocks` 1 200). It behaves as the constant prefix it stood for
+   before the cache was shared.
 4. **The tool time.** While a program calls a tool its KV is held and the
    GPU does not run it. The longer the call, the fewer programs TR mode
    keeps running for the same KV.
@@ -342,7 +351,7 @@ programs, with hit rates falling to 30 % and 93 %:
 - **The absolute steps/min** are within a fifth of Fig. 4a's for TR mode
   (307-310 against 370-382) and about a third below for default mode
   (99-101 against 140-162), with `g` at 3.3 ns; at 1.1 ns default mode is
-  above the paper's (183-187). The preset's constants are estimates, so
+  above the paper's (183-186). The preset's constants are estimates, so
   this agreement is not a check.
 - **A few trajectories end at a preemption.** At the example's scale a
   preempted request that has grown past what the replica's KV holds
@@ -355,10 +364,9 @@ What the program does not reproduce:
   lengths, its output lengths, its coding tools' times, its system
   prompts' length or the vLLM version, so the program cannot be fitted
   to one.
-- **Sharing beyond one prompt.** `S` is one prefix every program shares
-  and every replica keeps. Programs that share part of a task, or a
-  prompt a replica may evict, need a shared prefix cache
-  (`shared-prefix-cache.md`); serQ's cache is per session otherwise.
+- **Sharing beyond one prompt.** `S` is one prefix every program shares,
+  which no replica evicts in these runs. Programs that share part of a
+  task are not written.
 
 ## What the program still does not write
 

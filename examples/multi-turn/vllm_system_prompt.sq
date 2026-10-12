@@ -6,7 +6,7 @@
 // and a block several requests read is allocated once (`ref_cnt`,
 // block_pool.py:754-768) and goes back to the free queue only when the last
 // of them frees it (block_pool.py:776-796). The request says what its
-// prompt is made of, its first item: `prefix (product: system, session:
+// prompt is made of, its first item: `prefix (product: system, serial:
 // inf)`, the product's system prompt, then the session's own context. The
 // engine is `vllm.sq`'s, the request's segments named; the workload is
 // `vllm.sq`'s with a system prompt in front.
@@ -39,14 +39,14 @@ fn main() {
     reqs cap max_seqs;
     tokens cap B;
     // `vllm.sq`'s request. Its prompt is the system prompt of `product`,
-    // `system` tokens long, then the context of `session`: the cache reads
+    // `system` tokens long, then the session's own context: the cache reads
     // the first across sessions, the second within one. `known` is every
     // token it has (after a preemption, the position it had reached plus
     // the token sampled there, scheduler.py:1560-1561); `reused` is what
     // the prefix cache holds of it in full blocks, never the last token
     // (kv_cache_manager.py:289-300).
-    request (prompt, output, product, system, session) {
-      prefix (product: floor(system, bs), session: inf);   // vLLM shares full blocks
+    request (prompt, output, product, system) {
+      prefix (product: floor(system, bs), serial: inf);   // vLLM shares full blocks
       set kept = prompt;
       at admission {
         known = max(kept, computed + 1);
@@ -102,6 +102,6 @@ fn main() {
   // A turn is one request to the engine.
   server {
     set prompt = S + K + n;
-    vllm (prompt, o, product, S, serial);
+    vllm (prompt, o, product, S);
   }
 }

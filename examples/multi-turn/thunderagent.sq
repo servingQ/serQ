@@ -24,6 +24,7 @@ let bs = 16;           // block_size
 let c0 = 0;            // fixed cost per iteration (s)
 let buffer = 100;      // BUFFER_PER_PROGRAM: decode headroom per program (tokens)
 let p = 0.9;           // the agent continues after a turn
+let system = 0;        // the key of the system prompt every program shares
 
 fn main() {
   let tr = args.number("tr", 1);             // 1: --router tr, 0: --router default
@@ -51,8 +52,9 @@ fn main() {
   // examples/pd-disaggregation/llmd_nixl_pull.sq's local decoder without
   // its max_model_len cap. A request's prompt is the shared system prompt,
   // then the program's own context: the cache shares the first across
-  // programs, allocated once however many read it (vLLM's ref_cnt), and
-  // keeps the second per program (examples/multi-turn/vllm_system_prompt.sq).
+  // programs, allocated once however many read it (vLLM's ref_cnt) once
+  // a request that read it has ended, and keeps the second per program
+  // (examples/multi-turn/vllm_system_prompt.sq).
   queue E[J] : decode {
     device gpu { compute (t) = t * a; hbm (k) = omega + beta * k; kv cap blocks * bs; }
     engine on gpu {
@@ -69,7 +71,7 @@ fn main() {
     decode (prompt) {
       set kept = prompt;   // the most tokens an attempt had: a preemption keeps the outputs
       hold kv (cost(kv, min(known, reused + budget_left(E)))) reserve (cost(kv, known)), reqs (cost(reqs, 1))
-           prefix (0: S, serial: inf)
+           prefix (system: S, serial: inf)
            at admission (known = max(kept, computed + 1),
                          reused = min(cachedin(kv), floor(known - 1, bs))) {
         set kept = known;
