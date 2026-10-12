@@ -128,7 +128,12 @@ that the server may decide on it.
 Before it is revealed, these are link errors when they read it, or read an
 attribute the server set from it (`set long = o > 100;`): a `branch` or `while`
 condition, a `choose`, a `grow` or `load` amount, or the index that picks a pool or
-stage. An attribute set from it is revealed with it.
+stage. An attribute set from it is revealed with it. What the workload sets
+from it before a request counts as set from it as well, in `init`, in `turn`
+(`turn { set long = o > 100; }` hands the server the same unrevealed length)
+or in the session before its `turn`. A request's end reveals the turn's
+outputs to the workload: the session's statements after it read the turn
+that has ended (`set K = K + n + o;`), until it sets a hidden attribute again.
 
 Paths join conservatively: after a branch, the attribute counts as revealed
 only if both arms reveal it, and a loop's body may not run at all. Loop-carried
