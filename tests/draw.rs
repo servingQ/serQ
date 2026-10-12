@@ -10,7 +10,7 @@ mod common;
 use serq::ir::Program;
 use serq::view::deployment::{self, End};
 use serq::view::figure::{BoxStyle, Figure, StationKind};
-use serq::{compile_drawn_source_at, compile_source, program_path};
+use serq::{compile_drawn_source, compile_source, program_path};
 
 const PROGRAMS: [&str; 8] = [
     "mg1",
@@ -26,8 +26,7 @@ const PROGRAMS: [&str; 8] = [
 fn program(name: &str) -> Program {
     let path = program_path(name);
     let src = std::fs::read_to_string(&path).unwrap();
-    compile_drawn_source_at(&src, path.parent(), &common::horizon(10.0))
-        .unwrap_or_else(|e| panic!("{name}: {e}"))
+    compile_drawn_source(&src, &common::horizon(10.0)).unwrap_or_else(|e| panic!("{name}: {e}"))
 }
 
 fn stage(p: &Program, name: &str) -> usize {
@@ -749,8 +748,7 @@ fn a_server_guard_on_the_workload_draws_both_arms() {
         }
         server { branch (first) { run big (cost(big, n)); } else { run small (cost(small, n)); } }
         ";
-    let p =
-        compile_drawn_source_at(&common::main_source(src), None, &common::horizon(100.0)).unwrap();
+    let p = compile_drawn_source(&common::main_source(src), &common::horizon(100.0)).unwrap();
     let net = deployment::project(&p);
     assert_eq!(drawn_stages(&p, &net), ["big", "small"]);
 }
@@ -1218,7 +1216,7 @@ fn docs_assets_are_current() {
             .pop()
             .unwrap_or_else(|| panic!("docs/assets/{name} has no program: {stem}.sq"));
         let src = std::fs::read_to_string(&src_path).unwrap();
-        let p = serq::compile_drawn_file(&src, &src_path, &common::horizon(10.0))
+        let p = serq::compile_drawn_source(&src, &common::horizon(10.0))
             .unwrap_or_else(|e| panic!("{}: {e}", src_path.display()));
         let got = serq::view::svg::render(&deployment::figure(&p));
         if std::env::var("SERQ_BLESS").is_ok() {
@@ -1608,8 +1606,7 @@ fn labels_do_not_overlap() {
     for path in &files {
         let name = path.strip_prefix(root).unwrap().display().to_string();
         let src = std::fs::read_to_string(path).unwrap();
-        let p =
-            serq::compile_file(&common::main_source(&src), path, &common::horizon(10.0)).unwrap();
+        let p = serq::compile_source(&common::main_source(&src), &common::horizon(10.0)).unwrap();
         let f = deployment::figure(&p);
         let boxes: Vec<(f64, f64, f64, &str)> = f
             .items
@@ -1830,7 +1827,7 @@ fn a_while_body_does_not_determine_its_continuation() {
       }
       ",
     );
-    let p = compile_drawn_source_at(&src, None, &common::horizon(10.0)).unwrap();
+    let p = compile_drawn_source(&src, &common::horizon(10.0)).unwrap();
     let net = deployment::project(&p);
     assert!(net.node_of(stage(&p, "c")).is_some(), "zero passes reach c");
 }

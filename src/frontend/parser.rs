@@ -65,10 +65,8 @@
 
 use std::cell::Cell;
 use std::fmt;
-use std::path::{Path, PathBuf};
 
 use crate::frontend::ast::*;
-use crate::frontend::diagnostic::Source;
 use crate::frontend::lexer::{LexError, Tok, Token, lex};
 use crate::frontend::link::{
     AGGREGATES, BUILTIN_ATTRS, CONTEXT_VARS, Constants, FOLDED, FUNCTIONS, LISTS, LResult,
@@ -86,15 +84,10 @@ pub struct ParseError {
     pub line: usize,
     pub col: usize,
     pub msg: String,
-    /// The library the error is in, when it is not in the program.
-    pub origin: Option<Source>,
 }
 
 impl fmt::Display for ParseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if let Some(lib) = &self.origin {
-            write!(f, "{}:", lib.path)?;
-        }
         write!(f, "{}:{}: {}", self.line, self.col, self.msg)
     }
 }
@@ -109,12 +102,8 @@ impl ParseError {
             line: self.line,
             col: self.col,
             len: 1,
-            file: 0,
         };
-        match &self.origin {
-            Some(lib) => format!("{}:{}", lib.path, span.render(&lib.text, &self.msg)),
-            None => span.render(source, &self.msg),
-        }
+        span.render(source, &self.msg)
     }
 }
 
@@ -126,7 +115,6 @@ impl From<LexError> for ParseError {
             line: e.line,
             col: e.col,
             msg: e.msg,
-            origin: None,
         }
     }
 }
@@ -173,16 +161,6 @@ struct Parser {
     /// Uses whose arguments read names a `turn;` in the body
     /// might assign, which only the whole program says: checked at its end.
     deferred: Vec<Deferred>,
-    /// The directory of the program's file, which a `use` reads next to;
-    /// none for a program given as text.
-    base: Option<PathBuf>,
-    /// The libraries read so far (file `n` is `libs[n - 1]`), the
-    /// directory of each, and each one's canonical path, read once.
-    libs: Vec<Source>,
-    lib_dirs: Vec<PathBuf>,
-    /// Each library's directory as the program named it, for display.
-    lib_shown_dirs: Vec<PathBuf>,
-    read: Vec<PathBuf>,
     /// The `def` overrides: the body an expression definition has instead of
     /// its own, and whether the program defined it.
     def_overrides: Vec<(String, String, bool)>,
@@ -356,7 +334,6 @@ struct Deferred {
     name: String,
     line: usize,
     col: usize,
-    file: usize,
     reads: Vec<String>,
     turn: bool,
 }
@@ -375,7 +352,6 @@ struct Expanded {
     name: String,
     line: usize,
     col: usize,
-    file: usize,
 }
 
 /// `def name(x, y) { e }` or `def name(x, y) { statements }`: a name for
@@ -584,54 +560,14 @@ impl Role {
 }
 
 pub fn parse(src: &str) -> PResult<Program> {
-    parse_at(src, None)
+    parse_with(src, &[], &[])
 }
 
-/// Parse a program read from a file in `base`, next to which its `use`s
-/// read their libraries.
-pub fn parse_at(src: &str, base: Option<&Path>) -> PResult<Program> {
-    parse_with(src, base, None, &[], &[])
-}
-
-/// `parse_at`, with the bodies `def` overrides give expression definitions
+/// `parse`, with the bodies `def` overrides give expression definitions
 /// and the constants `let` overrides replace, which may not size a queue family.
-pub fn parse_at_with(
-    src: &str,
-    base: Option<&Path>,
-    defs: &[(String, String)],
-    lets: &[String],
-) -> PResult<Program> {
-    parse_with(src, base, None, defs, lets)
-}
-
-/// Parse the program file `path`, whose text is `src`. The file counts as
-/// read, so a library that `use`s it back is not read into it again.
-pub fn parse_file(src: &str, path: &Path) -> PResult<Program> {
-    parse_file_with(src, path, &[], &[])
-}
-
-/// `parse_file`, with `parse_at_with`'s overrides.
-pub fn parse_file_with(
-    src: &str,
-    path: &Path,
-    defs: &[(String, String)],
-    lets: &[String],
-) -> PResult<Program> {
-    let root = path.canonicalize().ok();
-    parse_with(src, path.parent(), root, defs, lets)
-}
-
-fn parse_with(
-    src: &str,
-    base: Option<&Path>,
-    root: Option<PathBuf>,
-    defs: &[(String, String)],
-    lets: &[String],
-) -> PResult<Program> {
+pub fn parse_with(src: &str, defs: &[(String, String)], lets: &[String]) -> PResult<Program> {
     let toks = lex(src)?;
     let mut p = Parser::new(toks);
-    p.base = base.map(Path::to_path_buf);
-    p.read = root.into_iter().collect();
     p.def_overrides = defs
         .iter()
         .map(|(n, e)| (n.clone(), e.clone(), false))
@@ -664,7 +600,6 @@ fn parse_with(
                     known.join(", ")
                 }
             ),
-            origin: None,
         });
     }
     Ok(prog)
@@ -1630,11 +1565,6 @@ impl Parser {
             defs: vec![],
             expanded: vec![],
             deferred: vec![],
-            base: None,
-            libs: vec![],
-            lib_dirs: vec![],
-            lib_shown_dirs: vec![],
-            read: vec![],
             def_overrides: vec![],
             queues: vec![],
             consts: vec![],
@@ -1674,28 +1604,14 @@ impl Parser {
         self.err_at(self.pos, msg)
     }
 
-    /// The library of file `file`, for an error in it.
-    fn origin(&self, file: usize) -> Option<Source> {
-        file.checked_sub(1).and_then(|i| self.libs.get(i)).cloned()
-    }
-
-    /// `path:` for a place in a library, nothing in the program.
-    fn place(&self, file: usize, line: usize, col: usize) -> String {
-        match self.origin(file) {
-            Some(lib) => format!("{}:{line}:{col}", lib.path),
-            None => format!("{line}:{col}"),
-        }
-    }
-
     fn err_at<T>(&self, pos: usize, msg: impl Into<String>) -> PResult<T> {
         let t = &self.toks[pos];
         let mut msg = msg.into();
         for e in self.expanded.iter().rev() {
             if e.start <= pos && pos < e.end {
                 msg.push_str(&format!(
-                    "\nnote: in `{}`, used at {}",
-                    e.name,
-                    self.place(e.file, e.line, e.col)
+                    "\nnote: in `{}`, used at {}:{}",
+                    e.name, e.line, e.col
                 ));
             }
         }
@@ -1703,7 +1619,6 @@ impl Parser {
             line: t.line,
             col: t.col,
             msg,
-            origin: self.origin(t.file),
         })
     }
 
@@ -1765,7 +1680,6 @@ impl Parser {
             line: t.line,
             col: t.col,
             len: t.text.chars().count().max(1),
-            file: t.file,
         }
     }
 
@@ -1927,44 +1841,35 @@ impl Parser {
         let mut prog = Program::default();
         let mut in_main = false;
         while *self.peek() != Tok::Eof {
-            if self.toks[self.pos].file == 0 {
-                if self.eat_kw("fn") {
-                    if in_main || prog.has_main {
-                        return self.err("a program has exactly one `fn main()`; nested or duplicate entry points are not allowed");
-                    }
-                    let name = self.ident()?;
-                    if name != "main" {
-                        return self
-                            .err("the entry point is `fn main()`; reusable definitions use `def`");
-                    }
-                    self.expect(&Tok::LParen)?;
-                    self.expect(&Tok::RParen)?;
-                    self.expect(&Tok::LBrace)?;
-                    prog.has_main = true;
-                    in_main = true;
-                    continue;
+            if self.eat_kw("fn") {
+                if in_main || prog.has_main {
+                    return self.err("a program has exactly one `fn main()`; nested or duplicate entry points are not allowed");
                 }
-                if in_main && *self.peek() == Tok::RBrace {
-                    self.advance();
-                    in_main = false;
-                    continue;
+                let name = self.ident()?;
+                if name != "main" {
+                    return self
+                        .err("the entry point is `fn main()`; reusable definitions use `def`");
                 }
-                if !in_main && !self.is_kw("use") && !self.is_kw("def") && !self.is_kw("let") {
-                    return self.err("executable declarations belong inside `fn main() { … }`; only `use`, `def` and constants belong outside it");
-                }
-                if prog.has_main && !in_main {
-                    return self.err("declarations belong before `fn main()`; its local names are not visible after it");
-                }
+                self.expect(&Tok::LParen)?;
+                self.expect(&Tok::RParen)?;
+                self.expect(&Tok::LBrace)?;
+                prog.has_main = true;
+                in_main = true;
+                continue;
             }
-            if self.toks[self.pos].file != 0 && !self.is_kw("def") && !self.is_kw("use") {
-                return self.err(format!(
-                    "a library holds definitions: found {} where `def` or `use` goes",
-                    self.peek()
-                ));
+            if in_main && *self.peek() == Tok::RBrace {
+                self.advance();
+                in_main = false;
+                continue;
             }
-            let (item, item_file) = (self.pos, self.toks[self.pos].file);
+            if !in_main && !self.is_kw("use") && !self.is_kw("def") && !self.is_kw("let") {
+                return self.err("executable declarations belong inside `fn main() { … }`; only `use`, `def` and constants belong outside it");
+            }
+            if prog.has_main && !in_main {
+                return self.err("declarations belong before `fn main()`; its local names are not visible after it");
+            }
             if self.is_kw("use") {
-                self.use_library()?;
+                self.use_args()?;
                 continue;
             }
             if self.eat_kw("let") {
@@ -2096,16 +2001,6 @@ impl Parser {
             } else {
                 return self.err(format!("unexpected {} at top level", self.peek()));
             }
-            // a library's definition ends in the library: the program does not
-            // finish it, nor it the program's
-            let last = self.toks[self.pos.saturating_sub(1)].file;
-            if last != item_file {
-                return self.err_at(
-                    item,
-                    "this item does not end in the file it starts in: a library's \
-                     definitions are whole",
-                );
-            }
         }
         if in_main {
             return self.err("unclosed `fn main()`; expected `}`");
@@ -2138,7 +2033,7 @@ impl Parser {
                 .find(|e| e.name == "tool" && (e.kind == Kind::Stage || e.meets(&supplied)))
             {
                 let t = &self.toks[e.at];
-                let place = self.place(t.file, t.line, t.col);
+                let place = format!("{}:{}", t.line, t.col);
                 let (is, help) = if e.kind == Kind::Stage {
                     (
                         "a stage declared below it".to_string(),
@@ -2192,7 +2087,6 @@ impl Parser {
         self.check_deferred(&prog, &served)?;
         prog.definitions = std::mem::take(&mut self.definitions);
         prog.cost_records = std::mem::take(&mut self.cost_records).into_iter().collect();
-        prog.libs = self.libs.clone();
         Ok(prog)
     }
 
@@ -2368,13 +2262,11 @@ impl Parser {
                 }
             }
             let queues = std::mem::take(&mut self.queues);
-            let libs = self.libs.clone();
             let expand = |stmts: &mut Vec<Stmt>| -> PResult<()> {
                 queue::expand(stmts, &queues).map_err(|e| ParseError {
                     line: e.at.line,
                     col: e.at.col,
                     msg: e.msg,
-                    origin: e.at.file.checked_sub(1).and_then(|i| libs.get(i)).cloned(),
                 })
             };
             if let Some((_, s)) = &mut self.wl_session {
@@ -2540,7 +2432,6 @@ impl Parser {
                     line: u.line,
                     col: u.col,
                     msg: live_message(&u.name, "", v),
-                    origin: self.origin(u.file),
                 });
             }
             let found = u.reads.iter().find_map(|n| {
@@ -2560,79 +2451,29 @@ impl Parser {
                          another name first and pass that",
                         u.name
                     ),
-                    origin: self.origin(u.file),
                 });
             }
         }
         Ok(())
     }
 
-    /// `use "path";`: the library's definitions, read from `path` next to
-    /// the file the `use` is in, in place of the `use`. A library read once
-    /// is not read again.
-    fn use_library(&mut self) -> PResult<()> {
+    /// `use "std/args";`: the program's inputs. A program is one file, so
+    /// no other `use` reads anything.
+    fn use_args(&mut self) -> PResult<()> {
         let at = self.pos;
         self.advance();
         let path = self.string()?;
         self.expect(&Tok::Semi)?;
-        if path == "std/args" {
-            self.args_imported = true;
-            return Ok(());
-        }
-        let file = self.toks[at].file;
-        let dir = match file.checked_sub(1) {
-            Some(i) => Some(self.lib_dirs[i].clone()),
-            None => self.base.clone(),
-        };
-        let Some(dir) = dir else {
+        if path != "std/args" {
             return self.err_at(
                 at,
                 format!(
-                    "`use \"{path}\"` reads a file next to the program, and this program was \
-                     given as text"
+                    "`use \"{path}\"`: `use` reads only `std/args`; a program is one file, \
+                     so write its definitions in it"
                 ),
             );
-        };
-        let full = match file.checked_sub(1) {
-            Some(i) => self.lib_shown_dirs[i].join(&path),
-            None => dir.join(&path),
-        };
-        let canonical = full
-            .canonicalize()
-            .or_else(|e| self.err_at(at, format!("cannot read `{path}`: {e}")))?;
-        let mut toks = vec![];
-        if !self.read.contains(&canonical) {
-            let text = std::fs::read_to_string(&canonical)
-                .or_else(|e| self.err_at(at, format!("cannot read `{path}`: {e}")))?;
-            let shown = full.display().to_string();
-            self.lib_shown_dirs
-                .push(full.parent().map(Path::to_path_buf).unwrap_or_default());
-            let lib = Source { path: shown, text };
-            toks = lex(&lib.text).map_err(|e| ParseError {
-                line: e.line,
-                col: e.col,
-                msg: e.msg,
-                origin: Some(lib.clone()),
-            })?;
-            toks.pop(); // its end of file
-            let id = self.libs.len() + 1;
-            for t in &mut toks {
-                t.file = id;
-            }
-            self.libs.push(lib);
-            self.lib_dirs.push(
-                canonical
-                    .parent()
-                    .map(Path::to_path_buf)
-                    .unwrap_or_default(),
-            );
-            self.read.push(canonical);
         }
-        if self.toks.len() + toks.len() > MAX_TOKENS {
-            return self.err_at(at, "the libraries are more than a program can hold");
-        }
-        self.toks.splice(at..self.pos, toks);
-        self.pos = at;
+        self.args_imported = true;
         Ok(())
     }
 
@@ -2666,7 +2507,7 @@ impl Parser {
         self.own_name(at, name, &d.described())?;
         if let Some(e) = self.declared.iter().find(|e| e.meets(&d)) {
             let t = &self.toks[e.at];
-            let place = self.place(t.file, t.line, t.col);
+            let place = format!("{}:{}", t.line, t.col);
             return self.err_at(
                 at,
                 one_word(&d, &format!("{} at {place}", e.described()), &e.help(&d)),
@@ -2691,7 +2532,7 @@ impl Parser {
             self.definitions
                 .iter()
                 .find(|(n, _)| n == name && !prog.lets.iter().any(|(l, _)| l == n))
-                .map(|(_, span)| self.place(span.file, span.line, span.col))
+                .map(|(_, span)| format!("{}:{}", span.line, span.col))
         };
         let bound_at = |name: &str| {
             self.header_binds
@@ -2699,7 +2540,7 @@ impl Parser {
                 .find(|(_, n)| n == name)
                 .map(|(at, _)| {
                     let t = &self.toks[*at];
-                    self.place(t.file, t.line, t.col)
+                    format!("{}:{}", t.line, t.col)
                 })
         };
         for d in self.declared.iter().filter(|d| d.kind != Kind::Constant) {
@@ -2840,22 +2681,16 @@ impl Parser {
             self.def_overrides[i].2 = true;
             let text = self.def_overrides[i].1.clone();
             let place = &self.toks[at];
-            let (line, col, file) = (place.line, place.col, place.file);
+            let (line, col) = (place.line, place.col);
             body = lex(&text)
                 .map_err(|e| ParseError {
                     line,
                     col,
                     msg: format!("the `def` override `{name}`: {}", e.msg),
-                    origin: None,
                 })?
                 .into_iter()
                 .filter(|t| t.tok != Tok::Eof)
-                .map(|t| Token {
-                    line,
-                    col,
-                    file,
-                    ..t
-                })
+                .map(|t| Token { line, col, ..t })
                 .collect();
         }
         if body.is_empty() && !stmts {
@@ -3062,8 +2897,7 @@ impl Parser {
     /// `a + b * 2` inside.
     fn expand(&mut self, i: usize) -> PResult<()> {
         let at = self.pos;
-        let (use_line, use_col, use_file) =
-            (self.toks[at].line, self.toks[at].col, self.toks[at].file);
+        let (use_line, use_col) = (self.toks[at].line, self.toks[at].col);
         self.advance();
         self.advance();
         let mut args: Vec<Vec<Token>> = vec![];
@@ -3165,7 +2999,6 @@ impl Parser {
                 name: d.name.clone(),
                 line: use_line,
                 col: use_col,
-                file: use_file,
                 reads,
                 turn,
             });
@@ -3185,7 +3018,6 @@ impl Parser {
             tok,
             line: like.line,
             col: like.col,
-            file: like.file,
             text: text.into(),
             leading: vec![],
         };
@@ -3261,7 +3093,6 @@ impl Parser {
             name: d.name.clone(),
             line: use_line,
             col: use_col,
-            file: use_file,
         });
         self.toks.splice(at..end, out);
         self.pos = at;

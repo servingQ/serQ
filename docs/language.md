@@ -27,10 +27,9 @@ prefills in the compute its decode step leaves is a stage kind of its own
 program  := (constant | definition | import)* fn main ( ) { item* }
 constant := let NAME = expr ;
 definition := def NAME ( NAME , ... ) ( { expr } | block )
-import   := use "file.sq" ; | use "std/args" ;
+import   := use "std/args" ;                 -- a program is one file
 item     := let NAME = expr ;
           | let NAME = args.number ( "argument_name" , expr ) ;
-          | use "file.sq" ;                  -- the definitions of a library, next to this file
           | def NAME ( NAME , ... ) { expr }   -- a name for an expression: NAME ( arg , ... )
           | def NAME ( NAME , ... ) block      -- a name for statements: NAME ( arg , ... ) ;
           | pool NAME [ '[' N ']' ] { poolopt* }
@@ -215,8 +214,7 @@ contract applies to direct JSON IR as well as source. See
 Source programs declare exactly one `fn main()`. It constructs the deployment
 once; each arriving session executes its session body. Execution settings are supplied externally.
 Only imports, definitions and fixed constants may precede `main`. Declarations
-after it and nested or duplicate entry points are refused. Libraries provide
-definitions and imports, never an executable entry point.
+after it and nested or duplicate entry points are refused.
 
 A plain `let` cannot be replaced externally. With `use "std/args";`, a
 `let` inside `main` may declare an input using

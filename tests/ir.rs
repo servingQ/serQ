@@ -6,7 +6,7 @@ mod common;
 
 use std::path::Path;
 
-use serq::{Overrides, Program, compile_source, compile_source_at, run_ir, run_source};
+use serq::{Overrides, Program, compile_source, run_ir, run_source};
 
 fn programs() -> Vec<std::path::PathBuf> {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples");
@@ -35,12 +35,7 @@ fn short() -> Overrides {
 fn json_round_trip_is_exact() {
     for path in programs() {
         let src = std::fs::read_to_string(&path).unwrap();
-        let p = compile_source_at(
-            &common::main_source(&src),
-            path.parent(),
-            &common::horizon(10.0),
-        )
-        .unwrap();
+        let p = compile_source(&common::main_source(&src), &common::horizon(10.0)).unwrap();
         let j = p.to_json();
         let q = Program::from_json(&j).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
         assert_eq!(j, q.to_json(), "{}", path.display());
@@ -79,7 +74,7 @@ fn ir_runs_like_text() {
         let from_text = run_source(&common::main_source(&src), &short(), base)
             .unwrap()
             .text();
-        let p = compile_source_at(&common::main_source(&src), base, &short()).unwrap();
+        let p = compile_source(&common::main_source(&src), &short()).unwrap();
         let q = Program::from_json(&p.to_json()).unwrap();
         let from_ir = run_ir(&q, base).unwrap().text();
         assert_eq!(from_text, from_ir, "{}", path.display());

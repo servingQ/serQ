@@ -675,7 +675,7 @@ pub struct RunOpts {
 
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct Program {
-    /// The source declares its executable entry point. Libraries have none.
+    /// The source declares its executable entry point.
     pub has_main: bool,
     /// (external argument name, declaration index in `lets`), from std/args.
     /// A name can be shadowed; inputs belong to declarations, not spellings.
@@ -684,8 +684,6 @@ pub struct Program {
     pub definitions: Vec<(String, Span)>,
     /// Composite Cost names and resource fields; source-only namespace data.
     pub cost_records: Vec<(String, Vec<String>)>,
-    /// The libraries `use` read, for the spans that point into them.
-    pub libs: Vec<crate::frontend::diagnostic::Source>,
     pub lets: Vec<(String, Expr)>,
     pub pools: Vec<PoolDecl>,
     pub stages: Vec<StageDecl>,

@@ -57,18 +57,7 @@ fn format_code(tokens: &[&Token]) -> String {
 /// or end of the file or of a block. Formatting twice has the same result as
 /// formatting once.
 pub fn format(src: &str) -> Result<String, String> {
-    format_at(src, None)
-}
-
-/// Format the text of a program file in `base`, whose `use`s are read to
-/// check the text parses.
-pub fn format_at(src: &str, base: Option<&std::path::Path>) -> Result<String, String> {
-    format_with(src, &|s| parser::parse_at(s, base))
-}
-
-/// Format `src`, the text of the program file `path`.
-pub fn format_file(src: &str, path: &std::path::Path) -> Result<String, String> {
-    format_with(src, &|s| parser::parse_file(s, path))
+    format_with(src, &parser::parse)
 }
 
 fn format_with(

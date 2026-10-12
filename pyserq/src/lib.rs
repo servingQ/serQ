@@ -451,7 +451,7 @@ fn draw(
     overriding(&mut ov, sets, defs)?;
     let ir = match (&path, source) {
         (Some(p), None) => serq::load_drawn(p, &ov),
-        (None, Some(src)) => serq::compile_drawn_source_at(src, None, &ov),
+        (None, Some(src)) => serq::compile_drawn_source(src, &ov),
         _ => {
             return Err(PyValueError::new_err(
                 "draw takes exactly one of a path and a source",

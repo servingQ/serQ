@@ -7,7 +7,7 @@ mod common;
 use std::collections::HashMap;
 
 use serq::frontend::parser::parse_expr;
-use serq::{Overrides, compile_source_at, program_path, run_ir, run_source};
+use serq::{Overrides, compile_source, program_path, run_ir, run_source};
 
 fn run(src: &str) -> serq::Report {
     run_source(&common::main_source(src), &common::horizon(100.0), None)
@@ -172,7 +172,7 @@ fn the_client_s_are_pd_batching_s_hand_written_ones() {
             lets: vec![("mode".into(), parse_expr(&mode.to_string()).unwrap())],
             ..Default::default()
         };
-        let p = compile_source_at(&src, path.parent(), &ov).unwrap();
+        let p = compile_source(&src, &ov).unwrap();
         let r = run_ir(&p, path.parent()).unwrap();
         for name in ["tpot", "response"] {
             let (mine, client) = (r.observe(name).unwrap(), r.client(name).unwrap());

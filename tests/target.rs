@@ -148,29 +148,22 @@ fn observable_serve_keys_name_the_programmable_scheduler() {
 #[test]
 fn a_constant_chunk_cap_is_refused_and_the_rule_taken() {
     let src = std::fs::read_to_string(root().join("examples/multi-turn/vllm.sq")).unwrap();
-    let dir = root().join("examples/multi-turn");
     let rule = "let threshold = running.count + waiting.count > 1 ? chunk_cap : inf;";
     assert!(src.contains(rule), "the program's chunk moved");
-    let p = serq::compile_source_at(
-        &common::main_source(&src),
-        Some(&dir),
-        &common::horizon(10.0),
-    )
-    .unwrap();
+    let p = serq::compile_source(&common::main_source(&src), &common::horizon(10.0)).unwrap();
     assert_eq!(
         serq::target::vllm(&p).unwrap()["config"]["long_prefill_token_threshold"],
         0
     );
     let mut ov = common::horizon(10.0);
     ov.set("chunk_cap", "512").unwrap();
-    let p = serq::compile_source_at(&common::main_source(&src), Some(&dir), &ov).unwrap();
+    let p = serq::compile_source(&common::main_source(&src), &ov).unwrap();
     assert_eq!(
         serq::target::vllm(&p).unwrap()["config"]["long_prefill_token_threshold"],
         512
     );
-    let p = serq::compile_source_at(
+    let p = serq::compile_source(
         &common::main_source(&src.replace(rule, "let threshold = 512;")),
-        Some(&dir),
         &common::horizon(10.0),
     )
     .unwrap();
@@ -189,7 +182,6 @@ fn a_constant_chunk_cap_is_refused_and_the_rule_taken() {
 #[test]
 fn the_adaptive_chunk_cap_is_taken_and_another_share_refused() {
     let src = std::fs::read_to_string(root().join("examples/multi-turn/vllm.sq")).unwrap();
-    let dir = root().join("examples/multi-turn");
     let rule = "let threshold = running.count + waiting.count > 1 ? chunk_cap : inf;";
     assert!(src.contains(rule), "the program's chunk moved");
     let target_as = |count: &str, threshold: &str| {
@@ -197,12 +189,7 @@ fn the_adaptive_chunk_cap_is_taken_and_another_share_refused() {
             rule,
             &format!("let r = {count}; let threshold = {threshold};"),
         );
-        let p = serq::compile_source_at(
-            &common::main_source(&src),
-            Some(&dir),
-            &common::horizon(10.0),
-        )
-        .unwrap();
+        let p = serq::compile_source(&common::main_source(&src), &common::horizon(10.0)).unwrap();
         serq::target::vllm(&p)
     };
     let target = |cap: &str| {

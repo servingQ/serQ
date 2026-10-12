@@ -22,7 +22,7 @@ mod common;
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
-use serq::{compile_source_at, program_path, run_ir};
+use serq::{compile_source, program_path, run_ir};
 
 fn dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tools/oracle/serve")
@@ -73,14 +73,10 @@ fn ir(name: &str) -> serq::Program {
             ]
         })
         .collect();
-    compile_source_at(
-        &common::main_source(&src),
-        program_path("vllm_request").parent(),
-        &ov,
-    )
-    .unwrap()
-    .with_sessions(&sessions)
-    .unwrap()
+    compile_source(&common::main_source(&src), &ov)
+        .unwrap()
+        .with_sessions(&sessions)
+        .unwrap()
 }
 
 fn scenarios() -> Vec<String> {

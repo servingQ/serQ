@@ -28,7 +28,7 @@ use std::path::Path;
 
 use serde_json::Value;
 use serq::frontend::parser;
-use serq::{Overrides, compile_source_at, program_path, run_ir};
+use serq::{Overrides, compile_source, program_path, run_ir};
 
 fn dir() -> std::path::PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tools/oracle")
@@ -76,8 +76,7 @@ fn oracle_ir(name: &str) -> serq::Program {
             ]
         })
         .collect();
-    // its `use` reads the library next to the program
-    compile_source_at(&common::main_source(&src), path.parent(), &ov)
+    compile_source(&common::main_source(&src), &ov)
         .unwrap()
         .with_sessions(&sessions)
         .unwrap()

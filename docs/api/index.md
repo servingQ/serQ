@@ -69,5 +69,4 @@ constructs that say it and a program that uses them.
 | what the scheduler may not read | [`hidden`](workload.md#hidden) | every vLLM program hides the output length (`o`; `out` in the replay) |
 | prefill/decode disaggregation | [`lease`](statements.md#hold), [`release`](statements.md#release), [`load`](statements.md#load), [`transfer … from … to`](serving.md#transfer-from-to) | [the P/D use case](../use-cases/pd.md) |
 | a routing policy | [`choose`](statements.md#choose), [observables](functions.md#observables) | `examples/multi-turn/routing.sq` |
-| definitions shared by several programs | [`def`](program.md#def), [`use`](program.md#use) | `tests/library.rs` |
 | what to measure or check | [`observe`](statements.md#observe), [`gauge`](program.md#gauge), [`claim`](program.md#claim) | [the Kong use case](../use-cases/kong.md) |

@@ -151,13 +151,13 @@ fn an_input_name_does_not_make_an_unrelated_constant_structural() {
 }
 
 #[test]
-fn importing_a_program_cannot_execute_its_main() {
+fn a_program_is_one_file() {
     let f = Fixture::new();
-    f.write("other.sq", "fn main() {  }");
-    f.write("model.sq", "use \"other.sq\"; fn main() {  }");
+    f.write("lib.sq", "def twice(x) { x * 2 }");
+    f.write("model.sq", "use \"lib.sq\"; fn main() {  }");
     let out = f.run(&["check", "model.sq"]);
     assert!(!out.status.success());
-    assert!(String::from_utf8_lossy(&out.stderr).contains("a library holds definitions"));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("`use` reads only `std/args`"));
 }
 
 #[test]
