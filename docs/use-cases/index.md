@@ -14,6 +14,7 @@ the program, what the runs show, and what the program leaves out.
 | [Different workloads](workloads.md) | One engine under single-turn, chat and subagent traffic |
 | [Prefill/decode over NIXL](pd.md) | llm-d's prefill/decode disaggregation with the KV transfer |
 | [FasterTransformer](fastertransformer.md) | Decode-only batches and their queueing cost (`only`) |
+| [ThunderAgent](thunderagent.md) | A router that schedules agents' programs against the KV, pausing idle ones, against the paper's results |
 
 ## Formal verification
 

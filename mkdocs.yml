@@ -101,6 +101,7 @@ nav:
           - Different workloads: use-cases/workloads.md
           - Prefill/decode over NIXL: use-cases/pd.md
           - FasterTransformer: use-cases/fastertransformer.md
+          - "ThunderAgent: program-aware scheduling": use-cases/thunderagent.md
       - Formal verification:
           - Throughput-optimal scheduling (Dai et al.): use-cases/dai.md
           - "RAD: optimal tiling (Bari et al.)": use-cases/bari.md
