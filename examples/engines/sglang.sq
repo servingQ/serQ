@@ -110,6 +110,4 @@ fn main() {
       set fin = 1;
     } cache (cost(reqs, kv, fin == 1 ? prompt + o : prompt));
   }
-
-
 }

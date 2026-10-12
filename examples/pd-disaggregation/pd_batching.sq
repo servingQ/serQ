@@ -197,5 +197,4 @@ fn main() {
   }
 
   server { gw.route(); }
-
 }

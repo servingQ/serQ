@@ -28,7 +28,6 @@ fn main() {
   workload {
     arrive renewal(gap);
     init { set t0 = now; }
-
   }
 
   server {
@@ -43,6 +42,4 @@ fn main() {
 
   // Theorem 2(a) holds for it as for every scheduler.
   claim token_rate: every iteration of fastertransformer (served * (c + a * bmax / b0) <= bmax * now);
-
-
 }

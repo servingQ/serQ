@@ -13,7 +13,6 @@ fn main() {
   workload {
     arrive poisson(Lambda);
     turn { Size work_size = ~exp(1); }
-
   }
 
   server {
@@ -22,6 +21,4 @@ fn main() {
     run svc (s);
     observe wait = now - t0 - S * work_size;
   }
-
-
 }

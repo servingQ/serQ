@@ -36,7 +36,6 @@ fn main() {
       set o = output();
       set k = floor(~uniform(0, N));   // a Poisson stream split at random is Poisson
     }
-
   }
 
   server {
@@ -46,6 +45,4 @@ fn main() {
     observe tpot = (now - t0) / (o - 1);
     observe output_tokens = o;
   }
-
-
 }

@@ -18,7 +18,6 @@ fn main() {
       Size work_size = ~exp(1);
       Size items = ceil(~uniform(1, 5));   // request items
     }
-
   }
 
   server {
@@ -32,6 +31,4 @@ fn main() {
       run svc (processing.svc);
     }
   }
-
-
 }
