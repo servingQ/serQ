@@ -128,6 +128,8 @@ stmt     := turn ;                           -- draw attributes, submit, wait fo
 serving  := transfer [ '[' expr ']' | on STAGE [, STAGE]* ] expr from POOL to POOL ( expr ) ;
                                              -- the KV moves: run link; load; release
           | tool     [ '[' expr ']' | on STAGE [, STAGE]* ] expr ;
+          | kvt.l2_load ( CACHE , POOL , expr , per_token = expr ) ;   -- std/kvt: copy the cache's KV in, the cache keeps it
+          | kvt.l2_store ( POOL , CACHE , expr , per_token = expr ) ;  -- std/kvt: the session's entry in the cache comes to hold expr tokens
 ```
 
 ### Arrivals and the run
@@ -224,7 +226,8 @@ inputs. Defaults and supplied expressions are resolved at link time; the
 result is the same IR as a program written with those values. An input that
 would change a parse-time array size is refused. See [Program](api/program.md)
 for the full input contract. `use "std/kvt";` supplies the KV-transfer
-vocabulary, `kvt.nixl_pull (…)` and `kvt.nixl_push (…)` (below, *Queues*).
+vocabulary, `kvt.nixl_pull (…)`, `kvt.nixl_push (…)`, `kvt.l2_load (…)` and
+`kvt.l2_store (…)` (below, *Queues*).
 Syntax snippets elsewhere may show just a main body or one of its nested
 blocks.
 
@@ -410,7 +413,7 @@ a family: its entries are called `D[j].decode (…)` and its lease taken
 (`holders(D[j].kv)`) is the kernel's array reference, which at size one
 also takes `D.kv`.
 
-Four roles are built into the parser, and a queue declares which it plays:
+Five roles are built into the parser, and a queue declares which it plays:
 
 | Role | Entries | The queue |
 |---|---|---|
@@ -418,6 +421,7 @@ Four roles are built into the parser, and a queue declares which it plays:
 | `prefill` | `prefill (prompt)` | computes the prompt; how it leaves the KV (`lease`, `cache`, a transfer) is the entry's |
 | `decode` | `decode (prompt)`, `decode (prompt) from Q`, either or both | a local prefill, or with the KV `Q`'s entry leased for this request; a pod that only decodes what it reads has no `decode (prompt)` |
 | `link` | `transfer (n)`, or none | the NIC: the body is the time to read `n` tokens; without one, the `serve` is the cost, and its `latency` a wait before it |
+| `l2` | none | an L2 KV cache (an LMCache server, a Mooncake store): one pool, the KV it holds, and a `serve`, the bandwidth its copies divide; std/kvt's `l2_load` and `l2_store` copy through it (below) |
 
 The server selects a gateway with `gw.route();`. The parser checks the
 queue and its entry, then expands the route at the call site. Declarations
@@ -481,6 +485,38 @@ dispatch, written where it happens, with `fork` (below,
 `examples/pd-disaggregation/vllm_nixl_push.sq`). The wait is a delay, so a
 push and a pull of the same constants run the same numbers. A queue waits
 before the copies it posts for one relation: one `latency` per poster.
+
+An L2 KV cache outside the engine, an LMCache server or a Mooncake store,
+is a queue that plays `l2`: one pool, the KV it holds, and a `serve`,
+the bandwidth the copies in and out of it divide. It has no engine, `nic`
+or entry, and it is one queue, not a family. Any entry or engine's
+request may read its pool (`cachedin(lmc.kv)`, at admission or in the
+body) and copy through it with std/kvt:
+
+```
+queue lmc : l2 { device host { kv cap l2_cap; } pool kv on host { block chunk; evict lru; } serve ps(1); }
+…
+    kvt.l2_load (lmc, kv, got, per_token = r);                          // in: the cache keeps it
+    …
+    kvt.l2_store (kv, lmc, floor(prompt + output, chunk), per_token = r);  // out: the part it lacks
+```
+
+`kvt.l2_load (C, P, n, per_token = r)` is `run C (cost(C, n · r)); load P
+(cost(P, n));`: the KV of `n` tokens arrives in the enclosing hold on `P`
+and nothing is released; a request may write those two statements
+itself, and `kvt.l2_load` stays beside them as `transfer` stays beside its
+kernel, to say which copy it is. `kvt.l2_store (P, C, n, per_token = r)` is `hold
+C.kv (cost(C.kv, cachedin(C.kv))) { grow C.kv (cost(C.kv, m)); run C
+(cost(C, m · r)); load C.kv (cost(C.kv, m)); } cache (cost(C.kv, n));`
+with `m = max(0, n - cached)`: the session's entry in the cache comes to
+hold `n` tokens, and only the part it lacks is copied. Its hold takes the
+entry the cache has and grows in its body, so `n` may read what a header
+may not, such as a request's hidden length; it may not read `cached` or
+`computed`, which inside the copy are the cache's. The source comes
+first in both, as the bytes go; `per_token` is required. The entry is the
+session's, as a pool's cache is (*Known limitations*). See
+`examples/multi-turn/vllm_lmcache.sq` and [the KV-transfer
+library](https://github.com/servingQ/serQ/blob/main/docs/design/kv-transfer.md).
 
 `transfer on L[k], M[l] (n) from S to P (m)` names the stages itself, as
 a `server` does: link queues, or any `ps` stages. `latency x` on a link's
@@ -1286,6 +1322,7 @@ that program's paths ([use cases](use-cases/index.md), `docs/lean.md`).
 | `multi-turn/replica.sq` | the paper's two-resource replica on the open-session scenario (`advance running decode first`, `drop kv` before `end`) | — |
 | `multi-turn/routing.sq` | four replicas, five routing policies | — |
 | `multi-turn/vllm.sq` | vLLM v1's engine under a multi-turn agent workload | its engine is the other vLLM workloads' (`tests/workloads.rs`) |
+| `multi-turn/vllm_lmcache.sq` | `vllm.sq` with an LMCache server as its L2 (`queue lmc : l2`, `kvt.l2_load`, `kvt.l2_store`) | the source (vLLM at 0c87a197); `tests/kvt_l2.rs`; no scheduler oracle |
 | `single-turn/vllm_single_turn.sq`, `multi-turn/vllm_chat.sq`, `subagent/vllm_subagents.sq` | the same engine under a single-turn, a chat and an approximated subagent workload ([use case](use-cases/workloads.md)) | `tests/workloads.rs` |
 | `oracle/vllm_request.sq` | one vLLM v1 request on the step clock, compiled per scenario to `tools/oracle/{alone,chunked,hol,longchunk,mixed,preempt,seqcap}.ir.json` | the upstream oracle ([vLLM correspondence](#7-vllm-v1-as-a-serq-program)), `tests/vllm_oracle.rs`, the Lean theorems generated from the same IR |
 | `replay/vllm_replay.sq` | vLLM v1 on the A100 testbed replaying the short-context trace ([A100 testbed](#8-vllm-on-the-a100-testbed)) | the prefix-cache oracle `tools/oracle/cache_trace` (`tests/vllm_cache.rs`, theorem `vllm_cache_trace`) |

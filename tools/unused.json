@@ -27,9 +27,6 @@
     "Largest",
     "Smallest"
   ],
-  "CStmt": [
-    "Grow"
-  ],
   "Share": [
     "Bottleneck"
   ],

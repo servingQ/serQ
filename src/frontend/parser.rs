@@ -2561,6 +2561,177 @@ impl Parser {
         self.copy_relation(prog, at, push, (source, a_at), (reader, b_at), latency)
     }
 
+    /// The L2 queue `n` names, as its stage (`lmc`) or its pool (`lmc.kv`):
+    /// its name and its pool's full name.
+    fn cache_of(&self, n: &str) -> Option<(String, String)> {
+        self.queues
+            .iter()
+            .filter(|c| c.roles.iter().any(|r| r == "l2"))
+            .find_map(|c| {
+                let pool = format!("{}.{}", c.name, c.pools.first()?);
+                (n == c.name || n == pool).then(|| (c.name.clone(), pool))
+            })
+    }
+
+    /// `kvt.l2_load (C, P, n, per_token = r);`: the KV of `n` tokens the L2
+    /// queue `C` holds is copied into the enclosing hold on `P`, at `C`'s
+    /// bandwidth, and stays in `C`: `run C (cost(C, n·r)); load P (cost(P,
+    /// n));`, which a request may also write, as `transfer` stays beside its
+    /// kernel. `kvt.l2_store (P, C, n, per_token = r);`: the session's entry
+    /// in `C` comes to hold `n` tokens, and the part it does not hold yet is
+    /// copied: `hold C.kv (cost(C.kv, cachedin(C.kv))) { grow C.kv (cost(C.kv,
+    /// m)); run C (cost(C, m·r)); load C.kv (cost(C.kv, m)); } cache
+    /// (cost(C.kv, n));` with `m =
+    /// max(0, n - cached)`. The hold takes the entry it has at its admission
+    /// and grows by the rest in its body, so that `n` may read what a header
+    /// may not (a request's hidden length). LMCache's and Mooncake's L2,
+    /// from std/kvt.
+    fn kvt_copy(&mut self) -> PResult<Vec<Stmt>> {
+        let at = self.pos;
+        let span = Some(self.span());
+        self.advance(); // `kvt`
+        self.expect(&Tok::Dot)?;
+        let f_at = self.pos;
+        let function = self.ident()?;
+        if !self.kvt_imported {
+            return self.err_at(at, format!("`kvt.{function}` needs `use \"std/kvt\";`"));
+        }
+        // a module's functions, not keywords (`args.number` likewise)
+        let load = function == "l2_load";
+        if !load && function != "l2_store" {
+            return self.err_at(
+                f_at,
+                format!(
+                    "std/kvt has no statement `{function}`; it has \
+                     `l2_load (CACHE, POOL, n, per_token = r)` and \
+                     `l2_store (POOL, CACHE, n, per_token = r)`"
+                ),
+            );
+        }
+        let written = format!("`kvt.{function}`");
+        self.expect(&Tok::LParen)?;
+        // the source first, as the bytes go
+        let cache = |p: &mut Self| -> PResult<(String, String)> {
+            let c_at = p.pos;
+            let c = p.ident()?;
+            match p.cache_of(&c).filter(|(name, _)| *name == c) {
+                Some(found) => Ok(found),
+                None => p.err_at(
+                    c_at,
+                    format!("{written}: `{c}` is not a queue that plays `l2` declared above"),
+                ),
+            }
+        };
+        let (c, pool) = if load {
+            let c = cache(self)?;
+            self.expect(&Tok::Comma)?;
+            (c, self.own_pool(&format!("kvt.{function} (…,")))
+        } else {
+            let pool = self.own_pool(&format!("kvt.{function} ("));
+            self.expect(&Tok::Comma)?;
+            (cache(self)?, pool)
+        };
+        let pool = pool?;
+        let (cache_stage, cache_pool) = c;
+        self.expect(&Tok::Comma)?;
+        let n_at = self.pos;
+        let n = self.expr()?;
+        // the one named argument, required: the time a token takes
+        let r_at = self.pos;
+        let name = if self.eat(&Tok::Comma) {
+            self.ident()?
+        } else {
+            String::new()
+        };
+        if name != "per_token" {
+            let found = if name.is_empty() {
+                String::new()
+            } else {
+                format!(", not `{name} = …`")
+            };
+            return self.err_at(
+                r_at,
+                format!(
+                    "{written} names the time a token takes at `{cache_stage}`'s bandwidth: \
+                     `per_token = …`{found}"
+                ),
+            );
+        }
+        self.expect(&Tok::Assign)?;
+        let rate = self.expr()?;
+        self.expect(&Tok::RParen)?;
+        self.expect(&Tok::Semi)?;
+        let r = |name: &str| Ref {
+            span,
+            name: name.into(),
+            index: None,
+        };
+        let stage = r(&cache_stage);
+        let times = |e: Expr| Expr::Binary(BinOp::Mul, Box::new(e), Box::new(rate.clone()));
+        if load {
+            return Ok(vec![
+                Stmt::Run {
+                    stage: stage.clone(),
+                    mode: RunMode::Plain,
+                    work: Expr::cost(std::slice::from_ref(&stage), times(n.clone())),
+                    growing: None,
+                    also: vec![],
+                },
+                Stmt::Load(pool.clone(), Expr::cost(&[pool], n)),
+            ]);
+        }
+        // the store's hold is a scope of its own: `cached` and `computed`
+        // there are the cache's, not the enclosing hold's the program meant
+        for w in ["cached", "computed"] {
+            if expr_reads(&n, w) || expr_reads(&rate, w) {
+                return self.err_at(
+                    n_at,
+                    format!(
+                        "{written} reads `{w}`, which inside the copy would be the cache's \
+                         entry, not the enclosing hold's: name it above, `set c = {w};`"
+                    ),
+                );
+            }
+        }
+        let new = Expr::Call(
+            "max".into(),
+            vec![
+                Arg::Expr(Expr::Num(0.0)),
+                Arg::Expr(Expr::Binary(
+                    BinOp::Sub,
+                    Box::new(n.clone()),
+                    Box::new(Expr::Var("cached".into())),
+                )),
+            ],
+        );
+        let kv = r(&cache_pool);
+        let held = Expr::Call("cachedin".into(), vec![Arg::Ref(kv.clone())]);
+        Ok(vec![Stmt::Hold {
+            pools: vec![(
+                kv.clone(),
+                Expr::cost(std::slice::from_ref(&kv), held),
+                None,
+            )],
+            reuse: None,
+            body: vec![
+                Stmt::Grow(
+                    kv.clone(),
+                    Expr::cost(std::slice::from_ref(&kv), new.clone()),
+                ),
+                Stmt::Run {
+                    stage: stage.clone(),
+                    mode: RunMode::Plain,
+                    work: Expr::cost(std::slice::from_ref(&stage), times(new.clone())),
+                    growing: None,
+                    also: vec![],
+                },
+                Stmt::Load(kv.clone(), Expr::cost(std::slice::from_ref(&kv), new)),
+            ],
+            cache: Some(Expr::cost(&[kv], n)),
+            lease: None,
+        }])
+    }
+
     /// A declaration or a parameter may not take a name the language
     /// supplies, as a `set` or a `let` may not (`link`, #231): `def now(x)`
     /// beside `now`, or `observe admitted` beside `admitted`, would have one
@@ -3581,7 +3752,7 @@ impl Parser {
                     return self.err_at(
                         r_at,
                         format!(
-                            "unknown role `{r}`: a queue plays gateway, prefill, decode or link"
+                            "unknown role `{r}`: a queue plays gateway, prefill, decode, link or l2"
                         ),
                     );
                 }
@@ -3852,6 +4023,30 @@ impl Parser {
             if sig.from.iter().any(|&f| q.entry(sig.verb, f).is_some()) {
                 continue;
             }
+            // an L2 is its pool and its `serve`: std/kvt copies through them
+            if sig.name == "l2" {
+                if roles.len() > 1 || q.engine || q.nic || q.pools.len() != 1 || !q.has_stage {
+                    return self.err_at(
+                        at,
+                        format!(
+                            "queue `{name}` plays `l2`: it is one pool and a `serve`, the KV \
+                             it holds and the bandwidth it copies at, with no engine, `nic`, \
+                             entry or other role"
+                        ),
+                    );
+                }
+                if family {
+                    return self.err_at(
+                        at,
+                        format!(
+                            "queue `{name}` plays `l2` and is a family: an L2 is one \
+                             queue; write its capacity and bandwidth as the pool's and the \
+                             `serve`'s"
+                        ),
+                    );
+                }
+                continue;
+            }
             // a link needs none when its `serve` is its cost (`transfer on L[k] (n) …`)
             if sig.name == "link" {
                 if !q.has_stage {
@@ -4067,11 +4262,15 @@ impl Parser {
                 || (!header && n == "now")
                 || seen.iter().any(|l| l == n)
         };
+        // an L2 queue's pool and stage are every entry's to read and copy
+        // through (std/kvt's `l2_load`, `l2_store`)
+        let cache_ref = |n: &str| self.cache_of(n).is_some();
         let own_ref = |r: &Ref| -> bool {
             q.pools.contains(&r.name)
                 || r.name == qname
                 || from.as_deref() == Some(r.name.as_str())
                 || params.contains(&r.name)
+                || cache_ref(&r.name)
         };
         if !is_gateway {
             let mut headers = vec![];
@@ -4089,10 +4288,11 @@ impl Parser {
             // an own pool, or the `from` name, is all an entry's statements hold
             let mut named = vec![];
             pools_named(&body, &mut named);
-            if let Some(r) = named
-                .iter()
-                .find(|r| !q.pools.contains(&r.name) && from.as_deref() != Some(r.name.as_str()))
-            {
+            if let Some(r) = named.iter().find(|r| {
+                !q.pools.contains(&r.name)
+                    && from.as_deref() != Some(r.name.as_str())
+                    && !cache_ref(&r.name)
+            }) {
                 if q.engine {
                     return self.err_at(
                         at,
@@ -4338,6 +4538,10 @@ impl Parser {
             && let Some(role) = Role::of(s)
         {
             out.extend(self.serving(role)?);
+            return Ok(());
+        }
+        if *self.peek() == Tok::Ident("kvt".into()) && *self.peek_at(1) == Tok::Dot {
+            out.extend(self.kvt_copy()?);
             return Ok(());
         }
         if let Some(engine) = self.in_request.clone() {
