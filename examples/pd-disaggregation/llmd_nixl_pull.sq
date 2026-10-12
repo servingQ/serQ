@@ -136,7 +136,7 @@ fn main() {
     // prompt fits the blocks, at a step with budget left and a running slot
     // free - it takes neither (the request is parked, not running) - and
     // reuses the full blocks it has of the prompt.
-    decode (prompt) from src {
+    decode (prompt) from P {
       set produced = min(o, max_model_len - prompt);   // generation stops at max_model_len tokens (sched/utils.py:114-120)
       set transferred = 0;   // one KV transfer per request (nixl/pull_scheduler.py:187-189)
       set kept = prompt;     // the most tokens an attempt had: a preemption keeps the outputs
@@ -151,7 +151,7 @@ fn main() {
           // once; the read done, the prefiller's lease ends. The last prompt
           // token is recomputed for its logits.
           observe remote_tokens = prompt - c;
-          transfer (prompt - c) from src to kv (prompt - 1 - c);   // over P's NIC and this pod's
+          transfer (prompt - c) from P to kv (prompt - 1 - c);   // over P's NIC and this pod's
           mark read_done;
           set transferred = 1;
           set c = prompt - 1;

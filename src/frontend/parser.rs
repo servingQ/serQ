@@ -3988,6 +3988,44 @@ impl Parser {
         Ok(())
     }
 
+    /// `from S` on an entry of queue `qi`: `S` is the queue the KV comes
+    /// from, declared above, and every way through each of its entries
+    /// leaves the lease this entry takes.
+    fn source_queue(&self, qi: usize, verb: &str, s: &str, at: usize) -> PResult<()> {
+        let qname = &self.queues[qi].name;
+        let header = format!("`{qname}.{verb} (…) from {s}`");
+        if *s == *qname {
+            return self.err_at(at, format!("{header}: a queue takes the KV from another"));
+        }
+        let Some(src) = self.queues.iter().find(|q| q.name == s) else {
+            return self.err_at(
+                at,
+                format!(
+                    "{header}: no queue `{s}` is declared above; `from` names the queue \
+                     whose entry leased the KV"
+                ),
+            );
+        };
+        let Some(leased) = &src.leased else {
+            return self.err_at(
+                at,
+                format!("{header}: no entry of `{s}` leases a pool, so it has nothing to take"),
+            );
+        };
+        if let Some(e) = src.entries.iter().find(|e| !e.leases) {
+            return self.err_at(
+                at,
+                format!(
+                    "{header}: `{s}.{}` leases nothing, so a request that went through it \
+                     would have no KV to take; a `from` needs every entry of `{s}` to lease \
+                     `{leased}`",
+                    e.verb
+                ),
+            );
+        }
+        Ok(())
+    }
+
     /// `VERB (params) [from NAME] block` inside a queue: parsed on the
     /// server's side, with the queue's own stage the one the serving forms
     /// name.
@@ -4017,7 +4055,10 @@ impl Parser {
             self.expect(&Tok::RParen)?;
         }
         let from = if self.eat_kw("from") {
-            Some(self.ident()?)
+            let s_at = self.pos;
+            let s = self.ident()?;
+            self.source_queue(qi, &verb, &s, s_at)?;
+            Some(s)
         } else {
             None
         };
@@ -4157,7 +4198,7 @@ impl Parser {
                          allocates its queue's own pools{}",
                         r.name,
                         match &from {
-                            Some(f) => format!(" and `{f}`, the pool its `from` names"),
+                            Some(f) => format!(" and `{f}`, the lease its `from` takes"),
                             None => String::new(),
                         }
                     ),
@@ -4195,16 +4236,15 @@ impl Parser {
                     .map(|v| (v, in_index))
                     .chain(indexed.into_iter().map(|v| (v, true)));
                 for (v, in_index) in tagged {
-                    // `from src`: the source pool, and in an index its member
+                    // `from P`: in the body `P` is the KV the request leased
+                    // there, which a transfer takes, not a number
                     if from.as_deref() == Some(v.as_str()) {
-                        if in_index {
-                            continue;
-                        }
                         return self.err_at(
                             at,
                             format!(
-                                "`{qname}.{verb}` reads `{v}` as a number: `{v}` is the source pool, \
-                                 and only in an index the source member (`L[{v}]`)"
+                                "`{qname}.{verb}` reads `{v}` as a number{}: in an entry `from {v}`, \
+                                 `{v}` is the KV the request leased there (`transfer … from {v} to …`)",
+                                if in_index { " (an index)" } else { "" }
                             ),
                         );
                     }
@@ -5115,6 +5155,21 @@ impl Parser {
             .iter()
             .position(|d| d.name == reader)
             .expect("checked above");
+        // the reader's entries say where their KV comes from: the relation's source
+        if let Some(e) = self.queues[qi]
+            .entries
+            .iter()
+            .find(|e| e.from.as_ref().is_some_and(|f| *f != source))
+        {
+            return self.err_at(
+                if push { at } else { s_at },
+                format!(
+                    "{written}, and `{reader}.{} (…)` takes the KV `from {}`",
+                    e.verb,
+                    e.from.as_deref().unwrap_or("?")
+                ),
+            );
+        }
         if let Some(r) = &self.queues[qi].takes {
             return self.err_at(
                 at,

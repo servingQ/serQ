@@ -37,8 +37,7 @@ local phase isolation does not remove cross-rank shape coordination.
 For a local non-speculative model, a cost expression can charge fixed
 prefill width or bucketed `decoders` while the logical work stays unchanged.
 The current example uses illustrative costs and does not emulate these
-compiled shapes. See [input shapes](input-shapes.md) for executable cost
-expressions and the remaining IR requirements.
+compiled shapes.
 
 ## Executable serQ approximation
 
@@ -55,7 +54,7 @@ already acquired allocation stays held. A selected prefill stops further
 waiting admission. Ordinary capacity, budget-exhaustion and preemption gates
 still apply. See the [`exclusive prefill` reference](../api/engine.md#exclusive-prefill).
 
-`reserve (known)` tests the current sequence's capacity (the prompt, or what a resumed request had computed), while the hold allocates
+`reserve (known)` tests the current sequence's capacity (the prompt, or what a resumed request had computed), while `taking` allocates
 only the initial chunk and `growing kv` extends it as computation advances.
 The live token budget is bound at admission, rather than captured before
 queuing.

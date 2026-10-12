@@ -50,9 +50,9 @@ queue P[NP] : prefill {
 queue D[ND] : decode {
   …
   nic ps(BwD);                          // the pod's NIC: the reads into it share it
-  decode (prompt) from src {
+  decode (prompt) from P {
     …
-        transfer (prompt - c) from src to kv (prompt - 1 - c);   // over P's NIC and this pod's
+        transfer (prompt - c) from P to kv (prompt - 1 - c);   // over P's NIC and this pod's
   }
 }
 D pull P latency x0 share maxmin;
@@ -79,14 +79,14 @@ latency x share s;`, after both queues:
 | `share s` | concurrent reads divide the two NICs by `s`: the program's `share`, written here |
 
 **A `transfer` without `on` is the read.** Inside an entry of `D` called
-`from P[i]`, `transfer (n) from src to kv (m);` names no stage, and the
+`from P[i]`, `transfer (n) from P to kv (m);` names no stage, and the
 relation supplies both ends:
 
 | Surface | Kernel |
 |---|---|
 | `nic k;` in `queue Q[N]` | `stage Q.nic[N] : k;` |
 | `D pull P latency x share s;` | `stage D.nic.latency[N] : delay; share s;`, `x` a constant of its own |
-| `transfer (n) from src to kv (m)` in `D[j]`, called `from P[i]` | `run D.nic.latency[j] (x); run P.nic[i], D.nic[j] (n); load D.kv[j] (m); release P.kv[i];` |
+| `transfer (n) from P to kv (m)` in `D[j]`, called `from P[i]` | `run D.nic.latency[j] (x); run P.nic[i], D.nic[j] (n); load D.kv[j] (m); release P.kv[i];` |
 
 The latency's constant has a name of its own (`D.pull.time`), as a link's
 does, so that a parameter or a local of the entry with the same name does
