@@ -72,11 +72,20 @@ fn cache_trace_matches_the_real_scheduler() {
             .unwrap();
     assert!(ir.trace.is_none(), "the IR carries its workload");
     let r = run_ir(&ir, None).unwrap();
+    assert_eq!(agrees(&r, "cache_trace.out.csv").len(), 9);
+}
+
+/// Compare a run with the real scheduler's `out` (session, turn, sent,
+/// first, done, prompt, cached, out): every turn's first and last token and
+/// its cached tokens. The oracle records a turn's cached tokens at its first
+/// admission, and so is the run read: a turn's first sample. Returns the
+/// cached tokens by (session, turn).
+fn agrees(r: &serq::Report, out: &str) -> std::collections::HashMap<(u64, u32), f64> {
     let get = |name: &str| {
         let o = r.observe(name).unwrap();
         let mut m = std::collections::HashMap::new();
         for (rec, v) in o.records.iter().zip(&o.samples) {
-            m.insert((rec.1, rec.2), *v);
+            m.entry((rec.1, rec.2)).or_insert(*v);
         }
         m
     };
@@ -86,8 +95,8 @@ fn cache_trace_matches_the_real_scheduler() {
         get("response"),
         get("cached_tokens"),
     );
-    let want = std::fs::read_to_string(dir().join("cache_trace.out.csv")).unwrap();
-    let mut n = 0;
+    let want = std::fs::read_to_string(dir().join(out)).unwrap();
+    let mut seen = std::collections::HashMap::new();
     for line in want.lines().skip(1) {
         let f: Vec<&str> = line.split(',').collect();
         let key = (f[0].parse::<u64>().unwrap(), f[1].parse::<u32>().unwrap());
@@ -99,9 +108,9 @@ fn cache_trace_matches_the_real_scheduler() {
         assert_eq!(sent[&key] + ttft[&key], first, "{key:?} first token");
         assert_eq!(sent[&key] + lat[&key], done, "{key:?} last token");
         assert_eq!(cached[&key], c, "{key:?} cached tokens");
-        n += 1;
+        seen.insert(key, c);
     }
-    assert_eq!(n, 9);
+    seen
 }
 
 /// The shared-system-prompt scenario (`tools/oracle/shared_trace.*`, written
@@ -121,39 +130,12 @@ fn shared_trace_matches_the_real_scheduler() {
     let src = std::fs::read_to_string(program_path("vllm_shared_prompt")).unwrap();
     let p = serq::compile_source(&common::main_source(&src), &ov).unwrap();
     let r = run_ir(&inline_trace(p, None).unwrap(), None).unwrap();
-    let get = |name: &str| {
-        let o = r.observe(name).unwrap();
-        let mut m = std::collections::HashMap::new();
-        for (rec, v) in o.records.iter().zip(&o.samples) {
-            m.insert((rec.1, rec.2), *v);
-        }
-        m
-    };
-    let (sent, ttft, lat, cached) = (
-        get("sent"),
-        get("ttft"),
-        get("response"),
-        get("cached_tokens"),
-    );
-    let want = std::fs::read_to_string(dir().join("shared_trace.out.csv")).unwrap();
-    let (mut n, mut shared) = (0, 0);
-    for line in want.lines().skip(1) {
-        let f: Vec<&str> = line.split(',').collect();
-        let key = (f[0].parse::<u64>().unwrap(), f[1].parse::<u32>().unwrap());
-        let (first, done, c): (f64, f64, f64) = (
-            f[3].parse().unwrap(),
-            f[4].parse().unwrap(),
-            f[6].parse().unwrap(),
-        );
-        assert_eq!(sent[&key] + ttft[&key], first, "{key:?} first token");
-        assert_eq!(sent[&key] + lat[&key], done, "{key:?} last token");
-        assert_eq!(cached[&key], c, "{key:?} cached tokens");
-        if key.0 > 0 && key.1 == 1 && c > 0.0 {
-            shared += 1;
-        }
-        n += 1;
-    }
-    assert_eq!(n, 9);
+    let cached = agrees(&r, "shared_trace.out.csv");
+    assert_eq!(cached.len(), 9);
+    let shared = cached
+        .iter()
+        .filter(|((s, t), c)| *s > 0 && *t == 1 && **c > 0.0)
+        .count();
     assert_eq!(
         shared, 2,
         "the later sessions' first turns read the system prompt"
