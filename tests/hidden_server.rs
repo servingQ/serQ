@@ -355,6 +355,23 @@ fn what_the_workload_sets_from_a_hidden_attribute_before_the_request_is_hidden()
         err.contains("`x` is set from the hidden `o` in the workload's init"),
         "{err}"
     );
+    // so is what the session sets before the request, from `init` or from
+    // a hidden attribute it draws again
+    let err = check(src("set o = ~exp(10);", "set y = 1;", "set x = o; turn;")).unwrap_err();
+    assert!(
+        err.contains("`x` is set from the hidden `o` in the workload's session"),
+        "{err}"
+    );
+    let err = check(src(
+        "set x = 0; set o = 1; set more = 1;",
+        "set y = 1;",
+        "turn; while (more) { set o = ~exp(10); set x = o; set more = 0; turn; }",
+    ))
+    .unwrap_err();
+    assert!(
+        err.contains("`x` is set from the hidden `o` in the workload's session"),
+        "{err}"
+    );
     // a later `set` in the turn of a visible value makes it visible again
     check(src("set o = 4; set x = o;", "set x = 1;", "turn;")).unwrap();
     // the session reads the turn that has ended
