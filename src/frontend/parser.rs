@@ -717,16 +717,16 @@ fn is_pure(name: &str) -> bool {
     Fun::from_name(name).is_some_and(Fun::is_arithmetic)
 }
 
-/// The words taken out of the language, with what a program writes
-/// instead: one spelling for one admission (#136), one for a power.
-pub(crate) fn retired(word: &str) -> Option<&'static str> {
+/// The words #136 took out of the language, with what a program writes
+/// instead: one spelling for one admission.
+fn retired(word: &str) -> Option<&'static str> {
     RETIRED
         .iter()
         .find(|(w, _)| *w == word)
         .map(|(_, now)| *now)
 }
 
-const RETIRED: [(&str, &str); 6] = [
+const RETIRED: [(&str, &str); 5] = [
     (
         "enter",
         "`enter` is now `hold`: `hold P (u) … at admission (x = e) { … } cache (ℓ);`",
@@ -742,7 +742,6 @@ const RETIRED: [(&str, &str); 6] = [
         "fit",
         "`fit` is gone: the pools of a `hold` are the condition",
     ),
-    ("pow", "`pow(x, y)` is now `x ^ y`"),
 ];
 
 /// Do these tokens say the statement `w;`?

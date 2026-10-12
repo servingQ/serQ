@@ -2161,11 +2161,15 @@ impl Constants for Linker<'_> {
     }
 }
 
+/// The functions taken out of the language, with what a program writes
+/// instead. A call is told; the name is free for anything else.
+const RETIRED_FUNCTIONS: [(&str, &str); 1] = [("pow", "`pow(x, y)` is now `x ^ y`")];
+
 /// A call of a name that is no function, with what to write instead when
 /// the language took the function out.
 fn unknown_function(f: &str) -> LinkError {
-    match crate::frontend::parser::retired(f) {
-        Some(now) => LinkError::new(format!("unknown function `{f}`: {now}")),
+    match RETIRED_FUNCTIONS.iter().find(|(w, _)| *w == f) {
+        Some((_, now)) => LinkError::new(format!("unknown function `{f}`: {now}")),
         None => LinkError::new(format!("unknown function `{f}`")),
     }
 }

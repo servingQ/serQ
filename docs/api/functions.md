@@ -110,7 +110,10 @@ already a resource formula; it takes ordinary quantities, not session
 Pure functions, available in `const` positions. Numeric arguments are
 expressions evaluated at the containing expression's moment. Operators are
 `+ - * / ^`, comparisons `< <= > >= == !=` (0 or 1), `&&`, `||`, `!`, and
-`c ? a : b`.
+`c ? a : b`. `x ^ y` is `x` raised to the power `y`: it binds tighter than a
+unary `-` (`-2 ^ 2` is `-4`) and to the right (`2 ^ 3 ^ 2` is `2 ^ 9`);
+floating-point arithmetic applies, and a result outside the real domain is
+NaN.
 
 ### `min` {#min}
 

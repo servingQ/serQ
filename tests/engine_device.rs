@@ -1463,6 +1463,9 @@ fn a_power_is_written_with_a_caret() {
     refused(&prog, "unknown function `foo`");
     let prog = src.replacen("let S = 1.0;", "let S = 1.0 ^ 1;", 1);
     compile_source(&prog, &common::horizon(10.0)).unwrap();
+    // the name is free: only a call is told
+    let prog = src.replacen("let S = 1.0;", "let pow = 1.0;\nlet S = pow;", 1);
+    compile_source(&prog, &common::horizon(10.0)).unwrap();
 }
 
 /// A device's resource is a definition too, replaced token by token: its

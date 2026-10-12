@@ -106,7 +106,7 @@ end;
 
 Arithmetic, comparisons (0/1), `&&`, `||`, `!`, `c ? a : b`.
 
-**Functions** `min` `max` `abs` `floor` `ceil` `sqrt` `exp` `ln` `pow`
+**Functions** `min` `max` `abs` `floor` `ceil` `sqrt` `exp` `ln`
 
 **Distributions** `~exp(m)` `~det(x)` `~uniform(a,b)` `~erlang(k,m)`
 `~h2(m,cv2)` `~bernoulli(p)`
