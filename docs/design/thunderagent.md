@@ -160,6 +160,11 @@ since the grower is a candidate itself (`tests/lease_preemption.rs`).
   actor that every consumer would have to learn. The paper's ablation
   moves throughput little: Δt = 2, 5, 7, 10 give about 363, 378, 370 and
   343 steps/min (Fig. 6b, p. 11, read from the figure).
+- **A slack argument instead of the shared prompt.** A `slack`, the share
+  of the KV the router's count leaves unused, moves TR mode's hit rate as
+  the shared prompt does. It says what the prompt does rather than what it
+  is, and it leaves default mode without the prompt's hits. `S` writes the
+  prompt, and both effects follow from it.
 - **`held(p)`** as the function's name: `held` is already the keyword of
   `reserve held`, so the name would mean two things. It is `allocated(p)`.
 
@@ -208,9 +213,9 @@ steps/min = active agents × 60 / (time in the engine + tool + wait). At
 in the engine (its decode batch is 3.1), at 13 s a step. Default mode
 keeps all 16, at 85 s a step. The engine-time ratio, 6.5, is the paper's
 order: at 96 agents Fig. 10 (p. 28) gives vLLM 48-56 s against
-ThunderAgent 9-13 s.
-TR mode loses most of that gain in the wait for room. Four things decide
-how much it keeps, and the program now has an argument for each:
+ThunderAgent 9-13 s. TR mode loses most of that gain in the wait for
+room. Four things decide how much it keeps, and the program has an
+argument for each:
 
 1. **The scale.** A replica of the example holds four of the agents'
    contexts, so TR mode's batch is tiny. The paper's node runs a GLM-4.6
@@ -223,78 +228,82 @@ how much it keeps, and the program now has an argument for each:
    the square of the context (Eq. 8, p. 7), because each token attends to
    all those before it. `g` is that attention, per token pair:
    `compute(batch.tokens) + g * batch.attention`. At 4 PFLOP/s, 92 layers
-   and 96 heads of 128 dimensions, it is about 1.1 ns; at a third of
-   that rate, 3.3 ns. The two bound a range; neither is measured.
-3. **What the router's count leaves free.** The program's count of a
-   program's tokens is exactly what vLLM holds for it. A real one counts
-   more than vLLM holds: a system prompt every program shares is counted
-   per program and stored once, and `shared_tokens` is never subtracted
-   (above). The KV the count leaves free keeps paused programs' prefixes
-   cached until they come back. `slack` is that share.
+   and 96 heads of 128 dimensions, it is about 1.1 ns; at a third of that
+   rate, 3.3 ns. The two bound a range; neither is measured.
+3. **A system prompt every program shares.** An agent framework starts
+   every program with the same system prompt and tool descriptions. vLLM
+   caches it once, and every request reuses it, so even a request that
+   lost its own prefix hits it. ThunderAgent counts it in every program's
+   tokens, so with k programs on a replica its count is (k − 1) × S above
+   what vLLM holds, and that KV keeps paused programs' prefixes cached
+   until they come back. `S` is its length: the replica keeps its blocks
+   resident (`kv cap blocks * bs - S`), a request holds and caches only its
+   own tokens beyond it, every request reads and attends to it, and its
+   tokens count as hits.
 4. **The tool time.** While a program calls a tool its KV is held and the
    GPU does not run it. The longer the call, the fewer programs TR mode
    keeps running for the same KV.
 
-At the paper's scale (`tools/thunderagent/sweep.py --preset paper`, two
-seeds), one factor at a time:
+At the paper's scale (`tools/thunderagent/sweep.py --preset paper`), one
+factor at a time, two seeds:
 
-| Setting | ratio at N = 96, 144, 192 | TR hit | default steps/min, N = 48 → 96 |
-|---|---|---|---|
-| `g` 0 (the example's cost) | 1.29, 1.30, 1.31 | 0.66-0.67 | 320 → 258 |
-| `g` 1.1e-9 | 1.66, 1.62, 1.60 | 0.65-0.66 | 290 → 174 |
-| `g` 3.3e-9 | 2.06, 2.01, 1.89 | 0.64-0.66 | 245 → 107 |
-| `g` 1.1e-9, `slack` 0.2 | 1.71, 1.71, 1.67 | 0.85-0.86 | 290 → 174 |
-| `g` 3.3e-9, `slack` 0.2 | 2.56, 2.47, 2.37 | 0.85-0.86 | 245 → 107 |
-| `g` 1.1e-9, `slack` 0.2, `Z` 1 s | 2.03, 2.01, 1.98 | 0.85-0.87 | 318 → 175 |
-| `g` 1.1e-9, `slack` 0.2, `Z` 10 s | 1.10, 1.11, 1.06 | 0.80-0.81 | 192 → 177 |
+| Setting | ratio at N = 96, 144, 192 | TR hit | default hit | default steps/min, N = 48 → 96 |
+|---|---|---|---|---|
+| `g` 3.3e-9, `S` 0 | 2.06, 2.01, 1.89 | 0.64-0.66 | 0.01 | 245 → 107 |
+| `g` 3.3e-9, `S` 2 048 | 2.72, 2.59, 2.48 | 0.86 | 0.14 | 275 → 112 |
+| `g` 0, `S` 3 968 | 1.19, 1.21, 1.19 | 0.91 | 0.24-0.29 | 335 → 324 |
+| `g` 1.1e-9, `S` 3 968 | 1.73, 1.81, 1.77 | 0.91 | 0.25-0.30 | 324 → 209 |
+| `g` 3.3e-9, `S` 3 968 | 2.67, 2.64, 2.53 | 0.91 | 0.26-0.30 | 294 → 123 |
+| `g` 3.3e-9, `S` 3 968, `Z` 10 s | 1.72, 1.82, 1.75 | 0.89 | 0.25-0.39 | 194 → 133 |
 
-The last full sweep, `g` 3.3e-9 with `slack` 0.2:
+The preset (`g` 3.3e-9, `S` 3 968), three seeds:
 
 | N | TR steps/min | default steps/min | ratio | TR hit | default hit | TR resumed/turn |
 |---|---|---|---|---|---|---|
-| 24 | 171.1 | 171.3 | 1.00 | 0.91 | 0.91 | 0.000 |
-| 48 | 270.1 | 245.1 | 1.10 | 0.89 | 0.85 | 0.091 |
-| 96 | 273.3 | 106.6 | 2.56 | 0.86 | 0.01 | 0.154 |
-| 144 | 285.4 | 115.5 | 2.47 | 0.85 | 0.01 | 0.157 |
-| 192 | 288.6 | 121.8 | 2.37 | 0.85 | 0.01 | 0.161 |
+| 24 | 172.9 | 173.1 | 1.00 | 0.94 | 0.94 | 0.000 |
+| 48 | 297.7 | 281.5 | 1.06 | 0.94 | 0.92 | 0.012 |
+| 96 | 327.5 | 116.8 | 2.81 | 0.91 | 0.28 | 0.155 |
+| 144 | 336.6 | 121.5 | 2.77 | 0.91 | 0.25 | 0.160 |
+| 192 | 336.6 | 128.2 | 2.63 | 0.91 | 0.26 | 0.163 |
 
-What each factor explains:
+Beside Fig. 4a and Fig. 5a (SWE-agent on GLM-4.6), whose vLLM serves 218,
+275, 162 and 140 steps/min and ThunderAgent 220, 350, 382 and 370 at 24-96
+programs, with hit rates falling to 30 % and 93 %:
 
 - **The shape** comes with the scale. The two modes serve alike while the
   contexts fit. TR mode's throughput then grows and levels off, while
-  default mode's rises, falls and stays down, as in Fig. 4a.
+  default mode's rises, falls and stays down.
 - **The ratio** is the cost of a recompute. Without `g`, default mode
-  loses a fifth of its throughput past the knee and the ratio is 1.3.
-  With `g` at 3.3 ns it loses more than half, 245 → 107, as the paper's
-  vLLM does (a: 275 → 140, b: 152 → 52, e: 172 → 70), and the ratio is
-  2.4-2.6, beside panels (a) 2.65 and (e) 2.43.
-- **TR mode's hit rate** is the slack. A sixth of TR mode's turns come
-  from a paused program at every setting, whatever the slack. Without
-  slack such a turn recomputes the whole context, and the hit rate is
-  0.65. With a fifth of the KV left free, the paused prefixes survive
-  and the hit rate is 0.85-0.86, first turns included, which have
-  nothing cached. The paper reports 93-96 %. The slack moves the
-  ratio little: TR mode then lets fewer programs in.
+  loses little past the knee and the ratio is 1.2. With `g` at 3.3 ns it
+  loses more than half, 282 → 117, as the paper's vLLM does (a: 275 →
+  140, b: 152 → 52, e: 172 → 70), and the ratio is 2.6-2.8, beside panels
+  (a) 2.65, (e) 2.43 and (d) 3.02.
+- **The hit rates** are the shared prompt. Without it, a sixth of TR
+  mode's turns come from a paused program and recompute their whole
+  context, so its hit rate is 0.65, and default mode's is 0.01. With 3 968
+  shared tokens, TR mode's is 0.91, the paper's 93-96 %, and default
+  mode's is 0.25-0.28, the paper's vLLM's 30-38 %. The share of turns from
+  paused programs does not change; their prefixes survive.
 - **The tool time** bounds the gain, as in the paper. With 10 s tools the
-  ratio is 1.1. The paper's smallest gains are on the workloads with the
-  longest and most variable tools: ScienceAgent, 1.24, and ToolOrchestra,
-  1.48, whose tools reach tens to hundreds of seconds (Fig. 9, p. 28).
+  ratio is 1.7-1.8. The paper's smallest gains are on the workloads with
+  the longest and most variable tools: ScienceAgent, 1.24, and
+  ToolOrchestra, 1.48, whose tools reach tens to hundreds of seconds
+  (Fig. 9, p. 28).
+- **The absolute steps/min** are within 15 % of Fig. 4a's for TR mode (327-
+  337 against 370-382) and default mode (117-128 against 140-162). That
+  agreement is chosen, not checked: the preset's constants are estimates.
 
 What the program still does not reproduce:
 
-- **Default mode's hit rate** is 0.01 past the knee, against the paper's
-  vLLM's 30-38 %. The paper's programs share a system prompt and tool
-  descriptions, which vLLM's cache keeps for all of them. serQ's cache is
-  per session (`docs/language.md`, Known limitations), so this needs a
-  shared prefix cache (`shared-prefix-cache.md`).
-- **The largest ratios**, 3.02 (d) and 3.58 (b), are above every setting
-  here. The paper does not state its KV capacity, its context lengths, its
-  output lengths, its coding tools' times or the vLLM version, so the
-  program cannot be fitted to a panel. Its `g` is a range, not a
-  measurement.
-- **The absolute steps/min** depend on all of these. At the `paper` preset
-  they are within a factor of 1.5 of Fig. 4a's (TR 270-290 against
-  350-382), but that agreement is chosen, not checked.
+- **The largest ratio**, 3.58 (b, OpenHands on GLM-4.6), is above every
+  setting here. The paper does not state its KV capacity, its context
+  lengths, its output lengths, its coding tools' times, its system
+  prompts' lengths or the vLLM version, so the program cannot be fitted
+  to a panel. Its `g` and `S` are estimates, not measurements.
+- **Sharing beyond one prompt.** `S` is one prefix every program shares
+  and every replica keeps. Programs that share part of a task, or a
+  prompt a replica may evict, need a shared prefix cache
+  (`shared-prefix-cache.md`); serQ's cache is per session otherwise.
 
 ## What the program still does not write
 

@@ -50,8 +50,9 @@ fn with_room_for_every_agent_the_two_modes_serve_alike() {
 /// At the paper's scale (`tools/thunderagent/sweep.py --preset paper`, one
 /// seed, a shorter run), the two causes `docs/design/thunderagent.md` gives
 /// for the paper's larger numbers: a recompute that costs the square of
-/// its context (`g`) is what makes default mode lose, and the KV the
-/// router's count leaves free (`slack`) is what keeps paused prefixes.
+/// its context (`g`) is what makes default mode lose, and a system prompt
+/// every program shares (`S`) is what keeps paused prefixes and gives
+/// default mode its hits.
 fn paper(tr: &str, more: &[&str]) -> serq::Report {
     let mut sets = vec![
         tr,
@@ -88,12 +89,15 @@ fn the_square_of_a_recompute_is_what_default_mode_loses() {
     );
 }
 
+/// The router counts the shared prompt in every program's tokens, and vLLM
+/// stores it once: the KV that leaves free keeps paused programs' prefixes.
 #[test]
-fn the_kv_the_count_leaves_free_keeps_paused_prefixes() {
-    let hit = |slack: &str| token_hit(&paper("tr=1", &["g=1.1e-9", slack]));
-    let (tight, loose) = (hit("slack=0"), hit("slack=0.2"));
+fn a_shared_system_prompt_keeps_paused_prefixes_and_gives_default_mode_its_hits() {
+    let hit = |tr: &str, s: &str| token_hit(&paper(tr, &["g=3.3e-9", s]));
+    let (alone, shared) = (hit("tr=1", "S=0"), hit("tr=1", "S=3968"));
+    let default = hit("tr=0", "S=3968");
     assert!(
-        tight < 0.75 && loose > 0.8,
-        "TR hit: slack 0 {tight}, slack 0.2 {loose}"
+        alone < 0.75 && shared > 0.85 && default > 0.2,
+        "TR hit: S 0 {alone}, S 3968 {shared}; default hit, S 3968 {default}"
     );
 }

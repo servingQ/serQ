@@ -34,41 +34,47 @@ fn main() {
   let g = args.number("g", 0);               // prefill attention per token and context token (s)
   let omega = args.number("omega", 0.02);    // weights read per iteration (s)
   let beta = args.number("beta", 2e-7);      // KV read per iteration per resident context token (s)
-  // The share of the KV the router's count leaves unused: what it counts
-  // twice, such as a system prompt the programs share and vLLM stores
-  // once (shared_tokens is never subtracted at 7ddc861). 0: the count is
-  // the KV.
-  let slack = args.number("slack", 0);
+  // The system prompt and tool descriptions every program starts with, in
+  // tokens, a multiple of the block and below the shortest first prompt.
+  // vLLM caches it once and every request reuses it; the router counts it
+  // in every program's tokens (shared_tokens is never subtracted at
+  // 7ddc861).
+  let S = args.number("S", 0);
 
   // A replica: vLLM's engine on one device, its prefix cache in the blocks,
   // examples/pd-disaggregation/llmd_nixl_pull.sq's local decoder without
-  // its max_model_len cap.
+  // its max_model_len cap. The
+  // shared prompt's blocks stay cached: every request hits them, so the LRU
+  // never reaches them. A request holds and caches only its own tokens
+  // beyond them.
   queue E[J] : decode {
-    device gpu { compute (t) = t * a; hbm (k) = omega + beta * k; kv cap blocks * bs; }
+    device gpu { compute (t) = t * a; hbm (k) = omega + beta * k; kv cap blocks * bs - S; }
     engine on gpu {
       reqs cap max_seqs;
       tokens cap B;
       schedule { advance running; admit waiting while (running.preempted == 0); }
       // a prefill's attention over its context grows with the square of
-      // what it recomputes (the paper's Eq. 8)
-      execute (c0 + max(hbm(batch.kv_decode + batch.kv_prefill),
-                        compute(batch.tokens) + g * batch.attention));
+      // what it recomputes (the paper's Eq. 8); every request also reads
+      // and attends to the shared prompt
+      execute (c0 + max(hbm(batch.kv_decode + batch.kv_prefill + S * batch.decoding),
+                        compute(batch.tokens) + g * (batch.attention + S * batch.prefilled)));
     }
     pool reqs on E { queue fifo; }
     pool kv on E.gpu { block bs; evict lru; preempt lifo; }
+    // `own` is every token the request has beyond the shared prompt.
     decode (prompt) {
-      set kept = prompt;   // the most tokens an attempt had: a preemption keeps the outputs
-      hold kv (cost(kv, min(known, reused + budget_left(E)))) reserve (cost(kv, known)), reqs (cost(reqs, 1))
-           at admission (known = max(kept, computed + 1),
-                         reused = min(cachedin(kv), floor(known - 1, bs))) {
-        set kept = known;
-        set c = min(cached, floor(known - 1, bs));
-        observe hit = c > 0;
-        observe reused_tokens = c;               // vLLM's prefix_cache_hits; with prefill_tokens, its queries
-        observe prefill_tokens = known - c;
-        run E prefill (cost(E, known - c)) growing kv;
-        run E decode (cost(E, o - 1 - (known - prompt))) growing kv;
-      } cache (cost(kv, reqs, prompt + o));
+      set kept = prompt - S;   // the most tokens an attempt had: a preemption keeps the outputs
+      hold kv (cost(kv, min(own, reused + budget_left(E)))) reserve (cost(kv, own)), reqs (cost(reqs, 1))
+           at admission (own = max(kept, computed + 1),
+                         reused = min(cachedin(kv), floor(own - 1, bs))) {
+        set kept = own;
+        set c = min(cached, floor(own - 1, bs));
+        observe hit = c > 0;                      // any block of the program's own
+        observe reused_tokens = S + c;            // vLLM's prefix_cache_hits; with prefill_tokens, its queries
+        observe prefill_tokens = own - c;
+        run E prefill (cost(E, own - c)) growing kv;
+        run E decode (cost(E, o - 1 - (own - (prompt - S)))) growing kv;
+      } cache (cost(kv, reqs, prompt - S + o));
     }
   }
 
@@ -102,7 +108,7 @@ fn main() {
   // (_pause_until_safe). A paused program's tokens are no longer counted,
   // and its next request waits to be let in again.
   pool prog[J] {
-    cap tr ? blocks * bs * (1 - slack) : inf;
+    cap tr ? blocks * bs : inf;
     queue by (turn_no == 0, prompt);
     preempt leases by (reasoning, prompt);
   }

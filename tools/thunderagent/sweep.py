@@ -8,7 +8,7 @@ lets a paused program in again.
     cargo build --release
     tools/thunderagent/sweep.py                       # the example as committed
     tools/thunderagent/sweep.py --preset paper        # the paper's scale
-    tools/thunderagent/sweep.py --preset paper g=3.3e-9 slack=0.2
+    tools/thunderagent/sweep.py --preset paper g=1.1e-9 S=0
 
 `k=v` sets an argument of the program after the preset's. Every number is
 a simulation of the program as committed, not a measurement: a steps/min
@@ -33,13 +33,16 @@ HORIZON, WARMUP = 3000, 500
 # each replica a GLM-4.6-class model in FP8 on one 8xH100 node, about
 # 500 000 tokens of KV, 64 GFLOP per token at about 4 PFLOP/s, 15 ms of
 # weights and 14 ns of KV read per context token per iteration, and the
-# attention of a prefill over its context at about 1.1 ns per token pair.
-# Both replicas together hold about 50 of the agents' contexts.
+# attention of a prefill over its context at 3.3 ns per token pair (1.1 ns
+# at the matrix units' rate; a third of it). Every program starts with the
+# same 3 968-token system prompt. Both replicas together hold about 50 of
+# the agents' contexts. None of it is fitted: the paper states none of it.
 PRESETS = {
     "example": {"ns": [4, 8, 16, 32, 48], "sets": {}},
     "paper": {
         "ns": [24, 48, 96, 144, 192],
-        "sets": {"blocks": 31250, "a": 1.6e-5, "omega": 0.015, "beta": 1.4e-8, "g": 1.1e-9},
+        "sets": {"blocks": 31250, "a": 1.6e-5, "omega": 0.015, "beta": 1.4e-8, "g": 3.3e-9,
+                 "S": 3968},
     },
 }
 
