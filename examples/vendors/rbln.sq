@@ -10,9 +10,27 @@ fn main() {
   engine llm on npu {
     reqs cap 4;
     tokens cap 256;
+    // What the RBLN scheduler does with one request: vLLM's, a preempted
+    // request keeping its generated tokens (`kept`).
+    request (prompt, output) {
+      set kept = prompt;
+      at admission {
+        known = max(kept, computed + 1);
+        left = budget_left(llm);
+        reused = min(cachedin(kv), reusable(known, blocksize(kv)));
+      }
+      set kept = known;
+      set c = min(cached, reusable(known, blocksize(kv)));
+      prefill (known - c) growing kv;
+      decode (output - (known - prompt)) growing kv;
+      cache (prompt + output);
+    }
     schedule {
       exclusive prefill each at most (128);
-      admit waiting while (running.preempted == 0) each at most (128);
+      // the reused prefix plus a chunk of at most 128, if the whole
+      // sequence fits
+      admit waiting while (running.preempted == 0) each at most (128)
+        taking reqs (1), kv (min(known, reused + min(128, left))) reserve (known);
     }
     execute (0.002 + 0.00001 * batch.tokens);
   }
@@ -24,16 +42,8 @@ fn main() {
 
   }
   server {
-    set kept = prompt;
-    hold reqs (cost(reqs, 1)), kv (cost(kv, min(known, reused + min(128, left)))) reserve (cost(kv, known))
-         at admission (known = max(kept, computed + 1),
-                       left = budget_left(llm),
-                       reused = min(cachedin(kv), reusable(known, blocksize(kv)))) {
-      set kept = known;
-      set c = min(cached, reusable(known, blocksize(kv)));
-      run llm prefill (cost(llm, known - c)) growing kv;
-      run llm decode (cost(llm, out - (known - prompt))) growing kv;
-    } cache (cost(reqs, kv, prompt + out));
+    llm (prompt, out);
   }
+
 
 }
