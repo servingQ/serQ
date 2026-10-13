@@ -99,8 +99,14 @@ serving `M` products this way.
   and no shared segment.
 - `evict by (…)` reads the session that wrote a node first while it lives,
   else the snapshot of the last write.
-- `cachedin(P)` is the cached prefix of the session's waiting hold's
-  chain, else of its innermost hold's, else of its own, in whole blocks.
+- `cachedin(P)` is the cached prefix, in whole blocks, of the session's
+  chain in `P`: its waiting hold's if that hold asks for `P`, else its
+  innermost hold of `P`'s, else its latest lease of `P`'s, else the chain it
+  last cached along in `P`, else its own. A `prefix` keys the pools its
+  hold holds and no other: a hold of `kv` with a `prefix` around a store
+  into an L2 that caches along the session's own chain does not change
+  how the L2's entry is read (#595, which read it by the hold's chain and
+  found 0).
 
 ## What it buys
 

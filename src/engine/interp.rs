@@ -309,6 +309,10 @@ struct Session<'p> {
     /// is no progress there: the session is `stuck`.
     preempt_pos: HashMap<usize, f64>,
     stuck: bool,
+    /// Per pool, the chain along which the session last cached there: the
+    /// key `cachedin` reads the pool by when no allocation of the session
+    /// names it (#595: a `prefix` keys only the pools its hold holds).
+    cached_chain: HashMap<usize, Chain>,
     /// Allocations that outlived their scope (`lease`).
     leases: Vec<Lease<'p>>,
     /// The request's latest token on a step stage, for the gaps between
@@ -1493,6 +1497,7 @@ impl<'p> Interp<'p> {
             script: script.map(|k| (k, 0)),
             adm_seq: u64::MAX,
             preempt_pos: HashMap::new(),
+            cached_chain: HashMap::new(),
             stuck: false,
             leases: vec![],
             last_token: None,
@@ -1805,6 +1810,7 @@ impl<'p> Interp<'p> {
             script: None,
             adm_seq: u64::MAX,
             preempt_pos: HashMap::new(),
+            cached_chain: s.cached_chain.clone(),
             stuck: false,
             leases: vec![],
             last_token: None,
@@ -2611,21 +2617,49 @@ impl<'p> Interp<'p> {
         Rc::from(chain)
     }
 
-    /// The chain `cachedin` reads for the session: its waiting hold's, else
-    /// its innermost hold's, else its own.
-    fn session_chain(&self, sid: usize) -> Chain {
+    /// The chain `cachedin(pl)` reads for the session: that of its waiting
+    /// hold if it asks for `pl`, else of its innermost hold of `pl`, else of
+    /// its latest lease of `pl`, else the one it last cached along in `pl`,
+    /// else its own. A `prefix` keys the pools its hold holds, not the
+    /// others (#595).
+    fn session_chain(&self, pl: usize, sid: usize) -> Chain {
         let s = &self.sessions[sid];
-        match (&s.pending, s.holds.last()) {
-            (Some(p), _) => p.chain.clone(),
-            (None, Some(h)) => h.chain.clone(),
-            (None, None) => own_chain(self.p, s.serial),
+        if let Some(p) = s
+            .pending
+            .as_ref()
+            .filter(|p| p.pools.iter().any(|w| w.pool == pl))
+        {
+            return p.chain.clone();
+        }
+        if let Some((hi, _)) = s.innermost(pl) {
+            return s.holds[hi].chain.clone();
+        }
+        if let Some(l) = s.leases.iter().rev().find(|l| l.pool == pl) {
+            return l.chain.clone();
+        }
+        match s.cached_chain.get(&pl) {
+            Some(c) => c.clone(),
+            None => own_chain(self.p, s.serial),
+        }
+    }
+
+    /// Record that the session cached along `chain` in `q`, for its legs and
+    /// for the session a leg is of: they share its entries.
+    fn note_cached_chain(&mut self, sid: usize, q: usize, chain: &Chain) {
+        let mut at = Some(sid);
+        while let Some(s) = at {
+            self.sessions[s].cached_chain.insert(q, chain.clone());
+            at = match self.sessions[s].leg {
+                Leg::Of(parent) => Some(parent),
+                Leg::No | Leg::Orphan => None,
+            };
         }
     }
 
     /// The cached prefix of the session's chain in `pl`, in whole blocks.
     fn own_entry_size(&self, pl: usize, sid: usize) -> f64 {
         let serial = self.sessions[sid].serial;
-        let chain = self.pool_chain(pl, &self.session_chain(sid), serial);
+        let chain = self.pool_chain(pl, &self.session_chain(pl, sid), serial);
         self.round_down(pl, self.pools[pl].cache.matched(&chain, serial))
     }
 
@@ -2900,6 +2934,12 @@ impl<'p> Interp<'p> {
             rseq,
         );
         self.pools[to].cached += added;
+        if let Some(s) = live
+            && dead.is_none()
+        {
+            let own = own_chain(self.p, owner);
+            self.note_cached_chain(s, to, &own);
+        }
         self.pools[pl].spills += 1;
         self.start_job(sp.via, None, work, RunMode::Plain, None);
     }
@@ -3002,6 +3042,7 @@ impl<'p> Interp<'p> {
             let rseq = self.next_release;
             if keep > 0.0 {
                 self.next_release += 1;
+                self.note_cached_chain(sid, q, &chain);
             }
             let now = self.now;
             delta = self.pools[q]
