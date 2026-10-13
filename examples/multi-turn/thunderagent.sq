@@ -156,10 +156,9 @@ fn main() {
   // waits or no replica has room for it (_select_backend_for_new_program);
   // at each tick it goes to the replica with the most room if one has room
   // for it, wherever it was before (_greedy_resume), and else waits for
-  // the next tick. After 30 minutes it stops waiting for ticks and waits
-  // for room on the replica it chooses, where _wait_for_resume lets it in
-  // whatever the capacity (docs/design/thunderagent.md, item 7). A new one
-  // let in at once goes to
+  // the next tick. After 30 minutes it is let in whatever the capacity
+  // (_wait_for_resume), on the replica it chooses. A new one let in at
+  // once goes to
   // the replica with the fewest program tokens among those it fits; in
   // default mode, to the one with the fewest programs. The program is
   // released when the session ends (/programs/release).
@@ -197,9 +196,13 @@ fn main() {
       choose j in J by (tr ? (free(prog[j]) >= charged ? 0 : 1) : 0,
                         tr ? used(prog[j]) : holders(prog[j]));
       set home = j;
-      hold prog[home] (cost(prog, charged)) {
+      // in with its buffer, then the rest: past the capacity only after
+      // 30 minutes, when _wait_for_resume lets it in whatever the room,
+      // and the next tick pauses others
+      hold prog[home] (cost(prog, tr ? buffer : charged)) {
         if (K > 0) { observe resume_wait = now - t_q; }
       } lease prog[home] (inf);
+      if (tr) { count_as(charged); }
     }
     E[home].decode (prompt);
     // the response's usage, the answer included, replaces the estimate
