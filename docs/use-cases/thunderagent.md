@@ -61,17 +61,17 @@ a program whose lease has gone that it must be let in again.
 |---|---|
 | A replica's capacity, `cache_config.total_tokens_capacity`, against `active_program_tokens + buffer` ([`backend/state.py#L185-L194`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/backend/state.py#L185-L194)) | `pool prog[J] { cap tr ? room : inf; … }`, one member per replica, `room` the replica's `kv` less the shared prompt when it is counted once |
 | `BUFFER_PER_PROGRAM = 100` per active program ([`backend/state.py#L23`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/backend/state.py#L23)) | `let buffer = 100;`, in every amount of `prog` |
-| The scheduler loop: every `--scheduler-interval`, 5 s by default, it lets waiting programs in, then pauses ([`__main__.py#L28`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/__main__.py#L28), [`scheduler/router.py#L746-L771`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L746-L771)) | `stage tick : delay;` and `next_tick(order)`: a wait until a millisecond before the next tick, at the program's place in the router's order |
-| A new program goes to the replica with the fewest active tokens among those where it fits, if no program waits; else it waits in the global queue ([`scheduler/router.py#L330-L362`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L330-L362)) | `choose j in J by (free(prog[j]) >= charged ? 0 : 1, used(prog[j]))`, then a `hold` of `prog[j]`, unless `used(waiting_queue) > 0` or no replica has room |
-| The global waiting queue ([`scheduler/router.py#L560-L571`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L560-L571)) | `pool waiting_queue`, which a program holds while it waits for ticks |
+| The scheduler loop: every `--scheduler-interval`, 5 s by default, it lets waiting programs in, then pauses ([`__main__.py#L28`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/__main__.py#L28), [`scheduler/router.py#L746-L771`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L746-L771)) | `pool waiting_queue { queue by (…) every (dt); }`: a hold on it waits for the next tick |
+| A new program goes to the replica with the fewest active tokens among those where it fits, if no program waits; else it waits in the global queue ([`scheduler/router.py#L330-L362`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L330-L362)) | `choose j in J by (free(prog[j]) >= charged ? 0 : 1, used(prog[j]))`, then a `hold` of `prog[j]`, unless `queued(waiting_queue) > 0` or no replica has room |
+| The global waiting queue ([`scheduler/router.py#L560-L571`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L560-L571)) | `pool waiting_queue`, in whose queue a program waits for ticks |
 | The program's tokens are counted while it reasons and while it calls a tool, at `acting_token_weight` 1.0, the default ([`backend/state.py#L104-L107`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/backend/state.py#L104-L107), [`__main__.py#L30`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/__main__.py#L30)) | `lease prog[home] (inf)`: the allocation outlives the hold |
 | A running program's next request is let through without a capacity check; its count becomes the new prompt's estimate, its characters over a ratio learnt from earlier responses ([`scheduler/router.py#L384-L389`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L384-L389), [`#L450-L458`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L450-L458), [`#L479-L491`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L479-L491)) | `charged`, the prompt off by at most `est` (0: exact), to which the lease grows or shrinks |
 | After the response, the count is the response's usage, the answer included ([`scheduler/router.py#L493-L494`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L493-L494)) | the lease grows or shrinks to `prompt + o + buffer` after the engine's request |
 | An ACTING program counts `acting_token_weight` of its tokens ([`backend/state.py#L104-L107`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/backend/state.py#L104-L107)) | `shrink prog[home] (cost(prog, (1 - w) * (allocated(prog[home]) - buffer)))` after the response, grown back at the next request |
-| Over capacity, pause the ACTING programs, the smallest first, then the REASONING ones ([`scheduler/router.py#L773-L805`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L773-L805)) | `preempt leases by (reasoning, prompt) every (dt) suspend;` on `prog`: a growth goes through, and at the tick idle programs' leases are set aside first, the smaller first |
-| A paused program with no request pending is let in again at a later tick if it fits, last of the groups, smallest first ([`scheduler/router.py#L851-L866`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L851-L866)) | `suspend`: the tick gives a set-aside lease back, before it pauses, if it fits |
+| Over capacity, pause the ACTING programs, the smallest first, then the REASONING ones ([`scheduler/router.py#L773-L805`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L773-L805)) | `preempt leases by (reasoning, prompt) every (dt) suspend by (prompt);` on `prog`: a growth goes through, and at the tick idle programs' leases are set aside first, the smaller first |
+| A paused program with no request pending is let in again at a later tick if it fits, last of the groups, smallest first ([`scheduler/router.py#L851-L866`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L851-L866)) | `suspend by (prompt)`: the tick gives set-aside leases back, the smaller first, before it pauses, each that fits |
 | A paused program's next request waits for a tick that lets it in, on the replica with the most room if one has room for it, wherever it was before ([`scheduler/router.py#L411-L424`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L411-L424), [`#L807-L932`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L807-L932)) | `allocated(prog[home])` is 0: the program releases what is set aside, waits for the next tick, then for the next while `no_room(charged)`, and is placed as a new one |
-| A program that has waited 30 minutes is let in whatever the capacity; at a tick, programs with a pending request, then new ones, each group smallest first ([`#L934-L956`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L934-L956), [`scheduler/router.py#L851-L866`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L851-L866)) | after 1 800 s the program stops waiting for ticks and is let in on the replica it chooses, past the capacity if it must; programs back at one tick wake in that order, with a step first, then new ones, the smaller first in each |
+| A program that has waited 30 minutes is let in whatever the capacity; at a tick, programs with a pending request, then new ones, each group smallest first ([`#L934-L956`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L934-L956), [`scheduler/router.py#L851-L866`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L851-L866)) | after 1 800 s the program stops waiting for ticks and is let in on the replica it chooses, past the capacity if it must; the waiting queue lets programs in at a tick in its order, `queue by (K > 0 ? 0 : 1, charged)` |
 | `/programs/release` at the end of the trajectory ([`scheduler/router.py#L514-L547`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L514-L547)) | the session's end ends the lease |
 | `--router default`: the replica with the fewest programs, no capacity ([`scheduler/router.py#L252-L271`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L252-L271)) | `tr = 0`: `cap inf` and `choose … by (0, holders(prog[j]))` |
 
@@ -120,16 +120,16 @@ At the example's configuration:
 |---|---|---|---|---|---|
 | 4 | 21.4 | 21.1 | 1.01 | 0.90 | 0.88 |
 | 8 | 28.9 | 24.1 | 1.20 | 0.84 | 0.53 |
-| 16 | 28.7 | 18.7 | 1.53 | 0.78 | 0.02 |
-| 32 | 27.6 | 18.6 | 1.48 | 0.71 | 0.01 |
-| 48 | 26.8 | 18.6 | 1.44 | 0.65 | 0.02 |
+| 16 | 28.8 | 18.7 | 1.54 | 0.78 | 0.02 |
+| 32 | 27.7 | 18.6 | 1.49 | 0.71 | 0.01 |
+| 48 | 27.0 | 18.6 | 1.45 | 0.66 | 0.02 |
 
 A step is a reasoning and an acting period, the paper's unit. While the
 agents' contexts fit, the two modes serve the same. Past that, default
 mode lets every agent in, the caches thrash, and almost every turn
 recomputes its whole context. TR mode keeps the prefixes of the programs
 it runs and serves about 1.5 times the steps. The gain is paid in
-waiting: TR mode's mean time to first token is lower (55 s against 81 s
+waiting: TR mode's mean time to first token is lower (54 s against 81 s
 at 32 agents), but its 99th percentile is 1 817 s against 140 s, since a
 program held back waits for the router's ticks until a replica has room
 for it; the router lets the smaller in first, so the largest wait until
@@ -148,10 +148,10 @@ not a fit:
 | N | TR steps/min | default steps/min | ratio | TR token hit | default token hit |
 |---|---|---|---|---|---|
 | 24 | 170.8 | 170.9 | 1.00 | 0.94 | 0.94 |
-| 48 | 294.6 | 284.7 | 1.03 | 0.94 | 0.93 |
-| 96 | 319.6 | 100.6 | 3.18 | 0.93 | 0.24 |
-| 144 | 319.3 | 99.5 | 3.21 | 0.93 | 0.23 |
-| 192 | 318.8 | 99.4 | 3.21 | 0.93 | 0.23 |
+| 48 | 294.7 | 284.7 | 1.03 | 0.94 | 0.93 |
+| 96 | 319.7 | 100.6 | 3.18 | 0.93 | 0.24 |
+| 144 | 319.1 | 99.5 | 3.21 | 0.93 | 0.23 |
+| 192 | 318.5 | 99.4 | 3.20 | 0.93 | 0.23 |
 
 The paper's SWE-agent runs on GLM-4.6 (Fig. 4a and Fig. 5a, read from the
 figures) serve 218, 275, 162 and 140 steps/min under vLLM and 220, 350,

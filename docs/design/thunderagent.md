@@ -30,17 +30,17 @@ the paper's to the PDF in its `assets/paper/`.
 |---|---|
 | A replica's capacity, `cache_config.total_tokens_capacity`, against `active_program_tokens + buffer` ([`backend/state.py#L185-L194`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/backend/state.py#L185-L194)) | `pool prog[J] { cap tr ? room : inf; … }`, one member per replica, `room` the replica's `kv` less the shared prompt when it is counted once |
 | `BUFFER_PER_PROGRAM = 100` per active program ([`backend/state.py#L23`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/backend/state.py#L23)) | `let buffer = 100;`, in every amount of `prog` |
-| The scheduler loop: every `--scheduler-interval`, 5 s by default, it lets waiting programs in, then pauses ([`__main__.py#L28`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/__main__.py#L28), [`scheduler/router.py#L746-L771`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L746-L771)) | `stage tick : delay;` and `next_tick(order)`: a wait until a millisecond before the next tick, at the program's place in the router's order |
-| A new program goes to the replica with the fewest active tokens among those where it fits, if no program waits; else it waits in the global queue ([`scheduler/router.py#L330-L362`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L330-L362)) | `choose j in J by (free(prog[j]) >= charged ? 0 : 1, used(prog[j]))`, then a `hold` of `prog[j]`, unless `used(waiting_queue) > 0` or no replica has room |
-| The global waiting queue ([`scheduler/router.py#L560-L571`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L560-L571)) | `pool waiting_queue`, which a program holds while it waits for ticks |
+| The scheduler loop: every `--scheduler-interval`, 5 s by default, it lets waiting programs in, then pauses ([`__main__.py#L28`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/__main__.py#L28), [`scheduler/router.py#L746-L771`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L746-L771)) | `pool waiting_queue { queue by (…) every (dt); }`: a hold on it waits for the next tick |
+| A new program goes to the replica with the fewest active tokens among those where it fits, if no program waits; else it waits in the global queue ([`scheduler/router.py#L330-L362`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L330-L362)) | `choose j in J by (free(prog[j]) >= charged ? 0 : 1, used(prog[j]))`, then a `hold` of `prog[j]`, unless `queued(waiting_queue) > 0` or no replica has room |
+| The global waiting queue ([`scheduler/router.py#L560-L571`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L560-L571)) | `pool waiting_queue`, in whose queue a program waits for ticks |
 | The program's tokens are counted while it reasons and while it calls a tool, at `acting_token_weight` 1.0, the default ([`backend/state.py#L104-L107`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/backend/state.py#L104-L107), [`__main__.py#L30`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/__main__.py#L30)) | `lease prog[home] (inf)`: the allocation outlives the hold |
 | A running program's next request is let through without a capacity check; its count becomes the new prompt's estimate, its characters over a ratio learnt from earlier responses ([`scheduler/router.py#L384-L389`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L384-L389), [`#L450-L458`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L450-L458), [`#L479-L491`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L479-L491)) | `charged`, the prompt off by at most `est` (0: exact), to which the lease grows or shrinks |
 | After the response, the count is the response's usage, the answer included ([`scheduler/router.py#L493-L494`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L493-L494)) | the lease grows or shrinks to `prompt + o + buffer` after the engine's request |
 | An ACTING program counts `acting_token_weight` of its tokens ([`backend/state.py#L104-L107`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/backend/state.py#L104-L107)) | `shrink prog[home] (cost(prog, (1 - w) * (allocated(prog[home]) - buffer)))` after the response, grown back at the next request |
-| Over capacity, pause the ACTING programs, the smallest first, then the REASONING ones ([`scheduler/router.py#L773-L805`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L773-L805)) | `preempt leases by (reasoning, prompt) every (dt) suspend;` on `prog`: a growth goes through, and at the tick idle programs' leases are set aside first, the smaller first |
-| A paused program with no request pending is let in again at a later tick if it fits, last of the groups, smallest first ([`scheduler/router.py#L851-L866`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L851-L866)) | `suspend`: the tick gives a set-aside lease back, before it pauses, if it fits |
+| Over capacity, pause the ACTING programs, the smallest first, then the REASONING ones ([`scheduler/router.py#L773-L805`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L773-L805)) | `preempt leases by (reasoning, prompt) every (dt) suspend by (prompt);` on `prog`: a growth goes through, and at the tick idle programs' leases are set aside first, the smaller first |
+| A paused program with no request pending is let in again at a later tick if it fits, last of the groups, smallest first ([`scheduler/router.py#L851-L866`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L851-L866)) | `suspend by (prompt)`: the tick gives set-aside leases back, the smaller first, before it pauses, each that fits |
 | A paused program's next request waits for a tick that lets it in, on the replica with the most room if one has room for it, wherever it was before ([`scheduler/router.py#L411-L424`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L411-L424), [`#L807-L932`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L807-L932)) | `allocated(prog[home])` is 0: the program releases what is set aside, waits for the next tick, then for the next while `no_room(charged)`, and is placed as a new one |
-| A program that has waited 30 minutes is let in whatever the capacity; at a tick, programs with a pending request, then new ones, each group smallest first ([`#L934-L956`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L934-L956), [`scheduler/router.py#L851-L866`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L851-L866)) | after 1 800 s the program stops waiting for ticks and is let in on the replica it chooses, past the capacity if it must; programs back at one tick wake in that order, with a step first, then new ones, the smaller first in each |
+| A program that has waited 30 minutes is let in whatever the capacity; at a tick, programs with a pending request, then new ones, each group smallest first ([`#L934-L956`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L934-L956), [`scheduler/router.py#L851-L866`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L851-L866)) | after 1 800 s the program stops waiting for ticks and is let in on the replica it chooses, past the capacity if it must; the waiting queue lets programs in at a tick in its order, `queue by (K > 0 ? 0 : 1, charged)` |
 | `/programs/release` at the end of the trajectory ([`scheduler/router.py#L514-L547`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L514-L547)) | the session's end ends the lease |
 | `--router default`: the replica with the fewest programs, no capacity ([`scheduler/router.py#L252-L271`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L252-L271)) | `tr = 0`: `cap inf` and `choose … by (0, holders(prog[j]))` |
 
@@ -183,21 +183,17 @@ At each tick it lets waiting programs in, those with a request pending
 first, then new ones, then paused ones that have none, the smaller first
 in each, and then pauses on every replica that is over its capacity.
 Between ticks a running program's request goes through unchecked, and a
-replica's count may go over. Two parts write it: the waiting is the
-program's, and the pause and the early resume are the pool's.
+replica's count may go over. Two pools write it: the global waiting queue
+lets its programs in at the tick, and each replica's `prog` gives back
+and pauses at it.
 
 **The waiting.** A paused program, and a new one when another waits or
-no replica has room for it, waits for the next tick on a delay stage,
+no replica has room for it, waits in the global queue for the next tick,
 and at each tick goes in if a replica has room for it, on the one with
-the most room, wherever it was before; else it waits for the next. The
-global queue is a pool its waiters hold:
+the most room, wherever it was before; else it waits for the next:
 
 ```serq
-  stage tick : delay;
-  pool waiting_queue { }
-  def next_tick(order) {
-    run tick (cost(tick, floor(now + 1e-3, dt) + dt - 1e-3 + order - now));
-  }
+  pool waiting_queue { queue by (K > 0 ? 0 : 1, charged) every (dt); }
   def no_room(x) { max r in J (free(prog[r])) < x }
   …
     } else {
@@ -205,13 +201,11 @@ global queue is a pool its waiters hold:
       if (K > 0) { release prog[home]; }
       set t_q = now;
       // a paused program, or a new one behind others or with no room
-      set waits = tr && (K > 0 || used(waiting_queue) > 0 || no_room(charged));
-      if (waits) {
-        set order = (K > 0 ? 0 : 1e-4) + 1e-10 * charged;
-        hold waiting_queue (cost(waiting_queue, 1)) {
-          next_tick(order);
-          while (no_room(charged) && now - t_q < force_resume) { run tick (cost(tick, dt)); }
-        }
+      set waits = tr && (K > 0 || queued(waiting_queue) > 0 || no_room(charged));
+      while (waits) {
+        // the next tick, at its place in the router's order
+        hold waiting_queue (cost(waiting_queue, 1)) { }
+        set waits = no_room(charged) && now - t_q < force_resume;
       }
       choose j in J by (…);
       set home = j;
@@ -219,45 +213,57 @@ global queue is a pool its waiters hold:
       if (tr) { count_as(charged); }
 ```
 
-A program let in enters with its buffer and grows the rest: within the
-room it was let in for, or, once it has waited 30 minutes, past the
-capacity, as `_wait_for_resume` lets it in whatever the room; the next
-tick then pauses others.
+`queue … every (dt)` admits only at the pool's ticks, in the queue's
+order: those with a step before new ones, the smaller first in each
+(`_greedy_resume`'s groups). Each one let in runs until it blocks, past
+its `choose` and into its replica, before the next is tried, so it reads
+the room the one before it left. One that finds no room queues again,
+for the next tick, as the resume's selection skips it. A program let in
+enters with its buffer and grows the rest: within the room it was let in
+for, or, once it has waited 30 minutes, past the capacity, as
+`_wait_for_resume` lets it in whatever the room; the next tick then
+pauses others.
 
-Every waiter wakes a millisecond before the tick, at an instant that
-puts it in the router's order: those with a step before new ones, the
-smaller first, microseconds apart. Each takes a replica only if one has
-room for it, so a program that does not fit leaves the room to those
-behind it that do, as the resume's selection skips it.
-
-**The pause and the early resume.** The pool's own rule takes the rest:
+**The pause and the early resume.** The replica's pool takes the rest:
 
 ```serq
   pool prog[J] {
     cap tr ? room : inf;
-    preempt leases by (reasoning, prompt) every (dt) suspend;
+    preempt leases by (reasoning, prompt) every (dt) suspend by (prompt);
   }
 ```
 
 `every (dt)` lets a lease's growth through at once, past the cap if it
 must, and at each multiple of `dt` takes leases in the keys' order while
-the pool is over its cap: ThunderAgent's pause, at its tick. `suspend`
+the pool is over its cap: ThunderAgent's pause, at its tick. `suspend by`
 sets a taken lease aside instead of ending it, and at each later tick,
-before it takes any, gives set-aside leases back in the same order while
-they fit: the resume of a paused program that has no request pending,
-the last of `_greedy_resume`'s groups. The program finds its lease back
-(`allocated(prog[home]) > 0`) and goes on as a running one; a lease still
-set aside at its next request it releases, and waits.
+before it takes any, gives set-aside leases back in its keys' order, the
+smaller first, each that fits: the resume of a paused program that has no
+request pending, the last of `_greedy_resume`'s groups. The program finds
+its lease back (`allocated(prog[home]) > 0`) and goes on as a running
+one; a lease still set aside at its next request it releases, and waits.
+
+**The order at a tick.** At an instant the pools' ticks come after its
+other events, the queue ticks before the preemption ticks, each in the
+order the pools are declared. So the router's order is the language's:
+the waiting queue lets its programs in, then each replica gives back
+what fits, then pauses while it is over.
 
 ### The price
 
 `Preempt::Leases` gains two fields a reader may ignore when absent:
-`every`, a number of seconds, and `suspend`. IR 13 is untagged, so
+`every`, a number of seconds, and `suspend`, the keys a set-aside lease
+comes back in. `Pool` gains one, `queue_every`. IR 13 is untagged, so
 nothing bumps, and they go in the coming tag's message with the rest of
-13. The Lean generator already raises `Fragment` on `Leases`; no oracle
-program uses either. No other program's IR moves: both are absent unless
-written. `suspend` without `every`, or `every` on a pool with `reserve
-held`, does not link (`tests/lease_ticks.rs`).
+13. The Lean generator already raises `Fragment` on `Leases` and on a
+pool with a queue order; no oracle program uses any of them. No other
+program's IR moves: all are absent unless written. `suspend` without
+`every`, `every` on a pool with `reserve held`, and `queue … every` on a
+pool an engine admits do not link (`tests/lease_ticks.rs`,
+`tests/queue_ticks.rs`). The ticks' place in an instant is a fixed rule
+of the language, as an iteration's is (it starts once every event of
+its instant has been handled). The deployment figure draws the wait for
+a queue's tick as a station of its own inside the queue's pool.
 
 ### Rejected on the way
 
@@ -267,7 +273,24 @@ held`, does not link (`tests/lease_ticks.rs`).
   too (a session's own slot), so the rule was the wrong condition (#591's
   review). A lease set aside now lets the prefix go, as a release does,
   and the rule went.
-
+- **The waiters' order as instants within the tick.** The first version
+  woke every waiter on a delay stage a millisecond before the tick, at
+  `1e-4` for a new program and `1e-10 × charged` within it, so that the
+  order of their instants was the router's (#591's review). It said how
+  the order is computed, not what it is (criterion 1), and rested on
+  `charged < 10⁶`. A pool's queue could not order them: the interpreter
+  settles after each event, so the first waiter to wake took its replica
+  before the second woke, and its `queue by` never saw them together.
+  `queue … every` hands them to the queue at once, at its tick.
+- **The resume in the victim's order.** The first `suspend` gave leases
+  back in the order it took them, which a program could not state
+  otherwise (criterion 2). ThunderAgent's two orders agree, those calling
+  a tool the smaller first, but a program may want the largest back
+  first, so `suspend by` takes its own keys. Two rules stay fixed: a lease
+  that does not fit is passed over, as a waiter is, and the give-back
+  comes before the pause. Writing either otherwise is a pool that pauses
+  what it has just given back, or one that waits behind a lease that will
+  not fit; no program here wants them, so no clause selects them.
 - **A timer statement.** A `every (dt) { … }` block the program writes
   would run the router's loop as its own actor. It would need statements
   that act on other sessions' leases, a new kind of node every consumer
@@ -279,10 +302,11 @@ held`, does not link (`tests/lease_ticks.rs`).
   (above, *A revoked lease waiting in the queue*). Under `suspend` the
   session waits nowhere: the pool keeps the lease aside and gives it
   back; the session only finds it again.
-- **The waiters' order as a queue key.** The waiters check for room
-  themselves at each tick, so a `queue by` on `prog` orders only those
-  that waited past the force-resume. Their instants within the tick are
-  what orders them, and they are the program's.
+- **One `every` for the pool.** A single `every (dt);` on `prog` for both
+  its queue and its pause would tie the replica's admissions to the tick,
+  and ThunderAgent places a new program at once when no one waits. The
+  global queue is a pool of its own, whose queue ticks; the replicas'
+  pools pause at theirs.
 
 ## What the program shows, against the paper
 
@@ -300,11 +324,11 @@ step adds about 1 000 tokens of observation and 300 of answer:
 
 | N | TR steps/min | default steps/min | ratio | TR hit | default hit | TR resumed/turn |
 |---|---|---|---|---|---|---|
-| 4 | 21.4 | 21.1 | 1.01 | 0.90 | 0.88 | 0.007 |
+| 4 | 21.4 | 21.1 | 1.01 | 0.90 | 0.88 | 0.006 |
 | 8 | 28.9 | 24.1 | 1.20 | 0.84 | 0.53 | 0.059 |
-| 16 | 28.7 | 18.7 | 1.53 | 0.78 | 0.02 | 0.111 |
-| 32 | 27.6 | 18.6 | 1.48 | 0.71 | 0.01 | 0.161 |
-| 48 | 26.8 | 18.6 | 1.44 | 0.65 | 0.02 | 0.202 |
+| 16 | 28.8 | 18.7 | 1.54 | 0.78 | 0.02 | 0.111 |
+| 32 | 27.7 | 18.6 | 1.49 | 0.71 | 0.01 | 0.163 |
+| 48 | 27.0 | 18.6 | 1.45 | 0.66 | 0.02 | 0.203 |
 
 The paper's Fig. 4 and Fig. 5 (p. 9-10), with values read from the
 figures except the printed ratios:
@@ -319,16 +343,15 @@ figures except the printed ratios:
 | (f) ScienceAgent, GLM-4.6 | 48-120 | 39.5 → 40 | 39.5 → 49.5 | 1.24 | 51 % | 52 → 60 % |
 
 The gain is a closed workload's, and it is paid in waiting. At 32 agents
-(seed 1), TR mode's mean time to first token is 55 s against default
-mode's 81 s, but its 99th percentile is 1 817 s against 140 s (1 817-1 818 s
+(seed 1), TR mode's mean time to first token is 54 s against default
+mode's 81 s, but its 99th percentile is 1 817 s against 140 s (1 816-1 818 s
 over seeds 1-4): a program the router holds back waits for room, and
 since the router lets the smaller in first, the largest wait until the
-force-resume lets them in at 30 minutes: 14 % of the resumes (2 % of
-the turns, seed 1) wait exactly that long, programs with prompts 2.7
-times the others'. Without the size in the order (those with a step
-still first) the 99th percentile is 639-788 s over seeds 1-4, and with
-the waiters in the order they reach the tick 409-486 s, at 1.5 % fewer
-steps/min. Under open Poisson arrivals of
+force-resume lets them in at 30 minutes, the 99th percentile of a
+resume's wait (1 805 s, seed 1). Without the size in the queue's order
+(`queue by (K > 0 ? 0 : 1)`) the 99th percentile is 649-783 s over seeds
+1-4, and in the order the programs joined it (`queue fifo`) 401-528 s, at
+1 % fewer steps/min. Under open Poisson arrivals of
 programs (the same program with `arrive poisson`), at rates default mode
 keeps up with, 0.01-0.02 a second, the two serve the same turns and TR
 mode's TTFT is a little lower (0.46 s against 1.05 s at 0.02). At 0.04 a
@@ -346,10 +369,10 @@ the reasons, one at a time.
 
 Write the throughput by Little's law: steps/min = agents × 60 / (time a
 step takes, its wait included). At 32 agents on the example's scale (seed
-1), TR mode's step is 68 s: 65 s from request to answer, of which 51 s
-is the wait for the router's ticks (24 of the 32 agents wait for one at
-any moment, Little's law at 0.47 turns a second), 14 s at the replica
-and its queues, and 3 s at the tool. A sixth of the turns come from a paused program.
+1), TR mode's step is 67 s: 65 s from request to answer, of which 51 s
+is the wait for the router's ticks (24 of the 32 agents are in its queue
+at any moment, Little's law at 0.47 turns a second), 14 s at the replica
+and its queues, and the rest at the tool. A sixth of the turns come from a paused program.
 Default mode's is 99 s: 96 s
 at the replica, most of it waiting for blocks behind the requests that
 recompute, and 3 s at the tool. The replicas run about as many requests
@@ -409,32 +432,32 @@ paper`), one factor at a time:
 
 | Setting | ratio at N = 96, 144, 192 | TR hit | default hit |
 |---|---|---|---|
-| preset: `g` 3.3e-9, `S` 3 968 | 3.18, 3.21, 3.21 | 0.93 | 0.23-0.24 |
+| preset: `g` 3.3e-9, `S` 3 968 | 3.18, 3.21, 3.20 | 0.93 | 0.23-0.24 |
 | `S` 0 | 2.40, 2.38, 2.34 | 0.73-0.74 | 0.01 |
-| `S` 2 048 | 3.21, 3.19, 3.18 | 0.90 | 0.12-0.13 |
-| `count_shared` 0 | 2.29, 2.26, 2.23 | 0.74-0.77 | 0.23-0.24 |
+| `S` 2 048 | 3.21, 3.19, 3.19 | 0.90 | 0.12-0.13 |
+| `count_shared` 0 | 2.30, 2.26, 2.22 | 0.74-0.77 | 0.23-0.24 |
 | `g` 0 | 1.18, 1.20, 1.20 | 0.93 | 0.23-0.28 |
 | `g` 1.1e-9 | 1.89, 1.93, 1.93 | 0.93 | 0.23-0.26 |
-| `Z` 1 s | 3.56, 3.56, 3.55 | 0.93 | 0.23-0.24 |
-| `Z` 10 s | 2.01, 2.12, 2.12 | 0.91-0.92 | 0.23-0.29 |
+| `Z` 1 s | 3.56, 3.57, 3.55 | 0.93 | 0.23-0.24 |
+| `Z` 10 s | 2.01, 2.12, 2.12 | 0.92 | 0.23-0.29 |
 | `w` 0.9 | 3.21, 3.24, 3.24 | 0.93 | 0.23-0.24 |
 | `w` 0.75 | 3.19, 3.22, 3.21 | 0.91-0.92 | 0.23-0.24 |
-| `w` 0.5 | 2.64, 2.63, 2.64 | 0.84 | 0.23-0.24 |
-| `w` 0 | 1.29, 1.29, 1.29 | 0.43-0.45 | 0.23-0.24 |
-| `dt` 0.05 s | 3.03, 3.01, 2.96 | 0.88-0.90 | 0.23-0.24 |
-| `dt` 2 s | 3.17, 3.19, 3.19 | 0.92 | 0.23-0.24 |
+| `w` 0.5 | 2.62, 2.64, 2.62 | 0.83-0.84 | 0.23-0.24 |
+| `w` 0 | 1.29, 1.30, 1.29 | 0.43-0.45 | 0.23-0.24 |
+| `dt` 0.05 s | 3.04, 3.01, 2.96 | 0.88-0.90 | 0.23-0.24 |
+| `dt` 2 s | 3.17, 3.20, 3.19 | 0.92 | 0.23-0.24 |
 | `dt` 10 s | 3.17, 3.20, 3.19 | 0.93 | 0.23-0.24 |
-| `est` 0.2 | 3.17, 3.19, 3.19 | 0.93 | 0.23-0.24 |
+| `est` 0.2 | 3.17, 3.19, 3.18 | 0.93 | 0.23-0.24 |
 
 The preset in full:
 
 | N | TR steps/min | default steps/min | ratio | TR hit | default hit | TR resumed/turn |
 |---|---|---|---|---|---|---|
 | 24 | 170.8 | 170.9 | 1.00 | 0.94 | 0.94 | 0.000 |
-| 48 | 294.6 | 284.7 | 1.03 | 0.94 | 0.93 | 0.006 |
-| 96 | 319.6 | 100.6 | 3.18 | 0.93 | 0.24 | 0.053 |
-| 144 | 319.3 | 99.5 | 3.21 | 0.93 | 0.23 | 0.057 |
-| 192 | 318.8 | 99.4 | 3.21 | 0.93 | 0.23 | 0.062 |
+| 48 | 294.7 | 284.7 | 1.03 | 0.94 | 0.93 | 0.006 |
+| 96 | 319.7 | 100.6 | 3.18 | 0.93 | 0.24 | 0.053 |
+| 144 | 319.1 | 99.5 | 3.21 | 0.93 | 0.23 | 0.058 |
+| 192 | 318.5 | 99.4 | 3.20 | 0.93 | 0.23 | 0.062 |
 
 Beside Fig. 4a and Fig. 5a (SWE-agent on GLM-4.6), whose vLLM serves 218,
 275, 162 and 140 steps/min and ThunderAgent 220, 350, 382 and 370 at 24-96
@@ -463,7 +486,7 @@ programs, with hit rates falling to 30 % and 93 %:
   does not state its prompts' length.
 - **The tool time bounds the gain.** With 10 s tools the ratio is 2.0-2.1;
   with 1 s tools it is 3.6, above the preset's 3.2 on every seed (TR mode
-  11 % faster). With 10 s tools TR mode's decode batch falls from 16 to 11
+  11 % faster). With 10 s tools TR mode's decode batch falls from 20 to 11
   while default mode's stays at 31-34. The paper's smallest gains are on its workloads with
   the longest and most variable tools, ScienceAgent (1.24) and
   ToolOrchestra (1.48); ScienceAgent runs OpenHands on GLM-4.6 as the
@@ -562,7 +585,7 @@ What the program does not reproduce:
    write it. The tick's check could read it (a replica's reasoning
    tokens, its acting ones whole for 1 / ln x seconds after a response,
    its buffers), but the pool gives a set-aside lease back only while it
-   fits (`suspend`), and a decayed program counts for almost nothing, so
+   fits (`suspend by`), and a decayed program counts for almost nothing, so
    ThunderAgent resumes every paused program and its pause trims the
    excess at the same tick. A variant that lowers TR mode instead of keeping it
    near 373 (#587) lets in more than the replica holds and pauses others

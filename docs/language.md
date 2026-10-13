@@ -60,10 +60,11 @@ poolopt  := cap expr ;                       -- capacity in units (default inf)
           | evict lru ; | evict by ( expr , ... ) ;   -- eviction order (ascending keys)
           | preempt none ; | preempt lifo ;  -- what a failed growth does
           | preempt by ( expr , ... ) [requeue head | requeue tail] ;   -- the victim: least keys
-          | preempt leases by ( expr , ... ) [every ( expr ) [suspend]] ;
+          | preempt leases by ( expr , ... ) [every ( expr ) [suspend by ( expr , ... )]] ;
                                              -- the victim: the lease with the least keys, which ends;
                                              -- every: at the pool's ticks; suspend: set aside, given back
-          | queue fifo ; | queue by ( expr (, expr)* ) ; -- waiting selection
+          | queue fifo [every ( expr )] ; | queue by ( expr (, expr)* ) [every ( expr )] ;
+                                             -- waiting selection; every: admissions at the pool's ticks
           | reserve held ;                   -- a hold's unallocated reservation counts against later admissions
           | spill POOL via STAGE ( expr ) when ( expr ) ;  -- write evicted prefixes to a tier
 kind     := fifo [ ( c ) ]                   -- c servers, one job each at rate 1
@@ -820,19 +821,20 @@ positive). A lease's growth is let through at once, past the cap if it
 must: `free` reads below 0 until the tick. A hold that is admitted still
 needs room, and a hold's growth takes a lease at once, as without
 `every`. At each tick, while the pool is over its cap, the lease with
-the least keys ends, as at a growth. With `suspend` too, a lease taken,
-at a tick or by a hold's growth, is set aside instead: its units are the
-pool's again, a cached prefix it read is let go as at a release,
-`allocated` reads 0 and it is no victim, and at each later tick, before
-the pool takes any, the leases set aside come back in the keys' order
-while they fit, to a session that neither holds nor leases the pool
-again. A `release` of the pool, or the session's end, drops one; a hold
+the least keys ends, as at a growth. With `suspend by (s₁, …)` too, a
+lease taken, at a tick or by a hold's growth, is set aside instead: its
+units are the pool's again, a cached prefix it read is let go as at a
+release, `allocated` reads 0 and it is no victim, and at each later
+tick, before the pool takes any, the leases set aside come back in the
+order of the `s` keys (read as the victim's are), each that fits, to a
+session that neither holds nor leases the pool again; one that does not
+fit is passed over. A `release` of the pool, or the session's end, drops one; a hold
 of it anew does not. `suspend` needs `every`, and `every` does not link
 on a pool with `reserve held`, whose reservations a growth let past the
 cap would take. A pool over its cap caches nothing until it is back
 within it. ThunderAgent's router acts at a 5 s tick: it pauses then, and lets
 a paused program in again at a tick before its next request when it
-fits.
+fits, the smallest first (`suspend by (prompt)`).
 
 ### Waiting selection
 
@@ -843,6 +845,18 @@ the seconds since the hold joined the queue, reset on re-entry. The chosen
 head that does not fit blocks the rest, a preempted hold re-enters ahead of
 the keys, a key may not draw or read a `hidden` attribute, and selection
 sets no timer. See [Pool](api/pool.md).
+
+`queue … every (dt)` admits only at the pool's ticks, every multiple of
+`dt` seconds (a constant, and positive). At a tick the holds that waited
+when it began are tried in the queue's order: each one admitted runs
+until it blocks (its body, and what follows it, up to its next wait)
+before the next is tried, and one that does not fit is passed over, not
+waited behind. A hold queued during a tick waits for the next, so a hold
+on such a pool lets time pass, and a `while` around it links. It does not
+link on a pool an engine admits. ThunderAgent's router lets its global
+waiting queue in at its tick, those with a request pending first, the
+smallest first in each, each placed before the next is tried
+(`examples/multi-turn/thunderagent.sq`).
 
 ### Ties
 
@@ -861,7 +875,11 @@ no engine's memory, the holder the pool admitted last). `choose`: the keys, in o
 index. A pool's growers: the order they stalled, the head blocking the
 rest. Events at one instant: the order they were scheduled; sessions run
 in the order they became ready; jobs of a `ps` stage with equal finish
-tags finish in the order they started. Each pool has one queue, and a hold
+tags finish in the order they started. The pools' ticks at an instant
+come after its other events: every `queue … every` tick, then every
+`preempt leases by … every` tick, each in the order the pools are
+declared, so that a waiting queue lets its programs in before the pools
+they enter give back and pause. Each pool has one queue, and a hold
 on several pools waits in its first pool's; where the heads of two queues
 both wait for room in one pool, or one stage serves several queues, the
 pool declared first is served first.

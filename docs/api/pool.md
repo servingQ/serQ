@@ -5,8 +5,8 @@ pool NAME [ '[' N ']' ] {
   cap expr;
   block expr;
   evict lru;  |  evict by (expr, …);
-  preempt none;  |  preempt lifo;  |  preempt by (expr, …) [requeue head | tail];  |  preempt leases by (expr, …) [every (expr) [suspend]];
-  queue fifo;  |  queue by (key, …);
+  preempt none;  |  preempt lifo;  |  preempt by (expr, …) [requeue head | tail];  |  preempt leases by (expr, …) [every (expr) [suspend by (expr, …)]];
+  queue fifo [every (expr)];  |  queue by (key, …) [every (expr)];
   reserve held;
   spill POOL via STAGE (expr) when (expr);
 }
@@ -75,7 +75,7 @@ preempt by (key, …) [requeue head | requeue tail];
 preempt lifo;
 preempt leases by (key, …);
 preempt leases by (key, …) every (dt);
-preempt leases by (key, …) every (dt) suspend;
+preempt leases by (key, …) every (dt) suspend by (key, …);
 ```
 
 What a [`grow`](statements.md#grow) (or a `growing` run) does when the pool has no room.
@@ -87,7 +87,7 @@ What a [`grow`](statements.md#grow) (or a `growing` run) does when the pool has 
 | `lifo` | Shorthand for `by (-admission) requeue head`: preempt the last admitted. |
 | `leases by (k, …)` | End the lease with the least keys, compared in order; ties go to the last admitted. No hold is preempted. |
 | `leases by (k, …) every (dt)` | A lease's growth goes through, past the cap if it must; at every multiple of `dt` seconds, end leases in that order while the pool is over its cap. A hold's growth takes a lease at once. Not on a pool with `reserve held`. |
-| `leases by (k, …) every (dt) suspend` | As `every`, but a lease taken is set aside, and a later tick gives it back, in the same order, if it fits; `release` or the session's end drops it. |
+| `leases by (k, …) every (dt) suspend by (s, …)` | As `every`, but a lease taken is set aside, and each later tick, before it takes any, gives set-aside leases back in the order of the `s` keys, each that fits; `release` or the session's end drops one. |
 
 Candidates are holders resident in the stage whose `memory` is this pool.
 If no stage names it as memory, candidates are holders with an active hold
@@ -132,6 +132,7 @@ Here `priority` and arrival time `t0` are attributes set by the program.
 ```serq
 queue fifo;
 queue by (key, …);
+queue by (key, …) every (dt);
 ```
 
 `by` reevaluates keys for every waiting hold before each admission attempt,
@@ -157,6 +158,19 @@ queue by (immediate ? 0 : prompt > 128 && waited >= 3 ? 1 : prompt <= 128 ? 2 : 
 This admits immediate requests, then aged long requests, then short requests,
 then other long requests. `serial` orders requests within a lane in this
 single-hold workload.
+
+`every (dt)` admits only at every multiple of `dt` seconds. At a tick the
+holds that waited when it began are tried in the queue's order; each one
+admitted runs until it blocks before the next is tried, and one that does
+not fit is passed over rather than blocking the rest. A hold queued during
+the tick waits for the next one. The pools' ticks at an instant come after
+its other events, these before any `preempt leases by … every` tick, each
+in declaration order. Not on a pool an engine admits. ThunderAgent's global
+waiting queue, let in at the router's tick:
+
+```serq
+pool waiting_queue { queue by (K > 0 ? 0 : 1, charged) every (dt); }
+```
 
 ## `reserve held`
 
