@@ -284,3 +284,60 @@ fn a_preempted_request_copies_nothing_in() {
     assert!(!after.is_empty(), "no preempted request came back");
     assert!(after.iter().all(|&g| g == 0.0), "{after:?}");
 }
+
+/// `cachedin(P)` reads `P` by the chain the session cached along there, not
+/// by a hold that does not hold `P` (#595). Inside a `prefix` hold of `kv`
+/// the L2's entry, which `kvt.l2_store` caches along the session's own
+/// chain, read 0; outside it, `kv`'s entry, cached along the hold's chain,
+/// read 0. A system prompt of length 0 hid both: the two chains are one
+/// then. The L2 holds the 100 tokens stored; `kv` the 200 cached, 192 in
+/// whole blocks of 16.
+#[test]
+fn cachedin_reads_each_pool_by_the_chain_it_was_cached_along() {
+    for system in [16, 0] {
+        let r = run(
+            &format!(
+                "use \"std/kvt\";
+                 queue lmc : l2 {{ pool kv {{ cap 1000; block 10; }} serve ps(1); }}
+                 pool kv {{ cap 1000; block 16; }}
+                 {SESSION}
+                 server {{
+                   observe l2_outside = cachedin(lmc.kv);
+                   observe kv_outside = cachedin(kv);
+                   hold kv (cost(kv, 200)) prefix (0: {system}, serial: inf) {{
+                     observe l2_inside = cachedin(lmc.kv);
+                     kvt.l2_store (kv, lmc, 100, per_token = 0.01);
+                   }} cache (cost(kv, 200));
+                 }}"
+            ),
+            &common::horizon(100.0),
+        );
+        assert_eq!(samples(&r, "l2_outside"), [0.0, 100.0], "{system}");
+        assert_eq!(samples(&r, "l2_inside"), [0.0, 100.0], "{system}");
+        assert_eq!(samples(&r, "kv_outside"), [0.0, 192.0], "{system}");
+    }
+}
+
+/// A waiting `prefix` hold of `kv` whose header reads the L2 reads it by the
+/// chain the L2's entry was cached along, not by its own (#595): the second
+/// turn asks 50 units more for the 100 tokens the first stored (100 and
+/// 150, in whole blocks of 16).
+#[test]
+fn a_waiting_hold_reads_another_pool_by_its_cached_chain() {
+    let r = run(
+        &format!(
+            "use \"std/kvt\";
+             queue lmc : l2 {{ pool kv {{ cap 1000; block 10; }} serve ps(1); }}
+             pool kv {{ cap 1000; block 16; }}
+             {SESSION}
+             server {{
+               hold kv (cost(kv, 100 + cachedin(lmc.kv) / 2)) prefix (0: 16, serial: inf) {{
+                 observe asked = allocated(kv);
+                 kvt.l2_store (kv, lmc, 100, per_token = 0.01);
+               }} cache (cost(kv, 100));
+             }}"
+        ),
+        &common::horizon(100.0),
+    );
+    assert_eq!(samples(&r, "asked"), [112.0, 160.0], "{}", r.text());
+}

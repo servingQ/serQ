@@ -99,8 +99,11 @@ serving `M` products this way.
   and no shared segment.
 - `evict by (…)` reads the session that wrote a node first while it lives,
   else the snapshot of the last write.
-- `cachedin(P)` is the cached prefix of the session's waiting hold's
-  chain, else of its innermost hold's, else of its own, in whole blocks.
+- `cachedin(P)` is the cached prefix, in whole blocks, of the session's
+  chain in `P`: its waiting hold's if that hold asks for `P`, else its
+  innermost hold of `P`'s, else the chain it or one of its legs last cached
+  along in `P`, else its own. A `prefix` keys the pools its hold holds and
+  no other.
 
 ## What it buys
 
@@ -248,3 +251,24 @@ serving `M` products this way.
 - **Spill along the chain.** A spilled block goes to the tier under its
   session's serial. A chain of shared segments has none, and a hold with
   `prefix` on a pool that spills or is spilled to does not link yet.
+- **`cachedin(P)` by the session's current hold (#595).** It read `P`
+  by the waiting or innermost hold's chain whether or not that hold held
+  `P`. Inside a `prefix` hold of `kv`, an L2 entry `kvt.l2_store` had
+  cached along the session's own chain read 0; outside it, `kv`'s entry,
+  cached along the hold's chain, read 0. A `prefix` keys the pools its
+  hold holds, and no other.
+- **A lease's chain before the last cached one.** A lease is an
+  allocation, not an entry: read by its chain, an entry the session cached
+  along another chain while the lease lasted read 0. A lease's chain is
+  recorded when it is released and cached.
+- **`cachedin(P)` outside a hold reads the last chain cached along.** This
+  is a rule the language sets, not one a program states: a router that
+  reads `cachedin(E[j].kv)` before a session's first turn reads its own
+  chain, and sees none of a system prompt another session cached; one
+  whose `prefix` key changes from turn to turn reads the last turn's. The
+  opposite, reading by the chain of the hold the session will make next,
+  needs that hold before it is reached; a program that wants to say which
+  chain it means needs the chain in the expression, `cachedin(kv, prefix
+  (…))`, an IR change no program asks for yet. A `drop P` leaves the
+  record: the read is then of the shared segments of that chain, which is
+  what a hold along it would read.

@@ -309,6 +309,11 @@ struct Session<'p> {
     /// is no progress there: the session is `stuck`.
     preempt_pos: HashMap<usize, f64>,
     stuck: bool,
+    /// Per pool, the chain along which the session or one of its legs last
+    /// cached there: the key `cachedin` reads the pool by when no hold of
+    /// the session names it (#595: a `prefix` keys only the pools its hold
+    /// holds). A leg's stays empty: its session keeps it (`Interp::root`).
+    cached_chain: HashMap<usize, Chain>,
     /// Allocations that outlived their scope (`lease`).
     leases: Vec<Lease<'p>>,
     /// The request's latest token on a step stage, for the gaps between
@@ -1493,6 +1498,7 @@ impl<'p> Interp<'p> {
             script: script.map(|k| (k, 0)),
             adm_seq: u64::MAX,
             preempt_pos: HashMap::new(),
+            cached_chain: HashMap::new(),
             stuck: false,
             leases: vec![],
             last_token: None,
@@ -1805,6 +1811,7 @@ impl<'p> Interp<'p> {
             script: None,
             adm_seq: u64::MAX,
             preempt_pos: HashMap::new(),
+            cached_chain: HashMap::new(),
             stuck: false,
             leases: vec![],
             last_token: None,
@@ -2611,21 +2618,41 @@ impl<'p> Interp<'p> {
         Rc::from(chain)
     }
 
-    /// The chain `cachedin` reads for the session: its waiting hold's, else
-    /// its innermost hold's, else its own.
-    fn session_chain(&self, sid: usize) -> Chain {
+    /// The chain `cachedin(pl)` reads for the session: that of its waiting
+    /// hold if it asks for `pl`, else of its innermost hold of `pl`, else the
+    /// one it last cached along in `pl`, else its own. A `prefix` keys the
+    /// pools its hold holds, not the others (#595).
+    fn session_chain(&self, pl: usize, sid: usize) -> Chain {
         let s = &self.sessions[sid];
-        match (&s.pending, s.holds.last()) {
-            (Some(p), _) => p.chain.clone(),
-            (None, Some(h)) => h.chain.clone(),
-            (None, None) => own_chain(self.p, s.serial),
+        if let Some(p) = s
+            .pending
+            .as_ref()
+            .filter(|p| p.pools.iter().any(|w| w.pool == pl))
+        {
+            return p.chain.clone();
         }
+        if let Some((hi, _)) = s.innermost(pl) {
+            return s.holds[hi].chain.clone();
+        }
+        match self.sessions[self.root(sid)].cached_chain.get(&pl) {
+            Some(c) => c.clone(),
+            None => own_chain(self.p, s.serial),
+        }
+    }
+
+    /// The session a leg is of, else the session itself: the one that keeps
+    /// `cached_chain`, since its legs share its entries.
+    fn root(&self, mut sid: usize) -> usize {
+        while let Leg::Of(parent) = self.sessions[sid].leg {
+            sid = parent;
+        }
+        sid
     }
 
     /// The cached prefix of the session's chain in `pl`, in whole blocks.
     fn own_entry_size(&self, pl: usize, sid: usize) -> f64 {
         let serial = self.sessions[sid].serial;
-        let chain = self.pool_chain(pl, &self.session_chain(sid), serial);
+        let chain = self.pool_chain(pl, &self.session_chain(pl, sid), serial);
         self.round_down(pl, self.pools[pl].cache.matched(&chain, serial))
     }
 
@@ -3002,6 +3029,8 @@ impl<'p> Interp<'p> {
             let rseq = self.next_release;
             if keep > 0.0 {
                 self.next_release += 1;
+                let root = self.root(sid);
+                self.sessions[root].cached_chain.insert(q, chain.clone());
             }
             let now = self.now;
             delta = self.pools[q]
