@@ -3,8 +3,8 @@
 
 // --8<-- [start:settings]
 let N = 200;
-let M = 20000;
-let P = 2500;
+let M = 20000;  // memory, tokens
+let P = 2500;  // the largest peak s + o; alpha = P / M
 // --8<-- [end:settings]
 
 fn main() {

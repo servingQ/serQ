@@ -16,7 +16,7 @@ The paper models a GPU's batch time from how matrix multiplications are tiled. A
 
 ## The system in serQ
 
-`examples/papers/bari_rad.sq` is one inference node running RAD with the
+`examples/papers/bari_rad.sq` is one inference node running RAD (Algorithm 1) with the
 cycle parameter $N$ taken infinite. The sections below build it a part at a
 time: what the paper assumes, what the program needs for it, and how serQ
 writes it.
@@ -24,7 +24,8 @@ writes it.
 ### Settings
 
 The paper's tiles are $b_{col} = b_{row} = b_{red} = 128$, so
-$b_{lcm} = 128$, and one constant stands for all four. Time is in µs:
+$b_{lcm} = 128$, and one constant stands for all four. Time is in µs. The argument opens
+`main`, which holds the rest of the program:
 
 ```serq title="examples/papers/bari_rad.sq"
 --8<-- "examples/papers/bari_rad.sq:settings"
@@ -51,7 +52,8 @@ served. In serQ that rule is a predicate, `in_mode()`, read by both halves
 of the schedule through `only`: in Decode Mode it selects the decoding
 residents, otherwise the prefilling ones. `tokens cap bcol` and `each at
 most (bcol)` make a Prefill Mode batch one chunk of $b_{lcm}$, and prefills
-are served in admission order, so the chunk is the oldest prefill's:
+are served in admission order, so the chunk is the oldest prefill's. The engine block stays open for its
+cost, the next section:
 
 ```serq
 --8<-- "examples/papers/bari_rad.sq:engine"
@@ -66,7 +68,7 @@ a pool.
 ### The batch time
 
 Equation (7) without its attention terms is a pass over each output tile
-plus the non-linear operations per token:
+plus the non-linear operations per token. It closes the engine block:
 
 ```serq
 --8<-- "examples/papers/bari_rad.sq:execute"

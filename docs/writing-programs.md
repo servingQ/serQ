@@ -64,16 +64,21 @@ Keep different roles distinct: `mem` is generic memory, `live` limits whole
 sessions, and `reqs` limits requests within them. `latency` on a link is a
 language construct for a transfer's fixed delay.
 
-Keep comments in a program to a short header that says what it models and
-where it is explained. A program a use case presents is explained on that
-page, a part at a time: mark each part with a named snippet section
+State units beside settings when the name alone does not make them clear,
+and the upstream name a setting stands for (`let B = 8192;  //
+max_num_batched_tokens`): a reader of the program alone still sees the
+correspondence. Comments should explain assumptions and source
+correspondence, not repeat syntax.
+
+A program a use case presents keeps, beyond those settings comments, only a
+short header that says what it models and where it is explained. The page
+explains it a part at a time: mark each part with a named snippet section
 (`// --8<-- [start:request]` … `// --8<-- [end:request]`), include it with
 `--8<-- "path/to/program.sq:request"`, and say beside it what the system does,
-what the program needs for it, and how serQ writes it. The assumptions, the
-units of settings, and the citations of upstream source go in that prose,
-not in comments. Close the page with the whole program in a collapsed
-`??? example` block. A comment that only repeats the syntax adds nothing
-anywhere.
+what the program needs for it, and how serQ writes it. The assumptions and
+the citations of upstream source go in that prose. When a part leaves a
+block open, or closes one an earlier part opened, the prose says so. Close
+the page with the whole program in a collapsed `??? example` block.
 
 See [`examples/vendors/ascend.sq`](https://github.com/servingQ/serQ/blob/main/examples/vendors/ascend.sq):
 its fixed thresholds and `waiting_class` definition precede `main`, while

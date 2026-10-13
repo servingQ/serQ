@@ -1,22 +1,8 @@
 // ThunderAgent (ThunderAgent-org/ThunderAgent at 7ddc861, its router in TR
-// mode) in front of J vLLM replicas, running a fixed number of agents at
-// once, as a rollout or a benchmark run does. The router admits programs,
-// not requests: a program (a session, by its `program_id`) is placed on a
-// replica at its first request and stays there, and it counts against that
-// replica's KV capacity while it reasons and while it calls a tool, so that
-// a program coming back from its tool still finds its prefix in the
-// replica's cache. A new program is let in only where its tokens fit;
-// otherwise it waits. A running program whose tokens outgrow the replica
-// pauses idle ones, which are let in again at their next request.
-// docs/design/thunderagent.md has the correspondence, the paper's results
-// beside this program's, and what this program does not write.
-//
-// `--tr 0` is the router's `default` mode: the replica with the fewest
-// programs, no capacity. The model's constants are of the order of a 32B
-// model on one GPU (an iteration of 20 ms), not a fit; the device's are
-// arguments, so that tools/thunderagent/sweep.py can run the paper's scale.
+// mode) in front of J vLLM replicas. docs/use-cases/thunderagent.md explains it.
 use "std/args";
 
+// --8<-- [start:settings]
 let J = 2;             // vLLM replicas (--backends)
 let B = 8192;          // max_num_batched_tokens
 let max_seqs = 256;    // max_num_seqs
@@ -36,69 +22,48 @@ fn main() {
   let g = args.number("g", 0);               // prefill attention per token and context token (s)
   let omega = args.number("omega", 0.02);    // weights read per iteration (s)
   let beta = args.number("beta", 2e-7);      // KV read per iteration per resident context token (s)
-  // The system prompt and tool descriptions every program starts with, in
-  // tokens, a multiple of the block and below the shortest first prompt:
-  // the first segment of every request's `prefix`, which the replica's
-  // cache shares across programs. The router counts it in every program's
-  // tokens (shared_tokens is never subtracted at 7ddc861).
-  let S = args.number("S", 0);
-  // 1: the router counts the shared prompt in every program, as the code
-  // does; 0: once, as the wiki's capacity, with shared_tokens subtracted
-  let count_shared = args.number("count_shared", 1);
-  // --acting-token-weight: a program calling a tool counts w of its tokens
-  let w = args.number("w", 1);
+  let S = args.number("S", 0);               // shared system prompt (tokens)
+  let count_shared = args.number("count_shared", 1);  // 1: S in every program, 0: once
+  let w = args.number("w", 1);               // --acting-token-weight
   let room = blocks * bs - (count_shared ? 0 : S);   // the router's capacity
-  // --scheduler-interval (s): the router lets paused programs in at its
-  // ticks
-  let dt = args.number("dt", 5);
-  // The router counts a request's tokens before it is sent as its
-  // characters over a ratio it learns from earlier responses, and the
-  // response's usage after: `est` is that estimate's relative error, at
-  // most, drawn uniformly per request (0: counted exactly)
-  let est = args.number("est", 0);
+  let dt = args.number("dt", 5);             // --scheduler-interval (s)
+  let est = args.number("est", 0);           // the router's token estimate's relative error, at most
+  // --8<-- [end:settings]
 
-  // A replica: vLLM's engine on one device, its prefix cache in the blocks,
-  // examples/pd-disaggregation/llmd_nixl_pull.sq's local decoder without
-  // its max_model_len cap. A request's prompt is the shared system prompt,
-  // then the program's own context: the cache shares the first across
-  // programs, allocated once however many read it (vLLM's ref_cnt) once
-  // a request that read it has ended, and keeps the second per program
-  // (examples/multi-turn/vllm_system_prompt.sq).
+  // --8<-- [start:replica]
   queue E[J] : decode {
     device gpu { compute (t) = t * a; hbm (k) = omega + beta * k; kv cap blocks * bs; }
     engine on gpu {
       reqs cap max_seqs;
       tokens cap B;
       schedule { advance running; admit waiting while (running.preempted == 0); }
-      // a prefill's attention over its context grows with the square of
-      // what it recomputes (the paper's Eq. 8)
       execute (c0 + max(hbm(batch.kv_decode + batch.kv_prefill),
                         compute(batch.tokens) + g * batch.attention));
     }
     pool reqs on E { queue fifo; }
     pool kv on E.gpu { block bs; evict lru; preempt lifo; }
     decode (prompt) {
-      set kept = prompt;   // the most tokens an attempt had: a preemption keeps the outputs
+      set kept = prompt;
       hold kv (cost(kv, min(known, reused + budget_left(E)))) reserve (cost(kv, known)), reqs (cost(reqs, 1))
            prefix (system: S, serial: inf)
            at admission (known = max(kept, computed + 1),
                          reused = min(cachedin(kv), floor(known - 1, bs))) {
         set kept = known;
         set c = min(cached, floor(known - 1, bs));
-        observe hit = c > S;                      // any block of the program's own
-        observe reused_tokens = c;                // vLLM's prefix_cache_hits; with prefill_tokens, its queries
+        observe hit = c > S;
+        observe reused_tokens = c;
         observe prefill_tokens = known - c;
         run E prefill (cost(E, known - c)) growing kv;
         run E decode (cost(E, o - 1 - (known - prompt))) growing kv;
       } cache (cost(kv, reqs, prompt + o));
     }
   }
+  // --8<-- [end:replica]
 
-  // The agent: a task's first prompt, then a tool call and a short
-  // observation per step. Nothing here is ThunderAgent's.
+  // --8<-- [start:workload]
   workload {
     arrive closed(N);
-    hidden o;              // the router knows the prompt, not the length of the answer
+    hidden o;
     init { set K = 0; }
     turn {
       set n = ceil(K == 0 ? ~uniform(4000, 8000) : ~exp(1000));
@@ -114,29 +79,19 @@ fn main() {
       }
     }
   }
+  // --8<-- [end:workload]
 
-  // The router's global_waiting_queue, of which these are the programs
-  // with a request pending (docs/design/thunderagent.md, item 1), drained
-  // at its scheduler's tick: those with a step first, then new ones, the
-  // smaller first in each (_greedy_resume). Each one let in takes its
-  // replica before the next is tried. Pools tick in the order they are
-  // declared: this one first, so the paused ones with no request pending
-  // come back after these, and the pause comes last.
+  // --8<-- [start:waiting_queue]
   pool waiting_queue { queue by (K > 0 ? 0 : 1, charged) every (dt); }
-  // The router's picture of a replica: the tokens of the programs placed on
-  // it, against vLLM's KV capacity (cache_config.total_tokens_capacity).
-  // A running program's tokens may grow past the capacity; at the
-  // router's next tick it pauses others while the replica is over:
-  // those calling a tool first, then those reasoning, the smaller first
-  // in each (_pause_until_safe). A paused program's tokens are no longer
-  // counted; at a later tick it is let in again, the smaller first, if it
-  // fits (_greedy_resume's last group), and else its next request waits.
+  // --8<-- [end:waiting_queue]
+  // --8<-- [start:prog]
   pool prog[J] {
     cap tr ? room : inf;
     preempt leases by (reasoning, prompt) every (dt) suspend by (prompt);
   }
+  // --8<-- [end:prog]
+  // --8<-- [start:helpers]
   def no_room(x) { max r in J (free(prog[r])) < x }
-  // the router's count of the program becomes x (state.total_tokens = x)
   def count_as(x) {
     if (x >= allocated(prog[home])) {
       grow prog[home] (cost(prog, x - allocated(prog[home])));
@@ -144,68 +99,47 @@ fn main() {
       shrink prog[home] (cost(prog, allocated(prog[home]) - x));
     }
   }
+  // --8<-- [end:helpers]
 
-  // The router. A program's tokens are its prompt, the router's estimate
-  // before the request (update_program_before_request), and they stay
-  // counted through the tool call (acting_token_weight 1, the default): a
-  // lease of `prog`. A running program's next request goes to its replica
-  // at once, its count grown to the new prompt. A paused program waits for
-  // the router's next tick, and so does a new one when another program
-  // waits or no replica has room for it (_select_backend_for_new_program);
-  // at each tick it goes to the replica with the most room if one has room
-  // for it, wherever it was before (_greedy_resume), and else waits for
-  // the next tick. After 30 minutes it is let in whatever the capacity
-  // (_wait_for_resume), on the replica it chooses. A new one let in at
-  // once goes to
-  // the replica with the fewest program tokens among those it fits; in
-  // default mode, to the one with the fewest programs. The program is
-  // released when the session ends (/programs/release).
+  // --8<-- [start:charge]
   server {
     set prompt = K + n;
-    // the router's tokens of the program
     set charged = min(floor(prompt * (est > 0 ? ~uniform(1 - est, 1 + est) : 1)) + buffer
                       - (count_shared ? 0 : S), room);
-    // vLLM refuses a prompt its KV cannot hold (max_model_len is at most
-    // the KV, as in examples/pd-disaggregation/llmd_nixl_pull.sq): the
-    // agent's trajectory ends there, in either mode
     if (prompt + buffer >= blocks * bs) { end; }
+    // --8<-- [end:charge]
+    // --8<-- [start:running]
     set reasoning = 1;
     set placed = K > 0 && allocated(prog[home]) > 0;
     if (placed) {
       count_as(charged);
     } else {
-      // paused and not let in again since: what it had is the router's
+      // --8<-- [end:running]
+      // --8<-- [start:let_in]
       if (K > 0) { release prog[home]; }
       set t_q = now;
-      // a paused program, or a new one behind others or with no room
       set waits = tr && (K > 0 || queued(waiting_queue) > 0 || no_room(charged));
       while (waits) {
-        // the next tick, at its place in the router's order
         hold waiting_queue (cost(waiting_queue, 1)) { }
         set waits = no_room(charged) && now - t_q < force_resume;
       }
       choose j in J by (tr ? (free(prog[j]) >= charged ? 0 : 1) : 0,
                         tr ? used(prog[j]) : holders(prog[j]));
       set home = j;
-      // in with its buffer, then the rest: past the capacity only after
-      // 30 minutes, when _wait_for_resume lets it in whatever the room,
-      // and the next tick pauses others
       hold prog[home] (cost(prog, tr ? buffer : charged)) {
         if (K > 0) { observe resume_wait = now - t_q; }
       } lease prog[home] (inf);
       if (tr) { count_as(charged); }
     }
+    // --8<-- [end:let_in]
+    // --8<-- [start:response]
     E[home].decode (prompt);
-    // the response's usage, the answer included, replaces the estimate
-    // (update_program_after_request), up to what a replica holds
     set usage = min(prompt + o + buffer - (count_shared ? 0 : S), room);
     if (allocated(prog[home]) > 0) { count_as(usage); }
-    // calling its tool now, the program counts at the acting weight, its
-    // buffer whole (active_program_tokens, remaining_capacity); its next
-    // request grows it back
     if (w < 1 && allocated(prog[home]) > 0) {
       shrink prog[home] (cost(prog, (1 - w) * (allocated(prog[home]) - buffer)));
     }
     set reasoning = 0;
   }
+  // --8<-- [end:response]
 }

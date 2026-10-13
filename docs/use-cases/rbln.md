@@ -53,7 +53,8 @@ writes it.
 ### The device and the engine
 
 One NPU with 8192 tokens of KV, and an engine that keeps at most four
-requests resident and schedules at most 256 tokens a step:
+requests resident and schedules at most 256 tokens a step. The engine block
+stays open for the request and the schedule below:
 
 ```serq title="examples/vendors/rbln.sq"
 --8<-- "examples/vendors/rbln.sq:engine"
@@ -86,7 +87,7 @@ once scheduling is final ([`cache_blocks`][cached]), which is `cache
 and the waiting path calls `allocate_slots` with
 `full_sequence_must_fit=True` ([Scheduler][native]). In serQ the first is
 `exclusive prefill`, and the second is a `reserve` beside the units the
-admission takes:
+admission takes. The step's cost follows and closes the engine block:
 
 ```serq
 --8<-- "examples/vendors/rbln.sq:schedule"

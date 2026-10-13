@@ -32,7 +32,8 @@ time.
 
 Point C is CodeLlama-34B on TP1, with batch time
 $t_b = 11.28 + 35.47\lceil b/128\rceil$ ms, $k_{max} = 100$, and one request
-every 467.5 ms with 290 prefill and 990 decode tokens:
+every 467.5 ms with 290 prefill and 990 decode tokens. The argument opens
+`main`, which holds the rest of the program:
 
 ```serq title="examples/single-turn/fastertransformer.sq"
 --8<-- "examples/single-turn/fastertransformer.sq:settings"

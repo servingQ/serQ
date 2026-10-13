@@ -30,7 +30,9 @@ has the line-by-line correspondence with citations.
 
 vLLM's engine is configured by a handful of numbers. The program names
 each once and takes the ones a run varies from the command line
-(`--set max_seqs=32`):
+(`serq run examples/multi-turn/vllm.sq --max_seqs 32`). The constants come
+before `main` and the arguments open it; the rest of the program is inside
+`main`:
 
 ```serq title="examples/multi-turn/vllm.sq"
 --8<-- "examples/multi-turn/vllm.sq:settings"
@@ -43,7 +45,7 @@ each once and takes the ones a run varies from the command line
 | `max_seqs` | `max_num_seqs` | requests resident at once |
 | `blocks` | `num_gpu_blocks`, less the null block | KV capacity in blocks |
 | `chunk_cap` | `long_prefill_token_threshold` | the most one prefill takes per step; `inf` for none |
-| `a`, `omega`, `beta`, `c0` | — | the cost model: seconds per scheduled token, per weight read, per resident context token, per step |
+| `a`, `omega`, `beta`, `c0` | — | the cost model in seconds: `a` per scheduled token; `omega` per step, to read the weights; `beta` per step per resident context token, to read its KV; `c0` fixed per step |
 | `Lambda`, `Z`, `p` | — | the workload: sessions per second, mean tool time, the chance a session continues |
 
 ### KV memory: a block pool with a prefix cache
@@ -52,7 +54,9 @@ vLLM's KV cache is a pool of fixed-size blocks. A finished or preempted
 request's full blocks go back to the free queue still hashed, so a later
 turn of the same session can reuse them; when the free queue runs dry the
 oldest freed block is evicted first. When a running request needs a block
-and none is free, the most recently admitted request is preempted.
+and none is free, the most recently admitted request is preempted: its
+blocks go back to the cache, and it re-enters the waiting queue at the
+head (`scheduler.py:1539-1582`) to recompute what was lost.
 
 serQ says this with a device that has KV capacity and a pool on it whose
 three clauses are those three rules:
@@ -69,8 +73,9 @@ scheduled token and `hbm` for the weights plus the KV read.
 ### The engine's two caps
 
 Each step vLLM schedules at most `max_num_seqs` requests and at most
-`max_num_batched_tokens` tokens (`scheduler.py:877-879`). These are the
-engine's two capacities:
+`max_num_batched_tokens` tokens (`scheduler.py:872, 877-879`). These are the
+engine's two capacities, the first lines of its block; the request, the
+schedule and the cost below are the rest of it:
 
 ```serq
 --8<-- "examples/multi-turn/vllm.sq:caps"
@@ -109,7 +114,8 @@ order: one token to each decoding request, and up to the chunk cap to a
 prefilling one. vLLM applies `long_prefill_token_threshold` only while
 another request is running or waiting; a request alone takes the whole
 budget (`scheduler.py:606-616`). That rule is written in the program, not
-assumed by the language:
+assumed by the language. It opens the `schedule` block, which the admission
+below continues:
 
 ```serq
 --8<-- "examples/multi-turn/vllm.sq:running"
@@ -130,9 +136,10 @@ not fit blocks the rest. Four details shape the admission:
 - it admits only if every known token fits, the reused ones counted
   (`scheduler_reserve_full_isl`, on by default: `config/scheduler.py:191`,
   `kv_cache_manager.py:515-531`);
-- nothing is admitted in a step that preempted.
+- nothing is admitted in a step that preempted (`scheduler.py:869`).
 
-In serQ these are the `taking` units, the `reserve`, and the `while`:
+In serQ these are the `taking` units, the `reserve`, and the `while`, the
+last statement of the `schedule` block:
 
 ```serq
 --8<-- "examples/multi-turn/vllm.sq:waiting"
@@ -143,7 +150,7 @@ In serQ these are the `taking` units, the `reserve`, and the `while`:
 ### The cost of a step
 
 A step's time is the larger of its compute and its memory traffic, plus a
-fixed overhead:
+fixed overhead. It is the engine block's last line:
 
 ```serq
 --8<-- "examples/multi-turn/vllm.sq:execute"

@@ -56,6 +56,9 @@ NICs of a read are links.
 
 ### Settings
 
+The constants come before `main` and the arguments open it; the rest of the
+program is inside `main`.
+
 ```serq title="examples/pd-disaggregation/llmd_nixl_pull.sq"
 --8<-- "examples/pd-disaggregation/llmd_nixl_pull.sq:settings"
 ```
@@ -68,7 +71,7 @@ NICs of a read are links.
 | `blocksP`, `blocksD` | `num_gpu_blocks` | KV capacity in blocks on a prefiller, on a decoder |
 | `bs` | `block_size` | tokens per KV block |
 | `max_model_len` | `max_model_len` | every KV pool holds one request of it: vLLM refuses to start otherwise (`kv_cache_utils.py:864-900`, called at `kv_cache_utils.py:2742`) |
-| `a`, `omega`, `beta`, `c0` | — | seconds per scheduled token, per weight read, per resident context token, per step |
+| `a`, `omega`, `beta`, `c0` | — | in seconds: `a` per scheduled token; `omega` per step, to read the weights; `beta` per step per resident context token, to read its KV; `c0` fixed per step |
 | `BwP`, `BwD` | — | NIXL bandwidth out of a prefiller and into a decoder, tokens/s (128 KB per token at 25 GB/s); one NIC each, so the tensor-parallel fan-out of the read is not modelled |
 | `x0` | — | per-read latency: posting the READ and the step that polls its completion (`nixl/pull_worker.py:545-558`) |
 | `thr`, `minp` | prefix-based-pd-decider `nonCachedTokens`, `promptTokens` | when to prefill remotely; `thr = 1` is the guide's always-disagg-pd-decider |
@@ -127,7 +130,8 @@ transfer releases them.
 A decoder is vLLM's engine on one device with two ways in. Its scheduler
 serves its queues in this order: the requests whose KV has arrived first
 (vLLM's `skipped_waiting`, `scheduler.py:2383-2385`), then the new ones, and
-the first that does not fit stops the step's admissions.
+the first that does not fit stops the step's admissions. The `queue D`
+block stays open: its two entries, below, are the rest of it.
 
 ```serq
 --8<-- "examples/pd-disaggregation/llmd_nixl_pull.sq:decoder"
@@ -165,7 +169,7 @@ decoder afterwards recomputes what it lost here, as any local prefill would
 
 In serQ that is a `decode … from P` entry: an outer hold on the blocks that
 reserves a slot without taking one, the `transfer` inside it, and an inner
-hold that takes the slot:
+hold that takes the slot. Its last brace closes `queue D`:
 
 ```serq
 --8<-- "examples/pd-disaggregation/llmd_nixl_pull.sq:remote"

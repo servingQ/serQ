@@ -3,14 +3,14 @@
 use "std/args";
 
 // --8<-- [start:settings]
-let bcol = 128;
-let tlin = 4000;
-let tnl = 5;
-let vpmax = 8;
-let vdmax = 512;
+let bcol = 128;  // b_col = b_row = b_red = b_lcm
+let tlin = 4000;  // µs per pass over a tile, 1 / c_Lin
+let tnl = 5;  // µs per token of non-linear operations, 1 / c_nLin
+let vpmax = 8;  // prompts are 1 .. vpmax tiles (Assumption 3)
+let vdmax = 512;  // the largest output
 
 fn main() {
-  let rate = args.number("rate", 0.00002);
+  let rate = args.number("rate", 0.00002);  // requests per µs (20 per second)
   // --8<-- [end:settings]
 
   // --8<-- [start:engine]

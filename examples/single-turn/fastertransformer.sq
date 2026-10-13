@@ -3,16 +3,16 @@
 use "std/args";
 
 // --8<-- [start:settings]
-let kmax = 100;
-let c = 11.28e-3;
-let a = 35.47e-3;
+let kmax = 100;  // batch size limit k_max (§6)
+let c = 11.28e-3;  // s
+let a = 35.47e-3;  // s per step of b0 tokens
 let b0 = 128;
-let gap = 0.4675;
+let gap = 0.4675;  // fixed inter-arrival time (s)
 let vp = 290;
 let vd = 990;
 
 fn main() {
-  let bmax = args.number("bmax", 128);
+  let bmax = args.number("bmax", 128);  // token budget b_max
   // --8<-- [end:settings]
 
   // --8<-- [start:slots]

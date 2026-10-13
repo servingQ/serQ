@@ -74,18 +74,10 @@ Requests arrive one per gap, and each is one call to the engine:
 
 ### FasterTransformer
 
-FasterTransformer decodes while any request decodes, and prefills otherwise: never both. It is the same program with its schedule changed:
+FasterTransformer decodes while any request decodes, and prefills otherwise: never both. `examples/papers/dai_fastertransformer.sq` models it at Sarathi-Serve's operating point, in the same units of 10 µs; it is the same program with its schedule changed:
 
-```serq title="examples/papers/dai_fastertransformer.sq (the engine)"
-def in_phase() { running.decoding > 0 ? decoding : !decoding }
-engine fastertransformer on gpu {
-  tokens cap bmax;
-  schedule {
-    advance running only (in_phase());
-    admit waiting only (in_phase()) while (running.preempted == 0);
-  }
-  execute (c + compute(batch.tokens));
-}
+```serq title="examples/papers/dai_fastertransformer.sq"
+--8<-- "examples/papers/dai_fastertransformer.sq:engine"
 ```
 
 `only` serves only the decodes while any request decodes, and only the prefills otherwise: decode first, no mixed batches. The running and the waiting requests share the one predicate `in_phase()`.
@@ -143,11 +135,13 @@ per unit of time, so a load above it diverges:
 --8<-- "examples/papers/dai_sarathi.sq:token_rate"
 ```
 
-FasterTransformer is not work-conserving (§4, `dai_fastertransformer.sq`):
+FasterTransformer is not work-conserving (§4, `dai_fastertransformer.sq`): some batch is not full although the residents could fill it:
 
 ```serq
-claim not_work_conserving: some iteration of fastertransformer (demand >= bmax && tokens < bmax);
+--8<-- "examples/papers/dai_fastertransformer.sq:not_work_conserving"
 ```
+
+Theorem 2(a), `token_rate`, holds for it as for every scheduler; the program claims it too.
 
 Theorem 2(b), pathwise: at this load, one request's tokens per gap, which is
 exactly $b_{\max}/t_{b_{\max}}$, the work that has arrived and not been
