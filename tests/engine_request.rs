@@ -480,35 +480,41 @@ fn a_session_does_not_call_an_engine() {
 
 // Where a request may not be.
 
+/// A queue's engine admits by its `taking`, as any engine, and its entries
+/// call it, `P (prompt, 1);`, a family's member its own pools; the server
+/// calls the entry, not the engine (#592).
 #[test]
-fn a_queue_says_what_it_does_with_a_request_in_its_entries() {
-    let queue = |admit: &str| {
+fn a_queue_s_entries_call_its_engine() {
+    let queue = |entry: &str, server: &str| {
         format!(
             "
 let bs = 4;
-queue P : prefill {{
+queue P[2] : prefill {{
   device gpu {{ kv cap 64; }}
   engine on gpu {{
     tokens cap 8;
-    scheduler {{ advance running; {admit}; }}
+    scheduler {{ advance running; admit waiting taking kv (request.known); }}
     worker {{ forward (1); }}
   }}
   pool kv on gpu {{ }}
-  prefill (prompt) {{ run P prefill (cost(P, prompt)); }}
+  prefill (prompt) {{ {entry} }}
 }}
-workload {{ arrive batch(1); turn {{ set n = 6; }} }}
-server {{ P.prefill (n); }}
+workload {{ arrive batch(2); turn {{ set n = 6; }} }}
+server {{ {server} }}
 "
         )
     };
-    compile_source(
-        &common::main_source(&queue("admit waiting while (running.preempted == 0)")),
-        &common::horizon(10.0),
-    )
-    .unwrap();
+    let r = run(&queue(
+        "P (prompt, 1); observe read = P.prefill;",
+        "P[serial].prefill (n);",
+    ));
+    assert_eq!(r.observe("read").unwrap().samples, [6.0, 6.0]);
+    // each member admitted into its own pool
+    let members: Vec<u64> = r.pools_named("P.kv").iter().map(|p| p.admissions).collect();
+    assert_eq!(members, [1, 1], "{}", r.text());
     refused(
-        &queue("admit waiting while (running.preempted == 0) taking kv (1)"),
-        "`taking` in queue `P`'s engine: a queue's entries hold its pools",
+        &queue("P (prompt, 1);", "P (n, 1);"),
+        "`P (…)` is a request to queue `P`'s engine, which its entries make",
     );
 }
 

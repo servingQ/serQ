@@ -93,23 +93,33 @@ delay stage is `Ps(Ctx(N))`, `ps(present)` (`CStageKind::delay`).
 | `memory` | Optional pool index supplying resident KV totals and preemption candidates. |
 | `iteration?` | A list of `CIter` statements, below. Omitted for the default serve-then-admit procedure. Cannot accompany `ExclusivePrefill`. |
 | `request?` | `CRequest`: how the engine admits and releases a request (`CStmt::Request`), below. Omitted when it takes nothing and caches nothing. |
-| `connector?` | `CConnector`: its KV connector to an L2, below. Omitted when it has none. |
+| `connector?` | `CConnector`: its KV connector, to an L2 or from its queue's KV source, below. Omitted when it has none. |
 
 A `CRequest` is a hold's header read for a request: `pools: [(pool,
 units, reserve?)]`, `reuse?`, `prefix?` (read at `Request`) and `cache?`
 (read at `Release`). The request waits in its first pool's queue. Its
 `records` are the slots the engine writes: the observations `reused` and
-`prefill` for each admission, and the attributes `admitted` and `first`
-the caller reads after the call. A `CConnector` has `load?` and `save?`,
-each an amount and the kernel block it means: the amount is read at
-`Request` (after `Hit`) or at `Release`, stored in the attribute `loaded`
-or `saved`, and the block run while the request holds its pools — a
-load's `Run` on the L2's stage and `Load` into the request's hold on the
-engine's memory, a save's `Hold` on the L2's pool that grows by what its
-entry lacks, copies it and caches the whole. `record` is the observation
-of what each admission loaded. The blocks are roots of the block tree, not
-bodies of a statement; a load's acts on the request's hold on `memory`, a
-save's inside every pool the request takes.
+`prefill` for each admission, and the attributes `admitted`, `first`,
+`last_reused` and `last_prefill` (`E.reused`, `E.prefill`) the caller reads
+after the call. A family engine's members each have their own `CStep`,
+whose `CRequest` names the member's pools. A `CConnector` has `load?` and
+`save?`, each an amount and the kernel block it means: the amount is read
+at `Request` (after `Hit`) or at `Release`, stored in the attribute
+`loaded` or `saved`, and the block run while the request holds its pools —
+an L2's load is a `Run` on the L2's stage and a `Load` into the request's
+hold on the engine's memory; a KV relation's (`from?` present) is `Join`
+in a push, the poster's latency `Run`, a `Run` over the source's NIC and
+the reader's, the `Load`, and the `Release` of the source's lease, the
+source member being the attribute `from?`, which the request's entry sets
+(-1: no source, nothing loaded); a save is an L2's `Hold` on its pool that
+grows by what its entry lacks, copies it and caches the whole. `record` is
+the observation of what each admission loaded, `load_done` the attribute
+of when its latest load ended. After a load the interpreter computes the
+request's last token again if every one has KV, and reads the `CRequest`
+again: the pools it took none of and takes now, it waits for, as a part of
+its hold. The blocks are roots of the block tree, not bodies of a
+statement; a load's acts on the request's hold on `memory`, a save's
+inside every pool the request takes.
 
 `By([])` means admission order. `decode first` compiles to
 `By([decoding ? 0 : 1])`. The [stage reference](api/stage.md) defines

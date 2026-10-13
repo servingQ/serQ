@@ -7,7 +7,7 @@ engine NAME on DEVICE {
   tokens cap expr;           // required: the tokens one iteration computes (inf: no cap)
   granule c;                 // a prefill gets all it has left or a multiple of c
   state NAME = c;            // a register the schedule sets
-  connector QUEUE { … }      // its KV connector to an L2 queue (below)
+  connector QUEUE { … }      // its KV connector: an L2 queue, or its queue's KV source (below)
   scheduler { stmt … }        // required: what each iteration does (below)
   worker {
     forward (expr);            // required: how long the iteration takes
@@ -55,7 +55,7 @@ the [IR](../ir.md) and the Lean model see only that.
 | `state NAME = c` | `const` | | A register; see below. |
 | `scheduler` | statements | as the iteration is planned | Whom the iteration serves, in what order, and when it admits. |
 | `worker { forward (T); }` | `expr` | after the batch is formed | What the worker does with the batch the scheduler formed (vLLM's `SchedulerOutput`): its forward's clock time. Reads `batch.…` and the device's time resources, not `running.…` or `waiting.…`. |
-| `connector QUEUE { … }` | clauses | at a request's admission and its end | Its KV connector to an L2 queue; see below. |
+| `connector QUEUE { … }` | clauses | at a request's admission and its end | Its KV connector to an L2 queue or from its queue's KV source; see below. |
 
 The values an engine reads, and in which clause, are in
 [Engines on devices](../language.md#engines-on-devices): `running.…` is
@@ -267,28 +267,50 @@ request as `request.input`, `request.output`, `request.known`,
 `request.hit`, `request.loaded` and `request.preempted`; `cache`, read when
 the request gives its pools back, reads `request.finished`. The engine's
 records are attributes the caller reads after the call: `ENGINE.reused`,
-`ENGINE.prefill`, `ENGINE.admitted` and `ENGINE.first`; `ENGINE.reused` and
-`ENGINE.prefill` are observations of the report too, one per admission.
-[An engine's request](../language.md#an-engines-request) has the rules.
+`ENGINE.prefill`, `ENGINE.admitted` and `ENGINE.first` (a connector adds
+`ENGINE.loaded`, `ENGINE.saved` and `ENGINE.load_done`); `ENGINE.reused`,
+`ENGINE.prefill` and `ENGINE.loaded` are observations of the report too,
+one per admission.
+
+A queue's engine admits the same way, and the queue's entries call it,
+`E (input, output);`; the server calls the entry, not the engine. A
+family's `taking` names its pools without an index, and each member takes
+its own. [An engine's request](../language.md#an-engines-request) has the
+rules.
 
 ## `connector`
 
 ```serq
 connector QUEUE {
-  per_token (r);      // required: the time a token's copy takes
+  per_token (r);      // an L2's: the time a token's copy takes
   load (n);           // read at the admission, after request.hit
-  save (n);           // read when the request has generated its output
+  save (n);           // an L2's: read when the request has generated its output
 }
 ```
 
-The engine's KV connector to `QUEUE`, a queue that plays `l2` (vLLM's
-`KVConnector`; LMCache's, `lmcache_mp_connector.py`). A request that loads
-`n > 0` tokens copies them at the queue's bandwidth into its hold on the
-engine's memory before its prefill; `taking` reads `n` as
-`request.loaded`. A finished request copies to its entry in the queue the
-part of `n` tokens it lacks before it gives its pools back. At least one of
-`load` and `save`. The engine records `ENGINE.loaded` and sets
-`ENGINE.loaded` and `ENGINE.saved`. `examples/multi-turn/vllm_lmcache.sq`:
+The engine's KV connector (vLLM's `KVConnector`). `QUEUE` is one of two:
+
+- a queue that plays `l2` (LMCache's, `lmcache_mp_connector.py`). A request
+  that loads `n > 0` tokens copies them at the queue's bandwidth,
+  `per_token` a token, into its hold on the engine's memory before its
+  prefill. A finished request copies to its entry in the queue the part of
+  `n` tokens it lacks before it gives its pools back. `per_token` is
+  required, and at least one of `load` and `save`;
+- the source of the engine's queue's KV relation (`kvt.nixl_pull (QUEUE,
+  Q, …)` or `kvt.nixl_push`; NIXL's). A request its entry was called `from
+  QUEUE[i]` with reads `n` tokens' KV over the two NICs the relation
+  declares (in a push, once the dispatch's leg has joined), and the lease
+  the entry took ends; one its entry took from no source loads nothing.
+  It has `load` alone.
+
+`taking` reads `n` as `request.loaded`. After the load, a request that has
+KV for every token it has computes its last again (`scheduler.py:3075-3076`),
+and its admission is read again: a pool it took none of and takes now, it
+waits for (vLLM's `WAITING_FOR_REMOTE_KVS`, `scheduler.py:1264-1267`), so
+`reqs (request.loaded > 0 ? 0 : 1) reserve (1)` holds no running slot
+while the request loads. The engine records `ENGINE.loaded` and sets
+`ENGINE.loaded`, `ENGINE.saved` and `ENGINE.load_done` (when its latest
+load ended). `examples/multi-turn/vllm_lmcache.sq`:
 
 ```serq
 connector lmc {
@@ -296,6 +318,13 @@ connector lmc {
   load (request.preempted ? 0 : beyond(request.known, request.hit));
   save (floor(request.input + request.output, chunk));
 }
+```
+
+and the decoder of `examples/pd-disaggregation/llmd_nixl_pull.sq`, whose
+`decode (prompt) from P` entry calls it:
+
+```serq
+connector P { load (request.preempted ? 0 : request.input - request.hit); }
 ```
 
 ## Examples

@@ -72,18 +72,20 @@ named.
 
 ### Example
 
-From `examples/pd-disaggregation/llmd_nixl_pull.sq`, the decoder's read of
-the prefiller's leased blocks, over the prefiller's NIC and its own, in the
-decoder's `decode (prompt) from P` entry (in it `P` is the KV the request
-leased on the prefiller). The NICs are the pods' (`nic ps(BwD);`), and the relation
-`kvt.nixl_pull (P, D, latency = x0);` from `std/kvt` makes a `transfer` without `on` the read over
-`P.nic[i]` and `D.nic[j]`, after the decoder's wait `x0`:
+Inside an entry `from P` of a queue with a KV relation, `P` is the KV the
+request leased on the prefiller. The NICs are the pods' (`nic ps(BwD);`),
+and the relation `kvt.nixl_pull (P, D, latency = x0);` from `std/kvt`
+makes a `transfer (n) from P to kv (m)` without `on` the read over
+`P.nic[i]` and `D.nic[j]`, after the decoder's wait `x0`. A decoder whose
+engine reads the KV itself says it with its connector instead
+([engine](engine.md#connector)), as `examples/pd-disaggregation/llmd_nixl_pull.sq`
+does:
 
 ```serq
-hold kv (cost(kv, known)) reserve (cost(kv, known)), reqs (cost(reqs, 0)) reserve (cost(reqs, 1)) … {
-  transfer (prompt - c) from P to kv (prompt - 1 - c);   // over P's NIC and this pod's
-  …
-} cache (cost(kv, reqs, prompt + o));
+decode (prompt) from P {
+  set produced = min(o, max_model_len - prompt);   // generation stops at max_model_len tokens (sched/utils.py:114-120)
+  D (prompt, produced);
+}
 ```
 
 ## Examples

@@ -71,7 +71,7 @@ fn token_hit(r: &serq::Report) -> f64 {
         let o = r.observe(k).unwrap();
         o.mean * o.count as f64
     };
-    total("reused_tokens") / (total("reused_tokens") + total("prefill_tokens"))
+    total("E.reused") / (total("E.reused") + total("E.prefill"))
 }
 
 #[test]

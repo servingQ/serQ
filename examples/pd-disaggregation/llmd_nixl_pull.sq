@@ -42,7 +42,7 @@ fn main() {
         P[i].prefill (prompt);
         set t1 = now;
         D[j].decode (prompt) from P[i];
-        observe lease = D.read_done - t1;
+        observe lease = D.load_done - t1;
       } else {
         D[j].decode (prompt);
       }
@@ -81,7 +81,16 @@ fn main() {
     engine on gpu {
       reqs cap max_seqsD;
       tokens cap B;
-      scheduler { advance running; admit waiting while (running.preempted == 0); }
+      connector P { load (request.preempted ? 0 : request.input - request.hit); }
+      scheduler {
+        advance running;
+        admit waiting while (running.preempted == 0)
+          taking kv (request.loaded > 0 ? request.known : min(request.known, request.hit + budget_left(D)))
+                   reserve (request.known),
+                 reqs (request.loaded > 0 ? 0 : 1) reserve (1)
+          reuse (floor(request.known - 1, bs))
+          cache (request.input + request.output);
+      }
       worker {
         forward (c0 + max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
       }
@@ -94,41 +103,14 @@ fn main() {
     // --8<-- [start:local]
     decode (prompt) {
       set produced = min(o, max_model_len - prompt);
-      set kept = prompt;
-      hold kv (cost(kv, min(known, reused + budget_left(D)))) reserve (cost(kv, known)), reqs (cost(reqs, 1))
-           at admission (known = max(kept, computed + 1),
-                         reused = min(cachedin(kv), floor(known - 1, bs))) {
-        set kept = known;
-        set c = min(cached, floor(known - 1, bs));
-        observe local_tokens = known - c;
-        run D prefill (cost(D, known - c)) growing kv;
-        run D decode (cost(D, produced - 1 - (known - prompt))) growing kv;
-      } cache (cost(kv, reqs, prompt + produced));
+      D (prompt, produced);
     }
     // --8<-- [end:local]
 
     // --8<-- [start:remote]
     decode (prompt) from P {
       set produced = min(o, max_model_len - prompt);
-      set transferred = 0;
-      set kept = prompt;
-      hold kv (cost(kv, known)) reserve (cost(kv, known)), reqs (cost(reqs, 0)) reserve (cost(reqs, 1))
-           reuse (cost(kv, reqs, floor(known - 1, bs)))
-           at admission (known = max(kept, computed + 1)) {
-        set kept = known;
-        set c = cached;
-        if (!transferred) {
-          observe remote_tokens = prompt - c;
-          transfer (prompt - c) from P to kv (prompt - 1 - c);
-          mark read_done;
-          set transferred = 1;
-          set c = prompt - 1;
-        }
-        hold reqs (cost(reqs, 1)) {
-          run D prefill (cost(D, known - c)) growing kv;
-          run D decode (cost(D, produced - 1 - (known - prompt))) growing kv;
-        }
-      } cache (cost(kv, reqs, prompt + produced));
+      D (prompt, produced);
     }
   }
   // --8<-- [end:remote]

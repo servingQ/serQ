@@ -215,6 +215,10 @@ struct Linker<'a> {
     /// Terms the program's aggregates have written out so far, nested ones
     /// included, against `MAX_OVER`.
     terms_written: Cell<usize>,
+    /// While a family engine's admission is read, its size: a family of as
+    /// many members named without an index is the member that admits
+    /// (`request_member` writes it).
+    member_of: Cell<Option<usize>>,
 }
 
 /// The context variables by their source names (`docs/api/context.md`). A
@@ -267,7 +271,12 @@ pub(crate) const REQUEST_ATTRS: [&str; 4] = ["admitted", "first", "reused", "pre
 /// its caller after the call as `E.loaded` and `E.saved`: the tokens its
 /// latest admission loaded, and the tokens the L2 holds of it after its
 /// save (`ir::CConnector`).
-pub(crate) const CONNECTOR_ATTRS: [&str; 2] = ["loaded", "saved"];
+pub(crate) const CONNECTOR_ATTRS: [&str; 3] = ["loaded", "saved", "load_done"];
+
+/// The attribute a queue's entry sets, before it calls its engine, to the
+/// member of its `from` source, which a KV relation's connector reads from
+/// (`E.from`).
+pub(crate) const RELATION_FROM: &str = "from";
 
 /// The names an engine reads its values under: `running.count`,
 /// `waiting.count`, `batch.tokens` (`parser/device.rs`).
@@ -459,6 +468,7 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
         spans: vec![],
         prog,
         terms_written: Cell::new(0),
+        member_of: Cell::new(None),
         registers: vec![],
         reg_index: HashMap::new(),
     };
@@ -766,6 +776,14 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
             if let (CStageKind::Step(st), Some((b, c))) = (&mut kind, memory) {
                 st.memory = Some(member(b, c, i, s.count, &s.name, "memory")?);
             }
+            // and E[i]'s request takes E[i]'s pools: a family the engine's
+            // size, written without an index, is its member
+            if let CStageKind::Step(st) = &mut kind
+                && let Some(r) = &mut st.request
+                && s.count > 1
+            {
+                request_member(r, i, s.count, &s.name)?;
+            }
             stages.push(CStage {
                 name: s.name.clone(),
                 index: s.array.then_some(i as u32),
@@ -907,17 +925,23 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
         });
     }
     // an engine's connector: its blocks after the session's, which keep
-    // their numbers
-    for (decl, st) in prog.stages.iter().zip(&mut stages) {
-        if let (StageKind::Step(sp), CStageKind::Step(step)) = (&decl.kind, &mut st.kind)
-            && let Some(c) = &sp.connector
-        {
-            let taken = sp.memory.as_ref().filter(|m| {
-                sp.request
-                    .as_ref()
-                    .is_some_and(|r| r.pools.iter().any(|(q, _, _)| q.name == m.name))
-            });
-            step.connector = Some(Box::new(lk.connector(c, &decl.name, taken)?));
+    // their numbers; a family's, one per member
+    let mut at = 0;
+    for decl in &prog.stages {
+        for i in 0..decl.count {
+            let st = &mut stages[at];
+            at += 1;
+            if let (StageKind::Step(sp), CStageKind::Step(step)) = (&decl.kind, &mut st.kind)
+                && let Some(c) = &sp.connector
+            {
+                let taken = sp.memory.as_ref().filter(|m| {
+                    sp.request
+                        .as_ref()
+                        .is_some_and(|r| r.pools.iter().any(|(q, _, _)| q.name == m.name))
+                });
+                let member = decl.array.then_some(i);
+                step.connector = Some(Box::new(lk.connector(c, &decl.name, taken, member)?));
+            }
         }
     }
     // what an engine records of its requests, after the program's own
@@ -1574,6 +1598,62 @@ fn hidden_in_server(
     walk(server, &mut tainted, admissions)
 }
 
+/// Engine member `i` of `n`'s request: every pool or stage family of `n`
+/// members it names without an index is its member `i`.
+fn request_member(r: &mut crate::ir::CRequest, i: usize, n: usize, who: &str) -> LResult<()> {
+    let at = member_ref;
+    let expr = member_expr;
+    for (q, u, reserve) in &mut r.pools {
+        at(q, i, n, who)?;
+        expr(u, i, n, who)?;
+        if let Some(x) = reserve {
+            expr(x, i, n, who)?;
+        }
+    }
+    for x in r.reuse.iter_mut().chain(&mut r.cache) {
+        expr(x, i, n, who)?;
+    }
+    for (k, m) in r.prefix.iter_mut().flatten() {
+        expr(k, i, n, who)?;
+        expr(m, i, n, who)?;
+    }
+    Ok(())
+}
+
+/// Member `i` of an `n`-engine family's reference to a family of `n`
+/// written without an index.
+fn member_ref(c: &mut CRef, i: usize, n: usize, who: &str) -> LResult<()> {
+    if c.index.is_none() && c.count > 1 {
+        c.base = member(c.base, c.count, i, n, who, "taking")?;
+        c.count = 1;
+    }
+    Ok(())
+}
+
+/// `member_ref` for every reference in `e`.
+fn member_expr(e: &mut CExpr, i: usize, n: usize, who: &str) -> LResult<()> {
+    let expr = member_expr;
+    let at = member_ref;
+    match e {
+        CExpr::Cost(_, x) | CExpr::Unary(_, x) => expr(x, i, n, who),
+        CExpr::Binary(_, a, b) => {
+            expr(a, i, n, who)?;
+            expr(b, i, n, who)
+        }
+        CExpr::Cond(c, a, b) => {
+            expr(c, i, n, who)?;
+            expr(a, i, n, who)?;
+            expr(b, i, n, who)
+        }
+        CExpr::Sample(_, xs) => xs.iter_mut().try_for_each(|x| expr(x, i, n, who)),
+        CExpr::Call(_, args) => args.iter_mut().try_for_each(|a| match a {
+            crate::ir::CArg::Expr(x) => expr(x, i, n, who),
+            crate::ir::CArg::Pool(c) | crate::ir::CArg::Stage(c) => at(c, i, n, who),
+        }),
+        _ => Ok(()),
+    }
+}
+
 /// Member `i` of an `n`-family's counterpart in a family of `count` from
 /// `base`: element for element when the counts match, the one member when
 /// there is one, and an error otherwise.
@@ -1735,6 +1815,7 @@ impl Linker<'_> {
             .get(&r.name)
             .ok_or_else(|| self.unknown(what, &r.name).at(r.span))?;
         let index = match &r.index {
+            None if self.member_of.get() == Some(count) => None,
             None => {
                 // a family is indexed at every size, so a constant that sizes
                 // it does not change how the program is spelled (#220)
@@ -2204,6 +2285,18 @@ impl Linker<'_> {
         r: &crate::frontend::ast::RequestSpec,
         engine: &str,
     ) -> LResult<crate::ir::CRequest> {
+        let size = self.stages.get(engine).map_or(1, |&(_, c)| c);
+        self.member_of.set(Some(size));
+        let read = self.request_clauses(r, engine);
+        self.member_of.set(None);
+        read
+    }
+
+    fn request_clauses(
+        &mut self,
+        r: &crate::frontend::ast::RequestSpec,
+        engine: &str,
+    ) -> LResult<crate::ir::CRequest> {
         let pools = r
             .pools
             .iter()
@@ -2241,30 +2334,35 @@ impl Linker<'_> {
         })
     }
 
-    /// An engine's connector: its amounts, read for the request, and the
-    /// kernel blocks they mean, which read them as `E.loaded` and `E.saved`
+    /// An engine's connector, for member `member` of an engine family (`None`
+    /// for one engine): its amounts, read for the request, and the kernel
+    /// blocks they mean, which read them as `E.loaded` and `E.saved`
     /// (`ir::CConnector`). A load computes into the request's hold on
-    /// `memory`, the engine's memory its `taking` takes; a save is the hold
-    /// on the L2's pool that copies what its entry lacks and caches the rest.
+    /// `memory`, the engine's memory its `taking` takes: an L2's copies its
+    /// tokens at the L2's stage, a KV relation's reads them over the two
+    /// NICs from the lease the request's entry took `from` the source (the
+    /// member `E.from`), waiting first for the source's leg in a push, and
+    /// ends the lease. A save is the hold on the L2's pool that copies what
+    /// its entry lacks and caches the rest.
     fn connector(
         &mut self,
         c: &ConnectorSpec,
         engine: &str,
         memory: Option<&Ref>,
+        member: Option<usize>,
     ) -> LResult<crate::ir::CConnector> {
-        let [loaded, saved] = CONNECTOR_ATTRS.map(|a| format!("{engine}.{a}"));
-        let (loaded_slot, saved_slot) = (self.attr(&loaded), self.attr(&saved));
+        let [loaded, saved, load_done] = CONNECTOR_ATTRS.map(|a| format!("{engine}.{a}"));
+        let slots = [&loaded, &saved, &load_done].map(|n| self.attr(n));
         let var = |n: &str| Expr::Var(n.into());
-        let times = |e: Expr| Expr::Binary(BinOp::Mul, Box::new(e), Box::new(c.per_token.clone()));
         let one = std::slice::from_ref;
-        let run = |work: Expr| Stmt::Run {
-            stage: c.stage.clone(),
-            mode: RunMode::Plain,
-            work: Expr::cost(one(&c.stage), times(work)),
-            growing: None,
-            also: vec![],
-            share: None,
+        // the engine's own pools and stages, as its `taking` names them: a
+        // family's member is written in (`member_block`)
+        let own = |name: &str| Ref {
+            span: None,
+            name: name.into(),
+            index: None,
         };
+        let size = self.stages.get(engine).map_or(1, |&(_, c)| c);
         let side = self.side;
         self.side = crate::ir::Side::Server;
         let load = match &c.load {
@@ -2276,16 +2374,111 @@ impl Linker<'_> {
                          on its device, which its `taking` does not take"
                     )));
                 };
-                let body = vec![
-                    run(var(&loaded)),
-                    Stmt::Load(kv.clone(), Expr::cost(one(kv), var(&loaded))),
-                ];
-                Some((self.expr(n)?, self.block(&body)?))
+                let kv = own(&kv.name);
+                let mut body = match &c.kind {
+                    ConnectorKind::L2 {
+                        stage, per_token, ..
+                    } => vec![Stmt::Run {
+                        stage: stage.clone(),
+                        mode: RunMode::Plain,
+                        work: Expr::cost(
+                            one(stage),
+                            Expr::Binary(
+                                BinOp::Mul,
+                                Box::new(var(&loaded)),
+                                Box::new(per_token.clone()),
+                            ),
+                        ),
+                        growing: None,
+                        also: vec![],
+                        share: None,
+                    }],
+                    ConnectorKind::Relation(None) => {
+                        return Err(LinkError::new(format!(
+                            "engine `{engine}`'s `connector {}`: its queue reads KV from no \
+                             `{}` (`kvt.nixl_pull ({}, {engine}, …);` or `kvt.nixl_push`)",
+                            c.queue, c.queue, c.queue
+                        )));
+                    }
+                    ConnectorKind::Relation(Some(rel)) => {
+                        let sources = self.pools.get(&rel.leased).map_or(1, |&(_, n)| n);
+                        let src = |name: String| Ref {
+                            span: None,
+                            name,
+                            index: (sources > 1)
+                                .then(|| Box::new(var(&format!("{engine}.{}", RELATION_FROM)))),
+                        };
+                        let mut out = vec![];
+                        // the source's KV is there once its leg has ended
+                        if rel.push {
+                            out.push(Stmt::Join);
+                        }
+                        if let Some(l) = &rel.latency {
+                            // the side that posts the copy waits
+                            let stage = if rel.push {
+                                src(format!("{}.nic.latency", rel.source))
+                            } else {
+                                own(&format!("{}.nic.latency", rel.reader))
+                            };
+                            out.push(Stmt::Run {
+                                stage: stage.clone(),
+                                mode: RunMode::Plain,
+                                work: Expr::cost(one(&stage), l.clone()),
+                                growing: None,
+                                also: vec![],
+                                share: None,
+                            });
+                        }
+                        let nic = own(&format!("{}.nic", rel.reader));
+                        out.push(Stmt::Run {
+                            stage: src(format!("{}.nic", rel.source)),
+                            mode: RunMode::Plain,
+                            work: Expr::cost(
+                                &[
+                                    Ref {
+                                        span: None,
+                                        name: format!("{}.nic", rel.source),
+                                        index: None,
+                                    },
+                                    nic.clone(),
+                                ],
+                                var(&loaded),
+                            ),
+                            growing: None,
+                            also: vec![nic],
+                            share: Some(rel.share),
+                        });
+                        out.push(Stmt::Release(src(rel.leased.clone())));
+                        out
+                    }
+                };
+                let at = body.len() - usize::from(matches!(c.kind, ConnectorKind::Relation(_)));
+                body.insert(
+                    at,
+                    Stmt::Load(kv.clone(), Expr::cost(one(&kv), var(&loaded))),
+                );
+                self.member_of.set(member.map(|_| size));
+                let compiled = self.expr(n).and_then(|e| Ok((e, self.block(&body)?)));
+                self.member_of.set(None);
+                let (mut amount, b) = compiled?;
+                if let Some(i) = member {
+                    member_expr(&mut amount, i, size, engine)?;
+                    self.member_block(b, i, size, engine)?;
+                }
+                Some((amount, b))
             }
         };
-        let save = match &c.save {
-            None => None,
-            Some(n) => {
+        let save = match (&c.save, &c.kind) {
+            (None, _) => None,
+            (Some(_), ConnectorKind::Relation(_)) => unreachable!("the parser refuses it"),
+            (
+                Some(n),
+                ConnectorKind::L2 {
+                    stage,
+                    pool,
+                    per_token,
+                },
+            ) => {
                 // the part of what the L2 is to hold that its entry lacks
                 let new = Expr::Call(
                     "max".into(),
@@ -2298,14 +2491,28 @@ impl Linker<'_> {
                         )),
                     ],
                 );
-                let kv = &c.pool;
+                let kv = pool;
                 let held = Expr::Call("cachedin".into(), vec![Arg::Ref(kv.clone())]);
                 let body = vec![Stmt::Hold {
                     pools: vec![(kv.clone(), Expr::cost(one(kv), held), None)],
                     reuse: None,
                     body: vec![
                         Stmt::Grow(kv.clone(), Expr::cost(one(kv), new.clone())),
-                        run(new.clone()),
+                        Stmt::Run {
+                            stage: stage.clone(),
+                            mode: RunMode::Plain,
+                            work: Expr::cost(
+                                one(stage),
+                                Expr::Binary(
+                                    BinOp::Mul,
+                                    Box::new(new.clone()),
+                                    Box::new(per_token.clone()),
+                                ),
+                            ),
+                            growing: None,
+                            also: vec![],
+                            share: None,
+                        },
                         Stmt::Load(kv.clone(), Expr::cost(one(kv), new)),
                     ],
                     cache: Some(Expr::cost(one(kv), var(&saved))),
@@ -2319,10 +2526,54 @@ impl Linker<'_> {
         Ok(crate::ir::CConnector {
             load,
             save,
-            loaded: loaded_slot,
-            saved: saved_slot,
+            loaded: slots[0],
+            saved: slots[1],
+            load_done: slots[2],
+            from: matches!(c.kind, ConnectorKind::Relation(_))
+                .then(|| self.attr(&format!("{engine}.{RELATION_FROM}"))),
             record: self.observe_slot(&loaded),
         })
+    }
+
+    /// `member_ref` for the references of a connector's block.
+    fn member_block(&mut self, b: BlockId, i: usize, n: usize, who: &str) -> LResult<()> {
+        let mut stmts = std::mem::take(&mut self.blocks[b]);
+        for s in &mut stmts {
+            match s {
+                // a run's stages are its member by index, as its work's
+                // cost is the family's
+                CStmt::Run {
+                    stage,
+                    growing,
+                    also,
+                    ..
+                } => {
+                    for r in std::iter::once(stage).chain(also.iter_mut()) {
+                        if r.index.is_none() && r.count == n && n > 1 {
+                            r.index = Some(Box::new(CExpr::Num(i as f64)));
+                        }
+                    }
+                    if let Some(g) = growing {
+                        member_ref(g, i, n, who)?;
+                    }
+                }
+                // a pool its member, and the amount's cost the member's
+                CStmt::Load(r, e) | CStmt::Grow(r, e) => {
+                    let family = r.index.is_none() && r.count == n && n > 1;
+                    member_ref(r, i, n, who)?;
+                    member_expr(e, i, n, who)?;
+                    if family && let CExpr::Cost(crate::ir::CostTarget::Pool { base, count }, _) = e
+                    {
+                        *base += i;
+                        *count = 1;
+                    }
+                }
+                CStmt::Release(r) => member_ref(r, i, n, who)?,
+                _ => {}
+            }
+        }
+        self.blocks[b] = stmts;
+        Ok(())
     }
 
     fn observe_slot(&mut self, name: &str) -> usize {

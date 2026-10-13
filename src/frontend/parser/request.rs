@@ -159,13 +159,24 @@ impl Parser {
         Ok(spec.clone())
     }
 
-    /// `E (input, output);` in a server: a request to engine `E`, `input`
-    /// tokens of prompt and `output` to generate.
+    /// `E (input, output);` in a server, or in an entry of queue `E` for its
+    /// own engine: a request to engine `E`, `input` tokens of prompt and
+    /// `output` to generate.
     pub(super) fn engine_call(&mut self) -> PResult<Stmt> {
         let at = self.pos;
         let span = Some(self.span());
         let name = self.ident()?;
-        if self.side != Side::Server {
+        let own = self.in_queue.is_some_and(|qi| self.queues[qi].name == name);
+        if !own && self.queues.iter().any(|q| q.name == name) {
+            return self.err_at(
+                at,
+                format!(
+                    "`{name} (…)` is a request to queue `{name}`'s engine, which its entries make: \
+                     call one of them (`{name}.VERB (…);`)"
+                ),
+            );
+        }
+        if !own && self.side != Side::Server {
             return self.err_at(
                 at,
                 format!("`{name} (…)` is a request to engine `{name}`, which a `server` makes"),
