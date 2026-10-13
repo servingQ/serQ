@@ -98,7 +98,7 @@ fn main() {
       prefill (8);
       decode (2);
     }
-    schedule { advance running; admit waiting while (running.preempted == 0); }
+    scheduler { advance running; admit waiting while (running.preempted == 0); }
     execute (1);
   }
   stage tool : delay;

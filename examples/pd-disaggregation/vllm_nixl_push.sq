@@ -76,7 +76,7 @@ fn main() {
     engine on gpu {
       reqs cap max_seqsP;
       tokens cap B;
-      schedule { advance running; admit waiting while (running.preempted == 0); }
+      scheduler { advance running; admit waiting while (running.preempted == 0); }
       execute (aP * batch.prefilled + bP * batch.attention);
     }
     pool reqs on P { queue fifo; }
@@ -100,7 +100,7 @@ fn main() {
     engine on gpu {
       reqs cap max_seqsD;
       tokens cap B;
-      schedule { advance running; admit waiting while (running.preempted == 0); }
+      scheduler { advance running; admit waiting while (running.preempted == 0); }
       execute (cD + aP * batch.prefilled + bP * batch.attention);
     }
     pool reqs on D { queue fifo; }

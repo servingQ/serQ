@@ -1,5 +1,5 @@
 //! Engines on devices (`docs/design/engine-device.md`): `device`, `engine …
-//! on`, `pool … on`, an engine's `schedule` and `execute`. All of it is
+//! on`, `pool … on`, an engine's `scheduler` and `execute`. All of it is
 //! parse-time sugar: an engine is a step stage, a pool on a device or an
 //! engine is a pool, and the links between them (`memory`, `admit_via`,
 //! `waiting.count`) are written once every declaration is read.
@@ -80,7 +80,7 @@ type Lets = Vec<(String, Expr)>;
 /// The clauses that read the residents as they stand: as the iteration
 /// starts (`tokens cap`, `each at most` and the `let`s it reads), at each
 /// resident's turn (`only`, `by`) and in the schedule's statements.
-const AS_THEY_STAND: &[&str] = &["tokens cap", "each at most", "only", "by", "schedule"];
+const AS_THEY_STAND: &[&str] = &["tokens cap", "each at most", "only", "by", "scheduler"];
 
 /// Those, and `execute`, which reads the count of the residents too.
 const RESIDENTS: &[&str] = &[
@@ -88,14 +88,14 @@ const RESIDENTS: &[&str] = &[
     "each at most",
     "only",
     "by",
-    "schedule",
+    "scheduler",
     "execute",
 ];
 
 /// An engine's values: the name it reads one by, the kernel's context
 /// variable, and the clauses that read it. `running` is the residents as
 /// they stand, `waiting` the queues, `batch` the iteration's batch: in a
-/// schedule's statements (`schedule`), what it has formed so far; in
+/// schedule's statements (`scheduler`), what it has formed so far; in
 /// `execute`, what it formed. The kernel reads `decoders` and `kv_decode` as
 /// the residents' before the batch is formed and as the batch's in `cost`
 /// (#416), so the engine names them twice. Within a schedule, `only`, `by`
@@ -105,11 +105,11 @@ pub const ENGINE_VALUES: [(&str, &str, &[&str]); 13] = [
     ("running.decoding", "decoders", AS_THEY_STAND),
     ("running.kv_decode", "kv_decode", AS_THEY_STAND),
     ("running.kv_prefill", "kv_prefill", AS_THEY_STAND),
-    ("running.preempted", "preempted", &["schedule"]),
+    ("running.preempted", "preempted", &["scheduler"]),
     ("waiting.count", WAITING_COUNT, RESIDENTS),
-    ("waiting.admitted", "admitted", &["schedule"]),
-    ("batch.tokens", "tokens", &["schedule", "execute"]),
-    ("batch.prefilled", "prefilled", &["schedule", "execute"]),
+    ("waiting.admitted", "admitted", &["scheduler"]),
+    ("batch.tokens", "tokens", &["scheduler", "execute"]),
+    ("batch.prefilled", "prefilled", &["scheduler", "execute"]),
     ("batch.decoding", "decoders", &["execute"]),
     ("batch.kv_decode", "kv_decode", &["execute"]),
     ("batch.kv_prefill", "kv_prefill", &["execute"]),
@@ -117,7 +117,7 @@ pub const ENGINE_VALUES: [(&str, &str, &[&str]); 13] = [
 ];
 
 /// The name an engine reads the kernel's context variable `var` by in
-/// `clause` (`tokens cap`, `schedule`, `execute`), if it reads it there: a
+/// `clause` (`tokens cap`, `scheduler`, `execute`), if it reads it there: a
 /// view that draws a step stage in an engine's words names it so.
 pub fn engine_name(var: &str, clause: &str) -> Option<&'static str> {
     ENGINE_VALUES
@@ -139,7 +139,7 @@ fn not_read_in(value: &str, clause: &str) -> String {
             "`execute` times the batch: `{value}` counts the residents, in the batch or not, \
              and the batch's is `batch.{field}`"
         )
-    } else if clause == "schedule" {
+    } else if clause == "scheduler" {
         format!(
             "`{value}` is the formed batch's, read in `execute`; a schedule's statements read \
              the batch so far as `batch.tokens` and `batch.prefilled`, and the residents' as \
@@ -431,9 +431,9 @@ impl Parser {
                 self.expect(&Tok::Assign)?;
                 s.state.push((n, self.expr()?));
                 self.expect(&Tok::Semi)?;
-            } else if self.eat_kw("schedule") {
+            } else if self.eat_kw("scheduler") {
                 if schedule {
-                    return self.err_at(k_at, "`schedule` twice: an engine has one schedule");
+                    return self.err_at(k_at, "`scheduler` twice: an engine has one scheduler");
                 }
                 schedule = true;
                 self.schedule(&name, &mut s)?;
@@ -460,8 +460,9 @@ impl Parser {
                     "memory",
                     "nothing: the engine's KV is the pool on its device",
                 ),
-                ("serve", "a statement of `schedule { … }`"),
-                ("iteration", "`schedule { … }`"),
+                ("serve", "a statement of `scheduler { … }`"),
+                ("iteration", "`scheduler { … }`"),
+                ("schedule", "`scheduler { … }`"),
             ]
             .iter()
             .find(|(w, _)| self.is_kw(w))
@@ -496,7 +497,7 @@ impl Parser {
                 if !self.eat_kw("cap") {
                     return self.err(format!(
                         "an engine holds capacities (`{r} cap expr;`), `tokens cap`, `granule`, \
-                         `state`, `schedule` and `execute`; found {}",
+                         `state`, `scheduler` and `execute`; found {}",
                         self.peek()
                     ));
                 }
@@ -518,7 +519,7 @@ impl Parser {
                 tokens,
                 "`tokens cap B;`: the tokens one iteration computes (`tokens cap inf;` for none)",
             ),
-            (schedule, "`schedule { … }`: what each iteration does"),
+            (schedule, "`scheduler { … }`: what each iteration does"),
             (execute, "`execute (T);`: how long a batch takes"),
         ] {
             if !has {
@@ -550,14 +551,14 @@ impl Parser {
         self.engine_request(&name, request, &takeable, registers)
     }
 
-    /// `{ let …; stmt* }` of engine `engine`'s `schedule`, written into `s`.
+    /// `{ let …; stmt* }` of engine `engine`'s `scheduler`, written into `s`.
     fn schedule(&mut self, engine: &str, s: &mut StepSpec) -> PResult<()> {
         let at = self.pos;
         self.expect(&Tok::LBrace)?;
-        let (lets, mut body) = self.engine_expr("schedule", |p| p.schedule_items(engine))?;
+        let (lets, mut body) = self.engine_expr("scheduler", |p| p.schedule_items(engine))?;
         self.expect(&Tok::RBrace)?;
         if body.is_empty() {
-            return self.err_at(at, "a schedule needs a statement: what the iteration does");
+            return self.err_at(at, "a scheduler needs a statement: what the iteration does");
         }
         // a `let` is read as the iteration starts, where the kernel reads its
         // per-run cap, and nowhere else; it may read the ones above it
@@ -871,7 +872,7 @@ impl Parser {
                 at,
                 format!(
                     "`{list}.…` is a value of an engine, read in its `tokens cap`, `execute` and \
-                     `schedule`"
+                     `scheduler`"
                 ),
             );
         };

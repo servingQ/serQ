@@ -29,7 +29,7 @@ fn main() {
       prefill (prompt);
       decode (output);
     }
-    schedule {
+    scheduler {
       advance running each at most (128);
       admit waiting while (running.preempted == 0) each at most (128)
         taking reqs (1), kv (prompt + output);

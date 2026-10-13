@@ -249,7 +249,7 @@ impl Moment {
             Moment::Step => "an engine's `execute`",
             Moment::Serve => "an engine's `advance running by (…)` keys or an `only`",
             Moment::Victim => "a pool's preempt keys",
-            Moment::Plan => "an engine's `schedule`",
+            Moment::Plan => "an engine's `scheduler`",
             Moment::Gauge => "a gauge",
             Moment::Given => "a claim's `given`",
             Moment::Iteration => "a claim over iterations",
@@ -258,7 +258,7 @@ impl Moment {
     }
 
     /// When it is read: what keeps the sentence true for an IR reader, who
-    /// has no `tokens cap` or `schedule` to look for.
+    /// has no `tokens cap` or `scheduler` to look for.
     pub fn when(self) -> &'static str {
         match self {
             Moment::Session => "read when the session gets there",
@@ -1931,7 +1931,7 @@ impl Program {
                 let stage = &self.stages[s];
                 if !matches!(stage.kind, CStageKind::Step(_)) {
                     return Err(at(format!(
-                        "`admit_via` names `{}`, but `{}` is a {} stage: only an engine's `schedule` \
+                        "`admit_via` names `{}`, but `{}` is a {} stage: only an engine's `scheduler` \
                          admits, and nothing would admit `{}`",
                         stage.name,
                         stage.name,
@@ -2007,7 +2007,7 @@ impl Program {
                     if let Some(body) = &st.iteration {
                         if matches!(st.serve, CServe::ExclusivePrefill) {
                             return Err(at(
-                                "`exclusive prefill` with a `schedule` body (the IR's `iteration`): \
+                                "`exclusive prefill` with a `scheduler` body (the IR's `iteration`): \
                                  the rule takes back decodes already chosen, which a body \
                                  cannot, and the two would answer one question twice"
                                     .into(),
@@ -2016,7 +2016,7 @@ impl Program {
                         v.iteration(si, body).map_err(at)?;
                         if !always_serves(body) {
                             return Err(at(
-                                "a `schedule` with a path that neither advances `running` nor \
+                                "a `scheduler` with a path that neither advances `running` nor \
                                  admits `waiting`: an engine whose schedule takes that path \
                                  schedules nothing, and waits for an event that may never come"
                                     .into(),
@@ -2036,7 +2036,7 @@ impl Program {
                 Some(CStageKind::Step(st)) if st.iteration.is_some() => {}
                 Some(CStageKind::Step(_)) => {
                     return Err(at(
-                        "a register of an engine without a `schedule` body (the IR's `iteration`), \
+                        "a register of an engine without a `scheduler` body (the IR's `iteration`), \
                          which nothing sets",
                     ));
                 }
@@ -2261,7 +2261,7 @@ struct Validator<'a> {
 }
 
 impl Validator<'_> {
-    /// An `advance running by (…)` key, in either form of `schedule`: read
+    /// An `advance running by (…)` key, in either form of `scheduler`: read
     /// for every resident at every iteration, so it does not draw. It may
     /// read the clock: a key orders the residents and excludes none.
     fn serve_key(&self, k: &CExpr) -> Result<(), String> {
@@ -2301,7 +2301,7 @@ impl Validator<'_> {
 
     /// A step stage's iteration body: its keys and `only`s as above, a
     /// guard and an `admit`'s `while` as the iteration is planned, neither
-    /// drawing nor reading the clock (an engine whose `schedule` schedules
+    /// drawing nor reading the clock (an engine whose `scheduler` schedules
     /// nothing waits for an event, and the clock moving is none, #263), and
     /// a guard does not read this stage's `budget_left`, which plans the
     /// iteration the body is planning.
@@ -2315,7 +2315,7 @@ impl Validator<'_> {
             }
             if reads_clock(e) {
                 return Err(format!(
-                    "{what} may not read `now` or `work(…)`: an engine whose `schedule` \
+                    "{what} may not read `now` or `work(…)`: an engine whose `scheduler` \
                      schedules nothing waits for an event, and the clock moving is none"
                 ));
             }
@@ -2344,7 +2344,7 @@ impl Validator<'_> {
                     }
                 }
                 CIter::Branch(g, a, b) => {
-                    plan(g, "an `if` in a `schedule`")?;
+                    plan(g, "an `if` in a `scheduler`")?;
                     self.iteration(st, a)?;
                     self.iteration(st, b)?;
                 }

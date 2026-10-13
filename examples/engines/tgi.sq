@@ -39,7 +39,7 @@ fn main() {
       cache (prompt);
     }
     // with no running batch there is no decode forward, and the queue is read
-    schedule {
+    scheduler {
       advance running;
       // blocks for the whole input plus max_new_tokens, at once
       if (just == 0 || running.count == 0) {

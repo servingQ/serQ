@@ -14,7 +14,7 @@ fn main() {
       observe gated_ttft = now - t0;   // from the gate, B's arrival at the engine
       if (decodes) { decode (2) growing kv; }
     }
-    schedule {
+    scheduler {
       exclusive prefill each at most (4);
       admit waiting while (running.preempted == 0) each at most (4)
         taking reqs (1), kv (min(prompt, left)) reserve (prompt);

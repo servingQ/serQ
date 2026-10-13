@@ -69,7 +69,7 @@ fn a_queue_is_its_pools_its_stage_and_the_server_statements() {
              queue gw : gateway {{ route {{ E[j].decode (prompt); observe done = now; }} }}
              queue E[N] : decode {{
                device gpu {{ kv cap 100; }} pool kv on gpu {{ block 16; }}
-               engine on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
+               engine on gpu {{ tokens cap inf; scheduler {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
                decode (prompt) {{
                  hold kv (cost(kv, min(prompt, budget_left(E)))) reserve (cost(kv, prompt)) {{
                    run E prefill (cost(E, prompt)) growing kv; run E decode (cost(E, o - 1)) growing kv;
@@ -93,7 +93,7 @@ fn a_queue_family_sized_by_an_aggregate() {
              queue gw : gateway {{ route {{ E[j].decode (prompt); observe done = now; }} }}
              queue E[N] : decode {{
                device gpu {{ kv cap 100; }} pool kv on gpu {{ block 16; }}
-               engine on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
+               engine on gpu {{ tokens cap inf; scheduler {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
                decode (prompt) {{ hold kv (cost(kv, prompt)) {{ run E prefill (cost(E, prompt)) growing kv; }} }}
              }}
              {WORKLOAD}"
@@ -127,7 +127,7 @@ fn a_transfer_between_queues_is_the_flat_transfer() {
       }
       queue D[ND] : decode {
         device gpu { kv cap 1000; } pool kv on gpu { block 16; }
-        engine on gpu { tokens cap inf; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); }
+        engine on gpu { tokens cap inf; scheduler { advance running; admit waiting while (running.preempted == 0); } execute (1); }
         decode (prompt) { hold kv (cost(kv, prompt)) { run D prefill (cost(D, prompt)) growing kv; mark first; } }
         decode (prompt) from P {
           set c = 0;
@@ -175,7 +175,7 @@ fn a_read_over_both_links_is_the_flat_read() {
       }
       queue D[ND] : decode {
         device gpu { kv cap 1000; } pool kv on gpu { block 16; }
-        engine on gpu { tokens cap inf; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); }
+        engine on gpu { tokens cap inf; scheduler { advance running; admit waiting while (running.preempted == 0); } execute (1); }
         decode (prompt) { hold kv (cost(kv, prompt)) { run D prefill (cost(D, prompt)) growing kv; } }
         decode (prompt) from P {
           hold kv (cost(kv, prompt)) {
@@ -213,7 +213,7 @@ fn a_link_latency_is_a_wait_before_the_read() {
       }
       queue D[2] : decode {
         device gpu { kv cap 1000; } pool kv on gpu { block 16; }
-        engine on gpu { tokens cap inf; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); }
+        engine on gpu { tokens cap inf; scheduler { advance running; admit waiting while (running.preempted == 0); } execute (1); }
         decode (prompt) { hold kv (cost(kv, prompt)) { run D prefill (cost(D, prompt)) growing kv; } }
         decode (prompt) from P {
           hold kv (cost(kv, prompt)) {
@@ -254,7 +254,7 @@ fn a_latency_is_the_links_constant() {
       }}
       queue D : decode {{
         device gpu {{ kv cap 1000; }} pool kv on gpu {{ }}
-        engine on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
+        engine on gpu {{ tokens cap inf; scheduler {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
         decode (p) {{ hold kv (cost(kv, p)) {{ run D prefill (cost(D, p)) growing kv; }} }}
         decode ({param}) from P {{
           hold kv (cost(kv, {param})) {{ transfer on egress, ingress ({param}, share = share.maxmin) from P to kv ({param} - 1); }}
@@ -384,7 +384,7 @@ fn a_link_has_a_cost() {
       queue gw : gateway { route { P.prefill (prompt); D.decode (prompt) from P; } }
       queue nic : link { serve ps(1); }
       queue P : prefill { pool kv { cap 100; } serve fifo; prefill (p) { hold kv (cost(kv, p)) { run (cost(P, p)); } cache (cost(kv, p)) lease kv (inf); } }
-      queue D : decode { device gpu { kv cap 100; } pool kv on gpu { } engine on gpu { tokens cap inf; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); }
+      queue D : decode { device gpu { kv cap 100; } pool kv on gpu { } engine on gpu { tokens cap inf; scheduler { advance running; admit waiting while (running.preempted == 0); } execute (1); }
         decode (p) { hold kv (cost(kv, p)) { run D prefill (cost(D, p)) growing kv; } }
         decode (p) from P { hold kv (cost(kv, p)) { BODY } } }
       workload { arrive batch(1); hidden o; init { set prompt = 32; set o = 4; } session { turn; end; } } server { gw.route(); }
@@ -413,7 +413,7 @@ fn a_link_has_a_cost() {
 fn an_admission_binding_sees_the_entry_only() {
     refused(
         "queue gw : gateway { route { set t0 = now; E.decode (prompt); } }
-         queue E : decode { device gpu { kv cap 100; } pool kv on gpu { } engine on gpu { tokens cap inf; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); }
+         queue E : decode { device gpu { kv cap 100; } pool kv on gpu { } engine on gpu { tokens cap inf; scheduler { advance running; admit waiting while (running.preempted == 0); } execute (1); }
            decode (prompt) { hold kv (cost(kv, x)) at admission (x = prompt + t0) { run E prefill (cost(E, 1)) growing kv; } } }
          workload { arrive batch(1); init { set prompt = 3; } session { turn; end; } } server { gw.route(); }
          ",
@@ -431,7 +431,7 @@ fn a_header_reads_a_local_set_above_its_hold() {
             "queue gw : gateway {{ route {{ E.decode (prompt); }} }}
              queue E : decode {{
                device gpu {{ kv cap 100; }} pool kv on gpu {{ block 16; }}
-               engine on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
+               engine on gpu {{ tokens cap inf; scheduler {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
                decode (prompt) {{
                  set kept = prompt;
                  hold kv (cost(kv, known)) at admission (known = max(kept, computed + 1)) {{
@@ -452,7 +452,7 @@ fn a_header_reads_a_local_set_above_its_hold() {
                  set kept = known;
                  prefill (known) growing kv;
                }}
-               schedule {{ advance running; admit waiting while (running.preempted == 0) taking kv (known); }}
+               scheduler {{ advance running; admit waiting while (running.preempted == 0) taking kv (known); }}
                execute (1);
              }}
              server {{ E (prompt); }}
@@ -468,7 +468,7 @@ fn a_header_reads_a_local_set_above_its_hold() {
 fn a_header_reads_a_local_both_arms_set() {
     let src = format!(
         "queue gw : gateway {{ route {{ E.decode (prompt); }} }}
-         queue E : decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
+         queue E : decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; scheduler {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
            decode (prompt) {{
              if (prompt > 1) {{ set kept = prompt; }} else {{ set kept = 1; }}
              hold kv (cost(kv, kept)) {{ run E prefill (cost(E, 1)) growing kv; }}
@@ -498,7 +498,7 @@ fn a_header_does_not_read_a_local_set_below_or_beside_it() {
         refused(
             &format!(
                 "queue gw : gateway {{ route {{ E.decode (prompt); }} }}
-                 queue E : decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
+                 queue E : decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; scheduler {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
                    decode (prompt) {{
                      {above}
                      hold kv (cost(kv, kept)) {{ {inside} run E prefill (cost(E, 1)) growing kv; }}
@@ -519,7 +519,7 @@ fn a_header_reads_a_bare_name_as_a_value() {
         refused(
             &format!(
                 "queue gw : gateway {{ route {{ E.decode (prompt); }} }}
-                 queue E : decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
+                 queue E : decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; scheduler {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
                    decode (prompt) {{ hold kv ({size}) {{ run E prefill (cost(E, 1)) growing kv; }} }} }}
                  {WORKLOAD}"
             ),
@@ -538,11 +538,11 @@ fn an_entry_reads_another_place_as_not_its_own() {
         format!(
             "device g0 {{ top cap 100; }} pool top on g0 {{ }} stage tl : delay; pool pf[2] {{ cap 10; }}
              queue gw : gateway {{ route {{ E.decode (prompt); }} }}
-             queue E : decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
+             queue E : decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; scheduler {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
                decode (prompt) {{ hold kv ({size}) {{ run E prefill (cost(E, 1)) growing kv; {body} }} }} }}
-             queue F : decode {{ device gpu {{ kv2 cap 100; }} pool kv2 on gpu {{ }} engine on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
+             queue F : decode {{ device gpu {{ kv2 cap 100; }} pool kv2 on gpu {{ }} engine on gpu {{ tokens cap inf; scheduler {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
                decode (prompt) {{ hold kv2 (1) {{ run F prefill (cost(F, 1)) growing kv2; }} }} }}
-             queue G[2] : decode {{ device gpu {{ kv3 cap 100; }} pool kv3 on gpu {{ }} engine on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
+             queue G[2] : decode {{ device gpu {{ kv3 cap 100; }} pool kv3 on gpu {{ }} engine on gpu {{ tokens cap inf; scheduler {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
                decode (prompt) {{ hold kv3 (1) {{ run G prefill (cost(G, 1)) growing kv3; }} }} }}
              {WORKLOAD}"
         )
@@ -584,7 +584,7 @@ fn an_entry_reads_a_device_as_a_device() {
             &format!(
                 "device g0 {{ top cap 100; }} pool top on g0 {{ }}
                  queue gw : gateway {{ route {{ E.decode (prompt); }} }}
-                 queue E : decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
+                 queue E : decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; scheduler {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
                    decode (prompt) {{ hold kv ({size}) {{ run E prefill (cost(E, 1)) growing kv; {body} }} }} }}
                  {WORKLOAD}"
             ),
@@ -602,9 +602,9 @@ fn another_queues_device_leaves_its_name_to_an_attribute() {
     refused(
         &format!(
             "queue gw : gateway {{ route {{ E.decode (prompt); }} }}
-             queue E : decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
+             queue E : decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; scheduler {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
                decode (prompt) {{ hold kv (1) {{ run E prefill (cost(E, 1)) growing kv; set y = j; }} }} }}
-             queue F : decode {{ device j {{ kv2 cap 100; }} pool kv2 on j {{ }} engine on j {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
+             queue F : decode {{ device j {{ kv2 cap 100; }} pool kv2 on j {{ }} engine on j {{ tokens cap inf; scheduler {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
                decode (prompt) {{ hold kv2 (1) {{ run F prefill (cost(F, 1)) growing kv2; }} }} }}
              {WORKLOAD}"
         ),
@@ -620,7 +620,7 @@ fn an_entry_names_its_own_pool_bare() {
     let program = |size: &str, body: &str| {
         format!(
             "queue gw : gateway {{ route {{ E.decode (prompt); }} }}
-             queue E : decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
+             queue E : decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; scheduler {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
                decode (prompt) {{ hold kv ({size}) {{ run E prefill (cost(E, 1)) growing kv; {body} }} }} }}
              {WORKLOAD}"
         )
@@ -672,7 +672,7 @@ fn a_definition_passes_an_own_pool_where_its_body_puts_it() {
         format!(
             "{def}
              queue gw : gateway {{ route {{ E.decode (prompt); }} }}
-             queue E : decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
+             queue E : decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; scheduler {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
                decode (prompt) {{ hold kv (1) {{ run E prefill (cost(E, 1)) growing kv; set y = go(kv); }} }} }}
              {WORKLOAD}"
         )
@@ -691,7 +691,7 @@ fn an_entry_sees_its_parameters_and_its_queue() {
     let program = |entry: &str, gw: &str| {
         format!(
             "queue gw : gateway {{ route {{ set t0 = now; {gw} E.decode (prompt); }} }}
-             queue E : decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }} decode (prompt) {{ {entry} }} }}
+             queue E : decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; scheduler {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }} decode (prompt) {{ {entry} }} }}
              {WORKLOAD}"
         )
     };
@@ -786,7 +786,7 @@ fn roles_and_entries_agree() {
 fn a_call_is_checked_against_the_entry() {
     let decls = "
       queue P : prefill { pool kv { cap 10; } serve fifo; prefill (p) { hold kv (cost(kv, p)) { run (cost(P, p)); } cache (cost(kv, p)) lease kv (inf); } }
-      queue D[2] : decode { device gpu { kv cap 10; } pool kv on gpu { } engine on gpu { tokens cap inf; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); }
+      queue D[2] : decode { device gpu { kv cap 10; } pool kv on gpu { } engine on gpu { tokens cap inf; scheduler { advance running; admit waiting while (running.preempted == 0); } execute (1); }
         decode (p) { hold kv (cost(kv, p)) { run D prefill (cost(D, p)) growing kv; } }
         decode (p) from P { hold kv (cost(kv, p)) { run D prefill (cost(D, p)) growing kv; } } }";
     let program = |route: &str| {
@@ -841,7 +841,7 @@ fn a_call_is_checked_against_the_entry() {
 /// call that would need the missing one names it.
 #[test]
 fn a_decode_queue_needs_one_of_its_entries() {
-    let engine = "device gpu { kv cap 10; } pool kv on gpu { } engine on gpu { tokens cap inf; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); }";
+    let engine = "device gpu { kv cap 10; } pool kv on gpu { } engine on gpu { tokens cap inf; scheduler { advance running; admit waiting while (running.preempted == 0); } execute (1); }";
     let local = "decode (p) { hold kv (cost(kv, p)) { run D prefill (cost(D, p)) growing kv; } }";
     let remote =
         "decode (p) from P { hold kv (cost(kv, p)) { run D prefill (cost(D, p)) growing kv; } }";
@@ -879,7 +879,7 @@ fn a_family_size_is_a_constant() {
     let rest = "queue gw : gateway { route { E[j].decode (1); } } workload { arrive batch(1); init { set j = 0; } session { turn; end; } } server { gw.route(); } ";
     let decl = |n: &str| {
         format!(
-            "use \"std/args\"; let N = args.number(\"N\", 2); queue E[{n}] : decode {{ device gpu {{ kv cap 10; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }} decode (p) {{ hold kv (cost(kv, p)) {{ run E prefill (cost(E, p)) growing kv; }} }} }} {rest}"
+            "use \"std/args\"; let N = args.number(\"N\", 2); queue E[{n}] : decode {{ device gpu {{ kv cap 10; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; scheduler {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }} decode (p) {{ hold kv (cost(kv, p)) {{ run E prefill (cost(E, p)) growing kv; }} }} }} {rest}"
         )
     };
     assert!(parse(&common::main_source(&decl("N"))).is_ok());
@@ -1000,7 +1000,7 @@ fn a_session_attribute_reaches_an_entry_only_if_hidden() {
     let program = |hidden: &str| {
         format!(
             "queue gw : gateway {{ route {{ E.decode (prompt); }} }}
-             queue E : decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
+             queue E : decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; scheduler {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
                decode (p) {{ hold kv (cost(kv, p)) {{ run E prefill (cost(E, p)) growing kv; run E decode (cost(E, out)) growing kv; }} }} }}
              workload {{ arrive batch(1); {hidden} init {{ set prompt = 3; set out = 2; }} session {{ turn; end; }} }} server {{ gw.route(); }}
              "
@@ -1053,7 +1053,7 @@ fn self_names_nothing_a_program_declares() {
     let program = |entry: &str, call: &str| {
         format!(
             "queue gw : gateway {{ route {{ {call} }} }}
-             queue E[2] : decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
+             queue E[2] : decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; scheduler {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
                {entry} }}
              workload {{ arrive batch(1); init {{ set prompt = 3; set j = 0; }} session {{ turn; end; }} }} server {{ gw.route(); }}
              "
@@ -1107,7 +1107,7 @@ fn a_refused_read_points_at_the_name() {
   queue E : decode {{
     device gpu {{ kv cap 100; }}
     pool kv on gpu {{ }}
-    engine on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
+    engine on gpu {{ tokens cap inf; scheduler {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
     decode (p) {{ hold kv (cost(kv, {units})) {{ run E prefill (cost(E, 1)) growing kv; }} }}
   }}
   workload {{ arrive batch(1); {hidden} init {{ set prompt = 3; }} session {{ turn; end; }} }}
@@ -1152,7 +1152,7 @@ fn an_entry_reads_every_context_variable_as_the_languages() {
     let program = |body: &str, header: &str| {
         format!(
             "queue gw : gateway {{ route {{ E.decode (prompt); }} }}
-             queue E : decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
+             queue E : decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; scheduler {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
                decode (p) {{ {body} hold kv (cost(kv, p{header})) {{ run E prefill (cost(E, p)) growing kv; run E decode (cost(E, 1)) growing kv; }} }} }}
              workload {{ arrive batch(1); init {{ set prompt = 3; }} session {{ turn; end; }} }} server {{ gw.route(); }}
              "
@@ -1216,7 +1216,7 @@ fn the_contract_holds_at_every_edge() {
             "workload {{ arrive batch(1); hidden o; init {{ set prompt = 3; set o = 2; }} session {{ {session} }} }} server {{ gw.route(); }} "
         )
     };
-    let engine = "queue E : decode { device gpu { kv cap 100; } pool kv on gpu { } engine on gpu { tokens cap inf; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); }
+    let engine = "queue E : decode { device gpu { kv cap 100; } pool kv on gpu { } engine on gpu { tokens cap inf; scheduler { advance running; admit waiting while (running.preempted == 0); } execute (1); }
                     decode (p) { hold kv (cost(kv, p)) { run E prefill (cost(E, p)) growing kv; } } }";
     // 1. what a named gateway assigns is what a request assigns: an argument
     //    that reads it would read the new value
@@ -1234,7 +1234,7 @@ fn the_contract_holds_at_every_edge() {
         &common::main_source(&format!(
             "use \"std/args\"; let N = args.number(\"N\", min(2, 3));
              queue gw : gateway {{ route {{ E[N - 1].decode (prompt); }} }}
-             queue E[N] : decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
+             queue E[N] : decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; scheduler {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
                decode (p) {{ hold kv (cost(kv, p + N)) {{ run E prefill (cost(E, p)) growing kv; }} }} }}
              {}",
             wl("turn; end;")
@@ -1279,7 +1279,7 @@ fn the_contract_holds_at_every_edge() {
              queue gw : gateway {{ route {{ P.prefill (prompt); D.decode (prompt) from P; }} }}
              queue P : prefill {{ pool kv {{ cap 100; }} serve fifo;
                prefill (p) {{ if (p > 1) {{ hold kv (cost(kv, p)) {{ run (cost(P, p)); }} cache (cost(kv, p)) lease kv (inf); }} else {{ run (cost(P, p)); }} }} }}
-             queue D : decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
+             queue D : decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; scheduler {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
                decode (p) {{ hold kv (cost(kv, p)) {{ run D prefill (cost(D, p)) growing kv; }} }}
                decode (p) from P {{ hold kv (cost(kv, p)) {{ transfer on nic (p) from P to kv (p); }} }} }}
              {}",
@@ -1295,7 +1295,7 @@ fn the_contract_holds_at_four_more_edges() {
     let wl = "workload { arrive batch(1); hidden o; init { set prompt = 3; set o = 2; } session { turn; end; } } server { gw.route(); } ";
     let engine = |body: &str| {
         format!(
-            "queue E[2] : decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
+            "queue E[2] : decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; scheduler {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
                decode (p) {{ {body} }} }}"
         )
     };
@@ -1330,7 +1330,7 @@ fn the_contract_holds_at_four_more_edges() {
             "stage nic : delay;
              queue gw : gateway {{ route {{ P.prefill (prompt); D.decode (prompt) from P.kv; }} }}
              queue P : prefill {{ pool kv {{ cap 100; }} serve fifo; prefill (p) {{ hold kv (cost(kv, p)) {{ run (cost(P, p)); }} cache (cost(kv, p)) lease kv (inf); }} }}
-             queue D : decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
+             queue D : decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; scheduler {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
                decode (p) {{ hold kv (cost(kv, p)) {{ run D prefill (cost(D, p)) growing kv; }} }}
                decode (p) from P {{ hold kv (cost(kv, p)) {{ transfer on nic (p) from P to kv (p); }} }} }}
              {wl}"
@@ -1341,7 +1341,7 @@ fn the_contract_holds_at_four_more_edges() {
     refused(
         &format!(
             "queue gw : gateway {{ route {{ E[0].decode (prompt); }} }}
-             queue E[3] : decode {{ device gpu {{ }} pool kv[2] {{ cap 100; }} engine on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
+             queue E[3] : decode {{ device gpu {{ }} pool kv[2] {{ cap 100; }} engine on gpu {{ tokens cap inf; scheduler {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
                decode (p) {{ hold kv (cost(kv, p)) {{ run E prefill (cost(E, p)) growing kv; }} }} }} {wl}"
         ),
         "a queue's pool is the member's",
@@ -1368,7 +1368,7 @@ fn a_pull_relation_is_the_flat_read() {
       }
       queue D[2] : decode {
         device gpu { kv cap 1000; } pool kv on gpu { block 16; }
-        engine on gpu { tokens cap inf; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); }
+        engine on gpu { tokens cap inf; scheduler { advance running; admit waiting while (running.preempted == 0); } execute (1); }
         nic ps(200);
         decode (prompt) { hold kv (cost(kv, prompt)) { run D prefill (cost(D, prompt)) growing kv; } }
         decode (prompt) from P {
@@ -1406,7 +1406,7 @@ fn a_pull_relation_says_what_it_couples() {
                prefill (p) {{ hold kv (cost(kv, p)) {{ run (cost(P, p)); }} cache (cost(kv, p)) lease kv (inf); }} }}
              queue Q : prefill {{ pool kv {{ cap 100; }} serve fifo; nic ps(1);
                prefill (p) {{ hold kv (cost(kv, p)) {{ run (cost(Q, p)); }} cache (cost(kv, p)) lease kv (inf); }} }}
-             queue D : decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }} nic ps(1);
+             queue D : decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; scheduler {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }} nic ps(1);
                decode (p) {{ hold kv (cost(kv, p)) {{ run D prefill (cost(D, p)) growing kv; }} }}
                decode (p) from P {{ hold kv (cost(kv, p)) {{ transfer (p) from P to kv (p); }} }} }}
              {rel}
@@ -1510,7 +1510,7 @@ fn std_kvt_names_the_relation() {
             "queue gw : gateway {{ route {{ P.prefill (prompt); D.decode (prompt) from P; }} }}
              queue P : prefill {{ pool kv {{ cap 100; }} serve fifo; nic ps(1);
                prefill (p) {{ hold kv (cost(kv, p)) {{ run (cost(P, p)); }} cache (cost(kv, p)) lease kv (inf); }} }}
-             queue D : decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }} nic ps(1);
+             queue D : decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; scheduler {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }} nic ps(1);
                decode (p) from P {{ hold kv (cost(kv, p)) {{ transfer (p) from P to kv (p); }} }} }}
              {rel}
              workload {{ arrive batch(1); init {{ set prompt = 3; }} session {{ turn; end; }} }} server {{ gw.route(); }} "
@@ -1570,7 +1570,7 @@ fn an_entry_reaches_only_its_own() {
             "stage nic : delay;
              queue gw : gateway {{ route {{ P[0].prefill (prompt); D.decode (prompt) from P[0]; }} }}
              queue P[2] : prefill {{ pool kv {{ cap 100; }} serve fifo; prefill (p) {{ hold kv (cost(kv, p)) {{ run (cost(P, p)); }} cache (cost(kv, p)) lease kv (inf); }} }}
-             queue D : decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
+             queue D : decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; scheduler {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
                decode (p) {{ hold kv (cost(kv, p)) {{ run D prefill (cost(D, p)) growing kv; }} }}
                decode (p) from P {{ observe x = P; hold kv (cost(kv, p)) {{ transfer on nic (p) from P to kv (p); }} }} }}
              {wl}"
@@ -1582,7 +1582,7 @@ fn an_entry_reaches_only_its_own() {
         &format!(
             "queue gw : gateway {{ route {{ A.prefill (prompt); B.decode (prompt); }} }}
              queue A : prefill {{ serve fifo; prefill (p) {{ run (cost(A, p)); mark secret; }} }}
-             queue B : decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
+             queue B : decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; scheduler {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
                decode (p) {{ observe leaked = A.secret; hold kv (cost(kv, p)) {{ run B prefill (cost(B, p)) growing kv; }} }} }}
              {wl}"
         ),
@@ -1602,7 +1602,7 @@ fn an_entry_reaches_only_its_own() {
     refused(
         &format!(
             "queue gw : gateway {{ route {{ set t0 = now; D[0].decode (prompt); observe t = D[missing].first_token - t0; }} }}
-             queue D[2] : decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
+             queue D[2] : decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; scheduler {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
                decode (p) {{ hold kv (cost(kv, p)) {{ run D prefill (cost(D, p)) growing kv; mark first_token; }} }} }}
              {wl}"
         ),
@@ -1613,10 +1613,10 @@ fn an_entry_reaches_only_its_own() {
         &format!(
             "stage nic : delay;
              queue gw : gateway {{ route {{ if (prompt > 5) {{ P.prefill (prompt); }} else {{ P.decode (prompt); }} D.decode (prompt) from P; }} }}
-             queue P : prefill, decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
+             queue P : prefill, decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; scheduler {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
                prefill (p) {{ hold kv (cost(kv, p)) {{ run P prefill (cost(P, p)) growing kv; }} cache (cost(kv, p)) lease kv (inf); }}
                decode (p) {{ hold kv (cost(kv, p)) {{ run P prefill (cost(P, p)) growing kv; }} }} }}
-             queue D : decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
+             queue D : decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; scheduler {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
                decode (p) {{ hold kv (cost(kv, p)) {{ run D prefill (cost(D, p)) growing kv; }} }}
                decode (p) from P {{ hold kv (cost(kv, p)) {{ transfer on nic (p) from P to kv (p); }} }} }}
              {wl}"
@@ -1627,7 +1627,7 @@ fn an_entry_reaches_only_its_own() {
     refused(
         &format!(
             "queue gw : gateway {{ route {{ E.prefill (prompt); }} }}
-             queue E : prefill {{ device gpu {{ }} engine on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }} pool kv {{ cap 10; }}
+             queue E : prefill {{ device gpu {{ }} engine on gpu {{ tokens cap inf; scheduler {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }} pool kv {{ cap 10; }}
                prefill (p) {{ hold kv (cost(kv, 1)) {{ run E prefill (cost(E, p)) growing kv; }} }} }}
              {wl}"
         ),

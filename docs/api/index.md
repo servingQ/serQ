@@ -13,7 +13,7 @@ operational semantics, see [The language](../language.md).
 | [std/share](std/share.md) | `share.maxmin`, `share.bottleneck`, how the flows of a fabric divide it |
 | [Pool](pool.md) | the options of `pool` |
 | [Stage](stage.md) | `fifo`, `ps`, `delay` |
-| [Engine](engine.md) | `device`, `engine … on`, `tokens cap`, `schedule`, `execute`, `pool … on` |
+| [Engine](engine.md) | `device`, `engine … on`, `tokens cap`, `scheduler`, `execute`, `pool … on` |
 | [Workload](workload.md) | `arrive`, `trace`, `init`, `turn`, `hidden` |
 | [Statements](statements.md) | the kernel: `hold`, `run`, `grow`, `if`, … |
 | [Serving vocabulary](serving.md) | `transfer`, `tool` |

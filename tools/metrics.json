@@ -7,7 +7,7 @@
     "CtxVar": 23
   },
   "surface": {
-    "keywords": 114,
+    "keywords": 115,
     "functions": 29,
     "context_variables": 23
   },
@@ -33,7 +33,7 @@
     "reused = min(cachedin(kv), floor(known - 1, blocksize(kv)));",
     "run D prefill (cost(D, known - c)) growing kv;",
     "run gate (cost(gate, serial * spacing));",
-    "schedule { advance running; admit waiting while (running.preempted == 0); }",
+    "scheduler { advance running; admit waiting while (running.preempted == 0); }",
     "set c = min(cached, floor(known - 1, blocksize(kv)));",
     "set n = ceil(K == 0 ? ~uniform(1000, 3000) : ~exp(500));",
     "taking reqs (1), kv (min(known, reused + budget_left(vllm))) reserve (known);"

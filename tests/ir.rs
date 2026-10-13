@@ -91,7 +91,7 @@ fn ir_that_skips_the_linker_meets_its_checks() {
         engine llm on gpu {
           tokens cap 8;
           request () { prefill (8) growing kv; }
-          schedule { advance running; admit waiting while (running.preempted == 0) taking kv (8); }
+          scheduler { advance running; admit waiting while (running.preempted == 0) taking kv (8); }
           execute (1);
         }
         pool kv on gpu { }
@@ -304,7 +304,7 @@ fn budget_left_needs_a_step_stage() {
     let src = "device gpu { kv cap 64; }
         engine llm on gpu {
           tokens cap 8;
-          schedule { advance running; admit waiting while (running.preempted == 0); }
+          scheduler { advance running; admit waiting while (running.preempted == 0); }
           execute (1);
         }
         pool kv on gpu { }
@@ -646,7 +646,7 @@ fn at_admission_is_substituted_into_the_header() {
             prefill (prompt - cached) growing kv;
             cache (prompt + output);
           }}
-          schedule {{
+          scheduler {{
             advance running;
             admit waiting while (running.preempted == 0) taking reqs (1), kv ({take});
           }}
@@ -708,7 +708,7 @@ fn a_bound_name_is_substituted_when_it_stands_alone_as_an_argument() {
             prefill (prompt - cached) growing kv;
             cache (prompt + output);
           }}
-          schedule {{
+          scheduler {{
             advance running;
             admit waiting while (running.preempted == 0) taking reqs (1), kv ({take});
           }}
@@ -845,7 +845,7 @@ fn the_request_boundary_preserves_size_ownership() {
             decode (output - 1) growing kv;
             cache (prompt + output);
           }
-          schedule {
+          scheduler {
             advance running;
             admit waiting while (running.preempted == 0)
               taking reqs (1), kv (min(prompt, hit + budget_left(llm)));
@@ -926,7 +926,7 @@ fn enter_is_hold_next_to_a_pool_the_engine_admits() {
           reqs cap 4;
           tokens cap 64;
           request (n) {{ prefill (n) growing kv; cache (n); }}
-          schedule {{ advance running; admit waiting while (running.preempted == 0) taking reqs (1), kv (n); }}
+          scheduler {{ advance running; admit waiting while (running.preempted == 0) taking reqs (1), kv (n); }}
           execute (1);
         }}
         pool kv on gpu {{ }} pool reqs on llm {{ }}
@@ -939,7 +939,7 @@ fn enter_is_hold_next_to_a_pool_the_engine_admits() {
           engine on gpu {{
             reqs cap 4;
             tokens cap 64;
-            schedule {{ advance running; admit waiting while (running.preempted == 0); }}
+            scheduler {{ advance running; admit waiting while (running.preempted == 0); }}
             execute (1);
           }}
           pool kv on gpu {{ }} pool reqs on llm {{ }}

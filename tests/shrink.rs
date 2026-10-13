@@ -48,7 +48,7 @@ fn a_hold_keeps_what_it_has_computed() {
     let src = r#"
         queue Q : decode {
           device gpu { kv cap 64; }
-          engine on gpu { reqs cap 1; tokens cap 8; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); }
+          engine on gpu { reqs cap 1; tokens cap 8; scheduler { advance running; admit waiting while (running.preempted == 0); } execute (1); }
           pool reqs on Q { }
           pool kv on Q.gpu { }
           decode (prompt) {

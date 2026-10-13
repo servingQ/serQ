@@ -43,7 +43,7 @@ fn main() {
       decode (output - 1) growing kv;
       cache (prompt + output);
     }
-    schedule {
+    scheduler {
       advance running;
       // a running slot, and the blocks of the reused prefix plus the chunk
       // the budget left allows; only if the whole prompt fits, as vLLM's

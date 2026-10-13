@@ -20,7 +20,7 @@ fn main() {
       prefill (prompt);
       decode (output);
     }
-    schedule {
+    scheduler {
       advance running admission;
       admit waiting while (running.preempted == 0);
     }

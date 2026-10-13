@@ -4,7 +4,7 @@
         stage P[2] : fifo;
         stage nicP[2] : ps(100);
         device gpu[2] { kvD cap 1000; } pool kvD on gpu { block 16; }
-        engine D[2] on gpu { tokens cap inf; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); }
+        engine D[2] on gpu { tokens cap inf; scheduler { advance running; admit waiting while (running.preempted == 0); } execute (1); }
         stage nicD[2] : ps(200);
         stage wait[2] : delay;
         use "std/share";

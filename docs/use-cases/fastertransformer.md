@@ -87,7 +87,7 @@ requests in the system, holding a slot or waiting for one:
 
 ## Results at point C
 
-`serq run`, seed 1, horizon 500 s, 1069 arrivals. Each row writes the listed policy in the engine's `schedule`, with `bmax` overrides shown below. `pending` is the time average of `holders(reqs) + queued(reqs)`.
+`serq run`, seed 1, horizon 500 s, 1069 arrivals. Each row writes the listed policy in the engine's `scheduler`, with `bmax` overrides shown below. `pending` is the time average of `holders(reqs) + queued(reqs)`.
 
 | Scheduler | `b_max` | pending mean | pending max | decode batch | batches |
 |---|---|---|---|---|---|

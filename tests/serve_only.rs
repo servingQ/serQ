@@ -27,7 +27,7 @@ fn source(schedule: &str) -> String {
         engine llm on gpu {{
           tokens cap 8;
           request () {{ prefill (3); decode (2); }}
-          schedule {{ {schedule} }}
+          scheduler {{ {schedule} }}
           execute (1);
         }}
         workload {{ arrive batch(2);
@@ -124,7 +124,7 @@ fn only_selects_and_by_orders() {
         engine llm on gpu {
           tokens cap 2;
           request (prompt) { prefill (prompt); decode (1); }
-          schedule {
+          scheduler {
             advance running only (running.decoding > 0 ? decoding : !decoding) by (remaining);
             admit waiting only (running.decoding > 0 ? decoding : !decoding) while (running.preempted == 0);
           }
@@ -173,7 +173,7 @@ fn admitted(schedule: &str) -> String {
             prefill (1);
             decode (2);
           }}
-          schedule {{ {schedule} }}
+          scheduler {{ {schedule} }}
           execute (1);
         }}
         pool reqs on llm {{ }}
@@ -277,7 +277,7 @@ fn an_engine_that_excludes_every_resident_waits_for_the_residents_to_change() {
         engine llm on gpu {
           tokens cap 8;
           request () { prefill (1); decode (1); }
-          schedule {
+          scheduler {
             advance running only (running.count > 1);
             admit waiting only (running.count > 1) while (running.preempted == 0);
           }
@@ -303,7 +303,7 @@ fn an_engine_that_excludes_every_resident_waits_for_the_residents_to_change() {
 
 /// A key orders the residents and excludes none, so reading the clock
 /// cannot leave the engine waiting: a key may read `now` and `work(…)`, and
-/// may not draw, whichever form the `schedule` takes. A body refused the
+/// may not draw, whichever form the `scheduler` takes. A body refused the
 /// clock, with the reason that fits `only` (#453); an `if` makes one.
 #[test]
 fn a_key_is_checked_alike_in_either_form_of_schedule() {

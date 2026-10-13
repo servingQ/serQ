@@ -8,7 +8,7 @@ device gpu { kv cap blocks * bs; }
 engine vllm on gpu {
   reqs cap max_seqs;
   tokens cap B;
-  schedule { advance running; admit waiting while (running.preempted == 0); }
+  scheduler { advance running; admit waiting while (running.preempted == 0); }
   execute (c0 + a * batch.tokens);
 }
 pool kv on gpu { block bs; evict lru; preempt lifo; }

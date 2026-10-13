@@ -2,7 +2,7 @@
 
 Four roles, four colours. A program's shape is `engine`/`workload`/`server`;
 what a request *does* is `hold`, `run`, `observe`; the knobs are `cap`,
-`evict`, `schedule`; and what it *reads* is `cachedin`, `running.count`, `now`.
+`evict`, `scheduler`; and what it *reads* is `cachedin`, `running.count`, `now`.
 A reader should be able to tell those apart before reading a word, so each
 lands in a different colour group, and `~` gets its own because that is where
 the randomness enters. Arithmetic stays plain: it is how a program computes,
@@ -46,7 +46,7 @@ OPTIONS = (
     # an engine's schedule and execution; `advance`, `each` and `most` are
     # read only in the phrases `advance running` and `each at most`, which
     # the rules below colour whole, and are listed for tests/docs_lexer.rs
-    "schedule", "advance", "each", "most", "execute",
+    "schedule", "scheduler", "advance", "each", "most", "execute",
     # no program writes `stage : step` any more, but the parser still matches
     # `step` to say an engine is written instead, and tests/docs_lexer.rs
     # asks the lexer for every word the parser matches

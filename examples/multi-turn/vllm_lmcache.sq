@@ -90,7 +90,7 @@ fn main() {
       kvt.l2_store (kv, lmc, floor(prompt + output, chunk), per_token = r);
       cache (prompt + output);
     }
-    schedule {
+    scheduler {
       // long_prefill_token_threshold, as in `multi-turn/vllm.sq`
       let threshold = running.count + waiting.count > 1 ? chunk_cap : inf;
       advance running each at most (threshold);

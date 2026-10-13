@@ -94,7 +94,7 @@ fn main() {
     engine on gpu {
       reqs cap max_seqs;
       tokens cap B;
-      schedule {
+      scheduler {
         exclusive prefill each at most (chunk_cap);
         admit waiting while (running.preempted == 0) each at most (chunk_cap);
       }
@@ -123,7 +123,7 @@ fn main() {
     engine on gpu {
       reqs cap max_seqs;
       tokens cap B;
-      schedule {
+      scheduler {
         exclusive prefill each at most (chunk_cap);
         admit waiting while (running.preempted == 0) each at most (chunk_cap);
       }
@@ -151,7 +151,7 @@ fn main() {
       tokens cap B;
       // no exclusive steps: the one prompt token a decoder recomputes rides
       // with the decodes, as in vLLM
-      schedule {
+      scheduler {
         advance running each at most (chunk_cap);
         admit waiting while (running.preempted == 0) each at most (chunk_cap);
       }

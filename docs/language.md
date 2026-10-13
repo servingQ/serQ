@@ -75,7 +75,7 @@ resource := NAME ( NAME , ... ) = expr ;           -- a time resource: a demand 
 eitem    := NAME [ '[' N ']' ] cap expr ;    -- a capacity the engine holds (`reqs cap max_seqs;`); `[N]`: N queues it admits
           | tokens cap expr ;                -- the tokens one iteration computes (required; `inf` for none)
           | granule expr ; | state NAME = expr ;
-          | schedule { (let NAME = expr ;)* sstmt+ }   -- what each iteration does (required)
+          | scheduler { (let NAME = expr ;)* sstmt+ }   -- what each iteration does (required)
           | execute ( expr ) ;               -- the batch's time over the device's resources (required)
           | request ( NAME , ... ) { rstmt* [at admission { (NAME = expr ;)* }] rstmt* [cache ( expr ) ;] }
                                              -- what the engine does with one request (*An engine's request*):
@@ -394,7 +394,7 @@ whole:
 ```
 queue P[NP] : prefill {
   device gpu { …; kv cap blocksP * bs; }
-  engine on gpu { reqs cap max_seqsP; tokens cap B; schedule { … } execute (…); }
+  engine on gpu { reqs cap max_seqsP; tokens cap B; scheduler { … } execute (…); }
   pool reqs on P { queue fifo; }
   pool kv on gpu { block bs; evict lru; preempt lifo; }
   prefill (prompt) {
@@ -1043,7 +1043,7 @@ device gpu {
 engine vllm on gpu {
   reqs cap max_seqs;
   tokens cap B;
-  schedule {
+  scheduler {
     let threshold = running.count + waiting.count > 1 ? chunk_cap : inf;
     advance running each at most (threshold);
     admit waiting while (running.preempted == 0) each at most (threshold);
@@ -1067,7 +1067,7 @@ pool reqs on vllm { queue fifo; }
 | `advance running [order]; admit waiting while (running.preempted == 0);` | `serve` `By([keys])` of the order (`By([])` for none, admission order), no `iteration` |
 | the same with `only (p)` on both statements | `serve` as above, `iteration` `[Serve {only: p}, Admit {only: p, gate: !preempted}]` |
 | `exclusive prefill; admit waiting while (running.preempted == 0);` | `serve` `ExclusivePrefill`, no `iteration` |
-| any other `schedule { … }` | `serve` `By([])`, `iteration` the body: `advance running` a `Serve`, `admit waiting` an `Admit`, `if` a `Branch`, `set` a `Set` |
+| any other `scheduler { … }` | `serve` `By([])`, `iteration` the body: `advance running` a `Serve`, `admit waiting` an `Admit`, `if` a `Branch`, `set` a `Set` |
 | `running.count`, `running.decoding`, `running.kv_decode`, `running.kv_prefill`, `running.preempted`, `waiting.admitted` | `Nres`, `Ndec`, `Kvb`, `Kvp`, `Preempted`, `Admitted` |
 | `batch.tokens`, `batch.prefilled`, `batch.decoding`, `batch.kv_decode`, `batch.kv_prefill`, `batch.attention` | `Ntok`, `Npre`, `Ndec`, `Kvb`, `Kvp`, `Attn` |
 | `waiting.count` | `Queued` of each pool the engine admits, summed |
@@ -1092,7 +1092,7 @@ names each value one way in all its clauses, and none by the kernel's
 bare name: `running.…` is the residents as they stand, `waiting.…` the
 queues, `batch.…` the iteration's batch.
 
-| Value | `tokens cap` | `schedule` | `execute` |
+| Value | `tokens cap` | `scheduler` | `execute` |
 |---|---|---|---|
 | `running.count`, `waiting.count` | yes | yes | yes |
 | `running.decoding`, `running.kv_decode`, `running.kv_prefill` | yes | yes | no: the batch's is `batch.…` |
@@ -1100,7 +1100,7 @@ queues, `batch.…` the iteration's batch.
 | `batch.tokens`, `batch.prefilled` | no | yes: the batch so far | yes |
 | `batch.decoding`, `batch.kv_decode`, `batch.kv_prefill`, `batch.attention` | no | no | yes |
 
-`schedule` is its statements: `if`, `while` and `set`, read as the
+`scheduler` is its statements: `if`, `while` and `set`, read as the
 iteration is planned. A schedule's `only` and `by`, read for each resident
 at its turn, and its `each at most` and the `let`s it reads, read as the
 iteration starts, read what `tokens cap` reads: `running.count`,
@@ -1110,7 +1110,7 @@ iteration starts, read what `tokens cap` reads: `running.count`,
 `batch.…`. `execute` times the batch, which a budget or an `only` can
 leave short of the residents, so it reads the batch's decodes and KV, not
 the residents'. `running.preempted` and `waiting.admitted` say what the
-schedule did, so only `schedule` reads them. `engine` is a keyword: an
+schedule did, so only `scheduler` reads them. `engine` is a keyword: an
 engine is named for what it models (`vllm`, `sglang`, `tgi`) or `llm`.
 Inside a `queue`, `device gpu` is the member's and `engine on gpu` is the
 queue's stage, named after the queue, so its pool is `pool reqs on Q`.
@@ -1139,7 +1139,7 @@ engine vllm on gpu {
     decode (output - 1 - (known - prompt)) growing kv;
     cache (prompt + output);
   }
-  schedule {
+  scheduler {
     let threshold = running.count + waiting.count > 1 ? chunk_cap : inf;
     advance running each at most (threshold);
     admit waiting while (running.preempted == 0) each at most (threshold)
@@ -1480,7 +1480,7 @@ from the cache alone rather than from the previous prompt, and caches `prompt + 
 
 | vLLM | serQ | Where |
 |---|---|---|
-| a token budget per step, running requests first in `running` order, then waiting requests with the budget left | `engine vllm on gpu { tokens cap B; schedule { advance running; admit waiting while (running.preempted == 0); } … }`, residents in admission order; `pool reqs on vllm` | `scheduler.py:577, 624-823, 868-1128` |
+| a token budget per step, running requests first in `running` order, then waiting requests with the budget left | `engine vllm on gpu { tokens cap B; scheduler { advance running; admit waiting while (running.preempted == 0); } … }`, residents in admission order; `pool reqs on vllm` | `scheduler.py:577, 624-823, 868-1128` |
 | `max_num_seqs` | `reqs cap max_seqs;` in `engine vllm`, held as `pool reqs on vllm` | `scheduler.py:877-879` |
 | FCFS, head-of-line blocking (`if new_blocks is None: break`) | pool queue `fifo`; the first request that does not fit blocks | `scheduler.py:1228-1235` |
 | admission needs blocks for the whole prompt (`scheduler_reserve_full_isl = True`), but only the first chunk is allocated | `kv (reused + min(known − reused, budget_left(vllm))) reserve (known)` | `kv_cache_manager.py:515-531`, `config/scheduler.py:191` |

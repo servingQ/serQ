@@ -26,7 +26,7 @@ device gpu {{ }}
 engine llm on gpu {{
   tokens cap 8;
   {request}
-  schedule {{ advance running; admit waiting while (running.preempted == 0); }}
+  scheduler {{ advance running; admit waiting while (running.preempted == 0); }}
   execute (1);
 }}
 "
@@ -147,13 +147,13 @@ device g2 { }
 engine p on g1 {
   tokens cap 8;
   request (prompt) { prefill (prompt); }
-  schedule { advance running; admit waiting while (running.preempted == 0); }
+  scheduler { advance running; admit waiting while (running.preempted == 0); }
   execute (1);
 }
 engine d on g2 {
   tokens cap 8;
   request (prompt, output) { prefill (prompt); decode (output); }
-  schedule { advance running; admit waiting while (running.preempted == 0); }
+  scheduler { advance running; admit waiting while (running.preempted == 0); }
   execute (1);
 }
 workload { arrive batch(1); }

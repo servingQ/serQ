@@ -214,7 +214,7 @@ struct Parser {
     devices: Vec<device::DeviceDecl>,
     engines: Vec<device::EngineDecl>,
     pools_on: Vec<device::PoolOn>,
-    /// The engine clause being parsed, `tokens cap`, `execute`, `schedule`
+    /// The engine clause being parsed, `tokens cap`, `execute`, `scheduler`
     /// or one of the schedule's own (`only`, `by`, `each at most`), where
     /// `running.…`, `waiting.…` and `batch.…` are read.
     in_engine: Option<&'static str>,
@@ -414,7 +414,7 @@ const MAX_FAMILY: usize = 10_000;
 /// parameter may not be one: a parameter is replaced token by token, and a
 /// keyword in the body is a token of the same spelling. `tests/docs_lexer.rs`
 /// keeps the list whole.
-pub const KEYWORDS: [&str; 114] = [
+pub const KEYWORDS: [&str; 115] = [
     "Cost",
     "Size",
     "admission",
@@ -503,6 +503,7 @@ pub const KEYWORDS: [&str; 114] = [
     "reuse",
     "run",
     "schedule",
+    "scheduler",
     "seed",
     "serve",
     "server",
@@ -3899,7 +3900,7 @@ impl Parser {
         } else if self.is_kw("step") {
             return self.err(
                 "`step` is an engine's: write `device D { … }` and `engine NAME on D { tokens cap \
-                 B; schedule { … } execute (T); }`, in a queue `engine on D { … }` \
+                 B; scheduler { … } execute (T); }`, in a queue `engine on D { … }` \
                  (docs/language.md, Engines on devices)",
             );
         } else {
@@ -6240,7 +6241,7 @@ mod tests {
     /// an error at is the one the source counts.
     const ENGINE: &str = r#"
         pool kv { cap 100; }
-        device gpu { } engine llm on gpu { tokens cap inf; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); }
+        device gpu { } engine llm on gpu { tokens cap inf; scheduler { advance running; admit waiting while (running.preempted == 0); } execute (1); }
         stage tool : delay;
     "#;
 
@@ -6781,8 +6782,8 @@ mod tests {
             "stage E : fifo; pool E { cap 1; }",
             "pool E { cap 1; } stage E : fifo;",
             "pool E { cap 4; } queue E[2] : decode { pool kv { cap 10; } serve fifo; decode (n) { hold kv (cost(kv, n)) { run E (cost(E, 1)); } } }",
-            "pool E { cap 1; } device dev { } engine E on dev { tokens cap 1; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); }",
-            "device dev { } engine E on dev { tokens cap 1; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); } pool E { cap 1; }",
+            "pool E { cap 1; } device dev { } engine E on dev { tokens cap 1; scheduler { advance running; admit waiting while (running.preempted == 0); } execute (1); }",
+            "device dev { } engine E on dev { tokens cap 1; scheduler { advance running; admit waiting while (running.preempted == 0); } execute (1); } pool E { cap 1; }",
         ] {
             let e = err(&format!("{decls} {server}"));
             assert!(e.contains("a pool and a stage share one name space"), "{e}");
@@ -6902,7 +6903,7 @@ mod tests {
             decode (output - 1) growing kv;
             cache (prompt + output);
           }
-          schedule {
+          scheduler {
             advance running;
             admit waiting while (running.preempted == 0)
               taking reqs (1), kv (min(prompt, hit + budget_left(llm)));

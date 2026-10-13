@@ -23,7 +23,7 @@ fn main() {
     }
     // --8<-- [end:request]
     // --8<-- [start:schedule]
-    schedule {
+    scheduler {
       exclusive prefill each at most (128);
       admit waiting while (running.preempted == 0) each at most (128)
         taking reqs (1), kv (min(known, reused + min(128, left))) reserve (known);

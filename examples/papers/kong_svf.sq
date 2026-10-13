@@ -27,7 +27,7 @@ fn main() {
   engine llm on gpu {
     tokens cap 1000000;
     request (output) { decode (output); }
-    schedule { advance running; admit waiting while (running.preempted == 0); }
+    scheduler { advance running; admit waiting while (running.preempted == 0); }
     execute (1);
   }
   // --8<-- [end:engine]

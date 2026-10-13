@@ -584,7 +584,7 @@ fn a_request_s_chain_reads_nothing_the_request_sets() {
             prefill (n - cached) growing kv;
             cache (n);
           }
-          schedule { advance running; admit waiting while (running.preempted == 0) taking kv (n); }
+          scheduler { advance running; admit waiting while (running.preempted == 0) taking kv (n); }
           execute (batch.tokens * 1e-5 + 1e-4);
         }
         workload { arrive batch(1); init { set sys = 7; } session { turn; } }
@@ -639,7 +639,7 @@ fn an_engine_s_request_takes_a_chain() {
             prefill (n - c) growing kv;
             cache (n);
           }}
-          schedule {{
+          scheduler {{
             advance running;
             admit waiting while (running.preempted == 0) taking kv (n) ;
           }}
@@ -740,7 +740,7 @@ fn an_entry_keys_its_prefix_by_the_requests_serial() {
             r#"
         queue E : decode {{
           device gpu {{ kv cap 640; }}
-          engine on gpu {{ reqs cap 4; tokens cap 64; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
+          engine on gpu {{ reqs cap 4; tokens cap 64; scheduler {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
           pool reqs on E {{ }}
           pool kv on E.gpu {{ block 16; }}
           decode (prompt) {{

@@ -196,7 +196,7 @@ fn grow_and_growing_need_an_enclosing_hold() {
     ] {
         let src = format!(
             "device gpu {{ kv cap 64; }} pool kv on gpu {{ }} pool q {{ cap 10; }}
-        engine llm on gpu {{ tokens cap 8; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
+        engine llm on gpu {{ tokens cap 8; scheduler {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
         workload {{ arrive batch(1);
           session {{ turn; end;
           }}
@@ -216,7 +216,7 @@ fn grow_and_growing_need_an_enclosing_hold() {
         let src = format!(
             "queue llm : prefill {{
           device gpu {{ kv cap 64; }} pool kv on gpu {{ }} pool q {{ cap 10; }}
-          engine on gpu {{ tokens cap 8; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
+          engine on gpu {{ tokens cap 8; scheduler {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
           prefill (n) {{ {stmt} }}
         }}
         workload {{ arrive batch(1);
@@ -247,7 +247,7 @@ fn grow_and_growing_need_an_enclosing_hold() {
         engine llm on gpu {
           tokens cap 8;
           request () { grow kv (cost(kv, 8)); prefill (8) growing kv; }
-          schedule { advance running; admit waiting while (running.preempted == 0) taking kv (8); }
+          scheduler { advance running; admit waiting while (running.preempted == 0) taking kv (8); }
           execute (1);
         }
         workload { arrive batch(1);
@@ -509,7 +509,7 @@ fn a_re_executed_hold_releases_nothing_twice() {
           pool memD on gpu { block 10; preempt lifo; }
           engine on gpu {
             tokens cap 100;
-            schedule { advance running; admit waiting while (running.preempted == 0); }
+            scheduler { advance running; admit waiting while (running.preempted == 0); }
             execute (1);
           }
           decode (prompt) {
@@ -556,7 +556,7 @@ fn an_engine_serves_its_queues_in_declaration_order() {
             a cap 1;
             b cap 1;
             tokens cap 1000;
-            schedule {{ advance running; admit waiting while (running.preempted == 0); }}
+            scheduler {{ advance running; admit waiting while (running.preempted == 0); }}
             execute (1);
           }}
           pool {first} on llm {{ }}
@@ -703,7 +703,7 @@ fn a_grow_with_nobody_to_preempt_waits() {
         device gpu { kv cap 20; }
         engine llm on gpu {
           tokens cap 100;
-          schedule { advance running; admit waiting while (running.preempted == 0); }
+          scheduler { advance running; admit waiting while (running.preempted == 0); }
           execute (1);
         }
         pool kv on gpu { preempt lifo; }

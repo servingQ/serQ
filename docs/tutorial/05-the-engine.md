@@ -32,7 +32,7 @@ engine llm on gpu {
   reqs cap max_seqs;
   tokens cap B;
   request (prompt, output) { … }
-  schedule {
+  scheduler {
     advance running;
     admit waiting while (running.preempted == 0)
       taking reqs (1), kv (min(prompt, reused + budget_left(llm))) reserve (prompt);
@@ -51,7 +51,7 @@ iteration may schedule (`max_num_batched_tokens`). `pool reqs on llm`
 holds the engine's `reqs cap`: its running slots, and the queue of
 requests waiting for one, served `fifo`.
 
-`schedule` is what each iteration does: give the running requests their
+`scheduler` is what each iteration does: give the running requests their
 tokens, then admit waiting ones while nothing was preempted. `taking` says
 what an admission takes of a request, below. `execute` is how long the
 iteration takes, as an expression in what it scheduled:

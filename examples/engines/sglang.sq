@@ -78,7 +78,7 @@ fn main() {
       set fin = 1;
       cache (fin == 1 ? prompt + output : prompt);
     }
-    schedule {
+    scheduler {
       // fully idle since the last iteration: no batch, and none waited
       if (running.count == 0 && backlog == 0) { set ratio = r0; }
       advance running only (!decoding);                  // the chunked request

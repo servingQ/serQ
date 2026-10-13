@@ -7,7 +7,7 @@
         pool kvP[2] { cap 1000; }
         stage P[2] : fifo;
         device gpu[2] { kvD cap 1000; } pool kvD on gpu { block 16; }
-        engine D[2] on gpu { tokens cap inf; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); }
+        engine D[2] on gpu { tokens cap inf; scheduler { advance running; admit waiting while (running.preempted == 0); } execute (1); }
         use "std/share";
         server {
           hold kvP[i] (cost(kvP, prompt)) { run P[i] (cost(P, prompt)); } cache (cost(kvP, prompt)) lease kvP[i] (inf);

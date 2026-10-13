@@ -10,7 +10,7 @@ use serq::{Overrides, run_source};
 /// `n` requests present at t = 0 (closed population, one turn each), with
 /// prompt `prompt` and `out` output tokens, on a device of `blocks` blocks
 /// of `bs` tokens, budget `budget`, cap `max_seqs`, scheduled by
-/// `schedule`.
+/// `scheduler`.
 #[allow(clippy::too_many_arguments)]
 fn engine(
     n: usize,
@@ -37,7 +37,7 @@ fn engine(
             observe ttft = now - t0;
             decode (o - 1) growing kv;
           }}
-          schedule {{ {schedule} }}
+          scheduler {{ {schedule} }}
           execute (1);
         }}
         pool kv on gpu {{ block bs; evict lru; preempt lifo; }}
@@ -59,7 +59,7 @@ fn engine(
     )
 }
 
-/// `schedule` with `taking {pools}` on each `admit waiting`: what the
+/// `scheduler` with `taking {pools}` on each `admit waiting`: what the
 /// engine's request is admitted with.
 fn taking(schedule: &str, pools: &str) -> String {
     let mut out = String::new();
@@ -134,7 +134,7 @@ fn a_request_preempted_during_decode_resumes_from_its_outputs() {
             if (known == prompt) { observe first = now; }
             decode (o - 1 - (known - prompt)) growing kv;
           }
-          schedule {
+          scheduler {
             advance running;
             admit waiting while (running.preempted == 0)
               taking reqs (1), kv (min(known, 1000)) reserve (known);
@@ -197,7 +197,7 @@ fn preempted_twice(set_kept: &str, known_is: &str) -> String {
             if (known == prompt) {{ observe first = s; }}
             decode (o - 1 - (known - prompt)) growing kv;
           }}
-          schedule {{
+          scheduler {{
             advance running each at most (8);
             admit waiting while (running.preempted == 0) each at most (8)
               taking reqs (1), kv (min(known, budget_left(llm))) reserve (known);
@@ -301,7 +301,7 @@ fn preempted_twice_in_a_queue(set_kept: &str, known_is: &str) -> String {
           engine on gpu {{
             reqs cap 16;
             tokens cap 64;
-            schedule {{
+            scheduler {{
               advance running each at most (8);
               admit waiting while (running.preempted == 0) each at most (8);
             }}
@@ -403,7 +403,7 @@ fn a_holder_preempted_before_its_first_step_has_computed_nothing() {
           device gpu { }
           engine on gpu {
             tokens cap 1000;
-            schedule { advance running; admit waiting while (running.preempted == 0); }
+            scheduler { advance running; admit waiting while (running.preempted == 0); }
             execute (1);
           }
           decode (prompt) {
@@ -465,7 +465,7 @@ fn serve_by_orders_residents_by_the_declared_keys() {
             prefill (1) growing kv;
             decode (o - 1) growing kv;
           }}
-          schedule {{
+          scheduler {{
             advance running {order};
             admit waiting while (running.preempted == 0) taking kv (100);
           }}
@@ -556,7 +556,7 @@ fn a_resident_admitted_mid_iteration_is_served_once_under_serve_by() {
             prefill (1) growing kv;
             decode (o - 1) growing kv;
           }
-          schedule {
+          scheduler {
             advance running by (remaining);
             admit waiting while (running.preempted == 0) taking reqs (1), kv (10);
           }
@@ -709,7 +709,7 @@ fn next_turn_reuses_full_blocks_of_the_cached_prefix() {
             decode (9) growing kv;
             cache (prompt + 10);
           }
-          schedule {
+          scheduler {
             advance running;
             admit waiting while (running.preempted == 0)
               taking reqs (1), kv (c + min(prompt - c, 8192));
@@ -759,7 +759,7 @@ fn lru_eviction_drops_tail_blocks_first() {
             prefill (prompt - min(cached, floor((prompt - 1) / bs) * bs)) growing kv;
             cache (prompt);
           }
-          schedule {
+          scheduler {
             advance running;
             admit waiting while (running.preempted == 0)
               taking reqs (1), kv (c + min(prompt - c, 8192));
