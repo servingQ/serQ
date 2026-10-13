@@ -59,14 +59,21 @@ neither: a request arrives at `vllm` and goes out.
 The SVG is a picture that a page can also address. Each station's shapes
 are grouped under its stage's name, `<g data-stage="P">` (an array's
 members share the name: `P[0]` and `P[1]` are one station, `P`); a queue
-glyph and a drum carry their pool, `<g data-pool="P.reqs">`; the arrival
-arrow is `data-role="arrival"`, an exit arrow `data-role="exit"`, and the
-used part of an engine's budget bar `data-role="budget"`. A decision
-diamond is no stage and has no name. That is what
+glyph and a drum carry their pool and which of the two they are,
+`<g data-pool="P.reqs" data-role="queue">`. A decision diamond and a
+pool's tick are no stage and have no name. That is what
 [serq-lar](https://github.com/servingQ/serq-lar) animates a
 [run log](../reference/log.md) over: it finds a station by what the
 program calls it, so a change of layout moves nothing but the picture. The
 TikZ writer ignores the ids.
+
+| `data-role` | on | means |
+|---|---|---|
+| `queue` | `<g data-pool>` | the queue glyph where holds of the pool wait |
+| `drum` | `<g data-pool>` | the pool's drum |
+| `arrival` | a `<path>` | the arrow sessions arrive by |
+| `exit` | a `<path>` | an arrow sessions leave by; `data-from` names the stage it leaves, absent from a decision |
+| `budget` | a `<rect>` inside `<g data-stage>` | the used part of an engine's budget bar |
 
 ## Glyphs
 

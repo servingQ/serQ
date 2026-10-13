@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 
 use crate::ir::{CArrival, CExpr, CRef, CStageKind, CStmt, CtxVar, Program, RunMode, Side, UnOp};
 use crate::view::figure::{
-    Anchor, BoxStyle, EdgeRole, EdgeStyle, Figure, Item, Rect, StationKind, TextSize, pt,
+    Anchor, BoxStyle, EdgeStyle, Figure, Item, Rect, StationKind, TextSize, pt,
 };
 
 // --- the projection ---------------------------------------------------------
@@ -2456,11 +2456,7 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
                 if arrivals == 1 && i == 0 {
                     // The arrow starts at the margin and the label rides above
                     // it, clear of the pool glyphs it passes.
-                    f.edge_as(
-                        vec![pt(MARGIN, y), pt(r.x, y)],
-                        EdgeStyle::Flow,
-                        EdgeRole::Arrival,
-                    );
+                    f.arrival(vec![pt(MARGIN, y), pt(r.x, y)]);
                     f.note(pt(MARGIN, y - 10.0), arrival_text.clone(), Anchor::Start);
                 } else {
                     // A session that opens with a branch has more than one entry
@@ -2472,32 +2468,28 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
                     }
                     let ly = lane(&mut lanes);
                     let x = r.x + r.w * 0.25;
-                    f.edge_as(
-                        vec![
-                            pt(MARGIN, y),
-                            pt(MARGIN, ly),
-                            pt(x, ly),
-                            pt(x, frames[i].bottom()),
-                        ],
-                        EdgeStyle::Flow,
-                        EdgeRole::Arrival,
-                    );
+                    f.arrival(vec![
+                        pt(MARGIN, y),
+                        pt(MARGIN, ly),
+                        pt(x, ly),
+                        pt(x, frames[i].bottom()),
+                    ]);
                 }
             }
             (End::Node(i), End::Exit) => {
                 let r = rects[i];
+                let from = net.nodes[i].stage.map(|st| p.stages[st].name.clone());
                 // a request leaving the deployment, or a session that ends
                 // inside it: both go out, and only the second has a guard
                 let text = label.map_or("out".into(), |l| format!("out ({l})"));
                 if i + 1 == net.nodes.len() {
                     // The last station leaves to the right.
-                    f.edge_as(
+                    f.exit(
                         vec![
                             pt(r.right(), r.centre().y),
                             pt(row_right + 26.0, r.centre().y),
                         ],
-                        EdgeStyle::Flow,
-                        EdgeRole::Exit,
+                        from,
                     );
                     f.note(
                         pt(row_right + 30.0, r.centre().y + 3.0),
@@ -2508,14 +2500,13 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
                     // An earlier station's exit drops into a lane of its own
                     // rather than running a line through the stations after it.
                     let y = lane(&mut lanes);
-                    f.edge_as(
+                    f.exit(
                         vec![
                             pt(r.x + r.w * 0.75, frames[i].bottom()),
                             pt(r.x + r.w * 0.75, y),
                             pt(row_right + 26.0, y),
                         ],
-                        EdgeStyle::Flow,
-                        EdgeRole::Exit,
+                        from,
                     );
                     f.note(pt(row_right + 30.0, y + 3.0), text, Anchor::Start);
                 }

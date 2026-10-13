@@ -9,10 +9,12 @@ use std::fmt::Write as _;
 
 use crate::view::figure::{Anchor, BoxStyle, EdgeRole, EdgeStyle, Figure, Item, StationKind};
 
+/// Text or an attribute value, escaped.
 fn esc(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 
 fn n(x: f64) -> String {
@@ -318,7 +320,7 @@ pub fn render(f: &Figure) -> String {
                 }
             }
             Item::Queue { rect, cells, pool } => {
-                let _ = writeln!(s, r#"<g data-pool="{}">"#, esc(pool));
+                let _ = writeln!(s, r#"<g data-pool="{}" data-role="queue">"#, esc(pool));
                 let _ = writeln!(
                     s,
                     r#"<path {} d="M{} {} L{} {} M{} {} L{} {}"/>"#,
@@ -348,7 +350,7 @@ pub fn render(f: &Figure) -> String {
                 s.push_str("</g>\n");
             }
             Item::Drum { rect, pool } => {
-                let _ = writeln!(s, r#"<g data-pool="{}">"#, esc(pool));
+                let _ = writeln!(s, r#"<g data-pool="{}" data-role="drum">"#, esc(pool));
                 // the side and the near half of the bottom, then the lid
                 let (rx, ry) = (rect.w / 2.0, (rect.h / 5.0).min(4.0));
                 let _ = writeln!(
@@ -399,9 +401,12 @@ pub fn render(f: &Figure) -> String {
                     ""
                 };
                 let r = match role {
-                    Some(EdgeRole::Arrival) => r#" data-role="arrival""#,
-                    Some(EdgeRole::Exit) => r#" data-role="exit""#,
-                    None => "",
+                    Some(EdgeRole::Arrival) => r#" data-role="arrival""#.to_string(),
+                    Some(EdgeRole::Exit { from: Some(st) }) => {
+                        format!(r#" data-role="exit" data-from="{}""#, esc(st))
+                    }
+                    Some(EdgeRole::Exit { from: None }) => r#" data-role="exit""#.to_string(),
+                    None => String::new(),
                 };
                 let _ = writeln!(s, r#"<path {}{r} d="{d}"{m}/>"#, paint(edge_class(*style)));
             }
