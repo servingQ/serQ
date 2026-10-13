@@ -2007,3 +2007,41 @@ fn a_while_body_does_not_determine_its_continuation() {
     let net = deployment::project(&p);
     assert!(net.node_of(stage(&p, "c")).is_some(), "zero passes reach c");
 }
+
+/// The figure is addressable as well as a picture: the SVG names each
+/// station's stage (`data-stage`, an array's members by their shared
+/// name), each queue glyph's and drum's pool (`data-pool`), the arrival
+/// and exit arrows and an engine's budget bar (`data-role`), so that a page
+/// animating a run over the figure finds them by what the program calls
+/// them, not by where the layout put them. A decision diamond is no stage
+/// and gets no name. The TikZ writer ignores the ids.
+#[test]
+fn the_svg_names_stages_pools_and_roles() {
+    use serq::view::figure::Item;
+    let p = program("llmd_nixl_pull");
+    let f = deployment::figure(&p);
+    for i in &f.items {
+        if let Item::Station { kind, stage, .. } = i {
+            assert_eq!(stage.is_none(), *kind == StationKind::Decision, "{i:?}");
+        }
+    }
+    let svg = serq::view::render(&f, "svg").unwrap();
+    for want in [
+        r#"<g data-stage="P">"#,
+        r#"<g data-stage="D">"#,
+        r#"<g data-stage="P.nic">"#,
+        r#"<g data-stage="D.nic">"#,
+        r#"<g data-pool="P.reqs">"#,
+        r#"<g data-pool="D.kv">"#,
+        r#"data-role="budget""#,
+        r#"data-role="arrival""#,
+        r#"data-role="exit""#,
+    ] {
+        assert!(svg.contains(want), "{want} is not in the SVG");
+    }
+    // one group per station, closed
+    assert_eq!(svg.matches("<g data-stage=").count(), 4);
+    assert_eq!(svg.matches("<g data-").count(), svg.matches("</g>").count());
+    let tikz = serq::view::render(&f, "tikz").unwrap();
+    assert!(!tikz.contains("data-"));
+}

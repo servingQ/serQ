@@ -7,7 +7,7 @@
 
 use std::fmt::Write as _;
 
-use crate::view::figure::{Anchor, BoxStyle, EdgeStyle, Figure, Item, StationKind};
+use crate::view::figure::{Anchor, BoxStyle, EdgeRole, EdgeStyle, Figure, Item, StationKind};
 
 fn esc(s: &str) -> String {
     s.replace('&', "&amp;")
@@ -188,8 +188,19 @@ pub fn render(f: &Figure) -> String {
                     n(*round)
                 );
             }
-            Item::Station { rect, kind, text } => {
+            Item::Station {
+                rect,
+                kind,
+                text,
+                stage,
+            } => {
                 let c = rect.centre();
+                // the station's shapes in a group that names its stage, so
+                // that a page can find the station (and, in an engine, its
+                // budget bar) by what the program calls it
+                if let Some(name) = stage {
+                    let _ = writeln!(s, r#"<g data-stage="{}">"#, esc(name));
+                }
                 match kind {
                     StationKind::Fifo | StationKind::Ps => {
                         let r = rect.h.min(rect.w) / 2.0;
@@ -278,7 +289,7 @@ pub fn render(f: &Figure) -> String {
                         );
                         let _ = writeln!(
                             s,
-                            r#"<rect {} x="{}" y="{}" width="{}" height="{}"/>"#,
+                            r#"<rect {} data-role="budget" x="{}" y="{}" width="{}" height="{}"/>"#,
                             paint("solid"),
                             n(bar.x),
                             n(bar.y),
@@ -302,8 +313,12 @@ pub fn render(f: &Figure) -> String {
                         esc(text)
                     );
                 }
+                if stage.is_some() {
+                    s.push_str("</g>\n");
+                }
             }
-            Item::Queue { rect, cells } => {
+            Item::Queue { rect, cells, pool } => {
+                let _ = writeln!(s, r#"<g data-pool="{}">"#, esc(pool));
                 let _ = writeln!(
                     s,
                     r#"<path {} d="M{} {} L{} {} M{} {} L{} {}"/>"#,
@@ -330,8 +345,10 @@ pub fn render(f: &Figure) -> String {
                         n(rect.h - 4.0)
                     );
                 }
+                s.push_str("</g>\n");
             }
-            Item::Drum { rect } => {
+            Item::Drum { rect, pool } => {
+                let _ = writeln!(s, r#"<g data-pool="{}">"#, esc(pool));
                 // the side and the near half of the bottom, then the lid
                 let (rx, ry) = (rect.w / 2.0, (rect.h / 5.0).min(4.0));
                 let _ = writeln!(
@@ -358,8 +375,14 @@ pub fn render(f: &Figure) -> String {
                     n(rx),
                     n(ry)
                 );
+                s.push_str("</g>\n");
             }
-            Item::Edge { pts, style, arrow } => {
+            Item::Edge {
+                pts,
+                style,
+                arrow,
+                role,
+            } => {
                 let mut d = String::new();
                 for (i, p) in pts.iter().enumerate() {
                     let _ = write!(
@@ -375,7 +398,12 @@ pub fn render(f: &Figure) -> String {
                 } else {
                     ""
                 };
-                let _ = writeln!(s, r#"<path {} d="{d}"{m}/>"#, paint(edge_class(*style)));
+                let r = match role {
+                    Some(EdgeRole::Arrival) => r#" data-role="arrival""#,
+                    Some(EdgeRole::Exit) => r#" data-role="exit""#,
+                    None => "",
+                };
+                let _ = writeln!(s, r#"<path {}{r} d="{d}"{m}/>"#, paint(edge_class(*style)));
             }
             Item::Text {
                 at,

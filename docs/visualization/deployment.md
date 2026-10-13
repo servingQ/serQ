@@ -54,6 +54,20 @@ KV blocks (`kv`) are held only at `vllm`, so they are drawn in its frame.
 The tool call and the next turn are the workload's, so the figure has
 neither: a request arrives at `vllm` and goes out.
 
+## Addressing the figure
+
+The SVG is a picture that a page can also address. Each station's shapes
+are grouped under its stage's name, `<g data-stage="P">` (an array's
+members share the name: `P[0]` and `P[1]` are one station, `P`); a queue
+glyph and a drum carry their pool, `<g data-pool="P.reqs">`; the arrival
+arrow is `data-role="arrival"`, an exit arrow `data-role="exit"`, and the
+used part of an engine's budget bar `data-role="budget"`. A decision
+diamond is no stage and has no name. That is what
+[serq-lar](https://github.com/servingQ/serq-lar) animates a
+[run log](../reference/log.md) over: it finds a station by what the
+program calls it, so a change of layout moves nothing but the picture. The
+TikZ writer ignores the ids.
+
 ## Glyphs
 
 | IR | Glyph |

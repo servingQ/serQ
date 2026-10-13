@@ -111,7 +111,9 @@ pub fn render(f: &Figure) -> String {
                     p(rect.right(), rect.bottom())
                 );
             }
-            Item::Station { rect, kind, text } => {
+            Item::Station {
+                rect, kind, text, ..
+            } => {
                 let c = rect.centre();
                 match kind {
                     StationKind::Fifo | StationKind::Ps => {
@@ -191,7 +193,7 @@ pub fn render(f: &Figure) -> String {
                     );
                 }
             }
-            Item::Queue { rect, cells } => {
+            Item::Queue { rect, cells, .. } => {
                 let _ = writeln!(
                     s,
                     "  \\draw[seqrail] {} -- {};",
@@ -215,7 +217,7 @@ pub fn render(f: &Figure) -> String {
                     );
                 }
             }
-            Item::Drum { rect } => {
+            Item::Drum { rect, .. } => {
                 // y grows downwards here: the arc from 180 to 0 passes 90,
                 // the near side of the bottom
                 let (rx, ry) = (rect.w / 2.0, (rect.h / 5.0).min(4.0));
@@ -236,7 +238,9 @@ pub fn render(f: &Figure) -> String {
                     n(ry)
                 );
             }
-            Item::Edge { pts, style, arrow } => {
+            Item::Edge {
+                pts, style, arrow, ..
+            } => {
                 let path: Vec<String> = pts.iter().map(|q| p(q.x, q.y)).collect();
                 let st = edge_style(*style);
                 let opts = if *arrow {

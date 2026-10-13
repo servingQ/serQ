@@ -94,6 +94,15 @@ pub enum EdgeStyle {
     Relation,
 }
 
+/// What an edge is, beyond its style: where sessions enter the figure and
+/// where they leave it. Written into the SVG (`data-role`) so that a page
+/// animating the figure knows where a request comes from and goes to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EdgeRole {
+    Arrival,
+    Exit,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Anchor {
     Start,
@@ -159,15 +168,27 @@ pub enum Item {
         kind: StationKind,
         /// `FIFO`, `PS`, the budget for a step engine.
         text: String,
+        /// The stage it draws, by name (an array's members share one);
+        /// `None` for a decision, which is no stage. The SVG writer puts
+        /// it on the glyph as `data-stage`, so that the figure is
+        /// addressable as well as a picture.
+        stage: Option<String>,
     },
-    /// The queueing-theory queue glyph: `cells` boxes between two rails.
-    Queue { rect: Rect, cells: usize },
-    /// A pool: a drum, its capacity written beside it.
-    Drum { rect: Rect },
+    /// The queueing-theory queue glyph: `cells` boxes between two rails,
+    /// where holds of `pool` wait (`data-pool`).
+    Queue {
+        rect: Rect,
+        cells: usize,
+        pool: String,
+    },
+    /// A pool: a drum, its capacity written beside it (`data-pool`).
+    Drum { rect: Rect, pool: String },
     Edge {
         pts: Vec<Point>,
         style: EdgeStyle,
         arrow: bool,
+        /// An arrival or an exit, which the SVG writer marks (`data-role`).
+        role: Option<EdgeRole>,
     },
     Text {
         at: Point,
@@ -272,6 +293,17 @@ impl Figure {
             pts,
             style,
             arrow: true,
+            role: None,
+        });
+    }
+
+    /// An arrow that is an arrival or an exit.
+    pub fn edge_as(&mut self, pts: Vec<Point>, style: EdgeStyle, role: EdgeRole) {
+        self.push(Item::Edge {
+            pts,
+            style,
+            arrow: true,
+            role: Some(role),
         });
     }
 
@@ -309,7 +341,7 @@ impl Figure {
                 Item::Box { rect, .. }
                 | Item::Station { rect, .. }
                 | Item::Queue { rect, .. }
-                | Item::Drum { rect } => visit(pt(rect.right(), rect.bottom())),
+                | Item::Drum { rect, .. } => visit(pt(rect.right(), rect.bottom())),
                 Item::Edge { pts, .. } => pts.iter().for_each(|p| visit(*p)),
                 Item::Text {
                     at,

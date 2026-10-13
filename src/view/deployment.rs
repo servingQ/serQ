@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 
 use crate::ir::{CArrival, CExpr, CRef, CStageKind, CStmt, CtxVar, Program, RunMode, Side, UnOp};
 use crate::view::figure::{
-    Anchor, BoxStyle, EdgeStyle, Figure, Item, Rect, StationKind, TextSize, pt,
+    Anchor, BoxStyle, EdgeRole, EdgeStyle, Figure, Item, Rect, StationKind, TextSize, pt,
 };
 
 // --- the projection ---------------------------------------------------------
@@ -2256,10 +2256,12 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
             f.push(Item::Queue {
                 rect: Rect::new(gx, gy - 11.0, QUEUE_W, 22.0),
                 cells: 3,
+                pool: pool.name.clone(),
             });
         }
         f.push(Item::Drum {
             rect: Rect::new(gx + 40.0, gy - DRUM_H / 2.0, DRUM_W, DRUM_H),
+            pool: pool.name.clone(),
         });
         for (k, line) in pool_notes(p, g.pool, cached_here(g))
             .into_iter()
@@ -2290,6 +2292,7 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
                     ],
                     style: EdgeStyle::Relation,
                     arrow: true,
+                    role: None,
                 });
             }
         }
@@ -2305,6 +2308,7 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
             let gx = fr.x + FRAME_PAD;
             f.push(Item::Drum {
                 rect: Rect::new(gx, y + 1.0, DRUM_W, DRUM_H),
+                pool: p.pools[q].name.clone(),
             });
             let tx = gx + DRUM_W + 10.0;
             f.text(
@@ -2336,6 +2340,7 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
             rect: r,
             kind: n.kind,
             text: n.inner.clone(),
+            stage: n.stage.map(|st| p.stages[st].name.clone()),
         });
         f.text(
             pt(r.centre().x, r.y - 8.0),
@@ -2451,7 +2456,11 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
                 if arrivals == 1 && i == 0 {
                     // The arrow starts at the margin and the label rides above
                     // it, clear of the pool glyphs it passes.
-                    f.edge(vec![pt(MARGIN, y), pt(r.x, y)], EdgeStyle::Flow);
+                    f.edge_as(
+                        vec![pt(MARGIN, y), pt(r.x, y)],
+                        EdgeStyle::Flow,
+                        EdgeRole::Arrival,
+                    );
                     f.note(pt(MARGIN, y - 10.0), arrival_text.clone(), Anchor::Start);
                 } else {
                     // A session that opens with a branch has more than one entry
@@ -2463,16 +2472,16 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
                     }
                     let ly = lane(&mut lanes);
                     let x = r.x + r.w * 0.25;
-                    f.push(Item::Edge {
-                        pts: vec![
+                    f.edge_as(
+                        vec![
                             pt(MARGIN, y),
                             pt(MARGIN, ly),
                             pt(x, ly),
                             pt(x, frames[i].bottom()),
                         ],
-                        style: EdgeStyle::Flow,
-                        arrow: true,
-                    });
+                        EdgeStyle::Flow,
+                        EdgeRole::Arrival,
+                    );
                 }
             }
             (End::Node(i), End::Exit) => {
@@ -2482,12 +2491,13 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
                 let text = label.map_or("out".into(), |l| format!("out ({l})"));
                 if i + 1 == net.nodes.len() {
                     // The last station leaves to the right.
-                    f.edge(
+                    f.edge_as(
                         vec![
                             pt(r.right(), r.centre().y),
                             pt(row_right + 26.0, r.centre().y),
                         ],
                         EdgeStyle::Flow,
+                        EdgeRole::Exit,
                     );
                     f.note(
                         pt(row_right + 30.0, r.centre().y + 3.0),
@@ -2498,15 +2508,15 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
                     // An earlier station's exit drops into a lane of its own
                     // rather than running a line through the stations after it.
                     let y = lane(&mut lanes);
-                    f.push(Item::Edge {
-                        pts: vec![
+                    f.edge_as(
+                        vec![
                             pt(r.x + r.w * 0.75, frames[i].bottom()),
                             pt(r.x + r.w * 0.75, y),
                             pt(row_right + 26.0, y),
                         ],
-                        style: EdgeStyle::Flow,
-                        arrow: true,
-                    });
+                        EdgeStyle::Flow,
+                        EdgeRole::Exit,
+                    );
                     f.note(pt(row_right + 30.0, y + 3.0), text, Anchor::Start);
                 }
             }
@@ -2527,6 +2537,7 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
                     ],
                     style: EdgeStyle::Flow,
                     arrow: true,
+                    role: None,
                 });
                 if let Some(l) = label {
                     f.note(
@@ -2565,6 +2576,7 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
                     ],
                     style: EdgeStyle::Back,
                     arrow: true,
+                    role: None,
                 });
                 if let Some(l) = label {
                     f.note(
