@@ -62,7 +62,7 @@ Requests arrive one per gap, and each is one call to the engine:
 |---|---|
 | batch budget $b_{\max}$ | `tokens cap bmax;` |
 | batch time $t_b = c + a\lceil b/b_0\rceil$ | `compute (t) = a * ceil(t / b0);` on the device, `worker { forward (c + compute(batch.tokens)); }` (time in 10 µs, so every number is an integer) |
-| request $i$ with $v_p$, $v_d$ | `request (prompt, output) { prefill (prompt); decode (output); }`, called as `sarathi (vp, vd);` |
+| request $i$ with $v_p$, $v_d$ | the request `sarathi (vp, vd + 1);`: a prefill of `vp` tokens, which samples the first, then `vd` decode steps |
 | deterministic arrivals | `arrive renewal(gap);` |
 | Sarathi-Serve: decodes first, then the oldest prefills | `advance running admission;` |
 

@@ -14,14 +14,14 @@ fn check(src: &str) -> Result<(), String> {
     compile_source(&common::main_source(src), &common::horizon(500.0)).map(|_| ())
 }
 
-/// Engine `llm` with `request` (one line) admitted `taking` its pools. Five
-/// lines, as `a_context_variable_outside_its_moment_is_rejected` reads a
-/// line number below them.
-fn engine(request: &str, taking: &str) -> String {
+/// Engine `llm` admitted `taking` its pools. Five lines, as
+/// `a_context_variable_outside_its_moment_is_rejected` reads a line number
+/// below them.
+fn engine(taking: &str) -> String {
     format!(
         "let bs = 16;
     device gpu {{ kv cap 1e5; }} pool kv on gpu {{ block bs; evict lru; }}
-    engine llm on gpu {{ reqs cap 8; tokens cap 512; {request} scheduler {{ advance running; admit waiting while (running.preempted == 0) taking {taking}; }} worker {{ forward (1e-3); }} }}
+    engine llm on gpu {{ reqs cap 8; tokens cap 512; scheduler {{ advance running; admit waiting while (running.preempted == 0) taking {taking}; }} worker {{ forward (1e-3); }} }}
     pool reqs on llm {{ }}
 
     "
@@ -30,46 +30,34 @@ fn engine(request: &str, taking: &str) -> String {
 const ENGINE_WORKLOAD: &str = "arrive poisson(0.3); init { set K = 0; }
                turn { set n = ~exp(500); set o = ~exp(200) + 1; }";
 /// The admission of the stale-header programs below.
-const CACHED_PREFIX: &str = "reqs (1), kv (c + min(prompt - c, budget_left(llm)))";
+const CACHED_PREFIX: &str = "reqs (1), kv (c + min(request.input - c, budget_left(llm))) cache (request.input + request.output)";
 
 /// `examples/multi-turn/vllm.sq` shipped with a prefix-cache lookup bound before the
-/// session queued, under a comment citing the admission-time lookup. A hold's
-/// header is read at admission; a `set` above it is not. In a request, the
-/// `set` above `at admission` is above the hold its `taking` lowers to.
+/// session queued, under a comment citing the admission-time lookup. The
+/// engine's admission is read when the scheduler admits the request; a `set`
+/// above the call is not.
 #[test]
 fn a_stale_header_read_is_rejected() {
-    let llm = engine(
-        "request (prompt, o) { set c = min(cachedin(kv), prompt - 1); at admission { } \
-         prefill (prompt - cached) growing kv; cache (prompt + o); }",
-        CACHED_PREFIX,
-    );
+    let llm = engine(CACHED_PREFIX);
     let src = format!(
         "{llm} workload {{ {ENGINE_WORKLOAD} session {{ loop {{ turn; set K = prompt + o; end; }}
         }} }}
         server {{
           set prompt = K + n;
+          set c = min(cachedin(kv), prompt - 1);
           llm (prompt, o);
         }}"
     );
     let e = check(&src).expect_err("rejected");
     assert!(e.contains("`c` reads cachedin(kv)"), "{e}");
-    assert!(
-        e.contains("hold on `kv`"),
-        "names the pool that reads it: {e}"
-    );
-    assert!(
-        e.contains("at admission"),
-        "points at the clause for it: {e}"
-    );
 }
 
-/// The same program with the clause links.
+/// `request.hit`, read at the admission, is the way to say it.
 #[test]
-fn at_admission_is_the_way_through() {
+fn the_request_s_hit_is_the_way_through() {
     let llm = engine(
-        "request (prompt, o) { at admission { c = min(cachedin(kv), prompt - 1); } \
-         prefill (prompt - cached) growing kv; cache (prompt + o); }",
-        CACHED_PREFIX,
+        "reqs (1), kv (request.hit + min(request.input - request.hit, budget_left(llm))) \
+         reuse (request.input - 1) cache (request.input + request.output)",
     );
     let src = format!(
         "{llm} workload {{ {ENGINE_WORKLOAD} session {{ loop {{ turn; set K = prompt + o; end; }}
@@ -79,43 +67,39 @@ fn at_admission_is_the_way_through() {
           llm (prompt, o);
         }}"
     );
-    check(&src).expect("the clause is the way to say it");
+    check(&src).expect("the request's hit is the way to say it");
 }
 
-/// Reassigning before the hold means the stale value never reaches it.
+/// Reassigning before the call means the stale value never reaches the
+/// admission.
 #[test]
 fn a_reassignment_clears_the_lint() {
-    let llm = engine(
-        "request (prompt) { set c = min(cachedin(kv), prompt - 1); set c = 0; at admission { } \
-         prefill (prompt) growing kv; cache (prompt); }",
-        "reqs (1), kv (c + prompt)",
-    );
+    let llm = engine("reqs (1), kv (c + request.input) cache (request.input)");
     let src = format!(
         "{llm} workload {{ {ENGINE_WORKLOAD} session {{ loop {{ turn; set K = prompt + o; end; }}
         }} }}
         server {{
           set prompt = K + n;
-          llm (prompt);
+          set c = min(cachedin(kv), prompt - 1);
+          set c = 0;
+          llm (prompt, 1);
         }}"
     );
     check(&src).expect("the read no longer reaches the header");
 }
 
-/// A `set` inside the body runs after admission, which is the timing it would
-/// have had anyway: in a request without `at admission`, every statement is.
+/// A read after the request is not a header's.
 #[test]
-fn a_read_inside_the_body_is_fine() {
-    let llm = engine(
-        "request (prompt) { set c = min(cachedin(kv), prompt - 1); observe hit = c; \
-         prefill (prompt) growing kv; cache (prompt); }",
-        "reqs (1), kv (prompt)",
-    );
+fn a_read_after_the_request_is_fine() {
+    let llm = engine("reqs (1), kv (request.input) cache (request.input)");
     let src = format!(
         "{llm} workload {{ {ENGINE_WORKLOAD} session {{ loop {{ turn; set K = prompt + o; end; }}
         }} }}
         server {{
           set prompt = K + n;
-          llm (prompt);
+          llm (prompt, 1);
+          set c = min(cachedin(kv), prompt - 1);
+          observe hit = c;
         }}"
     );
     check(&src).expect("after admission is not stale");
@@ -170,15 +154,12 @@ fn zero_and_one_are_tests() {
 /// knows the table, and the linker now runs it on what it produces.
 #[test]
 fn a_context_variable_outside_its_moment_is_rejected() {
-    let llm = engine(
-        "request (n) { prefill (n) growing kv; }",
-        "reqs (1), kv (n)",
-    );
+    let llm = engine("reqs (1), kv (request.input)");
     let src = format!(
         "{llm} workload {{ {ENGINE_WORKLOAD} session {{  turn; end;
         }} }}
         server {{ set x = tokens;
-          llm (n);
+          llm (n, 1);
         }}"
     );
     let e = check(&src).expect_err("rejected");
@@ -192,7 +173,7 @@ fn a_context_variable_outside_its_moment_is_rejected() {
     assert!(e.contains("exists only in an engine's `worker`"), "{e}");
     // every other moment refuses what it does not supply, and says where it
     // was read and where it exists
-    const LLM: &str = "reqs cap 8; tokens cap 512; request (m) { prefill (m) growing kv; } scheduler { advance running; admit waiting while (running.preempted == 0) taking reqs (1), kv (m); } worker { forward (1e-3); }";
+    const LLM: &str = "reqs cap 8; tokens cap 512; scheduler { advance running; admit waiting while (running.preempted == 0) taking reqs (1), kv (request.input); } worker { forward (1e-3); }";
     let engine = |pool: &str, llm: &str, session: &str| {
         format!(
             "let bs = 16;
@@ -207,7 +188,7 @@ fn a_context_variable_outside_its_moment_is_rejected() {
           }}
         }}
 
-        server {{ {session} llm (m);
+        server {{ {session} llm (m, 1);
         }}"
         )
     };
@@ -335,7 +316,6 @@ fn advancing(advance: &str) -> String {
         "device gpu {{ kv cap 1e5; }}
         engine llm on gpu {{
           tokens cap 512;
-          request () {{ prefill (1) growing kv; }}
           scheduler {{ {advance} admit waiting while (running.preempted == 0) taking kv (1); }}
           worker {{ forward (1); }}
         }}
@@ -344,7 +324,7 @@ fn advancing(advance: &str) -> String {
           session {{ turn; end;
           }}
         }}
-        server {{ llm ();
+        server {{ llm (1, 1);
         }}
         "
     )
@@ -396,14 +376,13 @@ fn serve_admission_is_by_with_no_keys_and_a_key_does_not_draw() {
 /// in session statements and rejected at every scheduler moment.
 #[test]
 fn a_hidden_attribute_is_not_read_by_the_scheduler() {
-    let wl = |request: &str, taking: &str| {
+    let wl = |taking: &str| {
         format!(
             "let bs = 16;
         device gpu {{ kv cap 1e5; }}
         engine llm on gpu {{
           reqs cap 8;
           tokens cap 512;
-          {request}
           scheduler {{ advance running; admit waiting while (running.preempted == 0) taking {taking}; }}
           worker {{ forward (1e-3); }}
         }}
@@ -415,46 +394,33 @@ fn a_hidden_attribute_is_not_read_by_the_scheduler() {
     };
     let wl_workload = "arrive poisson(0.3); hidden o; init { set K = 0; }
                    turn { set n = ~exp(500); set o = ~exp(200) + 1; }";
-    // the body may read it
+    // the request's output may be it, and its release may cache by it
     let ok = format!(
         "{} workload {{ {wl_workload} session {{  turn; end; \n}} }}\nserver {{ llm (n, o);\n}}",
-        wl(
-            "request (n, o) { prefill (n) growing kv; decode (o - 1) growing kv; cache (n + o); }",
-            "reqs (1), kv (n)"
-        )
+        wl("reqs (1), kv (request.input) cache (request.input + request.output)")
     );
     check(&ok).expect("links");
-    // a hold's header may not: the reservation is the scheduler's
+    // the admission may not: the reservation is the scheduler's
     let bad = format!(
         "{} workload {{ {wl_workload} session {{  turn; end; \n}} }}\nserver {{ llm (n, o);\n}}",
-        wl(
-            "request (n, o) { prefill (n) growing kv; }",
-            "reqs (1), kv (n) reserve (n + o)"
-        )
+        wl("reqs (1), kv (request.input) reserve (n + o)")
     );
     let e = check(&bad).expect_err("rejected");
     assert!(e.contains("`o` is hidden from the scheduler"), "{e}");
-    assert!(e.contains("read at admission"), "{e}");
-    // the request's binding is substituted into the header, and the check
-    // sees the substituted expression
+    assert!(e.contains("admits the request"), "{e}");
+    // nor through the request's output, which the call passes it as
     let bad = format!(
-        "{} workload {{ {wl_workload} session {{  turn; end; }} }}
-        server {{ llm (n, o); }}",
-        wl(
-            "request (n, o) { at admission { need = n + o; } prefill (n) growing kv; }",
-            "reqs (1), kv (n) reserve (need)"
-        )
+        "{} workload {{ {wl_workload} session {{  turn; end; \n}} }}\nserver {{ llm (n, o);\n}}",
+        wl("reqs (1), kv (request.input) reserve (request.input + request.output)")
     );
     let e = check(&bad).expect_err("rejected");
     assert!(e.contains("`o` is hidden from the scheduler"), "{e}");
-    assert!(e.contains("read at admission"), "{e}");
     // nor a pool's queue key
     let bad = "let bs = 16;
         device gpu { kv cap 1e5; }
         engine llm on gpu {
           tokens cap 512;
-          request (n) { prefill (n) growing kv; }
-          scheduler { advance running; admit waiting while (running.preempted == 0) taking kv (n); }
+          scheduler { advance running; admit waiting while (running.preempted == 0) taking kv (request.input); }
           worker { forward (1e-3); }
         }
         pool kv on gpu { block bs; evict lru; queue by (o); }
@@ -463,7 +429,7 @@ fn a_hidden_attribute_is_not_read_by_the_scheduler() {
           }
         }
 
-        server { llm (n);
+        server { llm (n, 1);
         }";
     let e = check(bad).expect_err("rejected");
     assert!(e.contains("pool `kv`"), "{e}");
@@ -473,8 +439,7 @@ fn a_hidden_attribute_is_not_read_by_the_scheduler() {
         device gpu { kv cap 1e5; }
         engine llm on gpu {
           tokens cap 512;
-          request (n) { prefill (n) growing kv; }
-          scheduler { advance running by (o); admit waiting while (running.preempted == 0) taking kv (n); }
+          scheduler { advance running by (o); admit waiting while (running.preempted == 0) taking kv (request.input); }
           worker { forward (1e-3); }
         }
         pool kv on gpu { block bs; evict lru; }
@@ -483,7 +448,7 @@ fn a_hidden_attribute_is_not_read_by_the_scheduler() {
           }
         }
 
-        server { llm (n);
+        server { llm (n, 1);
         }";
     let e = check(bad).expect_err("rejected");
     assert!(e.contains("engine `llm`"), "{e}");
@@ -502,8 +467,8 @@ fn a_hidden_attribute_is_not_read_by_the_scheduler() {
     assert!(e.contains("hidden `nothing`"), "{e}");
     // what the scheduler sets cannot be hidden from it, and a name is hidden once
     let one_pool = format!(
-        "{} workload {{ {wl_workload} session {{  turn; end; \n}} }}\nserver {{ llm (n);\n}}",
-        wl("request (n) { prefill (n) growing kv; }", "kv (n)")
+        "{} workload {{ {wl_workload} session {{  turn; end; \n}} }}\nserver {{ llm (n, 1);\n}}",
+        wl("kv (request.input)")
     );
     let bad = one_pool.replace("hidden o;", "hidden computed;");
     let e = check(&bad).expect_err("rejected");
@@ -532,13 +497,12 @@ fn a_stage_reads_no_session_attribute() {
             "device gpu {{ kv cap 100; }}
             engine llm on gpu {{
               tokens cap {tokens};
-              request (prompt) {{ prefill (prompt) growing kv; }}
               scheduler {{ {schedule} }}
               worker {{ forward ({execute}); }}
             }}
             pool kv on gpu {{ }}
             workload {{ arrive poisson(0.5); init {{ set prompt = 2; }} }}
-            server {{ llm (prompt); }}"
+            server {{ llm (prompt, 1); }}"
         )
     };
     let vllm = "advance running; admit waiting while (running.preempted == 0) taking kv (prompt);";
@@ -607,21 +571,19 @@ fn an_old_context_variable_name_says_the_new_one() {
     }
 }
 
-/// Engine `llm` with `request`, admitted `taking` its pools, and the server
-/// that calls it after a `user` delay, every turn.
-fn cache_engine(request: &str, taking: &str) -> String {
-    cache_server(request, &format!(" taking {taking}"), "", "llm ();")
+/// Engine `llm` admitted `taking` its pools, and the server that calls it
+/// after a `user` delay, every turn.
+fn cache_engine(taking: &str) -> String {
+    cache_server(&format!(" taking {taking}"), "", "llm (1000, 1);")
 }
 
-/// Engine `llm` with `request` and `admit waiting … {taking}`, pool
-/// `pool` declared after it, and a server that runs `user`, then
-/// `server`, every turn.
-fn cache_server(request: &str, taking: &str, pool: &str, server: &str) -> String {
+/// Engine `llm` with `admit waiting … {taking}`, pool `pool` declared after
+/// it, and a server that runs `user`, then `server`, every turn.
+fn cache_server(taking: &str, pool: &str, server: &str) -> String {
     format!(
         "device gpu {{ kv cap 1e5; }}
     engine llm on gpu {{
       tokens cap 512;
-      {request}
       scheduler {{ advance running; admit waiting while (running.preempted == 0){taking}; }}
       worker {{ forward (1e-3); }}
     }}
@@ -637,15 +599,22 @@ fn cache_server(request: &str, taking: &str, pool: &str, server: &str) -> String
 }
 const CACHE_ENGINE_WORKLOAD: &str = "arrive closed(1);";
 
+/// The server's hold of the device's pool, which no engine admits, around
+/// `body`, with `clause` after it.
+fn holding(body: &str, clause: &str) -> String {
+    cache_server(
+        "",
+        "",
+        &format!("hold kv (cost(kv, 1000)) {{ {body} }}{clause}"),
+    )
+}
+
 /// #230: a hold without a `cache` clause consumes nothing of the session's
 /// prefix, so `cached` is 0 in its body; reading it there is the old idiom
 /// for a probe that consumed and kept nothing, which is now `cache (0)`.
 #[test]
 fn cached_in_a_hold_without_cache_is_rejected() {
-    let src = cache_engine(
-        "request () { observe hit = cached > 0; prefill (1000 - cached) growing kv; }",
-        "kv (1000)",
-    );
+    let src = holding("observe hit = cached > 0; run user (cost(user, 1));", "");
     let e = check(&src).expect_err("rejected");
     assert!(
         e.contains("`cached` is read in a hold on `kv` that has no `cache` clause"),
@@ -657,12 +626,10 @@ fn cached_in_a_hold_without_cache_is_rejected() {
 /// `cache (0)` is that spelling, and the usual request links as before.
 #[test]
 fn cache_zero_is_the_way_through() {
-    for clause in ["cache (0);", "cache (1000);"] {
-        let src = cache_engine(
-            &format!(
-                "request () {{ observe hit = cached > 0; prefill (1000 - cached) growing kv; {clause} }}"
-            ),
-            "kv (1000)",
+    for clause in [" cache (cost(kv, 0));", " cache (cost(kv, 1000));"] {
+        let src = holding(
+            "observe hit = cached > 0; run user (cost(user, 1));",
+            clause,
         );
         check(&src).unwrap_or_else(|e| panic!("{clause}: {e}"));
     }
@@ -678,16 +645,15 @@ fn cache_zero_is_the_way_through() {
 fn cached_in_a_nested_hold_on_another_pool_is_rejected() {
     let nested = |inner: &str| {
         cache_server(
-            "request (w) { prefill (w); }",
             "",
             "pool reqs { cap 4; }",
             &format!("hold kv (cost(kv, 1000)) {{ {inner} }} cache (cost(kv, 1000));"),
         )
     };
-    let src = nested("hold reqs (cost(reqs, 1)) { llm (1000 - cached); }");
+    let src = nested("hold reqs (cost(reqs, 1)) { llm (1000 - cached, 1); }");
     let e = check(&src).expect_err("rejected");
     assert!(e.contains("hold on `reqs`"), "{e}");
-    let src = nested("set c = cached; hold reqs (cost(reqs, 1)) { llm (1000 - c); }");
+    let src = nested("set c = cached; hold reqs (cost(reqs, 1)) { llm (1000 - c, 1); }");
     check(&src).expect("read above the inner hold, as llmd_nixl_pull.sq does");
     // read after the inner hold, in the outer body: the inner admission set
     // it, so `c` was 0 every turn where 992 was kept (#237); in a branch
@@ -709,15 +675,20 @@ fn cached_in_a_nested_hold_on_another_pool_is_rejected() {
 /// `reuse` bounds what the admission consumes; without `cache` it consumes nothing.
 #[test]
 fn reuse_without_cache_is_rejected() {
-    let src = cache_engine(
-        "request () { prefill (1000) growing kv; }",
-        "kv (1000) reuse (512)",
+    let src = cache_server(
+        "",
+        "",
+        "hold kv (cost(kv, 1000)) reuse (cost(kv, 512)) { run user (cost(user, 1)); }",
     );
     let e = check(&src).expect_err("rejected");
     assert!(
         e.contains("`reuse` on a hold on `kv` that has no `cache` clause"),
         "{e}"
     );
+    // an engine's admission likewise
+    let e = check(&cache_engine("kv (1000) reuse (512)")).expect_err("rejected");
+    assert!(e.contains("`reuse`"), "{e}");
+    check(&cache_engine("kv (1000) reuse (512) cache (1000)")).expect("links");
 }
 
 /// #231: a name resolves to an attribute first, then a `let`, then a context
@@ -836,9 +807,8 @@ fn a_declaration_cannot_take_a_name_the_language_supplies() {
 fn a_schedules_let_cannot_take_a_name_the_language_supplies() {
     let src = format!(
         "{} workload {{ {ENGINE_WORKLOAD} session {{ turn; }} }}
-        server {{ llm (n); }}",
-        engine("request (n) { prefill (n); }", "reqs (1)")
-            .replace("scheduler { ", "scheduler { let inf = 1; ")
+        server {{ llm (n, 1); }}",
+        engine("reqs (1)").replace("scheduler { ", "scheduler { let inf = 1; ")
     );
     let e = check(&src).expect_err("rejected");
     assert!(

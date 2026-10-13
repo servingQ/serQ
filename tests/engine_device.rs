@@ -361,42 +361,33 @@ fn sglang_and_tgi_as_engines_are_bodies() {
 /// memory `kv` on its device.
 const WORKLOAD: &str = "
 workload { arrive batch(3); init { set prompt = 2; } }
-server { vllm (prompt); }
+server { vllm (prompt, 3); }
 ";
 
 /// `scheduler` with the request's admission on each `admit waiting`: a slot
-/// of `reqs` and the prompt's blocks of `kv`, which its runs grow.
+/// of `reqs` and the prompt's blocks of `kv`, which its KV grows.
 fn taking(schedule: &str) -> String {
     let mut out = String::new();
     let mut rest = schedule;
     while let Some(i) = rest.find("admit waiting") {
         let end = rest[i..].find(';').map_or(rest.len(), |e| i + e);
         out.push_str(&rest[..end]);
-        out.push_str(" taking reqs (1), kv (prompt)");
+        out.push_str(" taking reqs (1), kv (request.input)");
         rest = &rest[end..];
     }
     out + rest
 }
 
-/// vLLM's engine on one device, its request a prefill and two decodes. A
-/// schedule the refusals write without `admit waiting` takes nothing, so
-/// its request grows nothing.
+/// vLLM's engine on one device, its request a prefill and two decodes (the
+/// call's output 3, the prefill's token and two). A schedule the refusals
+/// write without `admit waiting` takes nothing.
 fn engine(schedule: &str) -> String {
-    let growing = if schedule.contains("admit waiting") {
-        " growing kv"
-    } else {
-        ""
-    };
     let schedule = taking(schedule);
     format!(
         "device gpu {{ step_time (t) = 1; kv cap 100; }}
 engine vllm on gpu {{
   reqs cap 8;
   tokens cap 8;
-  request (prompt) {{
-    prefill (prompt){growing};
-    decode (2){growing};
-  }}
   scheduler {{ {schedule} }}
   worker {{ forward (step_time(batch.tokens)); }}
 }}
@@ -1096,9 +1087,9 @@ engine e2 on gpu {{ tokens cap 4; scheduler {{ advance running; }} worker {{ for
         "no device `cpu`",
     );
     // a pool on a name nothing declares is pointed at that name, the owner
-    // (line 13, `pool kv on gpuu`, column 12), not the pool's
+    // (line 9, `pool kv on gpuu`, column 12), not the pool's
     let e = error(&engine(ok).replace("pool kv on gpu", "pool kv on gpuu"));
-    assert!(e.starts_with("13:12: no device or engine `gpuu`"), "{e}");
+    assert!(e.starts_with("9:12: no device or engine `gpuu`"), "{e}");
     assert!(e.contains("did you mean `gpu`?"), "{e}");
     // a context variable's old name is answered with the engine's name
     let e = error(&engine(ok).replace("forward (step_time(batch.tokens))", "forward (ntok)"));
@@ -1629,9 +1620,9 @@ fn a_name_is_a_number_only_where_its_function_takes_one() {
         format!(
             "{pre}
 device gpu {{ kv cap 100; }} pool kv on gpu {{ }}
-engine E on gpu {{ tokens cap inf; request () {{ prefill (1); }} scheduler {{ advance running; admit waiting while (running.preempted == 0); }} worker {{ forward (1); }} }}
+engine E on gpu {{ tokens cap inf; scheduler {{ advance running; admit waiting while (running.preempted == 0); }} worker {{ forward (1); }} }}
 workload {{ arrive batch(1); init {{ set prompt = 32; }} }}
-server {{ hold kv (cost(kv, {size})) {{ E (); }} }}"
+server {{ hold kv (cost(kv, {size})) {{ E (1, 1); }} }}"
         )
     };
     refused(

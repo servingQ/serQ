@@ -18,7 +18,6 @@ let b0 = 128;
 device gpu { }
 engine llm on gpu {
   tokens cap bmax;
-  request () { prefill (290); decode (990); }
   scheduler { SCHEDULE }
   worker { forward (c + a * ceil(batch.tokens / b0)); }
 }
@@ -26,7 +25,7 @@ workload { arrive renewal(46750); init { set t0 = now; }
   session { turn; end;
   }
 }
-server { llm (); observe response = now - t0;
+server { llm (290, 991); observe response = now - t0;
 }
 claim work_conserving: every iteration of llm (demand < bmax || tokens == bmax);
 claim token_rate: every iteration of llm (served * (c + a * ceil(bmax / b0)) <= bmax * now);
@@ -121,7 +120,6 @@ const BATCH: &str = "
         device gpu { }
         engine llm on gpu {
           tokens cap 4;
-          request (n) { prefill (n); }
           scheduler { advance running; admit waiting while (running.preempted == 0); }
           worker { forward (1); }
         }
@@ -129,7 +127,7 @@ const BATCH: &str = "
           session { turn; end;
           }
         }
-        server { llm (n); observe x = n;
+        server { llm (n, 1); observe x = n;
         }
 
 ";
@@ -227,7 +225,6 @@ fn arrived_counts_the_sessions_started_by_the_iteration() {
         device gpu { }
         engine llm on gpu {
           tokens cap 4;
-          request () { prefill (3); }
           scheduler { advance running; admit waiting while (running.preempted == 0); }
           worker { forward (1); }
         }
@@ -235,7 +232,7 @@ fn arrived_counts_the_sessions_started_by_the_iteration() {
           session { turn; end;
           }
         }
-        server { llm ();
+        server { llm (3, 1);
         }
 
         claim at_20: some iteration of llm (now == 20 && arrived == 2);

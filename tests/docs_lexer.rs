@@ -227,6 +227,9 @@ fn the_docs_lexer_knows_every_name_the_language_supplies() {
 
     let mut listed = coloured();
     listed.extend(lexer_list("ARITHMETIC"));
+    // a request's values, `request.known`, are context variables the
+    // ENGINE_VALUES rule colours whole
+    listed.extend(lexer_list("ENGINE_VALUES"));
     let missing: Vec<&str> = supplied.filter(|w| !listed.contains(*w)).collect();
     assert!(missing.is_empty(), "{LEXER} does not colour {missing:?}");
 }

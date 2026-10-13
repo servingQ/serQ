@@ -3,10 +3,11 @@
 Names for the parts of a request's life that are not one engine run. An
 admission is the kernel's
 [`hold … at admission (…) { … } cache (…)`](statements.md#hold), which an
-engine's request writes as `taking` and `at admission`. Prefill and decode
-are the mode of a [`run`](statements.md#run) on a step engine, written in
-the engine's request as `prefill (T);` and `decode (T);`, and in a queue's
-entry as `run P prefill (cost(P, T));`. The server calls the request.
+engine's scheduler writes as `taking`, `reuse` and `cache`, reading the
+engine's state of the request (`request.known`, `request.hit`). Prefill and
+decode are the mode of a [`run`](statements.md#run) on a step engine; the
+server calls the engine with the request's input and output, `E (in, out);`,
+and a queue's entry writes `run P prefill (cost(P, T));`.
 
 Serving forms accept ordinary quantities and perform the named resource
 [`cost`](functions.md#cost) conversion before the primitive operation.
@@ -94,10 +95,6 @@ fn main() {
   device gpu { }
   engine llm on gpu {
     tokens cap 8;
-    request () {
-      prefill (8);
-      decode (2);
-    }
     scheduler { advance running; admit waiting while (running.preempted == 0); }
     worker {
       forward (1);
@@ -108,7 +105,7 @@ fn main() {
     arrive batch(1);
   }
   server {
-    llm ();
+    llm (8, 3);
     tool (3);
     observe finished = now;
   }

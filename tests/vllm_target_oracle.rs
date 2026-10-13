@@ -139,9 +139,12 @@ fn the_programmable_scheduler_decides_as_the_program_does() {
             a => panic!("{name}: arrival {a:?}"),
         };
         let rep = run_ir(&ir, None).unwrap();
+        // the first token's time is the engine's record, observed after the
+        // call (`tests/vllm_oracle.rs` reads it so too)
         let mut got = vec![(0.0, 0.0); n];
-        for &(t, s, _) in &rep.observe("first").unwrap().records {
-            got[s as usize].0 = t;
+        let first = rep.observe("first").unwrap();
+        for (&(_, s, _), &v) in first.records.iter().zip(&first.samples) {
+            got[s as usize].0 = v;
         }
         for &(t, s, _) in &rep.observe("done").unwrap().records {
             got[s as usize].1 = t;

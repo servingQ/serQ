@@ -90,21 +90,26 @@ fn ir_that_skips_the_linker_meets_its_checks() {
     let src = "device gpu { kv cap 64; }
         engine llm on gpu {
           tokens cap 8;
-          request () { prefill (8) growing kv; }
           scheduler { advance running; admit waiting while (running.preempted == 0) taking kv (8); }
           worker { forward (1); }
         }
         pool kv on gpu { }
+        pool m { cap 10; }
         stage d : delay;
         workload { arrive batch(1); init { set x = 1; }
           session { turn; end;
           }
         }
-        server { llm ();
+        server { hold m (cost(m, 1)) { llm (8, 1); }
         }
         ";
     let p = compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap();
     let d = p.stages.iter().position(|s| s.name == "d").unwrap();
+    let m = CRef {
+        base: p.pools.iter().position(|q| q.name == "m").unwrap(),
+        count: 1,
+        index: None,
+    };
     let kv = CRef {
         base: 0,
         count: 1,
@@ -184,6 +189,19 @@ fn ir_that_skips_the_linker_meets_its_checks() {
         },
         "pool reference 99..100 out of range",
     );
+    refused(
+        &|q| {
+            let serq::ir::CStageKind::Step(st) = &mut q.stages[0].kind else {
+                panic!("the engine is stage 0")
+            };
+            st.request.as_mut().expect("the engine's request").pools[0].0 = CRef {
+                base: 99,
+                count: 1,
+                index: None,
+            };
+        },
+        "pool reference 99..100 out of range",
+    );
     let run_d_as = |mode, growing: Option<CRef>| {
         let CStmt::Run {
             stage, work, also, ..
@@ -205,8 +223,8 @@ fn ir_that_skips_the_linker_meets_its_checks() {
         &|q| q.blocks[q.session].insert(0, prefill_d.clone()),
         "`prefill`/`decode` are required on an engine",
     );
-    // the hold's body: `run d (1) growing kv` inside `hold kv`
-    let growing_d = run_d_as(serq::ir::RunMode::Plain, Some(kv.clone()));
+    // the hold's body: `run d (1) growing m` inside `hold m`
+    let growing_d = run_d_as(serq::ir::RunMode::Plain, Some(m.clone()));
     refused(
         &|q| {
             let body = q.blocks[q.session]
@@ -628,128 +646,6 @@ fn a_draw_is_labelled_w_p() {
     );
 }
 
-/// `at admission (hit = e)` names a value the hold's header is written in
-/// terms of. Everything in a header is evaluated when the session is
-/// admitted; a `set` above the hold is not, and looks the same - which is the
-/// bug the vLLM program carried. The clause is substituted at parse time, so
-/// it must reach the kernel as the inlined expression and nothing else.
-#[test]
-fn at_admission_is_substituted_into_the_header() {
-    let head = |admission: &str, take: &str| {
-        format!(
-            "device gpu {{ kv cap 1e5; }}
-        engine llm on gpu {{
-          reqs cap 8;
-          tokens cap 512;
-          request (prompt, output) {{
-            {admission}
-            prefill (prompt - cached) growing kv;
-            cache (prompt + output);
-          }}
-          scheduler {{
-            advance running;
-            admit waiting while (running.preempted == 0) taking reqs (1), kv ({take});
-          }}
-          worker {{ forward (1e-3); }}
-        }}
-        pool kv on gpu {{ block 16; evict lru; }}
-        pool reqs on llm {{ }}
-
-        "
-        )
-    };
-    let head_workload = "arrive poisson(0.3); init { set K = 0; }
-                   turn { set n = ~exp(500); set o = ~exp(200) + 1; }";
-    let bound = format!(
-        "{} workload {{ {head_workload} session {{ loop {{ turn; set K = prompt + o; end; }}
-        }} }}
-        server {{ set prompt = K + n; llm (prompt, o);
-        }}",
-        head(
-            "at admission { hit = min(cachedin(kv), prompt - 1); }",
-            "min(prompt, hit + budget_left(llm))"
-        )
-    );
-    let inlined = format!(
-        "{} workload {{ {head_workload} session {{ loop {{ turn; set K = prompt + o; end; }}
-        }} }}
-        server {{ set prompt = K + n; llm (prompt, o);
-        }}",
-        head(
-            "",
-            "min(prompt, min(cachedin(kv), prompt - 1) + budget_left(llm))"
-        )
-    );
-    let ov = common::horizon(500.0);
-    let a = serq::compile_source(&common::main_source(&bound), &ov).expect("the clause compiles");
-    let b = serq::compile_source(&common::main_source(&inlined), &ov)
-        .expect("the inlined form compiles");
-    assert_eq!(
-        a.to_json(),
-        b.to_json(),
-        "the clause must vanish into the header"
-    );
-}
-
-/// A bare identifier argument (`min(hit, 10)`) is parsed as a reference,
-/// since it may name a pool or a stage; when it names a binding it is the
-/// binding. Before this the substitution skipped it and `hit` read the
-/// session attribute of that name, 0 on a first admission, silently.
-#[test]
-fn a_bound_name_is_substituted_when_it_stands_alone_as_an_argument() {
-    let head = |admission: &str, take: &str| {
-        format!(
-            "device gpu {{ kv cap 1e5; }}
-        engine llm on gpu {{
-          reqs cap 8;
-          tokens cap 512;
-          request (prompt, output) {{
-            {admission}
-            prefill (prompt - cached) growing kv;
-            cache (prompt + output);
-          }}
-          scheduler {{
-            advance running;
-            admit waiting while (running.preempted == 0) taking reqs (1), kv ({take});
-          }}
-          worker {{ forward (1e-3); }}
-        }}
-        pool kv on gpu {{ block 16; evict lru; }}
-        pool reqs on llm {{ }}
-
-        "
-        )
-    };
-    let head_workload = "arrive poisson(0.3); init { set K = 0; }
-                   turn { set n = ~exp(500); set o = ~exp(200) + 1; }";
-    let bound = format!(
-        "{} workload {{ {head_workload} session {{  turn; end;
-        }} }}
-        server {{ set prompt = K + n; llm (prompt, o);
-        }}",
-        head(
-            "at admission { hit = min(cachedin(kv), prompt - 1); }",
-            "min(hit, 10)"
-        )
-    );
-    let inlined = format!(
-        "{} workload {{ {head_workload} session {{  turn; end;
-        }} }}
-        server {{ set prompt = K + n; llm (prompt, o);
-        }}",
-        head("", "min(min(cachedin(kv), prompt - 1), 10)")
-    );
-    let ov = common::horizon(500.0);
-    let a = serq::compile_source(&common::main_source(&bound), &ov).expect("the clause compiles");
-    let b = serq::compile_source(&common::main_source(&inlined), &ov)
-        .expect("the inlined form compiles");
-    assert_eq!(
-        a.to_json(),
-        b.to_json(),
-        "the bare `hit` must be the binding"
-    );
-}
-
 /// The bindings are substituted, so a name used twice would draw twice. That
 /// is not a binding anyone means to write, and the parser says so.
 #[test]
@@ -838,17 +734,12 @@ fn the_request_boundary_preserves_size_ownership() {
         engine llm on gpu {
           reqs cap 8;
           tokens cap 512;
-          request (prompt, output, t0) {
-            at admission { hit = min(cachedin(kv), prompt - 1); }
-            prefill (prompt - cached) growing kv;
-            observe ttft = now - t0;
-            decode (output - 1) growing kv;
-            cache (prompt + output);
-          }
           scheduler {
             advance running;
             admit waiting while (running.preempted == 0)
-              taking reqs (1), kv (min(prompt, hit + budget_left(llm)));
+              taking reqs (1), kv (min(request.input, request.hit + budget_left(llm)))
+              reuse (request.input - 1)
+              cache (request.input + request.output);
           }
           worker { forward (1e-3); }
         }
@@ -873,7 +764,8 @@ fn the_request_boundary_preserves_size_ownership() {
         server {{
           set t0 = now;
           set prompt = K + n;
-          llm (prompt, o, t0);
+          llm (prompt, o);
+          observe ttft = llm.first - t0;
           observe response = now - t0;
         }}"
     );
@@ -891,7 +783,8 @@ fn the_request_boundary_preserves_size_ownership() {
         server {{
           set t0 = now;
           set prompt = K + n;
-          llm (prompt, o, t0);
+          llm (prompt, o);
+          observe ttft = llm.first - t0;
           observe response = now - t0;
           set K = prompt + o;
         }}"
@@ -911,52 +804,6 @@ fn the_request_boundary_preserves_size_ownership() {
     assert_eq!(
         run_ir(&a, None).unwrap().json(),
         run_ir(&restored, None).unwrap().json()
-    );
-}
-
-/// `enter … keep` was `hold … cache`, next to a pool its engine admits; an
-/// engine's request is that hold now, and it is the hold a queue's entry
-/// writes, up to the names the queue gives its own (`llm.kv`).
-#[test]
-fn enter_is_hold_next_to_a_pool_the_engine_admits() {
-    let head_workload = "arrive poisson(1); init { set n = 10; }";
-    let sugar = format!(
-        "device gpu {{ kv cap 1000; }}
-        engine llm on gpu {{
-          reqs cap 4;
-          tokens cap 64;
-          request (n) {{ prefill (n) growing kv; cache (n); }}
-          scheduler {{ advance running; admit waiting while (running.preempted == 0) taking reqs (1), kv (n); }}
-          worker {{ forward (1); }}
-        }}
-        pool kv on gpu {{ }} pool reqs on llm {{ }}
-
-        workload {{ {head_workload} session {{ turn; end; \n}} }}\nserver {{ llm (n);\n}}"
-    );
-    let kernel = format!(
-        "queue llm : prefill {{
-          device gpu {{ kv cap 1000; }}
-          engine on gpu {{
-            reqs cap 4;
-            tokens cap 64;
-            scheduler {{ advance running; admit waiting while (running.preempted == 0); }}
-            worker {{ forward (1); }}
-          }}
-          pool kv on gpu {{ }} pool reqs on llm {{ }}
-          prefill (n) {{ hold reqs (cost(reqs, 1)), kv (cost(kv, n)) {{ run llm prefill (cost(llm, n)) growing kv; }} cache (cost(reqs, kv, n)); }}
-        }}
-
-        workload {{ {head_workload} session {{ turn; end; \n}} }}\nserver {{ llm.prefill (n);\n}}"
-    );
-    let ov = common::horizon(20.0);
-    assert_eq!(
-        serq::compile_source(&common::main_source(&sugar), &ov)
-            .unwrap()
-            .to_json(),
-        serq::compile_source(&common::main_source(&kernel), &ov)
-            .unwrap()
-            .to_json()
-            .replace("\"llm.", "\"")
     );
 }
 

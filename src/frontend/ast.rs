@@ -400,6 +400,37 @@ pub struct StepSpec {
     pub schedule: Schedule,
     /// `state NAME = c;`: the stage's registers and their first values.
     pub state: Vec<(String, Expr)>,
+    /// What its admission takes of a request and what the release leaves
+    /// cached (`taking` on `admit waiting`); `None` before the engine is read.
+    pub request: Option<RequestSpec>,
+    /// `connector C { … }`: its KV connector to the L2 queue `C`.
+    pub connector: Option<ConnectorSpec>,
+}
+
+/// An engine's `connector C { per_token (r); [load (n);] [save (n);] }`,
+/// read for each request (`ir::CConnector`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ConnectorSpec {
+    /// The L2 queue: its stage, whose bandwidth the copies share, and its
+    /// pool (`C.kv`).
+    pub stage: Ref,
+    pub pool: Ref,
+    /// The time one token's copy takes.
+    pub per_token: Expr,
+    /// The tokens a request loads at its admission.
+    pub load: Option<Expr>,
+    /// The tokens the L2 holds of a request once it has ended.
+    pub save: Option<Expr>,
+}
+
+/// An engine's `taking P (u) [reserve (r)], … [reuse (e)] [prefix (…)]
+/// [cache (e)]`, read for each request (`ir::CRequest`).
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct RequestSpec {
+    pub pools: Vec<(Ref, Expr, Option<Expr>)>,
+    pub reuse: Option<Expr>,
+    pub prefix: Option<Vec<(Expr, Expr)>>,
+    pub cache: Option<Expr>,
 }
 
 /// An engine's `scheduler` as the kernel runs it.
@@ -572,6 +603,12 @@ pub enum Stmt {
         from: Option<Ref>,
         to: Option<(Ref, Expr)>,
     },
+    /// `E (input, output);`: a request to engine `E` (`ir::CStmt::Request`).
+    EngineRequest {
+        stage: Ref,
+        input: Expr,
+        output: Expr,
+    },
     /// `mark x;` inside a queue's entry: the moment, as the attribute `Q.x`
     /// the caller reads. Parse-time only, as `Call`.
     Mark(String),
@@ -641,6 +678,15 @@ where
                 (parts.expr)(e);
             }
             Stmt::Drop(r) | Stmt::Release(r) => (parts.reference)(r),
+            Stmt::EngineRequest {
+                stage,
+                input,
+                output,
+            } => {
+                (parts.reference)(stage);
+                (parts.expr)(input);
+                (parts.expr)(output);
+            }
             Stmt::Run {
                 stage,
                 work,

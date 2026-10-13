@@ -11,6 +11,43 @@ fn run(src: &str, options: &Overrides) -> serq::Report {
     run_source(&common::main_source(src), options, None).unwrap()
 }
 
+/// The sessions the engine `llm` admitted, in the order it admitted them:
+/// what it records of each admission is keyed by the session.
+fn admissions(r: &serq::Report) -> Vec<f64> {
+    let o = r.observe("llm.prefill").unwrap();
+    o.records.iter().map(|rec| rec.1 as f64).collect()
+}
+
+/// Whether serial 1, preempted, is admitted again before serial 2 is first.
+fn readmitted_before_2(admitted: &[f64]) -> bool {
+    let again = admitted
+        .iter()
+        .enumerate()
+        .filter(|&(_, &s)| s == 1.0)
+        .nth(1)
+        .map(|(i, _)| i);
+    let two = admitted.iter().position(|&s| s == 2.0);
+    match (again, two) {
+        (Some(a), Some(t)) => a < t,
+        (Some(_), None) => true,
+        _ => false,
+    }
+}
+
+/// The sessions admitted again after a preemption, in that order.
+fn victims(r: &serq::Report) -> Vec<f64> {
+    let mut seen = vec![];
+    let mut again = vec![];
+    for s in admissions(r) {
+        if seen.contains(&s) {
+            again.push(s);
+        } else {
+            seen.push(s);
+        }
+    }
+    again
+}
+
 /// Three requests decode on a pool that cannot hold them all. After six
 /// decode steps every one has six outputs, so SGLang's order (fewest
 /// outputs, then longest prompt) retracts serial 1, whose prompt is the
@@ -22,15 +59,10 @@ fn three(preempt: &str) -> String {
         engine llm on gpu {{
           reqs cap 3;
           tokens cap 64;
-          request (prompt, id) {{
-            if (computed > 0) {{ observe victim = id; }}
-            prefill (prompt) growing kv;
-            decode (12) growing kv;
-            cache (0);
-          }}
           scheduler {{
             advance running;
-            admit waiting while (running.preempted == 0) taking reqs (1), kv (prompt);
+            admit waiting while (running.preempted == 0)
+              taking reqs (1), kv (request.input) cache (0);
           }}
           worker {{ forward (1); }}
         }}
@@ -44,7 +76,7 @@ fn three(preempt: &str) -> String {
         }}
         server {{
           set prompt = serial == 0 ? 4 : serial == 1 ? 10 : 6;
-          llm (prompt, serial);
+          llm (prompt, 13);   // twelve decode steps after the prefill's token
         }}
 
 "#
@@ -61,7 +93,7 @@ fn the_victim_is_the_least_key() {
         ("preempt by (admission);", 0.0),
     ] {
         let r = run(&three(preempt), &common::horizon(200.0));
-        let victims = &r.observe("victim").unwrap().samples;
+        let victims = victims(&r);
         assert_eq!(victims[0], first, "{preempt}: {victims:?}\n{}", r.text());
     }
 }
@@ -87,28 +119,20 @@ fn lifo_is_by_minus_admission() {
 
 /// Two requests run and a third waits for a slot. When the pool runs out,
 /// serial 1 (admitted last) is preempted; at the head it is admitted again
-/// before serial 2, at the tail after it.
+/// before serial 2, at the tail after it. (It keeps its outputs, so it may
+/// be preempted again; the first readmission is what the queue decides.)
 #[test]
 fn a_victim_requeues_at_the_head_or_the_tail() {
-    for (requeue, order) in [
-        ("requeue head", [0.0, 1.0, 1.0, 2.0]),
-        ("requeue tail", [0.0, 1.0, 2.0, 1.0]),
-    ] {
+    for (requeue, before) in [("requeue head", true), ("requeue tail", false)] {
         let src = format!(
             r#"
         device gpu {{ kv cap 24; }}
         engine llm on gpu {{
           reqs cap 2;
           tokens cap 64;
-          request (id) {{
-            observe admitted_at = id;
-            prefill (4) growing kv;
-            decode (10) growing kv;
-            cache (0);
-          }}
           scheduler {{
             advance running;
-            admit waiting while (running.preempted == 0) taking reqs (1), kv (4);
+            admit waiting while (running.preempted == 0) taking reqs (1), kv (4) cache (0);
           }}
           worker {{ forward (1); }}
         }}
@@ -120,7 +144,7 @@ fn a_victim_requeues_at_the_head_or_the_tail() {
 
           }}
         }}
-        server {{ llm (serial); }}
+        server {{ llm (4, 11); }}
 
 "#
         );
@@ -132,10 +156,11 @@ fn a_victim_requeues_at_the_head_or_the_tail() {
                 ..common::horizon(200.0)
             },
         );
-        let admitted = &r.observe("admitted_at").unwrap().samples;
+        let admitted = &admissions(&r);
+        assert_eq!(admitted[..2], [0.0, 1.0], "{requeue}: {admitted:?}");
         assert_eq!(
-            admitted[..4],
-            order,
+            readmitted_before_2(admitted),
+            before,
             "{requeue}: {admitted:?}\n{}",
             r.text()
         );
@@ -151,14 +176,10 @@ fn a_preempt_key_reads_the_candidate_and_nothing_it_cannot_see() {
         engine llm on gpu {{
           reqs cap 3;
           tokens cap 64;
-          request (prompt, output) {{
-            prefill (prompt) growing kv;
-            decode (output) growing kv;
-            cache (0);
-          }}
           scheduler {{
             advance running;
-            admit waiting while (running.preempted == 0) taking reqs (1), kv (prompt);
+            admit waiting while (running.preempted == 0)
+              taking reqs (1), kv (request.input) cache (0);
           }}
           worker {{ forward (1); }}
         }}
@@ -173,7 +194,7 @@ fn a_preempt_key_reads_the_candidate_and_nothing_it_cannot_see() {
         server {{
           set prompt = 4;
           set o = 12;
-          llm (prompt, o);
+          llm (prompt, o + 1);
         }}
 
 "#
@@ -279,15 +300,9 @@ fn a_tail_victim_is_ordered_by_the_queue_keys() {
         engine llm on gpu {
           reqs cap 2;
           tokens cap 64;
-          request (id) {
-            observe admitted_at = id;
-            prefill (4) growing kv;
-            decode (10) growing kv;
-            cache (0);
-          }
           scheduler {
             advance running;
-            admit waiting while (running.preempted == 0) taking reqs (1), kv (4);
+            admit waiting while (running.preempted == 0) taking reqs (1), kv (4) cache (0);
           }
           worker { forward (1); }
         }
@@ -301,7 +316,7 @@ fn a_tail_victim_is_ordered_by_the_queue_keys() {
         }
         server {
           set rank = serial == 2 ? 9 : serial;
-          llm (serial);
+          llm (4, 11);
         }
 
 "#;
@@ -313,15 +328,11 @@ fn a_tail_victim_is_ordered_by_the_queue_keys() {
             ..common::horizon(200.0)
         },
     );
-    let admitted = &r.observe("admitted_at").unwrap().samples;
+    let admitted = &admissions(&r);
     // serial 1 (rank 1) is the victim; at the tail of a keyed queue its key
     // puts it ahead of serial 2 (rank 9)
-    assert_eq!(
-        admitted[..4],
-        [0.0, 1.0, 1.0, 2.0],
-        "{admitted:?}\n{}",
-        r.text()
-    );
+    assert_eq!(admitted[..2], [0.0, 1.0], "{admitted:?}");
+    assert!(readmitted_before_2(admitted), "{admitted:?}\n{}", r.text());
 }
 
 /// A prefilling candidate reads `decoding` as 0: SGLang retracts from the

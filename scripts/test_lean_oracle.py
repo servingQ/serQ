@@ -72,26 +72,23 @@ class FragmentBoundaries(unittest.TestCase):
         self.fail("the mixed oracle must contain a Run")
 
     def test_leases_are_not_silently_discarded(self):
+        # the mixed oracle calls the engine; a server's own hold may lease
         ir = copy.deepcopy(self.ir)
-        for block in ir["blocks"]:
-            for stmt in block:
-                if "Hold" in stmt:
-                    stmt["Hold"]["lease"] = [{"base": 0, "count": 1, "index": None}, {"Num": 1}]
-                    with self.assertRaisesRegex(generator.Fragment, "lease"):
-                        generator.Lean(ir).block(ir["session"], 1)
-                    return
-        self.fail("the mixed oracle must contain a Hold")
+        body = len(ir["blocks"])
+        ir["blocks"].append([])
+        ir["blocks"][ir["session"]].insert(0, {"Hold": {
+            "pools": [[{"base": 0, "count": 1, "index": None}, {"Num": 1}, None]],
+            "reuse": None, "body": body, "cache": None,
+            "lease": [{"base": 0, "count": 1, "index": None}, {"Num": 1}]}})
+        with self.assertRaisesRegex(generator.Fragment, "lease"):
+            generator.Lean(ir).block(ir["session"], 1)
 
     def test_prefix_chains_are_not_silently_discarded(self):
+        # the engine's admission reads a chain of segments
         ir = copy.deepcopy(self.ir)
-        for block in ir["blocks"]:
-            for stmt in block:
-                if "Hold" in stmt:
-                    stmt["Hold"]["prefix"] = [[{"Num": 1}, {"Num": 16}]]
-                    with self.assertRaisesRegex(generator.Fragment, "prefix"):
-                        generator.Lean(ir).block(ir["session"], 1)
-                    return
-        self.fail("the mixed oracle must contain a Hold")
+        ir["stages"][0]["kind"]["Step"]["request"]["prefix"] = [[{"Num": 1}, {"Num": 16}]]
+        with self.assertRaisesRegex(generator.Fragment, "prefix"):
+            generator.Lean(ir).block(ir["session"], 1)
 
 
 

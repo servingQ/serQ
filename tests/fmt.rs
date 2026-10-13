@@ -10,14 +10,14 @@ fn formatting_preserves_program_and_comments_and_is_idempotent() {
         let C=10;         // pool capacity\n\
         // a paragraph\n\n\
         device gpu { kv cap C; }\n\
-        engine llm on gpu { tokens cap B; request () { prefill (1); } scheduler { advance running; admit waiting while (running.preempted == 0); } worker { forward (1); } }\n\
+        engine llm on gpu { tokens cap B; scheduler { advance running; admit waiting while (running.preempted == 0); } worker { forward (1); } }\n\
         pool kv on gpu { }\n\
         workload { arrive batch(1); session { turn; end; } }\n\
         server {\n\
           hold kv (cost(kv, 1))\n\
           at admission (hit = 1,\n\
           value = hit + 1) {\n\
-            llm ();\n\
+            llm (1, 1);\n\
           } cache (cost(kv, 1));\n\
         }\n\
         \n";

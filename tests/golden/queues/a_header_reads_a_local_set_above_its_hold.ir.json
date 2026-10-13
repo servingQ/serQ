@@ -1,0 +1,274 @@
+{
+  "version": 13,
+  "attrs": [
+    "cached",
+    "serial",
+    "turn_no",
+    "new",
+    "out",
+    "think",
+    "more",
+    "forced",
+    "computed",
+    "prompt",
+    "o",
+    "j",
+    "kept",
+    "known"
+  ],
+  "attr_types": [
+    "Value",
+    "Size",
+    "Size",
+    "Size",
+    "Size",
+    "Size",
+    "Size",
+    "Size",
+    "Value",
+    "Size",
+    "Size",
+    "Size",
+    "Value",
+    "Value"
+  ],
+  "sides": [
+    [
+      "Workload",
+      "Workload",
+      "Workload"
+    ],
+    [],
+    [
+      "Workload",
+      "Server",
+      "Server",
+      "Workload"
+    ],
+    [
+      "Server",
+      "Server",
+      "Server"
+    ]
+  ],
+  "observes": [],
+  "pools": [
+    {
+      "name": "kv",
+      "cap": 100.0,
+      "block": 16.0,
+      "evict": "Lru",
+      "preempt": "None",
+      "queue": null,
+      "spill": null,
+      "admit_via": null
+    }
+  ],
+  "stages": [
+    {
+      "name": "E",
+      "kind": {
+        "Step": {
+          "budget": {
+            "Num": "inf"
+          },
+          "cost": {
+            "Num": 1.0
+          },
+          "chunk": {
+            "Num": 0.0
+          },
+          "serve": {
+            "By": []
+          },
+          "memory": 0
+        }
+      }
+    }
+  ],
+  "arrival": {
+    "Batch": 1
+  },
+  "trace": null,
+  "trace_ordered": false,
+  "init": 0,
+  "turn": 1,
+  "session": 2,
+  "blocks": [
+    [
+      {
+        "Set": [
+          9,
+          {
+            "Num": 32.0
+          }
+        ]
+      },
+      {
+        "Set": [
+          10,
+          {
+            "Num": 4.0
+          }
+        ]
+      },
+      {
+        "Set": [
+          11,
+          {
+            "Num": 0.0
+          }
+        ]
+      }
+    ],
+    [],
+    [
+      "Turn",
+      {
+        "Set": [
+          12,
+          {
+            "Attr": 9
+          }
+        ]
+      },
+      {
+        "Hold": {
+          "pools": [
+            [
+              {
+                "base": 0,
+                "count": 1,
+                "index": null
+              },
+              {
+                "Cost": [
+                  {
+                    "Pool": {
+                      "base": 0,
+                      "count": 1
+                    }
+                  },
+                  {
+                    "Call": [
+                      "Max",
+                      [
+                        {
+                          "Expr": {
+                            "Attr": 12
+                          }
+                        },
+                        {
+                          "Expr": {
+                            "Binary": [
+                              "Add",
+                              {
+                                "Attr": 8
+                              },
+                              {
+                                "Num": 1.0
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    ]
+                  }
+                ]
+              },
+              null
+            ]
+          ],
+          "reuse": null,
+          "body": 3,
+          "cache": null,
+          "lease": null
+        }
+      },
+      "End"
+    ],
+    [
+      {
+        "Set": [
+          13,
+          {
+            "Call": [
+              "Max",
+              [
+                {
+                  "Expr": {
+                    "Attr": 12
+                  }
+                },
+                {
+                  "Expr": {
+                    "Binary": [
+                      "Add",
+                      {
+                        "Attr": 8
+                      },
+                      {
+                        "Num": 1.0
+                      }
+                    ]
+                  }
+                }
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "Set": [
+          12,
+          {
+            "Attr": 13
+          }
+        ]
+      },
+      {
+        "Run": {
+          "stage": {
+            "base": 0,
+            "count": 1,
+            "index": null
+          },
+          "mode": "Prefill",
+          "work": {
+            "Cost": [
+              {
+                "Stage": {
+                  "base": 0,
+                  "count": 1
+                }
+              },
+              {
+                "Attr": 13
+              }
+            ]
+          },
+          "growing": {
+            "base": 0,
+            "count": 1,
+            "index": null
+          }
+        }
+      }
+    ]
+  ],
+  "horizon": 100.0,
+  "warmup": 0.0,
+  "seed": 1,
+  "slot_cached": 0,
+  "slot_serial": 1,
+  "slot_turn": 2,
+  "slot_new": 3,
+  "slot_out": 4,
+  "slot_think": 5,
+  "slot_more": 6,
+  "slot_forced": 7,
+  "slot_computed": 8,
+  "hidden": [
+    10
+  ]
+}

@@ -15,10 +15,6 @@ fn main() {
   def in_phase() { running.decoding > 0 ? decoding : !decoding }
   engine fastertransformer on gpu {
     tokens cap bmax;
-    request (prompt, output) {
-      prefill (prompt);
-      decode (output);
-    }
     scheduler {
       advance running only (in_phase());
       admit waiting only (in_phase()) while (running.preempted == 0);
@@ -35,7 +31,7 @@ fn main() {
   }
 
   server {
-    fastertransformer (vp, vd);
+    fastertransformer (vp, vd + 1);   // the model's decode steps after the prefill's sampled token
     observe response = now - t0;
   }
 

@@ -101,8 +101,9 @@ either.
 ## The L2 cache
 
 Issue #522. An LMCache server, or a Mooncake store behind it, holds KV
-outside the engine for every engine that talks to it. At `ref/vllm`
-0c87a197, LMCache's multi-process connector:
+outside the engine for every engine that talks to it. At vLLM v0.31.0
+(the connector; `ref/vllm` 0c87a197 for the scheduler, which v0.31.0
+contains), LMCache's multi-process connector:
 
 - is asked, when the scheduler admits a request, how much of the prompt it
   holds past the GPU's prefix hit (`scheduler.py:941-954`), and answers in

@@ -7,26 +7,14 @@ fn main() {
     reqs cap 4;
     tokens cap 256;
     // --8<-- [end:engine]
-    // --8<-- [start:request]
-    request (prompt, output) {
-      set kept = prompt;
-      at admission {
-        known = max(kept, computed + 1);
-        left = budget_left(llm);
-        reused = min(cachedin(kv), floor(known - 1, blocksize(kv)));
-      }
-      set kept = known;
-      set c = min(cached, floor(known - 1, blocksize(kv)));
-      prefill (known - c) growing kv;
-      decode (output - (known - prompt)) growing kv;
-      cache (prompt + output);
-    }
-    // --8<-- [end:request]
     // --8<-- [start:schedule]
     scheduler {
       exclusive prefill each at most (128);
       admit waiting while (running.preempted == 0) each at most (128)
-        taking reqs (1), kv (min(known, reused + min(128, left))) reserve (known);
+        taking reqs (1), kv (min(request.known, request.hit + min(128, budget_left(llm))))
+          reserve (request.known)
+        reuse (floor(request.known - 1, blocksize(kv)))
+        cache (request.input + request.output - 1);
     }
     worker {
       forward (0.002 + 0.00001 * batch.tokens);
@@ -43,7 +31,7 @@ fn main() {
     init { set prompt = 256; set out = 16; }
   }
   server {
-    llm (prompt, out);
+    llm (prompt, out + 1);   // the model's `out` decode steps after the prefill's token
   }
   // --8<-- [end:workload]
 }

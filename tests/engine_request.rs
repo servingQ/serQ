@@ -1,18 +1,22 @@
-//! An engine's request (`docs/design/engine-request.md`): `request (…) {
-//! … }` with its `at admission` and `cache`, and `taking` on `admit
-//! waiting`, say in the engine what it does with one request, and the server calls it, `llm (prompt,
-//! o);`. It is parse-time sugar for the hold a server wrote, which the
-//! kernel still writes in a queue's entry: a program written either way has
-//! one IR, up to the names a queue gives its own; and what the design
-//! refuses does not link.
+//! An engine's request (`docs/design/scheduler-worker.md`, step 3): the
+//! engine keeps a request's state as vLLM does; what its admission takes is
+//! `taking … [reuse (e)] [prefix (…)] [cache (e)]` on `admit waiting`, read
+//! as `request.…`, and the server calls it, `llm (prompt, o);`. A request
+//! runs as the hold a queue's entry writes in the kernel, and what the
+//! design refuses does not link.
 
 mod common;
 
-use serq::compile_source;
-use serq::ir::{CExpr, CStmt, CtxVar, Program};
+use serq::ir::{CExpr, CStageKind, Program};
+use serq::{compile_source, run_source};
 
 fn compiled(src: &str) -> Program {
     compile_source(&common::main_source(src), &common::horizon(10.0))
+        .unwrap_or_else(|e| panic!("{e}\n{src}"))
+}
+
+fn run(src: &str) -> serq::Report {
+    run_source(&common::main_source(src), &common::horizon(100.0), None)
         .unwrap_or_else(|e| panic!("{e}\n{src}"))
 }
 
@@ -43,23 +47,17 @@ pool reqs on llm { queue fifo; }
 workload { arrive batch(3); hidden o; turn { set n = 6; set o = 3; } }
 ";
 
-/// The engine says what it does with a request.
+/// The engine admits a request with a slot and the blocks of the chunk the
+/// budget allows, if every token it has fits, and leaves it cached.
 const ENGINE: &str = "
 engine llm on gpu {
   reqs cap 2;
   tokens cap 8;
-  request (prompt, output) {
-    set kept = prompt;
-    at admission { known = max(kept, computed + 1); }
-    set kept = known;
-    prefill (known - cached) growing kv;
-    decode (output - 1 - (known - prompt)) growing kv;
-    cache (prompt + output);
-  }
   scheduler {
     advance running;
     admit waiting while (running.preempted == 0)
-      taking reqs (1), kv (min(known, budget_left(llm))) reserve (known);
+      taking reqs (1), kv (min(request.known, budget_left(llm))) reserve (request.known)
+      cache (request.input + request.output);
   }
   worker { forward (1); }
 }
@@ -68,17 +66,15 @@ engine llm on gpu {
 const SERVER: &str = "
 server {
   set t0 = now;
-  set prompt = n;
-  llm (prompt, o);
+  llm (n, o);
   observe response = now - t0;
 }
 ";
 
 /// The same, written as the hold of a queue's entry, the one place the
-/// kernel spelling of an engine's admission is still written (the server's
-/// is refused: `the_server_runs_an_engine_only_through_its_request`). The
-/// output is the session's `hidden` attribute, since the entry takes one
-/// parameter; the request reads the argument `o` it substitutes.
+/// kernel spelling of an engine's admission is still written: vLLM's
+/// request, the tokens it has (`known`) never fewer than an earlier attempt
+/// had (`kept`).
 const KERNEL: &str = "
 let bs = 4;
 queue llm : prefill {
@@ -104,8 +100,7 @@ queue llm : prefill {
 workload { arrive batch(3); hidden o; turn { set n = 6; set o = 3; } }
 server {
   set t0 = now;
-  set prompt = n;
-  llm.prefill (prompt);
+  llm.prefill (n);
   observe response = now - t0;
 }
 ";
@@ -114,46 +109,58 @@ fn program() -> String {
     format!("{DEVICE}{ENGINE}{POOLS}{SERVER}")
 }
 
-/// The IR of a program whose queue `llm` writes the kernel, with the names
-/// the queue gives its own (`llm.kv`, `llm.kept`) spelt as an engine's
-/// request keeps them (`kv`, `kept`).
-fn kernel_json(src: &str) -> String {
-    compiled(src).to_json().replace("\"llm.", "\"")
+#[test]
+fn a_request_runs_as_the_kernel_hold_does() {
+    let request = run(&program());
+    let kernel = run(KERNEL);
+    let samples = |r: &serq::Report| r.observe("response").unwrap().samples.clone();
+    assert_eq!(samples(&request), samples(&kernel));
+    let pools = |r: &serq::Report| {
+        let kv = r.pool("kv").or_else(|| r.pool("llm.kv")).unwrap();
+        (kv.admissions, kv.preemptions)
+    };
+    assert_eq!(pools(&request), pools(&kernel));
 }
 
+/// The engine records each admission: the cached tokens it read and the
+/// tokens its prefill computes; the caller reads when the request was
+/// admitted and when its first token came.
 #[test]
-fn a_request_is_the_hold_a_server_writes() {
-    let sugar = compiled(&program());
-    assert_eq!(sugar.to_json(), kernel_json(KERNEL));
-}
-
-#[test]
-fn a_mark_is_a_set_the_caller_reads_afterwards() {
+fn the_engine_records_its_requests() {
     let src = replaced(
         &program(),
-        &[
-            (
-                "prefill (known - cached) growing kv;",
-                "prefill (known - cached) growing kv;\n    mark prefilled;",
-            ),
-            (
-                "llm (prompt, o);",
-                "llm (prompt, o);\n  observe prefill_done = llm.prefilled - t0;",
-            ),
-        ],
+        &[(
+            "  observe response = now - t0;",
+            "  observe response = now - t0;\n  observe first = llm.first - t0;\n  observe admitted_at = llm.admitted - t0;\n  observe read_and_computed = llm.reused + llm.prefill;",
+        )],
     );
-    let p = compiled(&src);
-    let slot = p
-        .attrs
-        .iter()
-        .position(|a| a == "llm.prefilled")
-        .expect("the mark is an attribute");
-    let sets_now = |s: &CStmt| matches!(s, CStmt::Set(k, CExpr::Ctx(CtxVar::Now)) if *k == slot);
-    assert!(
-        p.blocks.iter().flatten().any(sets_now),
-        "no `set llm.prefilled = now`"
+    let r = run(&src);
+    let admissions = r.pool("kv").unwrap().admissions;
+    assert_eq!(r.observe("llm.prefill").unwrap().count, admissions);
+    assert_eq!(r.observe("llm.reused").unwrap().count, admissions);
+    // the latest admission's, as attributes: what it read and computes is
+    // every token the request had then, the prompt `n` (6) when unpreempted
+    let last = &r.observe("read_and_computed").unwrap().samples;
+    assert!(last.iter().all(|&t| t >= 6.0), "{last:?}");
+    let first = &r.observe("first").unwrap().samples;
+    let admitted = &r.observe("admitted_at").unwrap().samples;
+    let response = &r.observe("response").unwrap().samples;
+    for k in 0..first.len() {
+        assert!(admitted[k] < first[k] && first[k] <= response[k], "{k}");
+    }
+    refused(
+        &replaced(&program(), &[("now - t0;", "llm.prefilled - t0;")]),
+        "`llm.prefilled`",
     );
-    assert!(p.observes.iter().any(|o| o == "prefill_done"));
+}
+
+/// A request of no input decodes from its first iteration: `o` tokens,
+/// one per iteration.
+#[test]
+fn a_request_without_input_decodes_at_once() {
+    let src = replaced(&program(), &[("llm (n, o);", "llm (0, o);")]);
+    let r = run(&src);
+    assert_eq!(r.observe("response").unwrap().samples[0], 3.0);
 }
 
 #[test]
@@ -162,91 +169,157 @@ fn a_request_without_taking_holds_nothing() {
         "{DEVICE}
 engine llm on gpu {{
   tokens cap 8;
-  request (prompt) {{ prefill (prompt); }}
   scheduler {{ advance running; admit waiting while (running.preempted == 0); }}
   worker {{ forward (1); }}
 }}
 pool kv on gpu {{ block bs; }}
 workload {{ arrive batch(1); turn {{ set n = 6; }} }}
-server {{ llm (n); }}
+server {{ llm (n, 1); }}
 "
     );
-    let kernel = "
-let bs = 4;
-queue llm : prefill {
-  device gpu { kv cap 64; }
-  engine on gpu {
-    tokens cap 8;
-    scheduler { advance running; admit waiting while (running.preempted == 0); }
-    worker { forward (1); }
-  }
-  pool kv on gpu { block bs; }
-  prefill (prompt) { run llm prefill (cost(llm, prompt)); }
-}
-workload { arrive batch(1); turn { set n = 6; } }
-server { llm.prefill (n); }
-";
-    assert_eq!(compiled(&src).to_json(), kernel_json(kernel));
+    let p = compiled(&src);
+    let CStageKind::Step(st) = &p.stages[0].kind else {
+        panic!("the engine")
+    };
+    assert!(st.request.as_ref().unwrap().pools.is_empty());
+    assert_eq!(run(&src).pool("kv").unwrap().admissions, 0);
 }
 
-// What the request says, and where.
+/// The cache may read whether the request has finished: a retracted one
+/// leaves what `cache` says of it, a finished one all of it (SGLang's
+/// `cache (request.finished ? … : request.input)`, which no run of
+/// `sglang.sq` preempts). Two requests of 16 tokens that generate 24 outgrow
+/// four blocks: the second is preempted with two blocks computed, the first
+/// takes one of them, and the second, admitted again when the first ends,
+/// reads the other back if its preemption cached it, and nothing if
+/// `request.finished` was 0 there; at its end it caches its 40 tokens'
+/// two full blocks.
+#[test]
+fn the_cache_reads_whether_the_request_finished() {
+    let with = |cache: &str| {
+        format!(
+            "device gpu {{ kv cap 64; }}
+             pool kv on gpu {{ block 16; evict lru; preempt lifo; }}
+             engine e on gpu {{
+               tokens cap 64;
+               scheduler {{
+                 advance running;
+                 admit waiting while (running.preempted == 0)
+                   taking kv (request.known) reuse (floor(request.known - 1, 16)) cache ({cache});
+               }}
+               worker {{ forward (1); }}
+             }}
+             workload {{ arrive batch(2); }}
+             server {{ e (16, 24); observe after = cachedin(kv); }}"
+        )
+    };
+    let reused = |cache: &str| {
+        let r = run(&with(cache));
+        assert_eq!(r.pool("kv").unwrap().preemptions, 1, "{}", r.text());
+        (
+            r.observe("e.reused").unwrap().samples.clone(),
+            r.observe("after").unwrap().samples.clone(),
+        )
+    };
+    assert_eq!(reused("request.input + request.output").0, [0.0, 0.0, 16.0]);
+    let (again, after) = reused("request.finished ? request.input + request.output : 0");
+    assert_eq!(again, [0.0, 0.0, 0.0]);
+    assert_eq!(after.last(), Some(&32.0));
+}
 
-/// The request without its admission: no `at admission`, no `cache`.
-const UNTAKEN: &[(&str, &str)] = &[
-    (
-        "\n      taking reqs (1), kv (min(known, budget_left(llm))) reserve (known)",
-        "",
-    ),
-    (
-        "    at admission { known = max(kept, computed + 1); }\n",
-        "",
-    ),
-    ("    set kept = known;\n", ""),
-    ("prefill (known - cached)", "prefill (prompt)"),
-    (
-        "decode (output - 1 - (known - prompt))",
-        "decode (output - 1)",
-    ),
-    ("    cache (prompt + output);\n", ""),
-];
+/// The admission reads the engine's own registers, as SGLang's reservation
+/// reads its new-token ratio.
+#[test]
+fn the_admission_reads_the_engine_s_registers() {
+    let p = compiled(&replaced(
+        &program(),
+        &[
+            ("tokens cap 8;", "tokens cap 8;\n  state ratio = 2;"),
+            (
+                "    advance running;\n",
+                "    set ratio = ratio + 1;\n    advance running;\n",
+            ),
+            ("reserve (request.known)", "reserve (request.known + ratio)"),
+        ],
+    ));
+    let CStageKind::Step(st) = &p.stages[0].kind else {
+        panic!("the engine")
+    };
+    let reserve = st.request.as_ref().unwrap().pools[1].2.as_ref().unwrap();
+    assert!(reserve.any(&|e| matches!(e, CExpr::Reg(0))), "{reserve:?}");
+}
+
+/// Only the admission reads a register: the server reads none, and an
+/// admission that waits at a pool the engine does not admit is admitted
+/// apart from the engine's iteration.
+#[test]
+fn a_register_is_read_by_the_admission_alone() {
+    let with_ratio = |more: &[(&str, &str)]| {
+        let mut pairs = vec![
+            ("tokens cap 8;", "tokens cap 8;\n  state ratio = 2;"),
+            (
+                "    advance running;\n",
+                "    set ratio = ratio + 1;\n    advance running;\n",
+            ),
+        ];
+        pairs.extend_from_slice(more);
+        replaced(&program(), &pairs)
+    };
+    refused(
+        &with_ratio(&[(
+            "  observe response = now - t0;",
+            "  observe response = now - t0;\n  observe r = ratio;",
+        )]),
+        "`ratio` is an engine's register (`state`), which its schedule reads",
+    );
+    refused(
+        &with_ratio(&[(
+            "taking reqs (1), kv (min(request.known, budget_left(llm))) reserve (request.known)",
+            "taking kv (min(request.known, budget_left(llm))) reserve (request.known + ratio), reqs (1)",
+        )]),
+        "`ratio` is engine `llm`'s register",
+    );
+    // the release is the session's, as a hold's `cache` is (#592 review)
+    refused(
+        &with_ratio(&[(
+            "cache (request.input + request.output);",
+            "cache (request.input + request.output + ratio);",
+        )]),
+        "`ratio` is an engine's register (`state`), which its schedule reads; it is read in \
+         an engine's `cache` or a connector's `save`",
+    );
+}
+
+/// A request generates at least one token, as vLLM's `max_tokens` is at
+/// least 1 (sampling_params.py:612-614): a constant 0 does not link, and an
+/// output that comes to 0 stops the run (#592 review: it sampled a token).
+#[test]
+fn a_request_generates_a_token() {
+    refused(
+        &replaced(&program(), &[("  llm (n, o);", "  llm (n, 0);")]),
+        "a request to `llm` generates 0: a request generates at least one token",
+    );
+    let src = replaced(
+        &program(),
+        &[("  llm (n, o);", "  set z = 0;\n  llm (n, z);")],
+    );
+    let e = run_source(&common::main_source(&src), &common::horizon(100.0), None)
+        .expect_err("a request of no token runs");
+    assert!(e.contains("a request generates at least one token"), "{e}");
+}
+
+// What the engine writes, and where.
 
 #[test]
-fn taking_needs_a_request() {
+fn an_engine_has_no_request_block() {
     let src = replaced(
         &program(),
         &[(
-            "  request (prompt, output) {\n    set kept = prompt;\n    at admission { known = max(kept, computed + 1); }\n    set kept = known;\n    prefill (known - cached) growing kv;\n    decode (output - 1 - (known - prompt)) growing kv;\n    cache (prompt + output);\n  }\n",
-            "",
+            "  worker { forward (1); }\n",
+            "  worker { forward (1); }\n  request (prompt) { prefill (prompt); }\n",
         )],
     );
-    refused(
-        &src,
-        "`taking` sizes the admission of engine `llm`'s request",
-    );
-}
-
-#[test]
-fn a_cache_needs_what_the_admission_took() {
-    let mut pairs = UNTAKEN.to_vec();
-    pairs.pop();
-    refused(
-        &replaced(&program(), &pairs),
-        "`cache` in engine `llm`'s request, which takes nothing at admission",
-    );
-}
-
-#[test]
-fn bindings_need_an_admission() {
-    let mut pairs = UNTAKEN.to_vec();
-    pairs.remove(1);
-    pairs.remove(1);
-    pairs.remove(1);
-    pairs.remove(1);
-    let src = replaced(&program(), &pairs);
-    refused(
-        &src,
-        "`at admission` in engine `llm`'s request, which takes nothing at admission",
-    );
+    refused(&src, "an engine keeps a request's state");
 }
 
 #[test]
@@ -266,327 +339,93 @@ fn taking_names_the_engine_s_pools() {
     let src = replaced(
         &program(),
         &[(
-            "kv (min(known, budget_left(llm))) reserve (known)",
-            "kvx (min(known, budget_left(llm))) reserve (known)",
+            "kv (min(request.known, budget_left(llm)))",
+            "kvx (min(request.known, budget_left(llm)))",
         )],
     );
     refused(
         &src,
         "engine `llm`'s `taking` names `kvx`, which is no capacity of the engine or its device",
     );
-}
-
-#[test]
-fn a_request_is_admitted_once() {
-    let src = replaced(
-        &program(),
-        &[(
-            "    set kept = known;\n",
-            "    set kept = known;\n    at admission { late = known; }\n",
-        )],
-    );
-    refused(&src, "a request is admitted once: one `at admission`");
-}
-
-#[test]
-fn a_binding_goes_in_at_admission() {
-    let src = replaced(
-        &program(),
-        &[(
-            "    set kept = known;\n",
-            "    set kept = known;\n    late = known;\n",
-        )],
-    );
     refused(
-        &src,
-        "an admission binding goes in the request's `at admission { … }`",
-    );
-}
-
-#[test]
-fn the_cache_is_the_request_s_last_item() {
-    let src = replaced(
-        &program(),
-        &[(
-            "    cache (prompt + output);\n",
-            "    cache (prompt + output);\n    observe late = 1;\n",
-        )],
-    );
-    refused(&src, "a request's `cache (e);` is its last item");
-}
-
-/// The cache follows any statement, one that ends in a block too: it read
-/// as an unknown statement after an `if`'s `}`, which only a hold's own
-/// `} cache (…)` clause should be.
-#[test]
-fn the_cache_follows_a_block() {
-    // the request's cache is the joint cost over the pools taken, `reqs`
-    // and `kv`, wherever the statement before it ends
-    let joint = |src: &str| {
-        let ir = compiled(src).to_json();
-        ir.matches("\"Joint\"").count()
-    };
-    let plain = joint(&program());
-    assert_eq!(plain, 1, "the plain request's cache is joint");
-    for block in [
-        "    if (prompt > 1) { decode (output - 1 - (known - prompt)) growing kv; }\n",
-        "    if (prompt > 1) { decode (output - 1 - (known - prompt)) growing kv; } \
-         else { decode (output - 1) growing kv; }\n",
-    ] {
-        let src = replaced(
+        &replaced(
             &program(),
             &[(
-                "    decode (output - 1 - (known - prompt)) growing kv;\n",
-                block,
+                "taking reqs (1), kv (min(request.known, budget_left(llm))) reserve (request.known)\n      cache",
+                "taking cache",
             )],
-        );
-        assert_eq!(joint(&src), plain, "{block}");
-    }
-    // a nested hold's `} cache (…)` stays the hold's: two caches, the
-    // request's joint and the hold's on `reqs` alone
-    let src = replaced(
-        &program(),
-        &[(
-            "    decode (output - 1 - (known - prompt)) growing kv;\n",
-            "    hold reqs (cost(reqs, 1)) { decode (output - 1 - (known - prompt)) growing kv; } \
-             cache (cost(reqs, 1));\n",
-        )],
-    );
-    let ir = compiled(&src).to_json();
-    assert_eq!(ir.matches("\"Joint\"").count(), 1, "{ir}");
-    assert_eq!(ir.matches("\"cache\": {").count(), 2, "{ir}");
-}
-
-#[test]
-fn the_admission_reads_no_attribute_of_the_session() {
-    let src = replaced(
-        &program(),
-        &[("kv (min(known, budget_left(llm)))", "kv (min(known, n))")],
-    );
-    refused(
-        &src,
-        "engine `llm`'s admission (its request's `prefix`, its `taking` and `at admission`) reads `n`",
+        ),
+        "`taking` names the pools the admission takes first",
     );
 }
 
-/// The admission reads the engine's own registers, as SGLang's reservation
-/// reads its new-token ratio: the IR is the kernel hold that reads it. A
-/// queue entry's header reads no register, so the kernel is the entry's
-/// hold with the register's read added to its reserve in the IR.
+/// The request's names are read where the request has them: `hit` at its
+/// admission, `finished` at its release, none outside them, and `taking`
+/// reads no total of the engine's.
 #[test]
-fn the_admission_reads_the_engine_s_registers() {
-    let state = [("tokens cap 8;", "tokens cap 8;\n  state ratio = 2;")];
-    let sugar = compiled(&replaced(
-        &program(),
-        &[
-            state[0],
-            (
-                "    advance running;\n",
-                "    set ratio = ratio + 1;\n    advance running;\n",
-            ),
-            ("reserve (known);", "reserve (known + ratio);"),
-        ],
-    ));
-    let mut kernel: serde_json::Value = serde_json::from_str(&kernel_json(&replaced(
-        KERNEL,
-        &[
-            state[0],
-            (
-                "scheduler { advance running;",
-                "scheduler { set ratio = ratio + 1; advance running;",
-            ),
-        ],
-    )))
-    .unwrap();
-    assert_eq!(kernel["registers"][0]["name"], "ratio");
-    let hold = kernel["blocks"]
-        .as_array_mut()
-        .unwrap()
-        .iter_mut()
-        .flat_map(|b| b.as_array_mut().unwrap().iter_mut())
-        .find_map(|s| s.get_mut("Hold"))
-        .expect("the entry's hold");
-    // `reserve (cost(kv, known))` becomes `reserve (cost(kv, known + ratio))`
-    let known = &mut hold["pools"][1][2]["Cost"][1];
-    *known = serde_json::json!({"Binary": ["Add", known.take(), {"Reg": 0}]});
-    let sugar: serde_json::Value = serde_json::from_str(&sugar.to_json()).unwrap();
-    assert_eq!(sugar, kernel);
-}
-
-/// Only `taking` reads a register, at the engine's admission: the request's
-/// statements and its bindings are read when the session gets there, a hold
-/// whose first pool the engine does not admit is admitted apart from the
-/// engine's iteration, and a parameter named like a register would read the
-/// caller's value where the engine's was meant.
-#[test]
-fn a_register_is_read_by_the_taking_alone() {
-    let with_ratio = |more: &[(&str, &str)]| {
-        let mut pairs = vec![
-            ("tokens cap 8;", "tokens cap 8;\n  state ratio = 2;"),
-            (
-                "    advance running;\n",
-                "    set ratio = ratio + 1;\n    advance running;\n",
-            ),
-        ];
-        pairs.extend_from_slice(more);
-        replaced(&program(), &pairs)
+fn the_request_s_names_are_read_where_it_has_them() {
+    let at = |from: &str, to: &str, said: &str| {
+        refused(&replaced(&program(), &[(from, to)]), said);
     };
-    refused(
-        &with_ratio(&[(
-            "    set kept = known;\n",
-            "    set kept = known;\n    observe r = ratio;\n",
-        )]),
-        "`ratio` is an engine's register (`state`), which its schedule reads; it is read in a session statement",
+    at(
+        "cache (request.input + request.output)",
+        "cache (request.hit)",
+        "`request.hit` is read at the request's admission",
     );
-    refused(
-        &with_ratio(&[(
-            "known = max(kept, computed + 1);",
-            "known = max(kept, computed + ratio);",
-        )]),
-        "`ratio` is an engine's register (`state`), which its schedule reads",
+    at(
+        "reserve (request.known)",
+        "reserve (request.finished)",
+        "`request.finished` is read when the request gives its pools back",
     );
-    refused(
-        &with_ratio(&[(
-            "taking reqs (1), kv (min(known, budget_left(llm))) reserve (known);",
-            "taking kv (min(known, budget_left(llm))) reserve (known + ratio), reqs (1);",
-        )]),
-        "`ratio` is engine `llm`'s register, and a hold's header would read it apart from `llm`'s iteration",
+    at(
+        "forward (1)",
+        "forward (request.known)",
+        "`request.known` is the request's",
     );
-    refused(
-        &with_ratio(&[
-            (
-                "request (prompt, output)",
-                "request (prompt, output, ratio)",
-            ),
-            ("llm (prompt, o);", "llm (prompt, o, 3);"),
-        ]),
-        "engine `llm`'s request names a parameter `ratio`, which is also its register",
+    at(
+        "reserve (request.known)",
+        "reserve (running.count)",
+        "`taking` is read for one request",
     );
-}
-
-#[test]
-fn a_request_sets_no_parameter() {
-    let src = replaced(
-        &program(),
-        &[(
-            "    set kept = known;\n",
-            "    set kept = known;\n    set prompt = known;\n",
-        )],
+    at(
+        "reserve (request.known)",
+        "reserve (request.size)",
+        "`request.size`",
     );
-    refused(&src, "sets its parameter `prompt`");
-}
-
-#[test]
-fn the_program_reads_what_the_request_marks_not_its_names() {
-    let src = replaced(
-        &program(),
-        &[("observe response = now - t0;", "observe response = kept;")],
-    );
-    refused(&src, "`kept` is engine `llm`'s request's own");
-}
-
-/// Two engines' requests that name one value: one attribute would carry
-/// both.
-#[test]
-fn two_requests_do_not_share_a_name() {
-    let second = "
-device gpu2 { kv2 cap 64; }
-pool kv2 on gpu2 { block bs; }
-engine llm2 on gpu2 {
-  tokens cap 8;
-  request (prompt) {
-    set kept = prompt;
-    at admission { }
-    prefill (prompt) growing kv2;
-  }
-  scheduler { advance running; admit waiting while (running.preempted == 0) taking kv2 (prompt); }
-  worker { forward (1); }
-}
-";
-    let src = format!("{DEVICE}{ENGINE}{POOLS}{second}{SERVER}");
-    refused(
-        &src,
-        "`kept` is engine `llm`'s request's own and engine `llm2`'s too",
-    );
-}
-
-#[test]
-fn an_engine_has_one_request() {
-    let src = replaced(
-        &program(),
-        &[(
-            "  worker { forward (1); }\n",
-            "  worker { forward (1); }\n  request (prompt) { prefill (prompt); }\n",
-        )],
-    );
-    refused(&src, "`request` twice");
 }
 
 // The call.
 
 #[test]
-fn a_call_needs_the_engine_s_request() {
-    let src = replaced(
-        &program(),
-        &[
-            (
-                "  request (prompt, output) {\n    set kept = prompt;\n    at admission { known = max(kept, computed + 1); }\n    set kept = known;\n    prefill (known - cached) growing kv;\n    decode (output - 1 - (known - prompt)) growing kv;\n    cache (prompt + output);\n  }\n",
-                "",
-            ),
-            (
-                "\n      taking reqs (1), kv (min(known, budget_left(llm))) reserve (known)",
-                "",
-            ),
-        ],
+fn a_call_is_an_input_and_an_output() {
+    let src = replaced(&program(), &[("llm (n, o);", "llm (n, o, 1);")]);
+    refused(
+        &src,
+        "a request is its prompt's tokens and the tokens it generates",
     );
-    refused(&src, "engine `llm` has no `request (…) { … }`");
-}
-
-#[test]
-fn a_call_takes_the_request_s_parameters() {
-    let src = replaced(&program(), &[("llm (prompt, o);", "llm (prompt);")]);
-    refused(&src, "takes 2 argument(s), got 1");
-}
-
-#[test]
-fn an_argument_is_substituted_so_it_may_not_draw() {
-    let src = replaced(
-        &program(),
-        &[("llm (prompt, o);", "llm (prompt, ~exp(3));")],
-    );
-    refused(&src, "draws a sample");
 }
 
 /// The server runs an engine only through its request: a run of its
 /// prefill or decode, and a hold of a pool it admits (an engine capacity, or
-/// a pool `on E.gpu`), are refused with what to write instead. A hold of a
-/// pool no engine admits stays the server's, around the call.
+/// a pool `on E.gpu`), are refused. A hold of a pool no engine admits stays
+/// the server's, around the call.
 #[test]
 fn the_server_runs_an_engine_only_through_its_request() {
-    let call = "  llm (prompt, o);\n";
+    let call = "  llm (n, o);\n";
     let run = replaced(
         &program(),
-        &[(
-            call,
-            "  llm (prompt, o);\n  run llm decode (cost(llm, 1));\n",
-        )],
+        &[(call, "  llm (n, o);\n  run llm decode (cost(llm, 1));\n")],
     );
     refused(
         &run,
         "the server runs engine `llm`'s decode (`run llm decode (…)`): an engine runs only in its \
-         own request or queue; write it in `llm`'s `request (…) { … }`, which the server calls as \
-         `llm (…);`",
+         own queue's entries",
     );
     let held = replaced(
         &program(),
-        &[(call, "  hold reqs (cost(reqs, 1)) { llm (prompt, o); }\n")],
+        &[(call, "  hold reqs (cost(reqs, 1)) { llm (n, o); }\n")],
     );
-    refused(
-        &held,
-        "the server holds `reqs`, which engine `llm` admits: write the admission as `taking reqs \
-         (…)` on `llm`'s `admit waiting`, and what the hold does in `llm`'s `request (…) { … }`, \
-         which the server calls as `llm (…);`",
-    );
+    refused(&held, "the server holds `reqs`, which engine `llm` admits");
     let on_engine_device = replaced(
         &program(),
         &[
@@ -594,7 +433,7 @@ fn the_server_runs_an_engine_only_through_its_request() {
                 "pool kv on gpu { block bs; evict lru; preempt lifo; }",
                 "pool kv on llm.gpu { block bs; evict lru; preempt lifo; }",
             ),
-            (call, "  hold kv (cost(kv, 1)) { llm (prompt, o); }\n"),
+            (call, "  hold kv (cost(kv, 1)) { llm (n, o); }\n"),
         ],
     );
     refused(
@@ -608,7 +447,7 @@ fn the_server_runs_an_engine_only_through_its_request() {
                 "pool reqs on llm { queue fifo; }",
                 "pool reqs on llm { queue fifo; }\npool gate { cap 1; }",
             ),
-            (call, "  hold gate (cost(gate, 1)) { llm (prompt, o); }\n"),
+            (call, "  hold gate (cost(gate, 1)) { llm (n, o); }\n"),
         ],
     );
     compiled(&gated);
@@ -623,37 +462,7 @@ fn a_session_does_not_call_an_engine() {
             "workload { arrive batch(3); hidden o; turn { set n = 6; set o = 3; } session { turn; llm (n, o); } }",
         )],
     );
-    refused(&src, "calls engine `llm`'s request, which a `server` does");
-    // a request runs its own engine as `prefill (e)`, not in the kernel's
-    // spelling, and no other engine (#539, #552)
-    refused(
-        &replaced(
-            &program(),
-            &[(
-                "    decode (output - 1 - (known - prompt)) growing kv;\n",
-                "    run llm decode (cost(llm, output - 1 - (known - prompt))) growing kv;\n",
-            )],
-        ),
-        "engine `llm`'s request runs its own decode as `run llm decode (cost(llm, …))`: in a \
-         request it is written `decode (…);`",
-    );
-    let other = |body: &str| {
-        replaced(
-            &program(),
-            &[(
-                "pool reqs on llm { queue fifo; }\n",
-                &format!(
-                    "pool reqs on llm {{ queue fifo; }}\ndevice npu {{ }}\n\
-                     engine small on npu {{ tokens cap 8; request () {{ {body} }} \
-                     scheduler {{ advance running; admit waiting; }} worker {{ forward (1); }} }}\n"
-                ),
-            )],
-        )
-    };
-    refused(
-        &other("run llm prefill (cost(llm, 1));"),
-        "engine `small`'s request runs engine `llm`'s prefill",
-    );
+    refused(&src, "is a request to engine `llm`, which a `server` makes");
     // a queue's entry runs its own engine, and no other
     refused(
         &replaced(
@@ -673,25 +482,37 @@ fn a_session_does_not_call_an_engine() {
 
 #[test]
 fn a_queue_says_what_it_does_with_a_request_in_its_entries() {
-    let src = "
+    let queue = |admit: &str| {
+        format!(
+            "
 let bs = 4;
-queue P : prefill {
-  device gpu { kv cap 64; }
-  engine on gpu {
+queue P : prefill {{
+  device gpu {{ kv cap 64; }}
+  engine on gpu {{
     tokens cap 8;
-    request (prompt) { prefill (prompt); }
-    scheduler { advance running; admit waiting while (running.preempted == 0); }
-    worker { forward (1); }
-  }
-  prefill (prompt) { run P prefill (cost(P, prompt)); }
-}
-workload { arrive batch(1); turn { set n = 6; } }
-server { P.prefill (n); }
-";
-    refused(src, "a `request` in queue `P`'s engine");
+    scheduler {{ advance running; {admit}; }}
+    worker {{ forward (1); }}
+  }}
+  pool kv on gpu {{ }}
+  prefill (prompt) {{ run P prefill (cost(P, prompt)); }}
+}}
+workload {{ arrive batch(1); turn {{ set n = 6; }} }}
+server {{ P.prefill (n); }}
+"
+        )
+    };
+    compile_source(
+        &common::main_source(&queue("admit waiting while (running.preempted == 0)")),
+        &common::horizon(10.0),
+    )
+    .unwrap();
+    refused(
+        &queue("admit waiting while (running.preempted == 0) taking kv (1)"),
+        "`taking` in queue `P`'s engine: a queue's entries hold its pools",
+    );
 }
 
-/// An engine family is refused before its request is read: a family of
+/// An engine family is refused before what it takes is read: a family of
 /// engines is a queue family, whose entries are its requests (#539).
 #[test]
 fn an_engine_family_has_no_request() {
@@ -699,7 +520,6 @@ fn an_engine_family_has_no_request() {
 device gpu[2] { kv cap 64; }
 engine llm[2] on gpu {
   tokens cap 8;
-  request (prompt) { prefill (prompt); }
   scheduler { advance running; admit waiting while (running.preempted == 0); }
   worker { forward (1); }
 }
@@ -710,4 +530,30 @@ server { run llm[0] prefill (cost(llm, n)); }
         src,
         "engine family `llm[2]`: a family of engines is a queue family",
     );
+}
+
+/// `request.hit` is `min(cachedin(P), reuse)`, and a connector's
+/// `request.loaded` is read after it: a `reuse` that read either would read
+/// the previous admission's (#555). A `prefix` segment reads no state.
+#[test]
+fn a_bound_of_the_hit_does_not_read_it() {
+    let with = |clause: &str| {
+        replaced(
+            &program(),
+            &[(
+                "      cache (request.input + request.output);",
+                &format!("      {clause}\n      cache (request.input + request.output);"),
+            )],
+        )
+    };
+    refused(
+        &with("reuse (request.hit + 4)"),
+        "a request's `reuse` reads `request.hit`, which the admission computes from it",
+    );
+    refused(
+        &with("prefix (serial: request.hit)"),
+        "a request's `prefix` segment reads the state",
+    );
+    refused(&with("reuse (request.loaded)"), "`request.loaded`");
+    compiled(&with("reuse (request.known - 1)"));
 }

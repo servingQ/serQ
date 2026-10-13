@@ -49,7 +49,7 @@ abbrev M : Slot.Model where
   B := 128
 
 /-- What a session runs once it has arrived: `dai_sarathi.sq`'s session
-without its arrival delay (`run 1 (x.attr 10)`). -/
+without its arrival delay (`run 1 (x.attr 14)`). -/
 def arrived : Prog :=
   match Claims.DaiSarathi.prog with
   | .run _ _ _ _ k => k

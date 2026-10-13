@@ -22,7 +22,10 @@ fn engine(
     max_seqs: usize,
     schedule: &str,
 ) -> String {
-    let schedule = taking(schedule, &format!("reqs (1), kv (min(prompt, {budget}))"));
+    let schedule = taking(
+        schedule,
+        &format!("reqs (1), kv (min(request.input, {budget}))"),
+    );
     format!(
         r#"
         let bs = {bs};
@@ -30,13 +33,6 @@ fn engine(
         engine llm on gpu {{
           reqs cap {max_seqs};
           tokens cap {budget};
-          request (prompt, o, t0, s) {{
-            observe admitted_at = now - t0;
-            observe who_admitted = s;
-            prefill (prompt) growing kv;
-            observe ttft = now - t0;
-            decode (o - 1) growing kv;
-          }}
           scheduler {{ {schedule} }}
           worker {{ forward (1); }}
         }}
@@ -50,7 +46,10 @@ fn engine(
         }}
         server {{
           set t0 = now;
-          llm (prompt, o, t0, serial);
+          llm (prompt, o);
+          observe admitted_at = llm.admitted - t0;
+          observe who_admitted = serial;
+          observe ttft = llm.first - t0;
           observe done = now - t0;
           observe order = serial;
         }}
@@ -108,8 +107,8 @@ fn growth_preempts_the_last_admitted_request() {
 /// and keeps the request's output tokens, so a request preempted during
 /// decode is rescheduled with `num_tokens = prompt + outputs`
 /// (kv_cache_manager.py:515-531 reserves for that), recomputes their KV as
-/// one prefill and generates only what is left. The re-executed hold reads
-/// `computed`, the position it had computed, to say the same.
+/// one prefill and generates only what is left: the engine keeps the
+/// request's tokens.
 ///
 /// A (64 tokens, 20 out) and B (48, 40) are admitted at step 1 on 10 blocks
 /// of 16. Both grow a block at step 2 (A 5, B 4; 1 free). At step 18 A
@@ -127,17 +126,10 @@ fn a_request_preempted_during_decode_resumes_from_its_outputs() {
         engine llm on gpu {
           reqs cap 16;
           tokens cap 1000;
-          request (prompt, o) {
-            at admission { known = computed < prompt ? prompt : computed + 1; }
-            observe known_at = known;
-            prefill (known) growing kv;
-            if (known == prompt) { observe first = now; }
-            decode (o - 1 - (known - prompt)) growing kv;
-          }
           scheduler {
             advance running;
             admit waiting while (running.preempted == 0)
-              taking reqs (1), kv (min(known, 1000)) reserve (known);
+              taking reqs (1), kv (min(request.known, 1000)) reserve (request.known);
           }
           worker { forward (1); }
         }
@@ -151,6 +143,7 @@ fn a_request_preempted_during_decode_resumes_from_its_outputs() {
         }
         server {
           llm (prompt, o);
+          observe first = llm.first;
           observe done = now;
           observe order = serial;
         }
@@ -160,8 +153,9 @@ fn a_request_preempted_during_decode_resumes_from_its_outputs() {
     let kv = r.pool("kv").unwrap();
     assert_eq!(kv.preemptions, 1, "{}", r.text());
     assert_eq!(kv.stuck, 0, "{}", r.text());
+    // what each admission prefilled (no cache here): its tokens
     assert_eq!(
-        r.observe("known_at").unwrap().samples,
+        r.observe("llm.prefill").unwrap().samples,
         vec![64.0, 48.0, 65.0]
     );
     // the first token is recorded once per request: B's re-prefill at 21 is
@@ -177,49 +171,37 @@ fn a_request_preempted_during_decode_resumes_from_its_outputs() {
 }
 
 /// Three requests on 6 blocks of 16, prefill chunks of 8: A (16 tokens, 30
-/// out), C (16, 60) and B (32, 10), admitted in that order. `known` is
-/// written `known_is`; `kept` starts at the prompt, and `set_kept` opens the
-/// body.
-fn preempted_twice(set_kept: &str, known_is: &str) -> String {
-    format!(
-        r#"
+/// out), C (16, 60) and B (32, 10), admitted in that order.
+fn preempted_twice() -> String {
+    r#"
         let bs = 16;
-        device gpu {{ kv cap 6 * bs; }}
-        engine llm on gpu {{
+        device gpu { kv cap 6 * bs; }
+        engine llm on gpu {
           reqs cap 16;
           tokens cap 64;
-          request (prompt, o, s) {{
-            set kept = prompt;
-            at admission {{ known = {known_is}; }}
-            {set_kept}
-            if (s == 2) {{ observe known_at = known; observe at = computed; }}
-            prefill (known) growing kv;
-            if (known == prompt) {{ observe first = s; }}
-            decode (o - 1 - (known - prompt)) growing kv;
-          }}
-          scheduler {{
+          scheduler {
             advance running each at most (8);
             admit waiting while (running.preempted == 0) each at most (8)
-              taking reqs (1), kv (min(known, budget_left(llm))) reserve (known);
-          }}
-          worker {{ forward (1); }}
-        }}
-        pool kv on gpu {{ block bs; evict lru; preempt lifo; }}
-        pool reqs on llm {{ }}
-        workload {{ arrive batch(3);
-          init {{ set prompt = serial == 2 ? 32 : 16; set o = serial == 0 ? 30 : (serial == 1 ? 60 : 10); }}
-          session {{ turn;
+              taking reqs (1), kv (min(request.known, budget_left(llm))) reserve (request.known);
+          }
+          worker { forward (1); }
+        }
+        pool kv on gpu { block bs; evict lru; preempt lifo; }
+        pool reqs on llm { }
+        workload { arrive batch(3);
+          init { set prompt = serial == 2 ? 32 : 16; set o = serial == 0 ? 30 : (serial == 1 ? 60 : 10); }
+          session { turn;
             end;
 
-          }}
-        }}
-        server {{
-          llm (prompt, o, serial);
+          }
+        }
+        server {
+          llm (prompt, o);
           observe done = now;
-        }}
+        }
 
 "#
-    )
+    .to_string()
 }
 
 /// scheduler.py:1560-1561 again: a preemption resets `num_computed_tokens`
@@ -238,48 +220,26 @@ fn preempted_twice(set_kept: &str, known_is: &str) -> String {
 /// admitted at 62, recomputes its 33 tokens in 5 chunks and decodes the 8
 /// left: done at 74.
 ///
-/// `computed` is the position of the last preemption only, so a program
-/// that reads `known` from it alone
-/// (`computed < prompt ? prompt : computed + 1`, the vLLM examples before
-/// #475) brings B back at step 36 with its
-/// prompt (2 blocks fit): it has lost its output token, computes it again
-/// at step 39 and records its first token twice, and is preempted at 32 by
-/// the same lack of a block, to return at 62 with 33. `done` is the same in
-/// both forms, so the bug shows only in what is observed: `known_at` and
-/// `first`. Carrying the most it had, `kept`, B comes back with 33, as vLLM
-/// does.
+/// The engine keeps the tokens a request has, so B comes back with 33 both
+/// times, as vLLM does. A request that read them from the last preemption's
+/// position alone (the vLLM examples before #475) came back at step 36 with
+/// its prompt and lost its output token; since #555 no program writes it.
 #[test]
 fn a_request_preempted_twice_keeps_its_outputs() {
-    let r = run(
-        &preempted_twice("", "computed < prompt ? prompt : computed + 1"),
-        &common::horizon(1000.0),
-    );
-    assert_eq!(
-        r.observe("at").unwrap().samples,
-        vec![0.0, 32.0, 24.0, 32.0]
-    );
-    assert_eq!(
-        r.observe("known_at").unwrap().samples,
-        vec![32.0, 33.0, 32.0, 33.0]
-    );
-    assert_eq!(
-        r.observe("first").unwrap().samples,
-        vec![0.0, 1.0, 2.0, 2.0]
-    );
-    assert_eq!(r.observe("done").unwrap().samples, vec![31.0, 61.0, 74.0]);
-
-    let r = run(
-        &preempted_twice("set kept = known;", "max(kept, computed + 1)"),
-        &common::horizon(1000.0),
-    );
+    let r = run(&preempted_twice(), &common::horizon(1000.0));
     let kv = r.pool("kv").unwrap();
     assert_eq!(kv.preemptions, 2, "{}", r.text());
-    assert_eq!(r.observe("at").unwrap().samples, vec![0.0, 32.0, 24.0]);
-    assert_eq!(
-        r.observe("known_at").unwrap().samples,
-        vec![32.0, 33.0, 33.0]
-    );
-    assert_eq!(r.observe("first").unwrap().samples, vec![0.0, 1.0, 2.0]);
+    // what B (serial 2) prefilled at each admission: its prompt, then its
+    // prompt and the token it sampled, twice
+    let prefill = r.observe("llm.prefill").unwrap();
+    let b: Vec<f64> = prefill
+        .samples
+        .iter()
+        .zip(&prefill.records)
+        .filter(|(_, rec)| rec.1 == 2)
+        .map(|(v, _)| *v)
+        .collect();
+    assert_eq!(b, vec![32.0, 33.0, 33.0], "{}", r.text());
     assert_eq!(
         r.observe("done").unwrap().samples,
         vec![31.0, 61.0, 74.0],
@@ -461,10 +421,6 @@ fn serve_by_orders_residents_by_the_declared_keys() {
             "device gpu {{ kv cap 1000; }}
         engine llm on gpu {{
           tokens cap 1;
-          request (o) {{
-            prefill (1) growing kv;
-            decode (o - 1) growing kv;
-          }}
           scheduler {{
             advance running {order};
             admit waiting while (running.preempted == 0) taking kv (100);
@@ -479,7 +435,7 @@ fn serve_by_orders_residents_by_the_declared_keys() {
           }}
         }}
         server {{
-          llm (o);
+          llm (1, o);
           observe done = now;
           observe order = serial;
         }}
@@ -552,10 +508,6 @@ fn a_resident_admitted_mid_iteration_is_served_once_under_serve_by() {
         engine llm on gpu {
           reqs cap 8;
           tokens cap 2;
-          request (o) {
-            prefill (1) growing kv;
-            decode (o - 1) growing kv;
-          }
           scheduler {
             advance running by (remaining);
             admit waiting while (running.preempted == 0) taking reqs (1), kv (10);
@@ -573,7 +525,7 @@ fn a_resident_admitted_mid_iteration_is_served_once_under_serve_by() {
         }
         server {
           run gate (cost(gate, arrive));
-          llm (o);
+          llm (1, o);
           observe done = now;
           observe order = serial;
         }
@@ -605,7 +557,7 @@ fn admission_is_fcfs_with_head_of_line_blocking() {
     let r = run(&src, &common::horizon(1000.0));
     let adm = &r.observe("admitted_at").unwrap().samples;
     let order = &r.observe("who_admitted").unwrap().samples;
-    // observations are in admission order; find r2
+    // a request's admission and who it was, observed when it ends; find r2
     let i2 = order.iter().position(|&s| s == 2.0).unwrap();
     assert!(
         adm[i2] > 0.0,
@@ -701,18 +653,12 @@ fn next_turn_reuses_full_blocks_of_the_cached_prefix() {
         engine llm on gpu {
           reqs cap 16;
           tokens cap 8192;
-          request (prompt) {
-            at admission { c = min(cachedin(kv), floor((prompt - 1) / bs) * bs); }
-            observe cached_seen = cached;
-            observe prefill_tokens = prompt - min(cached, floor((prompt - 1) / bs) * bs);
-            prefill (prompt - min(cached, floor((prompt - 1) / bs) * bs)) growing kv;
-            decode (9) growing kv;
-            cache (prompt + 10);
-          }
           scheduler {
             advance running;
             admit waiting while (running.preempted == 0)
-              taking reqs (1), kv (c + min(prompt - c, 8192));
+              taking reqs (1), kv (request.hit + min(request.input - request.hit, 8192))
+              reuse (floor((request.input - 1) / bs) * bs)
+              cache (request.input + request.output);
           }
           worker { forward (1); }
         }
@@ -728,13 +674,13 @@ fn next_turn_reuses_full_blocks_of_the_cached_prefix() {
         }
         server {
           set prompt = K + 100;
-          llm (prompt);
+          llm (prompt, 10);
         }
 
 "#;
     let r = run(src, &common::horizon(1000.0));
-    let seen = &r.observe("cached_seen").unwrap().samples;
-    let pre = &r.observe("prefill_tokens").unwrap().samples;
+    let seen = &r.observe("llm.reused").unwrap().samples;
+    let pre = &r.observe("llm.prefill").unwrap().samples;
     // turn 1: nothing cached, prefill 100; context after = 110 -> 6 full
     // blocks (96) cached. turn 2: prompt 210, cached 96, prefill 114;
     // context 220 -> 13 blocks (208). turn 3: prompt 320, cached 208.
@@ -753,16 +699,12 @@ fn lru_eviction_drops_tail_blocks_first() {
         engine llm on gpu {
           reqs cap 16;
           tokens cap 8192;
-          request (prompt, s) {
-            at admission { c = min(cachedin(kv), floor((prompt - 1) / bs) * bs); }
-            if (s == 0) { observe cached0 = cached; }
-            prefill (prompt - min(cached, floor((prompt - 1) / bs) * bs)) growing kv;
-            cache (prompt);
-          }
           scheduler {
             advance running;
             admit waiting while (running.preempted == 0)
-              taking reqs (1), kv (c + min(prompt - c, 8192));
+              taking reqs (1), kv (request.hit + min(request.input - request.hit, 8192))
+              reuse (floor((request.input - 1) / bs) * bs)
+              cache (request.input);
           }
           worker { forward (1); }
         }
@@ -784,12 +726,20 @@ fn lru_eviction_drops_tail_blocks_first() {
         }
         server {
           set prompt = serial == 0 ? K + 160 : 192;
-          llm (prompt, serial);
+          llm (prompt, 1);
         }
 
 "#;
     let r = run(src, &common::horizon(1000.0));
-    let c0 = &r.observe("cached0").unwrap().samples;
+    // what session 0's admissions read of the cache
+    let reused = r.observe("llm.reused").unwrap();
+    let c0: Vec<f64> = reused
+        .samples
+        .iter()
+        .zip(&reused.records)
+        .filter(|(_, rec)| rec.1 == 0)
+        .map(|(v, _)| *v)
+        .collect();
     assert_eq!(c0, &[0.0, 128.0], "{}", r.text());
     // 2 blocks of session 0 for session 1's turn, then session 1's 12 blocks
     // (kept after it ended, as vLLM keeps them) for session 0's second turn

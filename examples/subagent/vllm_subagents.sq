@@ -39,25 +39,14 @@ fn main() {
   engine vllm on gpu {
     reqs cap max_seqs;
     tokens cap B;
-    request (prompt, output) {
-      set kept = prompt;
-      at admission {
-        known = max(kept, computed + 1);
-        reused = min(cachedin(kv), floor(known - 1, blocksize(kv)));
-      }
-      set kept = known;
-      set c = min(cached, floor(known - 1, blocksize(kv)));
-      observe hit = c > 0;
-      observe prefill_tokens = known - c;
-      prefill (known - c) growing kv;
-      decode (output - 1 - (known - prompt)) growing kv;
-      cache (prompt + output);
-    }
     scheduler {
       let threshold = running.count + waiting.count > 1 ? chunk_cap : inf;
       advance running each at most (threshold);
       admit waiting while (running.preempted == 0) each at most (threshold)
-        taking reqs (1), kv (min(known, reused + budget_left(vllm))) reserve (known);
+        taking reqs (1), kv (min(request.known, request.hit + budget_left(vllm)))
+          reserve (request.known)
+        reuse (floor(request.known - 1, blocksize(kv)))
+        cache (request.input + request.output);
     }
     worker {
       forward (c0 + max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
@@ -89,7 +78,7 @@ fn main() {
     session {
       loop {
         turn;
-        set K = prompt + o;
+        set K = K + n + o;
         if (more) {
           if (fan) { run delegate (cost(delegate, W)); } else { tool (~exp(Z)); }
         } else {
@@ -102,7 +91,6 @@ fn main() {
   // --8<-- [end:workload]
 
   server {
-    set prompt = K + n;
-    vllm (prompt, o);
+    vllm (K + n, o);
   }
 }

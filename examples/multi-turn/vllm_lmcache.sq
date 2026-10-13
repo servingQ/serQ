@@ -1,6 +1,7 @@
 // vLLM v1 with an LMCache server as its L2 KV cache (LMCacheMPConnector,
-// ref/vllm at 0c87a197, `vllm/distributed/kv_transfer/kv_connector/v1/
-// lmcache_mp_connector.py`): `multi-turn/vllm.sq` with a second, larger
+// vLLM v0.31.0, `vllm/distributed/kv_transfer/kv_connector/v1/
+// lmcache_mp_connector.py`; the scheduler at ref/vllm 0c87a197, which
+// v0.31.0 contains): `multi-turn/vllm.sq` with a second, larger
 // cache outside the GPU. When the scheduler admits a request it asks the
 // connector how much of the prompt the L2 holds past what the GPU's prefix
 // cache holds (scheduler.py:941-954), and the connector answers in whole
@@ -19,7 +20,6 @@
 // is never deferred to a later step; and the L2 entry is the session's,
 // where LMCache keys a chunk by its tokens (docs/design/kv-transfer.md).
 use "std/args";
-use "std/kvt";
 
 let B = 8192;          // max_num_batched_tokens
 let bs = 16;           // block_size
@@ -56,48 +56,35 @@ fn main() {
 
   // The whole chunks of `known` tokens the L2 holds past the `hit` the GPU
   // holds, all but the last token, which vLLM computes again after a full
-  // copy; nothing for a request once preempted (`fresh` is 0).
-  def beyond(known, hit, fresh) {
-    fresh ? max(0, min(floor(cachedin(lmc.kv), chunk), known - 1) - hit) : 0
+  // copy.
+  def beyond(known, hit) {
+    max(0, min(floor(cachedin(lmc.kv), chunk), known - 1) - hit)
   }
 
   engine vllm on gpu {
     reqs cap max_seqs;
     tokens cap B;
-    // `multi-turn/vllm.sq`'s request, and the L2: the admission allocates
-    // the blocks the copy fills (`loaded`), and the body copies them in. The
-    // body reads the L2 itself, at the instant it starts, which is the
-    // admission's.
-    request (prompt, output) {
-      set kept = prompt;
-      set fresh = 1;
-      at admission {
-        known = max(kept, computed + 1);
-        reused = min(cachedin(kv), floor(known - 1, blocksize(kv)));
-        loaded = beyond(known, reused, fresh);
-      }
-      set kept = known;
-      set hit = min(cached, floor(known - 1, blocksize(kv)));
-      set got = beyond(known, hit, fresh);
-      if (!fresh) { observe l2_after_preemption = got; }   // vLLM loads nothing then (lmcache_mp_connector.py:758)
-      set fresh = 0;
-      kvt.l2_load (lmc, kv, got, per_token = r);
-      set c = hit + got;
-      observe l2_hit = got;
-      observe prefill_tokens = known - c;
-      prefill (known - c) growing kv;
-      decode (output - 1 - (known - prompt)) growing kv;
-      kvt.l2_store (kv, lmc, floor(prompt + output, chunk), per_token = r);
-      cache (prompt + output);
+    // The LMCache connector: at a request's admission, what the L2 holds
+    // past the GPU's hit, nothing for a preempted request
+    // (lmcache_mp_connector.py:758); at its end, its tokens in whole chunks,
+    // its blocks kept until they are copied (lmcache_mp_connector.py:952).
+    connector lmc {
+      per_token (r);
+      load (request.preempted ? 0 : beyond(request.known, request.hit));
+      save (floor(request.input + request.output, chunk));
     }
     scheduler {
       // long_prefill_token_threshold, as in `multi-turn/vllm.sq`
       let threshold = running.count + waiting.count > 1 ? chunk_cap : inf;
       advance running each at most (threshold);
-      // a request that copies in takes blocks for the copy and none for
-      // new work (scheduler.py:1069-1072)
+      // `multi-turn/vllm.sq`'s admission; a request that copies in takes
+      // blocks for the copy and none for new work (scheduler.py:1069-1072)
       admit waiting while (running.preempted == 0) each at most (threshold)
-        taking reqs (1), kv (min(known, reused + (loaded > 0 ? loaded : budget_left(vllm)))) reserve (known);
+        taking reqs (1),
+          kv (min(request.known, request.hit + (request.loaded > 0 ? request.loaded : budget_left(vllm))))
+          reserve (request.known)
+        reuse (floor(request.known - 1, blocksize(kv)))
+        cache (request.input + request.output);
     }
     worker {
       forward (c0 + max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
@@ -125,7 +112,6 @@ fn main() {
   }
 
   server {
-    set prompt = K + n;
-    vllm (prompt, o);
+    vllm (K + n, o);
   }
 }

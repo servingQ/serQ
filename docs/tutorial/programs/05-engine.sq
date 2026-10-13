@@ -28,28 +28,18 @@ fn main() {
   engine llm on gpu {
     reqs cap max_seqs;
     tokens cap B;
-    // what the engine does with one request: reuse what the cache holds of
-    // the prompt, prefill the rest, decode, and leave it all cached
-    request (prompt, output) {
-      // how much of the prompt the cache could supply, in whole blocks
-      set hitmax = floor(prompt - 1, bs);
-      // read when the request is admitted: while it waits, its prefix is
-      // still evictable
-      at admission { reused = min(cachedin(kv), hitmax); }
-      // a request preempted runs again from here; count its hit once
-      set c = min(cached, floor(prompt - 1, bs));
-      if (computed == 0) { observe hit = c > 0; }
-      prefill (prompt - c) growing kv;
-      decode (output - 1) growing kv;
-      cache (prompt + output);
-    }
     scheduler {
       advance running;
       // a running slot, and the blocks of the reused prefix plus the chunk
-      // the budget left allows; only if the whole prompt fits, as vLLM's
-      // default scheduler_reserve_full_isl (config/scheduler.py:191)
+      // the budget left allows; only if every token the request has fits,
+      // as vLLM's default scheduler_reserve_full_isl (config/scheduler.py:191).
+      // It reuses what the cache holds of its tokens in whole blocks, never
+      // the last, and leaves them all cached when it ends.
       admit waiting while (running.preempted == 0)
-        taking reqs (1), kv (min(prompt, reused + budget_left(llm))) reserve (prompt);
+        taking reqs (1), kv (min(request.known, request.hit + budget_left(llm)))
+          reserve (request.known)
+        reuse (floor(request.known - 1, bs))
+        cache (request.input + request.output);
     }
     // an iteration costs whichever is larger: reading the weights and the
     // running requests' KV, or computing the tokens it scheduled

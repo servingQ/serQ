@@ -62,22 +62,6 @@ fn main() {
     tokens cap B;
     state ratio = r0;
     state backlog = 0;    // requests were waiting when the last iteration ended
-    // A retracted request keeps its output tokens and recomputes them; only
-    // its prompt stays in the cache (`fin` is 0 until the request finishes).
-    request (prompt, output) {
-      set kept = prompt;
-      set fin = 0;
-      at admission {
-        known = max(kept, computed + 1);
-        hit = min(cachedin(kv), known - 1);
-      }
-      set kept = known;
-      set c = min(cached, known - 1);
-      prefill (known - c) growing kv;
-      decode (output - 1 - (known - prompt)) growing kv;
-      set fin = 1;
-      cache (fin == 1 ? prompt + output : prompt);
-    }
     scheduler {
       // fully idle since the last iteration: no batch, and none waited
       if (running.count == 0 && backlog == 0) { set ratio = r0; }
@@ -85,11 +69,16 @@ fn main() {
       // and new prefills, alone. The reservation grows with the running
       // requests, as SGLang's test does; above the cap, the request waits
       // for some to finish (#364).
+      // A retracted request keeps its output tokens and recomputes them;
+      // only its prompt stays in the cache.
       admit waiting
-        taking reqs (1), kv (min(known, hit + budget_left(sglang)))
-          reserve (known - hit + min(M - (known - prompt), clip) + 1
-                   + ratio * min(M, clip) * holders(reqs));
-      if (batch.tokens == 0) {                           // no prefill: a decode batch
+        taking reqs (1), kv (min(request.known, request.hit + budget_left(sglang)))
+          reserve (request.known - request.hit
+                   + min(M - (request.known - request.input), clip) + 1
+                   + ratio * min(M, clip) * holders(reqs))
+        reuse (request.known - 1)
+        cache (request.finished ? request.input + request.output : request.input);
+      if (batch.tokens == 0) {                       // no prefill: a decode batch
         advance running;
         if (running.preempted > 0) {
           set ratio = max(r_min, min(1, retract_steps / M));   // the bound, see above

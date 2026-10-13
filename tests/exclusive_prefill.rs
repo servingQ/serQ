@@ -11,10 +11,10 @@ use std::process::Command;
 
 /// The schedule that takes a waiting prefill alone, in chunks of 4: the
 /// stage's `serve exclusive prefill`.
-const EXCLUSIVE: &str = "exclusive prefill each at most (4); admit waiting while (running.preempted == 0) each at most (4) taking reqs (1), kv (min(prompt, left)) reserve (prompt);";
+const EXCLUSIVE: &str = "exclusive prefill each at most (4); admit waiting while (running.preempted == 0) each at most (4) taking reqs (1), kv (min(request.input, budget_left(llm))) reserve (request.input) cache (100);";
 
 /// The default schedule, in chunks of 4.
-const MIXED: &str = "advance running each at most (4); admit waiting while (running.preempted == 0) each at most (4) taking reqs (1), kv (min(prompt, left)) reserve (prompt);";
+const MIXED: &str = "advance running each at most (4); admit waiting while (running.preempted == 0) each at most (4) taking reqs (1), kv (min(request.input, budget_left(llm))) reserve (request.input) cache (100);";
 
 fn source(schedule: &str, slot_cap: usize, kv_cap: usize) -> String {
     format!(
@@ -24,15 +24,6 @@ fn source(schedule: &str, slot_cap: usize, kv_cap: usize) -> String {
         engine llm on gpu {{
           reqs cap {slot_cap};
           tokens cap 4;
-          request (prompt, id) {{
-            at admission {{ left = budget_left(llm); }}
-            observe allocation = used(kv);
-            prefill (prompt) growing kv;
-            observe prefill_done = now;
-            observe prefill_who = id;
-            if (id == 0) {{ decode (2) growing kv; }}
-            cache (100);
-          }}
           scheduler {{ {schedule} }}
           worker {{ forward (1); }}
         }}
@@ -46,7 +37,8 @@ fn source(schedule: &str, slot_cap: usize, kv_cap: usize) -> String {
         }}
         server {{
           run gate (cost(gate, serial));
-          llm (prompt, serial);
+          // A decodes two tokens after its prefill's; B only prefills
+          llm (prompt, serial == 0 ? 3 : 1);
           observe final_cached = cachedin(kv);
           observe done = now;
           observe who = serial;
@@ -99,7 +91,6 @@ fn waiting_prefill_replaces_decodes_and_gets_the_full_budget() {
         .to_json();
     let from_ir = run_ir(&Program::from_json(&json).unwrap(), None);
     assert_eq!(r.json(), from_ir.unwrap().json());
-    assert_eq!(r.observe("allocation").unwrap().samples, [2.0, 7.0]);
     assert_eq!(r.observe("who").unwrap().samples, [1.0, 0.0]);
     assert_eq!(r.observe("done").unwrap().samples, [2.0, 4.0]);
     // The cancelled A decode reserved one token of capacity but computed
@@ -157,11 +148,6 @@ fn resident_prefill_chunks_do_not_admit_another_waiting_request() {
         engine llm on gpu {
           reqs cap 3;
           tokens cap 4;
-          request () {
-            observe admitted_at = now;
-            prefill (6) growing kv;
-            decode (1) growing kv;
-          }
           scheduler {
             exclusive prefill each at most (4);
             admit waiting while (running.preempted == 0) each at most (4)
@@ -177,7 +163,7 @@ fn resident_prefill_chunks_do_not_admit_another_waiting_request() {
 
           }
         }
-        server { llm (); }
+        server { llm (6, 2); observe admitted_at = llm.admitted; }
 
 "#;
     let r = run_source(&common::main_source(src), &common::horizon(20.0), None).unwrap();
@@ -197,14 +183,6 @@ fn an_exhausted_decode_budget_defers_waiting_prefill() {
         engine llm on gpu {
           reqs cap 3;
           tokens cap 2;
-          request (id) {
-            observe admitted_at = now;
-            if (id < 2) {
-              decode (2);
-            } else {
-              prefill (4);
-            }
-          }
           scheduler { exclusive prefill; admit waiting while (running.preempted == 0) taking reqs (1); }
           worker { forward (1); }
         }
@@ -216,7 +194,9 @@ fn an_exhausted_decode_budget_defers_waiting_prefill() {
           }
         }
         server {
-          llm (serial);
+          // A and B decode two tokens with no prefill, C prefills four
+          llm (serial < 2 ? 0 : 4, serial < 2 ? 2 : 1);
+          observe admitted_at = llm.admitted;
           observe done = now;
         }
 
@@ -229,12 +209,13 @@ fn an_exhausted_decode_budget_defers_waiting_prefill() {
 
 #[test]
 fn preemption_keeps_only_committed_progress_and_defers_readmission() {
-    // Six KV units, two 2-token prompts, three decode tokens each:
-    // t0 A:p2; t1 B:p2 displaces A's tentative decode (A holds 3, knows 2);
-    // t2 A:d1+B:d1 uses all six units; t3 A's growth preempts B at known=3.
-    // No waiting admission follows that preemption; t4 A:d1 ends at 5.
-    // B enters at 5 with known=3, recomputes in chunks 2,1, then decodes the
-    // remaining two tokens at t7,t8. Both final computed extents are 5.
+    // Six KV units, two 2-token prompts, four output tokens each (the
+    // prefill's and three decodes): t0 A:p2; t1 B:p2 displaces A's tentative
+    // decode (A holds 3); t2 A:d1+B:d1 uses all six units; t3 A's growth
+    // preempts B at position 3, which keeps the token it sampled there
+    // (known=4, as vLLM). No waiting admission follows that preemption; t4
+    // A:d1 ends at 5. B enters at 5 with known=4, recomputes in chunks 2,2,
+    // then decodes its last token at t7. Both final computed extents are 5.
     // `reuse (0)` removes hits from this arithmetic; the requested cache
     // bound is deliberately loose to expose any unexecuted KV publication.
     let src = r#"
@@ -242,23 +223,11 @@ fn preemption_keeps_only_committed_progress_and_defers_readmission() {
         engine llm on gpu {
           reqs cap 2;
           tokens cap 4;
-          request (id) {
-            at admission {
-              known = max(2, computed);
-              left = budget_left(llm);
-            }
-            if (id == 1) {
-              observe admitted_b = now;
-              observe restored_b = known;
-            }
-            prefill (known) growing kv;
-            decode (3 - (known - 2)) growing kv;
-            cache (100);
-          }
           scheduler {
             exclusive prefill each at most (2);
             admit waiting while (running.preempted == 0) each at most (2)
-              taking reqs (1), kv (min(known, left)) reserve (known) reuse (0);
+              taking reqs (1), kv (min(request.known, budget_left(llm))) reserve (request.known)
+              reuse (0) cache (100);
           }
           worker { forward (1); }
         }
@@ -271,7 +240,8 @@ fn preemption_keeps_only_committed_progress_and_defers_readmission() {
           }
         }
         server {
-          llm (serial);
+          llm (2, 4);
+          if (serial == 1) { observe admitted_b = llm.admitted; }
           observe cached_extent = cachedin(kv);
           observe done = now;
         }
@@ -280,8 +250,9 @@ fn preemption_keeps_only_committed_progress_and_defers_readmission() {
     let r = run_source(&common::main_source(src), &common::horizon(20.0), None).unwrap();
     assert_eq!(r.ended, 2, "{}", r.text());
     assert_eq!(r.pool("kv").unwrap().preemptions, 1);
-    assert_eq!(r.observe("admitted_b").unwrap().samples, [1.0, 5.0]);
-    assert_eq!(r.observe("restored_b").unwrap().samples, [2.0, 3.0]);
-    assert_eq!(r.observe("done").unwrap().samples, [5.0, 9.0]);
+    // what each admission prefilled: A, B, then B again with its tokens
+    assert_eq!(r.observe("llm.prefill").unwrap().samples, [2.0, 2.0, 4.0]);
+    assert_eq!(r.observe("admitted_b").unwrap().samples, [5.0]);
+    assert_eq!(r.observe("done").unwrap().samples, [5.0, 8.0]);
     assert_eq!(r.observe("cached_extent").unwrap().samples, [5.0, 5.0]);
 }

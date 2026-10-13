@@ -78,7 +78,8 @@ fn cache_trace_matches_the_real_scheduler() {
 /// Compare a run with the real scheduler's `out` (session, turn, sent,
 /// first, done, prompt, cached, out): every turn's first and last token and
 /// its cached tokens. The oracle records a turn's cached tokens at its first
-/// admission, and so is the run read: a turn's first sample. Returns the
+/// admission, and so is the run read: a turn's first sample of what the
+/// engine records of an admission, `vllm.reused`. Returns the
 /// cached tokens by (session, turn).
 fn agrees(r: &serq::Report, out: &str) -> std::collections::HashMap<(u64, u32), f64> {
     let get = |name: &str| {
@@ -93,7 +94,7 @@ fn agrees(r: &serq::Report, out: &str) -> std::collections::HashMap<(u64, u32), 
         get("sent"),
         get("ttft"),
         get("response"),
-        get("cached_tokens"),
+        get("vllm.reused"),
     );
     let want = std::fs::read_to_string(dir().join(out)).unwrap();
     let mut seen = std::collections::HashMap::new();

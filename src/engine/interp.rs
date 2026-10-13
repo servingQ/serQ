@@ -25,7 +25,7 @@ use crate::frontend::link::*;
 use crate::ir::Preempt;
 use crate::ir::Side;
 use crate::ir::trace::Corpus;
-use crate::ir::{CIter, ClaimKind};
+use crate::ir::{CConnector, CIter, CRequest, CStageKind, ClaimKind};
 
 /// The tolerance of a comparison of amounts that sums of floats produce
 /// (units, tokens, work): below it, two amounts are equal.
@@ -170,6 +170,53 @@ struct Hold<'p> {
     /// The pool whose allocation outlives the scope, and for how long.
     lease: Option<(usize, &'p CExpr)>,
     body: BlockId,
+    /// The hold of an engine's request: no body frame; a preemption puts
+    /// the request back in the queue, and its end goes on with the request.
+    request: bool,
+}
+
+/// A request to an engine (`CStmt::Request`), as vLLM keeps a `Request`:
+/// the tokens it has and what it has generated. Its KV position is its
+/// hold's on the engine's memory pool. A preemption keeps all of it but the
+/// position (`_preempt_request` resets `num_computed_tokens` only,
+/// scheduler.py:1561).
+#[derive(Clone, Debug)]
+struct Req<'p> {
+    stage: usize,
+    spec: Option<&'p CRequest>,
+    /// The engine's memory pool, whose position is the request's KV.
+    memory: Option<usize>,
+    input: f64,
+    output: f64,
+    /// The tokens it has: its input and what it has generated.
+    known: f64,
+    generated: f64,
+    /// `min(cachedin(memory), reuse)`, read at its latest admission.
+    hit: f64,
+    /// What its connector loads, read at its latest admission after `hit`.
+    loaded: f64,
+    /// Whether it has been preempted since its call.
+    preempted: bool,
+    /// The session's frames when a connector's block was pushed: the block
+    /// has run when they are as many again.
+    depth: usize,
+    /// Read by `cache` at a release: the request has generated its output.
+    finished: bool,
+    /// Whether the first token has been sampled.
+    first: bool,
+    phase: Phase,
+}
+
+/// Where a request stands, read when its session is ready again: admitted
+/// (or called, taking nothing), its connector loading, its prefill ended,
+/// its decode ended, its connector saving.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Phase {
+    Admitted,
+    Loading,
+    Prefill,
+    Decode,
+    Saving,
 }
 
 /// An allocation that outlived its scope (`lease P (t)`): the session's
@@ -274,6 +321,8 @@ struct Pending<'p> {
     lease: Option<(usize, &'p CExpr)>,
     body: BlockId,
     queued_at: f64,
+    /// An engine's request's admission (`Hold::request`).
+    request: bool,
 }
 
 /// A session, or a leg of one (`fork`).
@@ -343,6 +392,8 @@ struct Session<'p> {
     /// stream).
     legs: u32,
     forks: u64,
+    /// The engine request in progress (`CStmt::Request`).
+    req: Option<Req<'p>>,
 }
 
 impl Session<'_> {
@@ -1510,6 +1561,7 @@ impl<'p> Interp<'p> {
             leg: Leg::No,
             legs: 0,
             forks: 0,
+            req: None,
         };
         let sid = match self.free.pop() {
             Some(i) => {
@@ -1823,6 +1875,7 @@ impl<'p> Interp<'p> {
             leg: Leg::Of(sid),
             legs: 0,
             forks: 0,
+            req: None,
         };
         let lid = match self.free.pop() {
             Some(i) => {
@@ -2027,6 +2080,9 @@ impl<'p> Interp<'p> {
                 ));
                 return;
             }
+            if self.sessions[sid].req.is_some() && !self.request_next(sid) {
+                return;
+            }
             self.answer_if_done(sid);
             let Some(fr) = self.sessions[sid].frames.last().cloned() else {
                 self.end_session(sid);
@@ -2178,6 +2234,7 @@ impl<'p> Interp<'p> {
                         lease,
                         body: *body,
                         queued_at: self.now,
+                        request: false,
                     };
                     self.enqueue_hold(sid, pending, false);
                     return;
@@ -2210,6 +2267,66 @@ impl<'p> Interp<'p> {
                     let pl = self.session_index(r, sid);
                     let n = self.amount(e, sid, &format!("load {}", self.p.pools[pl].name));
                     self.load(sid, pl, n);
+                }
+                CStmt::Request {
+                    stage,
+                    input,
+                    output,
+                } => {
+                    let st = self.session_index(stage, sid);
+                    let name = &p.stages[st].name;
+                    let input = self.amount(input, sid, &format!("{name} input"));
+                    let output_expr = output;
+                    let output = self.amount(output, sid, &format!("{name} output"));
+                    // a request generates at least one token (vLLM's
+                    // `max_tokens`, sampling_params.py:612-614)
+                    if output < 1.0 {
+                        if self.error.is_none() {
+                            self.error = Some(format!(
+                                "`{name} (…, {})`: the request generates {output}, and a request \
+                                 generates at least one token",
+                                self.p.show_expr(output_expr)
+                            ));
+                        }
+                        return;
+                    }
+                    let CStageKind::Step(step) = &p.stages[st].kind else {
+                        unreachable!("validation: a request is to an engine")
+                    };
+                    let spec = step.request.as_deref();
+                    self.sessions[sid].req = Some(Req {
+                        stage: st,
+                        spec,
+                        memory: step.memory,
+                        input,
+                        output,
+                        known: input,
+                        generated: 0.0,
+                        hit: 0.0,
+                        loaded: 0.0,
+                        preempted: false,
+                        depth: 0,
+                        finished: false,
+                        first: false,
+                        phase: Phase::Admitted,
+                    });
+                    if spec.is_some_and(|r| !r.pools.is_empty()) {
+                        self.request_ask(sid, false);
+                        return;
+                    }
+                    // an engine that takes nothing admits the request as it
+                    // is called
+                    if let Some(r) = spec {
+                        self.observe_for(sid, r.records.reused, 0.0);
+                        self.observe_for(sid, r.records.prefill, input);
+                        let attrs = &mut self.sessions[sid].attrs;
+                        attrs[r.records.admitted] = self.now;
+                        attrs[r.records.last_reused] = 0.0;
+                        attrs[r.records.last_prefill] = input;
+                    }
+                    if !self.request_next(sid) {
+                        return;
+                    }
                 }
                 CStmt::Run {
                     stage,
@@ -2245,6 +2362,213 @@ impl<'p> Interp<'p> {
                 }
             }
         }
+    }
+
+    /// Put the session's request in the queue of the first pool its engine
+    /// takes; `front`: back from a preemption (vLLM's `prepend_request`).
+    fn request_ask(&mut self, sid: usize, front: bool) {
+        let spec = self.sessions[sid]
+            .req
+            .as_ref()
+            .and_then(|r| r.spec)
+            .expect("a request to an engine that takes");
+        let pools = self.wanted(&spec.pools, sid);
+        let chain = self.chain_of(spec.prefix.as_deref(), sid);
+        let pending = Pending {
+            pools,
+            reuse: spec.reuse.as_ref(),
+            cache: spec.cache.as_ref(),
+            chain,
+            lease: None,
+            body: 0,
+            queued_at: self.now,
+            request: true,
+        };
+        self.enqueue_hold(sid, pending, front);
+    }
+
+    /// `request.hit`: what the request may read of the cache in the
+    /// engine's memory pool, `min(cachedin(P), reuse)`, read when it is
+    /// tried for admission.
+    fn request_hit(&mut self, sid: usize) {
+        let Some(r) = &self.sessions[sid].req else {
+            return;
+        };
+        let (memory, reuse) = (r.memory, r.spec.and_then(|s| s.reuse.as_ref()));
+        let reuse = reuse.map(|e| self.eval(e, &Ctx::session(sid), Which::Session).max(0.0));
+        let cached = memory.map_or(0.0, |pl| self.own_entry_size(pl, sid));
+        let hit = reuse.map_or(cached, |b| cached.min(b));
+        self.sessions[sid].req.as_mut().expect("a request").hit = hit;
+        // what its connector loads beyond it, which `taking` reads
+        let st = self.sessions[sid].req.as_ref().expect("a request").stage;
+        let loaded = match self.connector(st).and_then(|c| c.load.as_ref()) {
+            Some((e, _)) => {
+                let what = format!("connector of {} load", self.p.stages[st].name);
+                self.amount(e, sid, &what)
+            }
+            None => 0.0,
+        };
+        self.sessions[sid].req.as_mut().expect("a request").loaded = loaded;
+    }
+
+    /// Engine `st`'s connector, if it has one.
+    fn connector(&self, st: usize) -> Option<&'p CConnector> {
+        match &self.p.stages[st].kind {
+            CStageKind::Step(step) => step.connector.as_deref(),
+            _ => None,
+        }
+    }
+
+    /// Run block `b` of engine `st`'s connector for `sid`'s request, its
+    /// attribute `slot` set to `v`, in phase `phase`.
+    fn connector_block(&mut self, sid: usize, slot: usize, v: f64, b: BlockId, phase: Phase) {
+        let s = &mut self.sessions[sid];
+        s.attrs[slot] = v;
+        let depth = s.frames.len();
+        let r = s.req.as_mut().expect("a request");
+        r.depth = depth;
+        r.phase = phase;
+        s.frames.push(Frame {
+            block: b,
+            pc: 0,
+            kind: FrameKind::Plain,
+        });
+    }
+
+    /// The request's hold and the place of the engine's memory pool in it.
+    fn request_kv(&self, sid: usize) -> Option<(usize, usize)> {
+        let s = &self.sessions[sid];
+        let memory = s.req.as_ref()?.memory?;
+        let hi = s.holds.iter().rposition(|h| h.request)?;
+        let k = s.holds[hi].pools.iter().position(|e| e.pool == memory)?;
+        Some((hi, k))
+    }
+
+    /// The request's KV position: what of its tokens has KV.
+    fn request_pos(&self, sid: usize) -> f64 {
+        self.request_kv(sid)
+            .map_or(0.0, |(hi, k)| self.sessions[sid].holds[hi].pools[k].pos)
+    }
+
+    /// The request is admitted: what the engine records of the admission.
+    fn request_admitted(&mut self, sid: usize) {
+        let pos = self.request_pos(sid);
+        let now = self.now;
+        let r = self.sessions[sid].req.as_mut().expect("a request");
+        r.phase = Phase::Admitted;
+        let (known, spec, loaded, st) = (r.known, r.spec, r.loaded, r.stage);
+        if let Some(spec) = spec {
+            self.observe_for(sid, spec.records.reused, pos);
+            self.observe_for(sid, spec.records.prefill, known - pos - loaded);
+            let attrs = &mut self.sessions[sid].attrs;
+            attrs[spec.records.admitted] = now;
+            attrs[spec.records.last_reused] = pos;
+            attrs[spec.records.last_prefill] = known - pos - loaded;
+        }
+        if let Some(c) = self.connector(st) {
+            self.observe_for(sid, c.record, loaded);
+            self.sessions[sid].attrs[c.loaded] = loaded;
+        }
+    }
+
+    /// Move the session's request on, its session ready again: start its
+    /// prefill once admitted; at the prefill's end sample a token and
+    /// decode; at the decode's end give its pools back. Returns whether the
+    /// request has ended, and the session goes on with its statements.
+    fn request_next(&mut self, sid: usize) -> bool {
+        let r = self.sessions[sid].req.clone().expect("a request");
+        // the memory pool grows with the KV position, if the request holds it
+        let grow = self
+            .request_kv(sid)
+            .map(|_| r.memory.expect("a memory pool"));
+        // a connector's block runs as the session's statements until it is done
+        if matches!(r.phase, Phase::Loading | Phase::Saving)
+            && self.sessions[sid].frames.len() > r.depth
+        {
+            return true;
+        }
+        // its connector loads first, into the hold it was admitted with
+        let load = self
+            .connector(r.stage)
+            .and_then(|c| c.load.as_ref().map(|(_, b)| (c.loaded, *b)));
+        if r.phase == Phase::Admitted
+            && r.loaded > 0.0
+            && let Some((slot, b)) = load
+        {
+            self.connector_block(sid, slot, r.loaded, b, Phase::Loading);
+            return true;
+        }
+        match r.phase {
+            Phase::Admitted | Phase::Loading if r.known > 0.0 => {
+                let work = r.known - self.request_pos(sid);
+                self.sessions[sid].req.as_mut().unwrap().phase = Phase::Prefill;
+                self.start_job(r.stage, Some(sid), work, RunMode::Prefill, grow);
+                return false;
+            }
+            // nothing to prefill: it decodes from its first iteration
+            Phase::Admitted | Phase::Loading => {}
+            Phase::Prefill => {
+                let now = self.now;
+                let req = self.sessions[sid].req.as_mut().unwrap();
+                req.generated += 1.0;
+                req.known += 1.0;
+                if !req.first {
+                    req.first = true;
+                    if let Some(spec) = req.spec {
+                        self.sessions[sid].attrs[spec.records.first] = now;
+                    }
+                }
+            }
+            Phase::Decode => {
+                let req = self.sessions[sid].req.as_mut().unwrap();
+                req.known += req.output - req.generated;
+                req.generated = req.output;
+                req.finished = true;
+                // its connector saves before its pools go back
+                // (`request_finished` keeps the blocks, lmcache_mp_connector.py:952)
+                if let Some(c) = self.connector(r.stage)
+                    && let Some((e, b)) = &c.save
+                {
+                    let what = format!("connector of {} save", self.p.stages[r.stage].name);
+                    let n = self.amount(e, sid, &what);
+                    self.connector_block(sid, c.saved, n, *b, Phase::Saving);
+                    return true;
+                }
+                return self.request_end(sid);
+            }
+            Phase::Saving => return self.request_end(sid),
+        }
+        let r = self.sessions[sid].req.as_mut().unwrap();
+        r.phase = Phase::Decode;
+        let (stage, work) = (r.stage, (r.output - r.generated).max(0.0));
+        // a request that sampled its one token at the prefill's end (a
+        // prefiller's `max_tokens = 1`) decodes nothing: its token is not
+        // the client's first unless a decode follows
+        if work > 0.0 {
+            self.decode_starts(sid);
+        }
+        self.start_job(stage, Some(sid), work, RunMode::Decode, grow);
+        false
+    }
+
+    /// The request has generated its output: it gives its pools back,
+    /// caching per `cache` with `request.finished` 1, and its session goes on.
+    fn request_end(&mut self, sid: usize) -> bool {
+        self.sessions[sid].req.as_mut().expect("a request").finished = true;
+        if let Some(hi) = self.sessions[sid].holds.iter().rposition(|h| h.request) {
+            let h = self.sessions[sid].holds.remove(hi);
+            self.end_hold(sid, &h);
+            for e in &h.pools {
+                self.sessions[sid].preempt_pos.remove(&e.pool);
+            }
+            let slot_computed = self.p.slot_computed;
+            self.sessions[sid].attrs[slot_computed] = 0.0;
+            self.sessions[sid].req = None;
+            self.try_admit_all();
+        } else {
+            self.sessions[sid].req = None;
+        }
+        true
     }
 
     /// The member a session statement's pool or stage reference names.
@@ -2453,6 +2777,9 @@ impl<'p> Interp<'p> {
             .pending
             .clone()
             .expect("queued session has a hold");
+        if pending.request {
+            self.request_hit(sid);
+        }
         for w in &mut pending.pools {
             let what = format!("hold {}", self.p.pools[w.pool].name);
             let u = self.amount(w.expr, sid, &what);
@@ -2733,13 +3060,19 @@ impl<'p> Interp<'p> {
             chain: pending.chain,
             lease: pending.lease,
             body: pending.body,
+            request: pending.request,
         });
-        s.frames.push(Frame {
-            block: pending.body,
-            pc: 0,
-            kind: FrameKind::Hold,
-        });
+        if !pending.request {
+            s.frames.push(Frame {
+                block: pending.body,
+                pc: 0,
+                kind: FrameKind::Hold,
+            });
+        }
         self.ready.push_back(sid);
+        if pending.request {
+            self.request_admitted(sid);
+        }
     }
 
     /// Evict cached prefixes until `need` more units fit, after a guard
@@ -3480,6 +3813,28 @@ impl<'p> Interp<'p> {
         let slot_computed = self.p.slot_computed;
         self.sessions[victim].attrs[slot_computed] = computed;
         self.detach(victim);
+        if self.sessions[victim].holds[hi].request {
+            // an engine's request: no body to run again. It keeps the tokens
+            // it has and what it generated, caches what it computed, and asks
+            // again. A decode has sampled a token for each one it computed:
+            // the tokens it has are its position and the one sampled there
+            if let Some(r) = self.sessions[victim].req.as_mut() {
+                r.known = r.known.max(computed + 1.0);
+                r.generated = r.known - r.input;
+                r.preempted = true;
+            }
+            let h = self.sessions[victim].holds.remove(hi);
+            for e in &h.pools {
+                let read = (&h.chain[..], e.shared, &e.path[..]);
+                self.release_units(victim, e.pool, e.alloc, e.pos, h.cache, read);
+            }
+            self.pools[pl].preemptions += 1;
+            self.preempted = true;
+            self.preempted_now += 1.0;
+            let tail = matches!(self.p.pools[pl].preempt, Preempt::By { tail: true, .. });
+            self.request_ask(victim, !tail);
+            return;
+        }
         // unwind holds inner to `hi` (nested holds), then `hi` itself. A
         // preempted hold caches what it computed, its position, not its
         // allocation: the scope's end counts a hold without a `growing` run
@@ -3554,6 +3909,7 @@ impl<'p> Interp<'p> {
             lease: lease_pool,
             body,
             queued_at: self.now,
+            request: false,
         };
         // back at the head (vLLM's `prepend_request`), or with `requeue
         // tail` at the back, a newcomer to the queue's keys and `waited`
@@ -5111,6 +5467,25 @@ impl<'p> Interp<'p> {
                 CtxVar::Demand => ctx.demand,
                 CtxVar::Served => ctx.served,
                 CtxVar::Arrived => ctx.arrived,
+                CtxVar::Input
+                | CtxVar::Output
+                | CtxVar::Known
+                | CtxVar::Hit
+                | CtxVar::Loaded
+                | CtxVar::Requeued
+                | CtxVar::Finished => match ctx.sid.and_then(|sid| self.sessions[sid].req.as_ref())
+                {
+                    Some(r) => match v {
+                        CtxVar::Input => r.input,
+                        CtxVar::Output => r.output,
+                        CtxVar::Known => r.known,
+                        CtxVar::Hit => r.hit,
+                        CtxVar::Loaded => r.loaded,
+                        CtxVar::Requeued => f64::from(u8::from(r.preempted)),
+                        _ => f64::from(u8::from(r.finished)),
+                    },
+                    None => 0.0,
+                },
             },
             CExpr::Agg(a, k) => a.of(self.observed[*k].as_deref().unwrap_or(&[])),
             CExpr::Sample(kind, args) => {

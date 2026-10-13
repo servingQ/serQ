@@ -5,28 +5,34 @@
 // hold with `computed` at the position it had reached (`resumed`). The Lean
 // semantics must give the interpreter's answer (lean/Serq/Regress.lean,
 // generated from this program's IR and `serq run`'s output; README.md).
+// An engine's request has no delay inside it, so the hold is a queue's
+// entry, which runs its engine's prefill and decode itself.
 fn main() {
-  device gpu { kv cap 48; }
-  engine llm on gpu {
-    slots cap 4;
-    tokens cap 64;
-    request (pause) {
-      observe resumed = computed;
-      prefill (16) growing kv;
-      run tool (cost(tool, pause));
-      decode (20) growing kv;
-      observe done = now;
+  queue llm : decode {
+    device gpu { kv cap 48; }
+    engine on gpu {
+      slots cap 4;
+      tokens cap 64;
+      scheduler {
+        advance running;
+        admit waiting while (running.preempted == 0);
+      }
+      worker {
+        forward (1);
+      }
     }
-    scheduler {
-      advance running;
-      admit waiting while (running.preempted == 0) taking slots (1), kv (16);
-    }
-    worker {
-      forward (1);
+    pool kv on gpu { block 16; evict lru; preempt lifo; }
+    pool slots on llm { }
+    decode (pause) {
+      hold slots (cost(slots, 1)), kv (cost(kv, 16)) {
+        observe resumed = computed;
+        run llm prefill (cost(llm, 16)) growing kv;
+        run tool (cost(tool, pause));
+        run llm decode (cost(llm, 20)) growing kv;
+        observe done = now;
+      }
     }
   }
-  pool kv on gpu { block 16; evict lru; preempt lifo; }
-  pool slots on llm { }
   stage tool : delay;
 
   workload {
@@ -35,6 +41,6 @@ fn main() {
   }
 
   server {
-    llm (d);
+    llm.decode (d);
   }
 }

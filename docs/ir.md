@@ -92,6 +92,24 @@ delay stage is `Ps(Ctx(N))`, `ps(present)` (`CStageKind::delay`).
 | `serve` | `By([keys])` in ascending order, ties by admission order, or `ExclusivePrefill`. Keys are pure expressions read at `Serve`. |
 | `memory` | Optional pool index supplying resident KV totals and preemption candidates. |
 | `iteration?` | A list of `CIter` statements, below. Omitted for the default serve-then-admit procedure. Cannot accompany `ExclusivePrefill`. |
+| `request?` | `CRequest`: how the engine admits and releases a request (`CStmt::Request`), below. Omitted when it takes nothing and caches nothing. |
+| `connector?` | `CConnector`: its KV connector to an L2, below. Omitted when it has none. |
+
+A `CRequest` is a hold's header read for a request: `pools: [(pool,
+units, reserve?)]`, `reuse?`, `prefix?` (read at `Request`) and `cache?`
+(read at `Release`). The request waits in its first pool's queue. Its
+`records` are the slots the engine writes: the observations `reused` and
+`prefill` for each admission, and the attributes `admitted` and `first`
+the caller reads after the call. A `CConnector` has `load?` and `save?`,
+each an amount and the kernel block it means: the amount is read at
+`Request` (after `Hit`) or at `Release`, stored in the attribute `loaded`
+or `saved`, and the block run while the request holds its pools — a
+load's `Run` on the L2's stage and `Load` into the request's hold on the
+engine's memory, a save's `Hold` on the L2's pool that grows by what its
+entry lacks, copies it and caches the whole. `record` is the observation
+of what each admission loaded. The blocks are roots of the block tree, not
+bodies of a statement; a load's acts on the request's hold on `memory`, a
+save's inside every pool the request takes.
 
 `By([])` means admission order. `decode first` compiles to
 `By([decoding ? 0 : 1])`. The [stage reference](api/stage.md) defines
@@ -139,6 +157,7 @@ between simulation checks and proofs.
 | `While(guard, body)` | test `guard` before each pass (exactly 0 or 1); run `body` for 1, continue after the loop for 0; reevaluate after each completed body |
 | `Branch(e, then, else)`, `Loop(body)`, `Choose {var, count, key}` (`key` a list, compared in order), `End` | control; `End` ends the session |
 | `Fork(body)`, `Join` | `Fork` runs `body` beside the session as a leg of the request: from now, with a copy of the attributes, its own holds and stream; the leases it leaves pass to the session when it ends. `Join` waits until every leg the session forked has ended |
+| `Request {stage, input, output}` | a request to step stage `stage`, `input` tokens of prompt and `output` to generate, both read at the call: the engine keeps its state (the tokens it has, its KV position on `memory`, what it has generated), admits it by its `CRequest` (none: as it is called), runs its connector's load, computes what of its tokens has no KV, samples a token when they all have it, decodes the rest, runs its connector's save, and gives its pools back; a preempted request keeps its tokens, `known = max(known, computed + 1)`, and waits again; the session goes on when the request has generated `output` |
 
 ### Types and statement authority
 
@@ -179,7 +198,8 @@ attributes must be ready at hold entry, including for early release paths.
 `Cost(target, expression)`, `Num`, `Attr(slot)`, `Ctx(var)` (`Now`, `Waited`, `Size`, `Age`, `Last`, `Queued`,
 `N`, `Ntok`, `Ndec`, `Npre`, `Nres`, `Kvb`, `Kvp`, `Attn`, `Decoding`,
 `Admission`, `Remaining`, `Position`, `Admitted`, `Preempted`, `Demand`,
-`Served`, `Arrived`: availability is defined by the moments below), `Sample(dist, args)`,
+`Served`, `Arrived`, and a request's `Input`, `Output`, `Known`, `Hit`,
+`Finished`, `Loaded`, `Requeued`: availability is defined by the moments below), `Sample(dist, args)`,
 `Reg(register)` (a stage register by index), `Call(fun, args)` (arithmetic functions, pool and stage queries such as
 `CachedIn(pool)`, `Allocated(pool)`, `BudgetLeft(stage)`), `Unary`, `Binary`, `Cond`, and
 `Agg(agg, observation)`: `Total`, `Count`, `Largest`, `Smallest` (0 when
@@ -268,6 +288,8 @@ predicates and iteration-body guards, admission gates and assignments:
 | `Given` | a claim's `given`, evaluated for each session once its `init` has run (and its preset attributes are set), on its attributes (`hidden` ones included: a claim is no scheduler) and the constants; no `Sample`, no `Call` but arithmetic | none (not `Now`) |
 | `Iteration` | a claim over the iterations of a step stage, evaluated when an iteration starts, after its batch is scheduled (where the cost is read); no `Attr`, no `Sample`, of the calls only arithmetic, `Queue`, `Busy`, `Used`, `Free`, `Holders`, `Queued`, an index a `Num` in range | `Ntok`, `Ndec`, `Npre`, `Nres`, `Kvb`, `Kvp`, `Attn`, `Demand`, `Served`, `Arrived`, `Now` |
 | `End` | a claim `at end`, evaluated once when the run ends, when no session is live; no `Attr`, no `Sample`, no `Call` but arithmetic; the only moment that reads `Agg` | `Now` |
+| `Request` | a `CRequest`'s units, `reserve`, `reuse` and `prefix`, and a `CConnector`'s load, read for the request the scheduler admits; no draw | `Input`, `Output`, `Known`, `Hit`, `Loaded`, `Requeued`, `Now` |
+| `Release` | a `CRequest`'s `cache` and a `CConnector`'s save, read when the request gives its pools back (`Finished` 0 at a preemption, 1 at its end) | `Input`, `Output`, `Known`, `Finished`, `Now` |
 
 `Demand` is the tokens the stage's residents could take in the iteration
 if the budget were unlimited: `min(1, remaining)` for a decode, the

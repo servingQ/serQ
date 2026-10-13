@@ -14,7 +14,7 @@
 
 use serde_json::{Value, json};
 
-use crate::ir::{BinOp, CEvict, CExpr, CServe, CStageKind, CStmt, CtxVar, Preempt, Program};
+use crate::ir::{BinOp, CEvict, CExpr, CRef, CServe, CStageKind, CStmt, CtxVar, Preempt, Program};
 
 fn number(p: &Program, e: &CExpr, what: &str) -> Result<f64, String> {
     match e {
@@ -187,13 +187,19 @@ pub fn vllm(p: &Program) -> Result<Value, String> {
         count(block, &format!("pool `{}`'s block", kvp.name))?,
         count(blocks, &format!("pool `{}`'s blocks", kvp.name))?,
     );
-    // a hold that caches its KV at release keeps a prefix the next turn reuses
-    let prefix_caching = p.blocks.iter().flatten().any(|s| match s {
-        CStmt::Hold { pools, cache, .. } => {
-            cache.is_some() && pools.iter().any(|(r, _, _)| r.base == kv)
-        }
-        _ => false,
-    });
+    // an admission, or a hold, that caches its KV at release keeps a prefix
+    // the next turn reuses
+    let caches = |pools: &[(CRef, CExpr, Option<CExpr>)], cache: &Option<CExpr>| {
+        cache.is_some() && pools.iter().any(|(r, _, _)| r.base == kv)
+    };
+    let prefix_caching = step
+        .request
+        .as_ref()
+        .is_some_and(|r| caches(&r.pools, &r.cache))
+        || p.blocks.iter().flatten().any(|s| match s {
+            CStmt::Hold { pools, cache, .. } => caches(pools, cache),
+            _ => false,
+        });
     let mut out = json!({
         "target": "vllm",
         "engine": engine.name,

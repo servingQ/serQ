@@ -49,7 +49,11 @@
   "Value",
   "Size",
   "Size",
-  "Size"
+  "Size",
+  "Value",
+  "Value",
+  "Value",
+  "Value"
  ],
  "attrs": [
   "cached",
@@ -63,7 +67,11 @@
   "computed",
   "n",
   "o",
-  "t0"
+  "t0",
+  "llm.admitted",
+  "llm.first",
+  "llm.reused",
+  "llm.prefill"
  ],
  "blocks": [
   [
@@ -120,122 +128,25 @@
     }
    },
    {
-    "Hold": {
-     "body": 3,
-     "cache": null,
-     "lease": null,
-     "pools": [
-      [
+    "Request": {
+     "input": {
+      "Attr": 9
+     },
+     "output": {
+      "Binary": [
+       "Add",
        {
-        "base": 1,
-        "count": 1,
-        "index": null
+        "Attr": 10
        },
        {
-        "Cost": [
-         {
-          "Pool": {
-           "base": 1,
-           "count": 1
-          }
-         },
-         {
-          "Num": 1.0
-         }
-        ]
-       },
-       null
-      ],
-      [
-       {
-        "base": 0,
-        "count": 1,
-        "index": null
-       },
-       {
-        "Cost": [
-         {
-          "Pool": {
-           "base": 0,
-           "count": 1
-          }
-         },
-         {
-          "Call": [
-           "Min",
-           [
-            {
-             "Expr": {
-              "Attr": 9
-             }
-            },
-            {
-             "Expr": {
-              "Call": [
-               "BudgetLeft",
-               [
-                {
-                 "Stage": {
-                  "base": 0,
-                  "count": 1,
-                  "index": null
-                 }
-                }
-               ]
-              ]
-             }
-            }
-           ]
-          ]
-         }
-        ]
-       },
-       {
-        "Cost": [
-         {
-          "Pool": {
-           "base": 0,
-           "count": 1
-          }
-         },
-         {
-          "Attr": 9
-         }
-        ]
+        "Num": 1.0
        }
       ]
-     ],
-     "reuse": null
-    }
-   },
-   "End"
-  ],
-  [
-   {
-    "Run": {
-     "growing": {
-      "base": 0,
-      "count": 1,
-      "index": null
      },
-     "mode": "Prefill",
      "stage": {
       "base": 0,
       "count": 1,
       "index": null
-     },
-     "work": {
-      "Cost": [
-       {
-        "Stage": {
-         "base": 0,
-         "count": 1
-        }
-       },
-       {
-        "Attr": 9
-       }
-      ]
      }
     }
    },
@@ -246,7 +157,7 @@
       "Binary": [
        "Sub",
        {
-        "Ctx": "Now"
+        "Attr": 13
        },
        {
         "Attr": 11
@@ -256,41 +167,14 @@
     ]
    },
    {
-    "Run": {
-     "growing": {
-      "base": 0,
-      "count": 1,
-      "index": null
-     },
-     "mode": "Decode",
-     "stage": {
-      "base": 0,
-      "count": 1,
-      "index": null
-     },
-     "work": {
-      "Cost": [
-       {
-        "Stage": {
-         "base": 0,
-         "count": 1
-        }
-       },
-       {
-        "Attr": 10
-       }
-      ]
-     }
-    }
-   },
-   {
     "Observe": [
      1,
      {
       "Ctx": "Now"
      }
     ]
-   }
+   },
+   "End"
   ]
  ],
  "hidden": [],
@@ -298,7 +182,9 @@
  "init": 0,
  "observes": [
   "ttft",
-  "done"
+  "done",
+  "llm.reused",
+  "llm.prefill"
  ],
  "pools": [
   {
@@ -348,13 +234,9 @@
    "Workload",
    "Server",
    "Server",
+   "Server",
+   "Server",
    "Workload"
-  ],
-  [
-   "Server",
-   "Server",
-   "Server",
-   "Server"
   ]
  ],
  "slot_cached": 0,
@@ -436,6 +318,67 @@
       ]
      },
      "memory": 0,
+     "request": {
+      "pools": [
+       [
+        {
+         "base": 1,
+         "count": 1,
+         "index": null
+        },
+        {
+         "Num": 1.0
+        },
+        null
+       ],
+       [
+        {
+         "base": 0,
+         "count": 1,
+         "index": null
+        },
+        {
+         "Call": [
+          "Min",
+          [
+           {
+            "Expr": {
+             "Ctx": "Input"
+            }
+           },
+           {
+            "Expr": {
+             "Call": [
+              "BudgetLeft",
+              [
+               {
+                "Stage": {
+                 "base": 0,
+                 "count": 1,
+                 "index": null
+                }
+               }
+              ]
+             ]
+            }
+           }
+          ]
+         ]
+        },
+        {
+         "Ctx": "Input"
+        }
+       ]
+      ],
+      "records": {
+       "admitted": 12,
+       "first": 13,
+       "last_prefill": 15,
+       "last_reused": 14,
+       "prefill": 3,
+       "reused": 2
+      }
+     },
      "serve": {
       "By": []
      }

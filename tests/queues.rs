@@ -422,11 +422,14 @@ fn an_admission_binding_sees_the_entry_only() {
 }
 
 /// A local the entry sets above a hold is the header's, as what an engine's
-/// request sets above its `at admission` is (#475): the entry is the
-/// request, its `kept` and `known` renamed `E.kept` and `E.known`.
+/// request block set above its `at admission` was (#475): the entry is that
+/// request, its `kept` and `known` renamed `E.kept` and `E.known`. The
+/// engine keeps a request's state since #555, so the block no longer links:
+/// `tests/golden/queues/a_header_reads_a_local_set_above_its_hold.ir.json` is
+/// what it compiled to, kept as the reference.
 #[test]
 fn a_header_reads_a_local_set_above_its_hold() {
-    same_ir(
+    same_ir_as_flat(
         &format!(
             "queue gw : gateway {{ route {{ E.decode (prompt); }} }}
              queue E : decode {{
@@ -442,23 +445,7 @@ fn a_header_reads_a_local_set_above_its_hold() {
              }}
              {WORKLOAD}"
         ),
-        &format!(
-            "device gpu {{ kv cap 100; }} pool kv on gpu {{ block 16; }}
-             engine E on gpu {{
-               tokens cap inf;
-               request (prompt) {{
-                 set kept = prompt;
-                 at admission {{ known = max(kept, computed + 1); }}
-                 set kept = known;
-                 prefill (known) growing kv;
-               }}
-               scheduler {{ advance running; admit waiting while (running.preempted == 0) taking kv (known); }}
-               worker {{ forward (1); }}
-             }}
-             server {{ E (prompt); }}
-             {}",
-            WORKLOAD.replace("server { gw.route(); }", "")
-        ),
+        "a_header_reads_a_local_set_above_its_hold",
         &[("E.kv", "kv"), ("E.kept", "kept"), ("E.known", "known")],
     );
 }
@@ -1160,6 +1147,21 @@ fn an_entry_reads_every_context_variable_as_the_languages() {
     };
     for (v, _) in serq::frontend::link::CONTEXT_VARS {
         if v == "now" {
+            continue;
+        }
+        // a request's names are an engine's values, read as `request.…` in
+        // its `taking` and `cache` alone
+        if v.starts_with("request.") {
+            let e = compile_source(
+                &common::main_source(&program(&format!("set zz = {v};"), "")),
+                &common::horizon(100.0),
+            )
+            .expect_err(v)
+            .to_string();
+            assert!(
+                e.contains("`request.…` is a value of an engine"),
+                "{v}: {e}"
+            );
             continue;
         }
         let cases = [

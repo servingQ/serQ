@@ -11,7 +11,11 @@
     "forced",
     "computed",
     "s",
-    "o"
+    "o",
+    "llm.admitted",
+    "llm.first",
+    "llm.reused",
+    "llm.prefill"
   ],
   "attr_types": [
     "Value",
@@ -24,7 +28,11 @@
     "Size",
     "Value",
     "Size",
-    "Size"
+    "Size",
+    "Value",
+    "Value",
+    "Value",
+    "Value"
   ],
   "sides": [
     [
@@ -47,7 +55,9 @@
   "observes": [
     "output_tokens",
     "vol",
-    "response"
+    "response",
+    "llm.reused",
+    "llm.prefill"
   ],
   "pools": [
     {
@@ -131,7 +141,18 @@
           "serve": {
             "By": []
           },
-          "memory": null
+          "memory": null,
+          "request": {
+            "pools": [],
+            "records": {
+              "reused": 3,
+              "prefill": 4,
+              "admitted": 11,
+              "first": 12,
+              "last_reused": 13,
+              "last_prefill": 14
+            }
+          }
         }
       }
     }
@@ -320,27 +341,18 @@
     ],
     [
       {
-        "Run": {
+        "Request": {
           "stage": {
             "base": 0,
             "count": 1,
             "index": null
           },
-          "mode": "Decode",
-          "work": {
-            "Cost": [
-              {
-                "Stage": {
-                  "base": 0,
-                  "count": 1
-                }
-              },
-              {
-                "Attr": 10
-              }
-            ]
+          "input": {
+            "Num": 0.0
           },
-          "growing": null
+          "output": {
+            "Attr": 10
+          }
         }
       }
     ]

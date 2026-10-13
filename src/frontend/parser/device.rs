@@ -32,6 +32,8 @@ pub(super) struct EngineDecl {
     pub device: String,
     pub stage: usize,
     pub caps: Vec<Capacity>,
+    /// Whether it has a `connector`, whose records its caller may read.
+    pub connector: bool,
 }
 
 /// What `pool NAME on …` names: the device or engine that owns the
@@ -90,7 +92,7 @@ const AS_THEY_STAND: &[&str] = &["tokens cap", "each at most", "only", "by", "sc
 /// the residents' before the batch is formed and as the batch's in `cost`
 /// (#416), so the engine names them twice. Within a schedule, `only`, `by`
 /// and `each at most` are read at their own moments, not the statements'.
-pub const ENGINE_VALUES: [(&str, &str, &[&str]); 13] = [
+pub const ENGINE_VALUES: [(&str, &str, &[&str]); 20] = [
     ("running.count", "residents", AS_THEY_STAND),
     ("running.decoding", "decoders", AS_THEY_STAND),
     ("running.kv_decode", "kv_decode", AS_THEY_STAND),
@@ -104,6 +106,13 @@ pub const ENGINE_VALUES: [(&str, &str, &[&str]); 13] = [
     ("batch.kv_decode", "kv_decode", &["worker"]),
     ("batch.kv_prefill", "kv_prefill", &["worker"]),
     ("batch.attention", "attention", &["worker"]),
+    ("request.input", "request.input", &["taking", "cache"]),
+    ("request.output", "request.output", &["taking", "cache"]),
+    ("request.known", "request.known", &["taking", "cache"]),
+    ("request.hit", "request.hit", &["taking"]),
+    ("request.finished", "request.finished", &["cache"]),
+    ("request.loaded", "request.loaded", &["taking"]),
+    ("request.preempted", "request.preempted", &["taking"]),
 ];
 
 /// The name an engine reads the kernel's context variable `var` by in
@@ -119,7 +128,29 @@ pub fn engine_name(var: &str, clause: &str) -> Option<&'static str> {
 /// Why `value` of `ENGINE_VALUES` is not read in `clause`.
 fn not_read_in(value: &str, clause: &str) -> String {
     let (list, field) = value.split_once('.').expect("a list's value");
-    if field == "preempted" || field == "admitted" {
+    if list == "request" {
+        if field == "hit" {
+            "`request.hit` is read at the request's admission, in `taking` and a connector's \
+             `load`"
+                .into()
+        } else if field == "loaded" {
+            "`request.loaded` is what the connector's `load` read at the request's admission, \
+             read in `taking`"
+                .into()
+        } else if field == "finished" {
+            "`request.finished` is read when the request gives its pools back, in `cache`".into()
+        } else {
+            format!(
+                "`{value}` is the request's, read at its admission (`taking`, `reuse`, \
+                 `prefix`) and in its `cache`, not in `{clause}`"
+            )
+        }
+    } else if clause == "taking" || clause == "cache" {
+        format!(
+            "`{clause}` is read for one request, which reads `request.…`, the session's \
+             attributes and the engine's pools, not `{value}`"
+        )
+    } else if field == "preempted" || field == "admitted" {
         format!(
             "`{value}` is what the iteration's schedule did, read in its `if`, `while` and \
              `set`, not in `{clause}`"
@@ -392,21 +423,21 @@ impl Parser {
             memory: None,
             schedule: Schedule::Procedure(None),
             state: vec![],
+            request: None,
+            connector: None,
         };
         let mut caps: Vec<Capacity> = vec![];
         let (mut tokens, mut schedule, mut execute) = (false, false, false);
-        let mut request: Option<request::RequestSrc> = None;
         self.takings.clear();
         while *self.peek() != Tok::RBrace {
             let k_at = self.pos;
             if self.is_kw("request") {
-                if request.is_some() {
-                    return self.err_at(
-                        k_at,
-                        "`request` twice: an engine says once what it does with one",
-                    );
-                }
-                request = Some(self.request_src(&device)?);
+                return self.err(
+                    "an engine keeps a request's state, as vLLM's scheduler does: no `request \
+                     (…) { … }` says what it does with one. What its admission takes is \
+                     `taking … [reuse (e)] [prefix (…)] [cache (e)]` on `admit waiting`, and the \
+                     server calls `E (input, output);` (docs/design/scheduler-worker.md)",
+                );
             } else if self.eat_kw("tokens") {
                 if tokens {
                     return self.err_at(k_at, "`tokens cap` twice: an iteration has one budget");
@@ -437,6 +468,11 @@ impl Parser {
                 }
                 schedule = true;
                 self.schedule(&name, &mut s)?;
+            } else if self.eat_kw("connector") {
+                if s.connector.is_some() {
+                    return self.err_at(k_at, "`connector` twice: an engine has one KV connector");
+                }
+                s.connector = Some(self.connector()?);
             } else if self.eat_kw("worker") {
                 if execute {
                     return self.err_at(k_at, "`worker` twice: an engine has one worker");
@@ -489,7 +525,7 @@ impl Parser {
                 if !self.eat_kw("cap") {
                     return self.err(format!(
                         "an engine holds capacities (`{r} cap expr;`), `tokens cap`, `granule`, \
-                         `state`, `scheduler` and `worker`; found {}",
+                         `state`, `connector`, `scheduler` and `worker`; found {}",
                         self.peek()
                     ));
                 }
@@ -524,7 +560,20 @@ impl Parser {
             .chain(&self.devices[dev].caps)
             .map(|c| c.name.clone())
             .collect();
-        let registers: Vec<String> = s.state.iter().map(|(n, _)| n.clone()).collect();
+        // a queue's engine admits by its entries, which hold its pools
+        let in_queue = device.contains('.');
+        let taking = self.engine_request(&name, &takeable)?;
+        if !in_queue {
+            s.request = Some(taking);
+        } else if !taking.pools.is_empty() {
+            return self.err_at(
+                at,
+                format!(
+                    "`taking` in queue `{}`'s engine: a queue's entries hold its pools",
+                    device.split('.').next().unwrap_or_default()
+                ),
+            );
+        }
         self.stages.push(name.clone());
         self.engines.push(EngineDecl {
             name: name.clone(),
@@ -532,6 +581,7 @@ impl Parser {
             device,
             stage: prog.stages.len(),
             caps,
+            connector: s.connector.is_some(),
         });
         prog.stages.push(StageDecl {
             span,
@@ -540,7 +590,85 @@ impl Parser {
             array: dev_array,
             kind: StageKind::Step(Box::new(s)),
         });
-        self.engine_request(&name, request, &takeable, registers)
+        Ok(())
+    }
+
+    /// `C { per_token (r); [load (n);] [save (n);] }` of an engine's
+    /// `connector`: the L2 queue `C` it loads a request's KV from at the
+    /// request's admission (`n` read as `taking` is, `request.hit` included)
+    /// and saves it to at its end (`n` read as `cache` is), each token's copy
+    /// taking `r` at `C`'s bandwidth (`ir::CConnector`).
+    fn connector(&mut self) -> PResult<ConnectorSpec> {
+        let c_at = self.pos;
+        let span = Some(self.span());
+        let c = self.ident()?;
+        let Some((stage, pool)) = self.cache_of(&c).filter(|(name, _)| *name == c) else {
+            return self.err_at(
+                c_at,
+                format!("`connector {c}`: `{c}` is not a queue that plays `l2` declared above"),
+            );
+        };
+        let r = |name: String| Ref {
+            span,
+            name,
+            index: None,
+        };
+        self.expect(&Tok::LBrace)?;
+        let (mut per_token, mut load, mut save) = (None, None, None);
+        while *self.peek() != Tok::RBrace {
+            let k_at = self.pos;
+            let (slot, clause) = if self.eat_kw("per_token") {
+                (&mut per_token, "per_token")
+            } else if self.eat_kw("load") {
+                (&mut load, "taking")
+            } else if self.eat_kw("save") {
+                (&mut save, "cache")
+            } else {
+                return self.err(format!(
+                    "a connector takes `per_token (r);`, `load (n);` and `save (n);`; found {}",
+                    self.peek()
+                ));
+            };
+            if slot.is_some() {
+                return self.err_at(k_at, "a connector's clause twice");
+            }
+            self.expect(&Tok::LParen)?;
+            let e_at = self.pos;
+            let e = self.engine_expr(clause, |p| p.expr())?;
+            // a save's copy runs in the L2's hold: `cached` and `computed`
+            // there are the L2 entry's, not the request's
+            if clause == "per_token"
+                && let Some(w) = SCHEDULER_ATTRS.into_iter().find(|w| expr_reads(&e, w))
+            {
+                return self.err_at(
+                    e_at,
+                    format!(
+                        "`per_token` is read as a copy starts, where `{w}` would be the L2 \
+                         entry's, not the request's"
+                    ),
+                );
+            }
+            *slot = Some(e);
+            self.expect(&Tok::RParen)?;
+            self.expect(&Tok::Semi)?;
+        }
+        self.expect(&Tok::RBrace)?;
+        let Some(per_token) = per_token else {
+            return self.err_at(
+                c_at,
+                "a connector needs `per_token (r);`: the time a token's copy takes",
+            );
+        };
+        if load.is_none() && save.is_none() {
+            return self.err_at(c_at, "a connector needs `load (n);`, `save (n);` or both");
+        }
+        Ok(ConnectorSpec {
+            stage: r(stage),
+            pool: r(pool),
+            per_token,
+            load,
+            save,
+        })
     }
 
     /// `{ forward (T); }` of an engine on `devices[dev]`: what the worker does
@@ -881,7 +1009,7 @@ impl Parser {
     /// `read` as `clause` of an engine, which reads `running.…`, `waiting.…`
     /// and `batch.…` as `ENGINE_VALUES` says, and no bare total; the clause
     /// outside it is restored after.
-    fn engine_expr<T>(
+    pub(super) fn engine_expr<T>(
         &mut self,
         clause: &'static str,
         read: impl FnOnce(&mut Self) -> PResult<T>,

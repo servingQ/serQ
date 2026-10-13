@@ -7,6 +7,15 @@ cd "$(dirname "$0")/.."
 REV=0c87a197b856a25670cc711456533e5ef9f94d9f
 URL=https://github.com/vllm-project/vllm.git
 
+# The release tags some files are cited at instead of REV (the LMCache
+# connector at v0.31.0: scripts/check_citations.py, RELEASED), fetched as
+# tags so that `git show TAG:path` reads them.
+fetch_releases() {
+  for tag in $(scripts/check_citations.py --releases); do
+    git -C ref/vllm fetch -q --depth 1 "$@" origin "refs/tags/$tag:refs/tags/$tag"
+  done
+}
+
 # `--sparse` fetches only the revision and only the files the citations name
 # (scripts/check_citations.py --paths, so the two cannot drift): 4 MB and two
 # seconds against 228 MB and thirteen for the whole history. CI wants that;
@@ -19,6 +28,7 @@ if [ "${1:-}" = "--sparse" ]; then
   git -C ref/vllm fetch -q --depth 1 --filter=blob:none origin "$REV"
   git -C ref/vllm sparse-checkout set --cone $(scripts/check_citations.py --paths)
   git -C ref/vllm -c advice.detachedHead=false checkout -q FETCH_HEAD
+  fetch_releases --filter=blob:none
   echo "OK: ref/vllm at ${REV:0:8} (sparse)"
   exit 0
 fi
@@ -27,4 +37,5 @@ if [ ! -d ref/vllm/.git ]; then
   git clone -q --filter=blob:none "$URL" ref/vllm
 fi
 git -C ref/vllm -c advice.detachedHead=false checkout -q "$REV"
+fetch_releases
 echo "OK: ref/vllm at ${REV:0:8}"

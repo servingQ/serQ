@@ -573,6 +573,57 @@ impl Walker<'_> {
                         self.last_flow = Some(k);
                     }
                 }
+                // an engine's request: the hold of what its engine takes,
+                // around the engine's prefill and decode
+                CStmt::Request { stage, .. } => {
+                    let pools = match &self.p.stages[stage.base].kind {
+                        CStageKind::Step(st) => st
+                            .request
+                            .as_ref()
+                            .map(|r| r.pools.clone())
+                            .unwrap_or_default(),
+                        _ => vec![],
+                    };
+                    let id = self.next_hold;
+                    if !pools.is_empty() {
+                        self.next_hold += 1;
+                        self.net.holds.push(HoldSpan {
+                            queue: Some(pools[0].0.base),
+                            visits: vec![],
+                        });
+                        for (r, units, _) in &pools {
+                            let encloses = !self.value(units).is_some_and(|(v, _)| v == 0.0);
+                            self.holds.push((r.base, id, encloses));
+                        }
+                    }
+                    // its connector's load, then the engine, then its save,
+                    // inside the request's hold
+                    let connector = match &self.p.stages[stage.base].kind {
+                        CStageKind::Step(st) => st.connector.clone(),
+                        _ => None,
+                    };
+                    if let Some((_, b)) = connector.as_ref().and_then(|c| c.load.as_ref()) {
+                        self.walk(*b);
+                    }
+                    self.last_flow = None;
+                    let label = self.p.show_stage_ref(&stage);
+                    let note = stage.index.as_ref().and_then(|i| self.claim_choose(i));
+                    self.visit_stage(stage.base, label, note);
+                    let node = self.net.node_of(stage.base).unwrap();
+                    self.place(node, &stage);
+                    let n = &mut self.net.nodes[node];
+                    for mode in [RunMode::Prefill, RunMode::Decode] {
+                        if !n.modes.contains(&mode) {
+                            n.modes.push(mode);
+                        }
+                    }
+                    if let Some((_, b)) = connector.as_ref().and_then(|c| c.save.as_ref()) {
+                        self.walk(*b);
+                    }
+                    if !pools.is_empty() {
+                        self.holds.retain(|&(_, h, _)| h != id);
+                    }
+                }
                 CStmt::Hold {
                     pools, body, lease, ..
                 } => {
@@ -1680,6 +1731,22 @@ pub(crate) fn cache_targets(p: &Program) -> BTreeMap<usize, Vec<usize>> {
                         f.grown.push(g.base);
                     }
                 }
+                // an engine's request caches in its memory pool, which grows
+                // with it, or in every pool it takes when it holds no memory;
+                // it has no body, so it is keyed past every block
+                CStmt::Request { stage, .. } => {
+                    if let CStageKind::Step(st) = &p.stages[stage.base].kind
+                        && let Some(r) = &st.request
+                        && r.cache.is_some()
+                    {
+                        let pools: Vec<usize> = r.pools.iter().map(|(q, _, _)| q.base).collect();
+                        let targets = match st.memory {
+                            Some(m) if pools.contains(&m) => vec![m],
+                            _ => pools,
+                        };
+                        out.insert(p.blocks.len() + stage.base, targets);
+                    }
+                }
                 CStmt::Branch(_, t, e) => {
                     walk(p, *t, stack, out);
                     walk(p, *e, stack, out);
@@ -1693,6 +1760,10 @@ pub(crate) fn cache_targets(p: &Program) -> BTreeMap<usize, Vec<usize>> {
     }
     let mut out = BTreeMap::new();
     walk(p, p.session, &mut vec![], &mut out);
+    // a connector's save is a hold on its L2's pool that caches
+    for b in p.connectors().flat_map(|(_, c)| c.blocks()) {
+        walk(p, b, &mut vec![], &mut out);
+    }
     out
 }
 

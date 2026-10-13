@@ -28,6 +28,8 @@ an `observe`, a `stage`, a `pool`, a `device`, an `engine`, a `queue`, a
 | `Given` | a claim's `given` | for each session, once its `init` has run |
 | `Iteration` | a claim over iterations | when an iteration starts, where the cost is read |
 | `End` | a claim `at end` | once, when the run ends |
+| `Request` | an engine's `taking`, `reuse` and `prefix`; its connector's `load` | for one request, when the scheduler admits it |
+| `Release` | an engine's `cache`; its connector's `save` | for one request, when it gives its pools back |
 
 ## Variables
 
@@ -56,6 +58,12 @@ an `observe`, a `stage`, a `pool`, a `device`, an `engine`, a `queue`, a
 | `demand` | number | `Iteration` | tokens the residents could take this iteration with no budget: `min(1, remaining)` per decode, the remaining work up to the `chunk` per prefill, over the residents after the batch is scheduled (those an `only` leaves out included) |
 | `served` | number | `Iteration` | tokens the stage scheduled in its earlier iterations, from the start of the run |
 | `arrived` | number | `Iteration` | sessions the workload has started by the iteration's start, one arriving at that instant included |
+| `request.input`, `request.output` | number | `Request`, `Release` | the call's arguments, `E (input, output);` |
+| `request.known` | number | `Request`, `Release` | the tokens the request has: its input and what it has generated |
+| `request.hit` | number | `Request` | `min(cachedin(P), reuse)` on the engine's memory `P` |
+| `request.loaded` | number | `Request` (in `taking`) | what the engine's connector's `load` read for this admission |
+| `request.preempted` | 0 / 1 | `Request` | 1 once the request has been preempted (vLLM's `RequestStatus.PREEMPTED`) |
+| `request.finished` | 0 / 1 | `Release` | 1 at the release that ends the request, 0 at a preemption |
 
 At `Budget`, totals describe residents before the iteration. At `Serve`
 they describe the residents present when the expression is read, including
@@ -80,7 +88,6 @@ fn main() {
   device gpu { }
   engine llm on gpu {
     tokens cap 8;
-    request () { prefill (8); }
     scheduler { advance running by (remaining); admit waiting while (running.preempted == 0); }
     worker {
       forward (1 + 0.1 * batch.tokens);
@@ -90,7 +97,7 @@ fn main() {
     arrive batch(2);
   }
   server {
-    llm ();
+    llm (8, 1);
     observe finished = now;
   }
 }

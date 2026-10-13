@@ -348,10 +348,30 @@ class Lean:
     of `Route Exec.Env ℕ`. Attribute slots are the IR's; the built-in
     `cached` and `serial` read the environment."""
 
-    def __init__(self, ir):
-        self.ir = ir
+    def __init__(self, ir, observed=None):
+        # its own list of attributes, which a request's state extends
+        self.ir = {**ir, "attrs": list(ir["attrs"])}
+        # An engine's records are written where something reads them: an
+        # observation its theorem compares (`observed`, its slots; None for
+        # every one), an attribute an expression reads. One nothing reads
+        # changes nothing the theorem states, and the papers' proofs follow
+        # the program's text.
+        self.observed = observed
+
+        def attrs_read(x):
+            if isinstance(x, dict):
+                return ({x["Attr"]} if "Attr" in x and isinstance(x["Attr"], int) else set()).union(
+                    *(attrs_read(v) for v in x.values()))
+            if isinstance(x, list):
+                return set().union(*(attrs_read(v) for v in x))
+            return set()
+        self.read = attrs_read(ir)
         self.empty_turns = False
         self.builtin = {ir["slot_cached"]: "x.cached", ir["slot_serial"]: "x.serial"}
+        self.request_slots = {}
+        # the attributes a request's input reads that the translation takes
+        # to be at least 1 (`request_untaken`): its caller's workload must be
+        self.positive = set()
 
     def leaf(self, e):
         """What a session statement reads: attributes, `now`, the engine's
@@ -486,6 +506,8 @@ class Lean:
                                        "preemption victim is the engine's rule)")
                     g = f" growing {gp}"
                 out.append(f"{pad}run {s}{mode} ({self.top(v['work'])}){g};")
+            elif kind == "Request":
+                out.extend(self.request(v, pad, ind))
             elif kind == "Hold":
                 if v.get("lease") is not None:
                     raise Fragment("a hold with a lease is outside the fragment")
@@ -522,6 +544,183 @@ class Lean:
                 raise Fragment(f"statement {kind}")
         out.append(pad + "done")
         return "\n".join(out)
+
+    def fresh(self, name):
+        """A slot past the IR's attributes, for the state the interpreter
+        keeps of a request; `Exec` reads an unset attribute as 0."""
+        self.ir["attrs"].append(name)
+        return len(self.ir["attrs"]) - 1
+
+    def request(self, v, pad, ind):
+        """`E (input, output);`, a request to the engine, as the kernel text
+        it means (docs/design/scheduler-worker.md, Lean): the call's values
+        and `kept`, the tokens it has, in attributes; a hold of what the
+        admission takes, whose clauses read `request.known` as `max(kept,
+        computed + 1)` and `request.hit` as `min(cachedin(P), reuse)` on the
+        engine's memory `P`; in it `known` and `kept` set, the engine's
+        records of the admission, the prefill of what the hold did not read
+        from the cache, the first token's time when the prefill ends on the
+        prompt, and the decode of the rest. Preempted, the hold runs again,
+        `kept` where it had got to, as the interpreter's request keeps its
+        tokens (scheduler.py:1561)."""
+        e = one_ref(v["stage"], "request")
+        if e != 0:
+            raise Fragment("a request to an engine other than stage 0")
+        step = self.ir["stages"][e]["kind"]["Step"]
+        spec = step.get("request")
+        if step.get("connector") is not None:
+            raise Fragment("an engine's connector")
+        if spec is None or not spec["pools"]:
+            return self.request_untaken(v, e, spec, pad, ind)
+        if spec.get("prefix") is not None:
+            raise Fragment("a request's prefix chain: the model's cache is per session")
+        mem = step["memory"]
+        if mem is None or all(one_ref(r, "taking") != mem for r, _, _ in spec["pools"]):
+            raise Fragment("a request that does not take the engine's memory")
+        # one session has one request at a time: every call shares the slots
+        if e not in self.request_slots:
+            name = self.ir["stages"][e]["name"]
+            self.request_slots[e] = tuple(
+                self.fresh(f"{name}.{w}") for w in ("input", "output", "kept", "known", "again"))
+        inp, outp, kept, known, again = self.request_slots[e]
+        computed = self.ir["slot_computed"]
+
+        def attr(k):
+            return {"Attr": k}
+
+        def call(f, *xs):
+            return {"Call": [f, [{"Expr": x} for x in xs]]}
+
+        # the tokens it has: its input at the first admission, and after a
+        # preemption the position it had reached and the token sampled there
+        # (`Interp::preempt`), never fewer than before
+        at_admission = {"Cond": [
+            attr(again),
+            call("Max", attr(kept), {"Binary": ["Add", attr(computed), {"Num": 1.0}]}),
+            attr(kept),
+        ]}
+
+        def subst(x, known_is, hit_is=None):
+            """`x` with the request's context variables written as the
+            kernel's reads."""
+            if isinstance(x, list):
+                return [subst(y, known_is, hit_is) for y in x]
+            if not isinstance(x, dict):
+                return x
+            if "Ctx" in x and isinstance(x["Ctx"], str):
+                c = x["Ctx"]
+                if c == "Input":
+                    return attr(inp)
+                if c == "Output":
+                    return attr(outp)
+                if c == "Known":
+                    if known_is is None:
+                        raise Fragment("`request.known` in `cache`: the kernel's hold reads the "
+                                       "admission's")
+                    return known_is
+                if c == "Hit":
+                    if hit_is is None:
+                        raise Fragment("`request.hit` outside `taking`")
+                    return hit_is
+                if c in ("Finished", "Loaded", "Requeued"):
+                    raise Fragment(f"`{c}`, which the kernel's hold has no word for")
+                return x
+            return {k: subst(y, known_is, hit_is) for k, y in x.items()}
+
+        cached_in = {"Call": ["CachedIn", [{"Pool": {"base": mem, "count": 1, "index": None}}]]}
+        reuse = None if spec.get("reuse") is None else subst(spec["reuse"], at_admission)
+        hit = cached_in if reuse is None else call("Min", cached_in, reuse)
+        ps = []
+        for r, u, fits in spec["pools"]:
+            u = self.top(subst(u, at_admission, hit))
+            f = f" fits ({self.top(subst(fits, at_admission, hit))})" if fits is not None else ""
+            ps.append(f"{one_ref(r, 'taking')} ({u}){f}")
+        ru = f" reuse ({self.top(reuse)})" if reuse is not None else ""
+        cache = spec.get("cache")
+        ca = f" cache ({self.top(subst(cache, None))})" if cache is not None else ""
+        rec = spec["records"]
+        inner = "  " * (ind + 1)
+        n, c = f"(x.attr {known})", "x.cached"
+        return self.records([
+            f"{pad}set {inp} = {self.top(v['input'])};",
+            f"{pad}set {outp} = {self.top(v['output'])};",
+            f"{pad}set {kept} = x.attr {inp};",
+            f"{pad}set {again} = 0;",
+            f"{pad}hold {', '.join(ps)}{ru} {{",
+            f"{inner}set {known} = {self.top(at_admission)};",
+            f"{inner}set {kept} = x.attr {known};",
+            f"{inner}set {again} = 1;",
+            f"{inner}observe {rec['reused']} = {c};",
+            f"{inner}observe {rec['prefill']} = {n} - {c};",
+            f"{inner}set {rec['admitted']} = x.now;",
+            f"{inner}set {rec['last_reused']} = {c};",
+            f"{inner}set {rec['last_prefill']} = {n} - {c};",
+            f"{inner}run {e} prefill ({n} - {c}) growing {mem};",
+            f"{inner}branch (if ({n} = (x.attr {inp})) then 1 else 0) {{",
+            f"{inner}  set {rec['first']} = x.now;",
+            f"{inner}  done",
+            f"{inner}}} else {{",
+            f"{inner}  done",
+            f"{inner}}};",
+            f"{inner}run {e} decode (((x.attr {outp}) - 1) - ({n} - (x.attr {inp}))) growing {mem};",
+            f"{inner}done",
+            f"{pad}}}{ca};",
+        ], rec)
+
+    def records(self, lines, rec):
+        """`lines` without the engine's records nothing reads (`__init__`)."""
+        if rec is None:
+            return lines
+        drop = {f"observe {rec[k]} =" for k in ("reused", "prefill")
+                if self.observed is not None and rec[k] not in self.observed}
+        drop |= {f"set {rec[k]} =" for k in ("admitted", "first", "last_reused", "last_prefill")
+                 if rec[k] not in self.read}
+        return [l for l in lines if not any(l.strip().startswith(d) for d in drop)]
+
+    def request_untaken(self, v, e, spec, pad, ind):
+        """A request to an engine that takes nothing, admitted as it is
+        called: its records, a prefill of its input when it has one, which
+        samples its first token, and the decode of the rest."""
+        inner = "  " * (ind + 1)
+        inp = self.top(v["input"])
+        outp = self.top(v["output"])
+        less_one = self.top({"Binary": ["Sub", v["output"], {"Num": 1.0}]})
+        out = []
+        rec = spec["records"] if spec is not None else None
+        if rec is not None:
+            out += [
+                f"{pad}observe {rec['reused']} = 0;",
+                f"{pad}observe {rec['prefill']} = {inp};",
+                f"{pad}set {rec['admitted']} = x.now;",
+                f"{pad}set {rec['last_reused']} = 0;",
+                f"{pad}set {rec['last_prefill']} = {inp};",
+            ]
+        first = [f"set {rec['first']} = x.now;"] if rec is not None else []
+        prefilled = [f"run {e} prefill ({inp});", *first, f"run {e} decode ({less_one});"]
+        alone = [f"run {e} decode ({outp});"]
+        n = fold(erase_costs(v["input"]))
+        if n is not None:
+            return self.records(out + [pad + st for st in (prefilled if n > 0 else alone)], rec)
+        # An input that is an attribute is a prefill of it and a decode of
+        # the rest, unless the first token's time is read: the papers'
+        # proofs (`Slot.lean`, `Bari.lean`) follow a program without a
+        # branch. It is the interpreter's request for an input of 1 or more,
+        # and the caller's workload must have one (`positive`): a claim's
+        # family holds it, where the program's `init` draws only such.
+        inp_attr = erase_costs(v["input"]).get("Attr")
+        if (rec is None or rec["first"] not in self.read) and isinstance(inp_attr, int):
+            self.positive.add(inp_attr)
+            return self.records(out + [f"{pad}run {e} prefill ({inp});",
+                                       f"{pad}run {e} decode ({less_one});"], rec)
+        return self.records(out + [
+            f"{pad}branch (if ({inp}) > 0 then 1 else 0) {{",
+            *(inner + st for st in prefilled),
+            f"{inner}done",
+            f"{pad}}} else {{",
+            *(inner + st for st in alone),
+            f"{inner}done",
+            f"{pad}}};",
+        ], rec)
 
     def deployment(self):
         ir = self.ir
@@ -600,6 +799,16 @@ def load(name):
     return ir, Lean(ir)
 
 
+def explicit_positive(ir, lean, name):
+    """The explicit sessions give every request input the translation takes
+    to be at least 1 (`Lean.positive`) such a value."""
+    for s in (ir["arrival"].get("Sessions") or []) if isinstance(ir["arrival"], dict) else []:
+        vals = dict((slot, v) for slot, v in s["attrs"])
+        for k in lean.positive:
+            if vals.get(k, 0) < 1:
+                raise Fragment(f"{name}: a session's request input `{ir['attrs'][k]}` is 0")
+
+
 def doc_tables(ir):
     pools = ", ".join(f"{i} = {p['name']}" for i, p in enumerate(ir["pools"]))
     stages = ", ".join(f"{i} = {s['name']}" for i, s in enumerate(ir["stages"]))
@@ -615,8 +824,13 @@ def program(defname, names, source):
     workload differ)."""
     progs = {}
     for name in names:
-        ir, lean = load(name)
-        progs[name] = (lean.block(ir["session"], 1), doc_tables(ir))
+        ir, _ = load(name)
+        # every record: the differential test (`lean_drt.py`) compares every
+        # observation of the program the Lean executable runs
+        lean = Lean(ir)
+        body = lean.block(ir["session"], 1)
+        explicit_positive(ir, lean, name)
+        progs[name] = (body, doc_tables(lean.ir))
     body, tables = next(iter(progs.values()))
     for name, p in progs.items():
         if p != (body, tables):
@@ -719,15 +933,18 @@ def gen_cache():
     keys = sorted(rows)
     horizon = max(r[2] for r in rows.values()) + 5
     ob = {n: i for i, n in enumerate(ir["observes"])}
+    # the cached tokens are what the engine records of each admission; the
+    # trace preempts nothing, so each turn has one
+    ob["cached_tokens"] = ob.get("vllm.reused")
     for n in ("sent", "ttft", "response", "cached_tokens"):
-        if n not in ob:
+        if ob.get(n) is None:
             raise Fragment(f"cache_trace: no observation `{n}`")
 
     def col(f):
         return "[" + ", ".join(f"({s}, {f(rows[(s, k)])})" for s, k in keys) + "]"
 
     return "\n/-! ### A multi-turn scenario with a prefix cache -/\n\n" + program(
-        "vllmTurn", ["cache_trace"], "The vLLM replay program (serQ `examples/replay/vllm_replay.sq`) on a unit step clock"
+        "vllmTurn", ["cache_trace"], "The vLLM replay program (serQ `examples/replay/vllm_replay.sq`) on a unit step clock",
     ) + f'''
 /-- serQ `tools/oracle/cache_trace.ir.json`: {len(ir["arrival"]["Sessions"])} sessions of the inlined trace
 `cache_trace.csv`; the deployment and the workload are the IR's. Per turn:
@@ -784,14 +1001,16 @@ def gen_regress():
         if ir["version"] not in SUPPORTED_IR_VERSIONS:
             raise Fragment(f"{name}: IR version {ir['version']}")
         lean = Lean(ir)
+        body = lean.block(ir["session"], 1)
+        explicit_positive(ir, lean, name)
         obs = ir["observes"]
         lhs = ", ".join(f"observed m {i}" for i in range(len(obs)))
         rhs = ", ".join("[" + ", ".join(f"({s}, {v})" for s, v in ans["observes"].get(n, [])) + "]" for n in obs)
         horizon = nat(ir["horizon"], "horizon")
         out.append(f'''
-/-- `tests/lean-regress/{name}.sq`, translated from its IR. {doc_tables(ir)} -/
+/-- `tests/lean-regress/{name}.sq`, translated from its IR. {doc_tables(lean.ir)} -/
 def {camel(name)} : Prog := [route|
-{lean.block(ir["session"], 1)}]
+{body}]
 
 /-- `serq run`: {", ".join(obs)} per session, and {ans["preemptions"]} preemptions. -/
 theorem regress_{name} :

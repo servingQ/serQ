@@ -1,0 +1,14 @@
+device gpu { kv cap 100; } pool kv on gpu { block 16; }
+             engine E on gpu {
+               tokens cap inf;
+               request (prompt) {
+                 set kept = prompt;
+                 at admission { known = max(kept, computed + 1); }
+                 set kept = known;
+                 prefill (known) growing kv;
+               }
+               scheduler { advance running; admit waiting while (running.preempted == 0) taking kv (known); }
+               worker { forward (1); }
+             }
+             server { E (prompt); }
+             workload { arrive batch(1); hidden o; init { set prompt = 32; set o = 4; set j = 0; } session { turn; end; } }

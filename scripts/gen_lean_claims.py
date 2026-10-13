@@ -34,7 +34,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(__file__))
 from gen_lean_oracle import (  # noqa: E402
-    Expr, Fragment, Lean, affine, chunk_rule, fold, nat, one_ref, COST_VARS, is_delay, is_lifo, only_body,
+    Expr, Fragment, Lean, affine, chunk_rule, erase_costs, fold, nat, one_ref, COST_VARS, is_delay,
+    is_lifo, only_body,
 )
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
@@ -103,6 +104,32 @@ def serve_leaf(e):
     raise Fragment(f"serve only reads {e}")
 
 
+def at_least_one(e):
+    """Whether every value `e` takes is a natural number of at least 1: a
+    constant, a product or sum of such, and the floor or ceiling of a uniform
+    draw between them (its lower bound at least 1)."""
+    e = erase_costs(e)
+    v = fold(e)
+    if v is not None:
+        return v >= 1
+    if "Binary" in e:
+        op, a, b = e["Binary"]
+        if op == "Mul":
+            return at_least_one(a) and at_least_one(b)
+        if op == "Add":
+            return at_least_one(a) and (at_least_one(b) or (fold(b) or -1) >= 0)
+        return False
+    if "Call" in e:
+        f, args = e["Call"]
+        if f in ("Floor", "Ceil") and len(args) == 1 and "Expr" in args[0]:
+            x = erase_costs(args[0]["Expr"])
+            if "Sample" in x and x["Sample"][0] == "Uniform":
+                lo = fold(x["Sample"][1][0])
+                return lo is not None and lo >= 1
+            return at_least_one(x)
+    return False
+
+
 class Program:
     def __init__(self, name, ir):
         self.name, self.ir = name, ir
@@ -111,7 +138,16 @@ class Program:
         for what in ("share", "arrivals", "trace"):
             if ir.get(what) is not None:
                 raise Fragment(f"{name}: {what}")
-        self.lean = Lean(ir)
+        # the observations its claims read: an engine's records no claim
+        # reads are not written (`Lean.records`)
+        def aggregated(x):
+            if isinstance(x, dict):
+                own = {x["Agg"][1]} if "Agg" in x else set()
+                return own.union(*(aggregated(v) for v in x.values()))
+            if isinstance(x, list):
+                return set().union(*(aggregated(v) for v in x))
+            return set()
+        self.lean = Lean(ir, aggregated(ir.get("claims", [])) | aggregated(ir.get("gauges", [])))
         self.arr_slot = len(ir["attrs"])  # a fresh slot for the arrival time
         arr = ir["arrival"]
         (self.akind, self.aval), = arr.items() if isinstance(arr, dict) else ((arr, None),)
@@ -254,6 +290,15 @@ class Program:
             conds.append(f"w.arriveSlot = some {self.arr_slot}")
         g = self.given_expr(claims)
         per = [] if g == "True" else [f"({g})".replace("(a ", "(w.attr i ")]
+        # a request's input that the program is translated as at least 1
+        # (`Lean.positive`): every value `init` draws for it is, so the
+        # family still holds the program's support
+        for k in sorted(self.lean.positive):
+            sets = [st["Set"][1] for st in self.init if st["Set"][0] == k]
+            if not sets or not all(at_least_one(e) for e in sets):
+                raise Fragment(f"{self.name}: a request's input `{self.ir['attrs'][k]}` may be 0, "
+                               "which the translation does not run")
+            per.append(f"1 ≤ w.attr i {k}")
         if self.gap() is not None:
             per.append(f"w.attr i {self.arr_slot} = (i + 1) * {self.gap()}")
         if per:

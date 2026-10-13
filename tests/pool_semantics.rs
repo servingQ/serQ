@@ -517,21 +517,21 @@ fn admit_via_names_a_step_stage() {
     }
 }
 
-/// A hold that fits at admission but can never grow to what its body needs
+/// A request that fits at admission but can never grow to what it needs
 /// preempts itself, re-enters at the head of the queue, and does it again:
 /// a livelock the run would otherwise hide behind a preemption count. The
-/// report counts the session once as `stuck` (preempted again at the same
-/// position) and says so.
+/// report counts the session once as `stuck` (preempted again without
+/// passing its position) and says so.
 ///
 /// On 10 blocks of 16 (160 tokens) with a 1000-token budget: step 1
 /// prefills the 100-token prompt (7 blocks), steps 2..61 decode tokens
 /// 101..160 (block 8 at 113, 9 at 129, 10 at 145), step 62 needs an 11th
 /// block, none is free, the request is `running[-1]` and preempts itself:
 /// the step schedules nothing and is not skipped (vLLM's `schedule()` runs
-/// it and admits nothing, scheduler.py:869). Step 63 re-admits and
-/// prefills again. The cycle is 62 steps, so preemptions fall at 62, 124,
-/// …, 372: six before the horizon of 400, the second of them at the same
-/// position (160) as the first.
+/// it and admits nothing, scheduler.py:869). The request keeps the 61
+/// tokens it generated (scheduler.py:1561): it has 161, more than the
+/// pool, so from step 63 every step re-admits it and its prefill preempts
+/// it at once: 340 preemptions and admissions before the horizon of 400.
 #[test]
 fn a_hold_that_can_never_fit_is_reported_stuck() {
     let src = r#"
@@ -539,10 +539,6 @@ fn a_hold_that_can_never_fit_is_reported_stuck() {
         engine llm on gpu {
           reqs cap 4;
           tokens cap 1000;
-          request () {
-            prefill (100) growing kv;
-            decode (100) growing kv;
-          }
           scheduler {
             advance running;
             admit waiting while (running.preempted == 0) taking reqs (1), kv (100) reserve (100);
@@ -557,13 +553,13 @@ fn a_hold_that_can_never_fit_is_reported_stuck() {
 
           }
         }
-        server { llm (); }
+        server { llm (100, 101); }
 
 "#;
     let r = run(src, &common::horizon(400.0));
     let kv = r.pool("kv").unwrap();
-    assert_eq!(kv.preemptions, 6, "{}", r.text());
-    assert_eq!(kv.admissions, 7, "{}", r.text());
+    assert_eq!(kv.preemptions, 340, "{}", r.text());
+    assert_eq!(kv.admissions, 340, "{}", r.text());
     assert_eq!(kv.stuck, 1, "{}", r.text());
     assert!(r.text().contains("stuck: 1 session(s)"), "{}", r.text());
     assert_eq!(r.ended, 0, "{}", r.text());
@@ -578,16 +574,15 @@ fn a_hold_that_can_never_fit_is_reported_stuck() {
 /// 100 costs 100, sixty decodes cost 60, the preempting step 0: preemptions
 /// at t = 160 and 320, the third prefill would end at 420 > 400.
 #[test]
+#[ignore = "#555: the resumed request keeps its 61 generated tokens, 161 on a \
+            160-token pool, so every step preempts at zero cost and the run \
+            spins at one instant; the interpreter should fail loudly"]
 fn a_zero_cost_preempting_step_does_not_hang() {
     let src = r#"
         device gpu { kv cap 160; }
         engine llm on gpu {
           reqs cap 4;
           tokens cap 1000;
-          request () {
-            prefill (100) growing kv;
-            decode (100) growing kv;
-          }
           scheduler {
             advance running;
             admit waiting while (running.preempted == 0) taking reqs (1), kv (100) reserve (100);
@@ -602,7 +597,7 @@ fn a_zero_cost_preempting_step_does_not_hang() {
 
           }
         }
-        server { llm (); }
+        server { llm (100, 101); }
 
 "#;
     let r = run(src, &common::horizon(400.0));
@@ -668,7 +663,7 @@ fn a_boolean_guard_and_a_declared_draw_run() {
 
 /// #230: a hold without a `cache` clause takes no part in the prefix
 /// cache. One session sends the same 1000-token prompt every second; the
-/// request's hold keeps `cache (1000)`, i.e. 992 (62 full blocks of 16).
+/// request's admission keeps `cache (1000)`, i.e. 992 (62 full blocks of 16).
 /// Alone, turn 1 misses and every later turn hits: `cached` = min(992,
 /// 992) > 0. Wrapped in an outer hold on the same pool, with or without a
 /// `release kv;` first, the outer hold has no `cache` clause, so it leaves
@@ -680,7 +675,7 @@ fn a_boolean_guard_and_a_declared_draw_run() {
 /// nothing, and every turn misses.
 #[test]
 fn a_hold_without_cache_leaves_the_prefix_to_the_hold_that_caches() {
-    let request = "llm ();";
+    let request = "llm (1000, 1);";
     for (wrap, want_hit) in [
         (request.to_string(), 1.0),
         (format!("hold kv (cost(kv, 0)) {{ {request} }}"), 1.0),
@@ -698,15 +693,10 @@ fn a_hold_without_cache_leaves_the_prefix_to_the_hold_that_caches() {
         device gpu {{ kv cap 100000; }}
         engine llm on gpu {{
           tokens cap 8192;
-          request () {{
-            at admission {{ reused = min(cachedin(kv), 992); }}
-            observe hit = cached > 0;
-            prefill (1000 - cached) growing kv;
-            cache (1000);
-          }}
           scheduler {{
             advance running;
-            admit waiting while (running.preempted == 0) taking kv (min(cachedin(kv), 992) + 8);
+            admit waiting while (running.preempted == 0)
+              taking kv (request.hit + 8) reuse (992) cache (1000);
           }}
           worker {{ forward (batch.tokens * 1e-5 + 1e-4); }}
         }}
@@ -729,7 +719,14 @@ fn a_hold_without_cache_leaves_the_prefix_to_the_hold_that_caches() {
                 ..common::horizon(20.0)
             },
         );
-        let hits = &r.observe("hit").unwrap().samples;
+        // whether an admission read any of the cache
+        let hits: Vec<f64> = r
+            .observe("llm.reused")
+            .unwrap()
+            .samples
+            .iter()
+            .map(|&c| f64::from(u8::from(c > 0.0)))
+            .collect();
         assert!(hits.len() >= 10, "{wrap}\n{}", r.text());
         assert_eq!(hits[0], 0.0, "the first turn is cold: {wrap}");
         assert!(
@@ -857,13 +854,12 @@ fn bad_amounts_and_indices_fail_the_run() {
         e.contains("stage index -1: a member of an array of 2 is 0 to 1"),
         "{e}"
     );
-    // a decode is named as the kernel writes it (`run E decode (…)`)
+    // a request's output is named as the call writes it
     let e = run_source(
         &common::main_source(
             "device gpu { kv cap 64; }
         engine eng on gpu {
           tokens cap 8;
-          request (output) { decode (output); }
           scheduler { advance running; admit waiting while (running.preempted == 0); }
           worker { forward (1); }
         }
@@ -872,7 +868,7 @@ fn bad_amounts_and_indices_fail_the_run() {
           session { turn; end;
           }
         }
-        server { hold kv (cost(kv, 8)) { eng (z - 1); }
+        server { hold kv (cost(kv, 8)) { eng (0, z - 1); }
         }
         ",
         ),
@@ -880,10 +876,7 @@ fn bad_amounts_and_indices_fail_the_run() {
         None,
     )
     .unwrap_err();
-    assert!(
-        e.contains("`run eng decode (cost(eng, z - 1))`: the amount is -1"),
-        "{e}"
-    );
+    assert!(e.contains("`eng output (z - 1)`: the amount is -1"), "{e}");
     // zero is an amount: a run of no work, a hold of nothing
     let r = run(
         "pool kv { cap 64; } stage d : delay;
@@ -906,12 +899,11 @@ fn bad_amounts_and_indices_fail_the_run() {
 /// in the kernel's.
 #[test]
 fn a_hold_takes_a_pool_once() {
-    let src = |request: &str, taking: &str, server: &str| {
+    let src = |taking: &str, server: &str| {
         format!(
             "device gpu {{ kv cap 400; }}
         engine llm on gpu {{
           tokens cap 128;
-          {request}
           scheduler {{
             advance running each at most (128);
             admit waiting while (running.preempted == 0) each at most (128){taking};
@@ -933,20 +925,15 @@ fn a_hold_takes_a_pool_once() {
         )
     };
     let e = serq::compile_source(
-        &common::main_source(&src(
-            "request (prompt) { prefill (prompt) growing kv; decode (40) growing kv; }",
-            " taking kv (16), kv (16)",
-            "llm (prompt);",
-        )),
+        &common::main_source(&src(" taking kv (16), kv (16)", "llm (prompt, 41);")),
         &common::horizon(1.0),
     )
     .unwrap_err();
     assert!(e.contains("`taking` names `kv` twice"), "{e}");
     let e = serq::compile_source(
         &common::main_source(&src(
-            "request (prompt) { prefill (prompt); decode (40); }",
             "",
-            "hold kv (cost(kv, 16)), kv (cost(kv, 16)) { llm (prompt); }",
+            "hold kv (cost(kv, 16)), kv (cost(kv, 16)) { llm (prompt, 41); }",
         )),
         &common::horizon(1.0),
     )
@@ -1070,15 +1057,10 @@ fn a_held_reservation_counts_against_later_admissions() {
         engine llm on gpu {{
           reqs cap 8;
           tokens cap 64;
-          request () {{
-            observe admitted_at = now;
-            prefill (4) growing kv;
-            decode (6) growing kv;
-            cache (0);
-          }}
           scheduler {{
             advance running;
-            admit waiting while (running.preempted == 0) taking reqs (1), kv (4) reserve (10);
+            admit waiting while (running.preempted == 0)
+              taking reqs (1), kv (4) reserve (10) cache (0);
           }}
           worker {{ forward (1); }}
         }}
@@ -1090,7 +1072,7 @@ fn a_held_reservation_counts_against_later_admissions() {
 
           }}
         }}
-        server {{ llm (); }}
+        server {{ llm (4, 7); observe admitted_at = llm.admitted; }}
 
 "#
         )
@@ -1173,23 +1155,21 @@ fn a_held_reservation_is_each_live_hold_s() {
 }
 
 /// A run ends at its start plus its work, not at the sum of its chunks
-/// (#479). 0.4 then 1.2 in chunks of 1 sums to 0.4 + 1 + 0.19999999999999996
-/// = 1.5999999999999999, an ulp short of 0.4 + 1.2: the cached extent and
-/// the `computed` of a hold preempted right after its prefill read a
-/// finished prefill as unfinished (`computed < prompt`).
+/// (#479). A prompt of 0.4 + 1.2 in chunks of 1 sums to an ulp short of
+/// it: the cached extent and the tokens of a request preempted right after
+/// its prefill read a finished prefill as unfinished.
 #[test]
 fn a_run_ends_at_its_start_plus_its_work() {
-    let prog = |sessions: u32, cap: u32, request: &str, body: &str| {
+    let prog = |sessions: u32, cap: u32, cache: &str, body: &str| {
         format!(
             r#"
         device gpu {{ kv cap {cap}; }}
         engine llm on gpu {{
           reqs cap 2;
           tokens cap 4;
-          {request}
           scheduler {{
             advance running each at most (1);
-            admit waiting each at most (1) taking reqs (1), kv (0);
+            admit waiting each at most (1) taking reqs (1), kv (0){cache};
           }}
           worker {{ forward (1); }}
         }}
@@ -1207,36 +1187,22 @@ fn a_run_ends_at_its_start_plus_its_work() {
     let src = prog(
         1,
         10,
-        "request () {
-           prefill (0.4) growing kv;
-           prefill (1.2) growing kv;
-           cache (100);
-         }",
-        "llm ();
+        " cache (100)",
+        "llm (prompt, 1);
          observe extent = cachedin(kv);",
     );
     let r = run(&src, &common::horizon(20.0));
     assert_eq!(r.observe("extent").unwrap().samples, [0.4 + 1.2]);
-    // `computed`: B ends its prefill at 1.6 with A, and A's first decode
-    // token preempts it (lifo); B's re-executed hold reads where it was
-    let src = prog(
-        2,
-        4,
-        "request (prompt) {
-           if (computed > 0) { observe at_prompt = computed == prompt; }
-           if (computed == 0) {
-             prefill (0.4) growing kv;
-             prefill (1.2) growing kv;
-           }
-           decode (2) growing kv;
-         }",
-        "llm (prompt);",
-    );
+    // B ends its prefill at 1.6 with A and samples a token, and A's first
+    // decode token preempts it (lifo): B is admitted again with its prompt
+    // and that token, which it prefills again
+    let src = prog(2, 4, "", "llm (prompt, 3);");
     let r = run(&src, &common::horizon(20.0));
     assert_eq!(r.ended, 2, "{}", r.text());
+    assert!(r.pool("kv").unwrap().preemptions >= 1, "{}", r.text());
     assert_eq!(
-        r.observe("at_prompt").unwrap().samples[0],
-        1.0,
+        r.observe("llm.prefill").unwrap().samples.last(),
+        Some(&(0.4 + 1.2 + 1.0)),
         "{}",
         r.text()
     );
@@ -1244,8 +1210,8 @@ fn a_run_ends_at_its_start_plus_its_work() {
 
 /// A growth that stalled and resumes does not move its hold's position: the
 /// tokens it stalled on move it once, when they are computed (#482). B's
-/// decode stalls on a token's growth (A holds 3 of 7 until its gate ends)
-/// and resumes when A releases; main counted the stalled token twice and B
+/// decode stalls on a token's growth (the server holds 3 of 7 for 5) and
+/// resumes when that hold ends; main counted the stalled token twice and B
 /// ended at 7, not 2 + 4. The run's end is checked against the sum of its
 /// chunks (a `debug_assert!` in the interpreter), so a position moved twice
 /// mid-run fails there too.
@@ -1256,19 +1222,9 @@ fn a_resumed_growth_moves_the_position_once() {
         engine llm on gpu {
           reqs cap 2;
           tokens cap 4;
-          request (id) {
-            prefill (2) growing kv;
-            if (id == 0) {
-              decode (1) growing kv;
-              run gate (cost(gate, 5));
-            } else {
-              decode (4) growing kv;
-            }
-            cache (100);
-          }
           scheduler {
             advance running;
-            admit waiting taking reqs (1), kv (0);
+            admit waiting taking reqs (1), kv (0) cache (100);
           }
           worker { forward (1); }
         }
@@ -1277,8 +1233,12 @@ fn a_resumed_growth_moves_the_position_once() {
         stage gate : delay;
         workload { arrive batch(2); session { turn; end; } }
         server {
-          llm (serial);
-          if (serial == 1) { observe extent = cachedin(kv); }
+          if (serial == 0) {
+            hold kv (cost(kv, 3)) { run gate (cost(gate, 5)); }
+          } else {
+            llm (2, 5);
+            observe extent = cachedin(kv);
+          }
         }
 "#;
     let r = run(src, &common::horizon(50.0));

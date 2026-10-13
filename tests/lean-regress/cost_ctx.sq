@@ -10,16 +10,10 @@ fn main() {
   engine llm on gpu {
     slots cap 4;
     tokens cap 48;
-    request (prompt, output, t0) {
-      prefill (prompt) growing kv;
-      observe ttft = now - t0;
-      decode (output) growing kv;
-      observe done = now;
-    }
     scheduler {
       advance running;
       admit waiting while (running.preempted == 0)
-        taking slots (1), kv (min(prompt, budget_left(llm))) reserve (prompt);
+        taking slots (1), kv (min(request.input, budget_left(llm))) reserve (request.input);
     }
     worker {
       forward (3 + batch.tokens + 2 * batch.prefilled + batch.decoding + batch.kv_decode + 2 * batch.attention);
@@ -36,6 +30,8 @@ fn main() {
 
   server {
     run gate (cost(gate, t0));
-    llm (n, o, t0);
+    llm (n, o + 1);                     // `o` tokens decoded after the prefill's
+    observe ttft = llm.first - t0;
+    observe done = now;
   }
 }

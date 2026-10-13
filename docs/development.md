@@ -33,10 +33,10 @@ the run settings, observations and pools:
 $ serq run examples/multi-turn/vllm.sq --horizon 300 --warmup 30
 run: horizon 300 end 300 warmup 30 seed 1 events 150579 arrivals 95 ended 86 turns 779 mean live 7.387
 
-observe         count      mean    95% CI    cv2        p99
---------------  -----  --------  --------  -----  ---------
-hit               779    0.8858   ±0.0215  0.129     1.0000
-prefill_tokens    779  685.2439  ±56.1267  1.068  2883.0000
+observe       count       mean     95% CI    cv2         p99
+------------  -----  ---------  ---------  -----  ----------
+vllm.reused     779  6525.5558  ±702.3442  0.642  23488.0000
+vllm.prefill    779   685.2439   ±56.1267  1.068   2883.0000
 
 client    count       mean      95% CI    cv2        p99
 --------  -----  ---------  ----------  -----  ---------
@@ -52,8 +52,11 @@ kv    1251.5  144310.0  0.000    0.171     NaN     798        76    545120      
 reqs     0.2       0.0  0.001    0.171  0.0005     798         0         0        0      0    0      0
 ```
 
-`observe` rows are the program's own: each is whatever its `observe` line
-says, so read that line before comparing the number with a measurement.
+`observe` rows are the program's own, and its engines' records
+(`vllm.reused`, the tokens an admission read from the cache;
+`vllm.prefill`, the tokens it computed): each of the program's is whatever
+its `observe` line says, so read that line before comparing the number with
+a measurement.
 `client` rows are what each turn's client saw, the same in every program:
 `ttft` from sending the turn to its first output token, `tpot` the time per
 output token after the first, `response` from sending to the answer

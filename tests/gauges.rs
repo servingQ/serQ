@@ -380,13 +380,12 @@ fn a_gauge_does_not_plan_an_iteration() {
     let src = "device gpu { }
         engine e on gpu {
           tokens cap ~uniform(1, 2);
-          request () { prefill (1); }
           scheduler { advance running; admit waiting while (running.preempted == 0); }
           worker { forward (1); }
         }
         workload { session { turn; end;
         } }
-        server { e ();
+        server { e (1, 1);
         }
         gauge g = budget_left(e);";
     assert!(link_error(src).contains("may not read `budget_left"));
@@ -403,7 +402,6 @@ fn a_budget_does_not_read_budget_left() {
         device tpu {{ }}
         engine e on gpu {{
           tokens cap {budget};
-          request () {{ prefill (1); }}
           scheduler {{ advance running; admit waiting while (running.preempted == 0); }}
           worker {{ forward (1); }}
         }}
@@ -414,7 +412,7 @@ fn a_budget_does_not_read_budget_left() {
         }}
         workload {{ session {{ turn; end;
         }} }}
-        server {{ e ();
+        server {{ e (1, 1);
         }} "
         );
         let e = link_error(&src);
@@ -428,7 +426,6 @@ fn a_budget_does_not_read_budget_left() {
     let src = "device gpu { }
         engine e on gpu {
           tokens cap 128;
-          request () { prefill (1); }
           scheduler {
             let c = budget_left(e) > 1 ? 4 : 8;
             advance running each at most (c);
@@ -438,7 +435,7 @@ fn a_budget_does_not_read_budget_left() {
         }
         workload { session { turn; end;
         } }
-        server { e ();
+        server { e (1, 1);
         } ";
     let e = link_error(src);
     assert!(
@@ -450,7 +447,6 @@ fn a_budget_does_not_read_budget_left() {
     let src = "device gpu { kv cap 64; }
         engine e on gpu {
           tokens cap 8;
-          request () { prefill (4); }
           scheduler { advance running by (budget_left(e)); admit waiting while (running.preempted == 0); }
           worker { forward (1 + 0 * budget_left(e)); }
         }
@@ -459,7 +455,7 @@ fn a_budget_does_not_read_budget_left() {
           session { turn; end;
           }
         }
-        server { hold kv (cost(kv, min(8, budget_left(e)))) { e (); }
+        server { hold kv (cost(kv, min(8, budget_left(e)))) { e (4, 1); }
         }
         ";
     run_source(&common::main_source(src), &common::horizon(1.0), None).unwrap();

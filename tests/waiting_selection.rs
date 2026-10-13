@@ -6,6 +6,13 @@ mod common;
 use serq::ir::{CExpr, CtxVar, DistKind};
 use serq::{Program, compile_source, run_ir, run_source};
 
+/// Who engine `llm` admitted and when, in the order it admitted them: what
+/// it records of each admission is keyed by the session and timed.
+fn admissions(r: &serq::Report) -> (Vec<f64>, Vec<f64>) {
+    let o = r.observe("llm.prefill").unwrap();
+    o.records.iter().map(|rec| (rec.1 as f64, rec.0)).unzip()
+}
+
 fn aging_source(bound: bool, key: &str) -> String {
     let (stage, pool) = if bound {
         (
@@ -13,11 +20,6 @@ fn aging_source(bound: bool, key: &str) -> String {
         engine llm on gpu {
           reqs cap 1;
           tokens cap 2;
-          request (s) {
-            observe selected = s;
-            observe admitted_at = now;
-            decode (s == 0 ? 4 : 1);
-          }
           scheduler { advance running; admit waiting while (running.preempted == 0) taking reqs (1); }
           worker { forward (1); }
         }",
@@ -30,7 +32,10 @@ fn aging_source(bound: bool, key: &str) -> String {
     // the engine admits its slot in its request; the fifo stage runs in the
     // server's hold of a pool no engine admits
     let serve = if bound {
-        "llm (serial);"
+        // one slot: the requests end in the order they were admitted
+        "llm (0, serial == 0 ? 4 : 1);
+          observe selected = serial;
+          observe admitted_at = llm.admitted;"
     } else {
         "hold reqs (cost(reqs, 1)) {
             observe selected = serial;
@@ -114,12 +119,6 @@ fn each_selection_reads_the_current_remaining_iteration_budget() {
         engine llm on gpu {
           reqs cap 4;
           tokens cap 5;
-          request (s) {
-            observe selected = s;
-            observe admitted_at = now;
-            if (s == 0) { decode (1); }
-            else { prefill (s == 2 ? 1 : s == 1 ? 2 : 3); }
-          }
           scheduler { advance running; admit waiting while (running.preempted == 0) taking reqs (1); }
           worker { forward (1); }
         }
@@ -133,14 +132,16 @@ fn each_selection_reads_the_current_remaining_iteration_budget() {
         }
         server {
           run delay (cost(delay, serial == 0 ? 0 : 0.25));
-          llm (serial);
+          // the blocker decodes one token; the others prefill and end
+          llm (serial == 0 ? 0 : serial == 2 ? 1 : serial == 1 ? 2 : 3, 1);
         }
 
 "#;
     let r = run_source(&common::main_source(src), &common::horizon(10.0), None).unwrap();
     assert_eq!(r.ended, 4);
-    assert_eq!(r.observe("selected").unwrap().samples, [0., 1., 3., 2.]);
-    assert_eq!(r.observe("admitted_at").unwrap().samples, [0., 1., 1., 2.]);
+    let (selected, at) = admissions(&r);
+    assert_eq!(selected, [0., 1., 3., 2.]);
+    assert_eq!(at, [0., 1., 1., 2.]);
 }
 
 #[test]
@@ -267,23 +268,10 @@ fn resumed_holds_keep_prepend_priority_over_recomputed_keys() {
         engine llm on gpu {
           reqs cap 2;
           tokens cap 4;
-          request (s) {
-            at admission {
-              known = s == 2 ? 0 : max(2, computed);
-              left = budget_left(llm);
-            }
-            observe selected = s;
-            observe admitted_at = now;
-            if (s == 2) { decode (1); }
-            else {
-              prefill (known) growing kv;
-              decode (3 - (known - 2)) growing kv;
-            }
-          }
           scheduler {
             exclusive prefill each at most (2);
             admit waiting while (running.preempted == 0) each at most (2)
-              taking reqs (1), kv (min(known, left)) reserve (known);
+              taking reqs (1), kv (min(request.known, budget_left(llm))) reserve (request.known);
           }
           worker { forward (1); }
         }
@@ -298,15 +286,17 @@ fn resumed_holds_keep_prepend_priority_over_recomputed_keys() {
         }
         server {
           run delay (cost(delay, serial == 2 ? 3.25 : 0));
-          llm (serial);
+          // 2 decodes one token; 0 and 1 prefill 2 and decode 3
+          llm (serial == 2 ? 0 : 2, serial == 2 ? 1 : 4);
         }
 
 "#;
     let r = run_source(&common::main_source(src), &common::horizon(20.0), None).unwrap();
     assert_eq!(r.ended, 3);
     assert_eq!(r.pool("kv").unwrap().preemptions, 1);
-    assert_eq!(r.observe("selected").unwrap().samples, [1., 0., 0., 2.]);
-    assert_eq!(r.observe("admitted_at").unwrap().samples, [0., 1., 5., 7.]);
+    let (selected, at) = admissions(&r);
+    assert_eq!(selected, [1., 0., 0., 2.]);
+    assert_eq!(at, [0., 1., 5., 7.]);
 }
 
 #[test]

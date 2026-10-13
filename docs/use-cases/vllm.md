@@ -95,17 +95,15 @@ details make it more than that.
   recomputed for its logits (`kv_cache_manager.py:289-300`), so the reusable
   prefix is the cached full blocks of `known − 1`.
 
-In serQ the request is a hold whose `at admission` block computes those two
-values at the moment the scheduler admits it:
-
-```serq
---8<-- "examples/multi-turn/vllm.sq:request"
-```
-
-`prefill … growing kv` and `decode … growing kv` allocate a block at a time
-as the request advances, as `allocate_slots` does. `observe hit` records
-whether any block was reused, again after a preemption. `cache (prompt +
-output)` leaves a finished request's blocks cached for the next turn.
+In serQ these are the engine's own state of the request, which the
+scheduler reads when it admits: `request.known` is every token the request
+has, the generated ones kept across a preemption, and `request.hit` the
+cached full blocks of `request.known − 1` it reuses. A request needs no
+procedure of its own: the server calls the engine with its input and
+output, `vllm (K + n, o);`, and the engine prefills what the cache does not
+hold, then decodes, allocating a block at a time as `allocate_slots` does.
+The admission below says what is reused (`reuse`) and what a finished
+request leaves cached for the next turn (`cache`).
 
 ### Scheduling the running requests
 
@@ -139,7 +137,8 @@ not fit blocks the rest. Four details shape the admission:
 - nothing is admitted in a step that preempted (`scheduler.py:869`).
 
 In serQ these are the `taking` units, the `reserve`, and the `while`, the
-last statement of the `schedule` block:
+last statement of the `scheduler` block, with the prefix it reuses and the
+blocks it leaves cached:
 
 ```serq
 --8<-- "examples/multi-turn/vllm.sq:waiting"
@@ -194,10 +193,10 @@ A turn is one request to the engine, on the whole context:
 | Requirement | Current expression | Limit of the model |
 |---|---|---|
 | Token budget and chunked prefill | `engine … { tokens cap …; scheduler { … each at most (…); } }` | Resident selection then waiting admission is a specific policy |
-| Request slots and KV space | `hold`, admission bindings, `reserve`, `growing` | Tagged fit/lookahead conditions are not fully validated |
+| Request slots and KV space | `taking`, `reserve`, the engine's request state | Tagged fit/lookahead conditions are not fully validated |
 | FCFS/priority | Queue order and `preempt lifo`; PRIORITY is `preempt by (-priority, -t0) requeue tail` beside `queue by (priority, t0)` | No oracle scenario checks the PRIORITY victim |
 | Shared prefix | `cachedin`, `reuse`, `cache` | Cache identity is session-based, not content-key shared objects |
-| Local decode preemption | `computed`-aware `known` in the `server` block | Latest-tag recovery paths need differential validation |
+| Local decode preemption | `request.known`, which keeps the generated tokens | Latest-tag recovery paths need differential validation |
 | Async and speculative execution | Cost expressions, explicit leases/transfers | In-flight scheduler state and proposed/accepted progress remain absent |
 
 ## Validation
