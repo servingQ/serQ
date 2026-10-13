@@ -99,7 +99,9 @@ fn main() {
       decode (2);
     }
     scheduler { advance running; admit waiting while (running.preempted == 0); }
-    execute (1);
+    worker {
+      forward (1);
+    }
   }
   stage tool : delay;
   workload {

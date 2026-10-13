@@ -28,7 +28,9 @@ fn main() {
     tokens cap 1000000;
     request (output) { decode (output); }
     scheduler { advance running; admit waiting while (running.preempted == 0); }
-    execute (1);
+    worker {
+      forward (1);
+    }
   }
   // --8<-- [end:engine]
 

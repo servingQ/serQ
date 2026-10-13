@@ -46,7 +46,7 @@ OPTIONS = (
     # an engine's schedule and execution; `advance`, `each` and `most` are
     # read only in the phrases `advance running` and `each at most`, which
     # the rules below colour whole, and are listed for tests/docs_lexer.rs
-    "schedule", "scheduler", "advance", "each", "most", "execute",
+    "schedule", "scheduler", "advance", "each", "most", "execute", "worker", "forward",
     # no program writes `stage : step` any more, but the parser still matches
     # `step` to say an engine is written instead, and tests/docs_lexer.rs
     # asks the lexer for every word the parser matches

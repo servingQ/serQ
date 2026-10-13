@@ -21,7 +21,9 @@ fn main() {
       admit waiting while (running.preempted == 0)
         taking slots (1), kv (min(prompt, budget_left(llm))) reserve (prompt);
     }
-    execute (3 + batch.tokens + 2 * batch.prefilled + batch.decoding + batch.kv_decode + 2 * batch.attention);
+    worker {
+      forward (3 + batch.tokens + 2 * batch.prefilled + batch.decoding + batch.kv_decode + 2 * batch.attention);
+    }
   }
   pool kv on gpu { block 16; evict lru; preempt lifo; }
   pool slots on llm { }

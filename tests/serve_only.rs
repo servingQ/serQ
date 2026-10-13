@@ -28,7 +28,7 @@ fn source(schedule: &str) -> String {
           tokens cap 8;
           request () {{ prefill (3); decode (2); }}
           scheduler {{ {schedule} }}
-          execute (1);
+          worker {{ forward (1); }}
         }}
         workload {{ arrive batch(2);
           session {{ turn;
@@ -128,7 +128,7 @@ fn only_selects_and_by_orders() {
             advance running only (running.decoding > 0 ? decoding : !decoding) by (remaining);
             admit waiting only (running.decoding > 0 ? decoding : !decoding) while (running.preempted == 0);
           }
-          execute (1);
+          worker { forward (1); }
         }
         workload { arrive batch(2); init { set prompt = serial == 0 ? 4 : 2; }
           session { turn;
@@ -174,7 +174,7 @@ fn admitted(schedule: &str) -> String {
             decode (2);
           }}
           scheduler {{ {schedule} }}
-          execute (1);
+          worker {{ forward (1); }}
         }}
         pool reqs on llm {{ }}
         workload {{ arrive batch(3);
@@ -281,7 +281,7 @@ fn an_engine_that_excludes_every_resident_waits_for_the_residents_to_change() {
             advance running only (running.count > 1);
             admit waiting only (running.count > 1) while (running.preempted == 0);
           }
-          execute (1);
+          worker { forward (1); }
         }
         workload { arrive batch(2);
           session { turn;

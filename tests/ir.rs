@@ -92,7 +92,7 @@ fn ir_that_skips_the_linker_meets_its_checks() {
           tokens cap 8;
           request () { prefill (8) growing kv; }
           scheduler { advance running; admit waiting while (running.preempted == 0) taking kv (8); }
-          execute (1);
+          worker { forward (1); }
         }
         pool kv on gpu { }
         stage d : delay;
@@ -270,7 +270,7 @@ fn malformed_ir_is_rejected() {
     let e = bad.validate().unwrap_err();
     assert!(e.starts_with("session: "), "{e}");
     assert!(e.contains("`tokens` is read in a session statement"), "{e}");
-    assert!(e.contains("exists only in an engine's `execute`"), "{e}");
+    assert!(e.contains("exists only in an engine's `worker`"), "{e}");
     // a hidden slot that does not exist
     let mut bad = p.clone();
     bad.hidden.push(99);
@@ -305,7 +305,7 @@ fn budget_left_needs_a_step_stage() {
         engine llm on gpu {
           tokens cap 8;
           scheduler { advance running; admit waiting while (running.preempted == 0); }
-          execute (1);
+          worker { forward (1); }
         }
         pool kv on gpu { }
         stage d : delay;
@@ -650,7 +650,7 @@ fn at_admission_is_substituted_into_the_header() {
             advance running;
             admit waiting while (running.preempted == 0) taking reqs (1), kv ({take});
           }}
-          execute (1e-3);
+          worker {{ forward (1e-3); }}
         }}
         pool kv on gpu {{ block 16; evict lru; }}
         pool reqs on llm {{ }}
@@ -712,7 +712,7 @@ fn a_bound_name_is_substituted_when_it_stands_alone_as_an_argument() {
             advance running;
             admit waiting while (running.preempted == 0) taking reqs (1), kv ({take});
           }}
-          execute (1e-3);
+          worker {{ forward (1e-3); }}
         }}
         pool kv on gpu {{ block 16; evict lru; }}
         pool reqs on llm {{ }}
@@ -850,7 +850,7 @@ fn the_request_boundary_preserves_size_ownership() {
             admit waiting while (running.preempted == 0)
               taking reqs (1), kv (min(prompt, hit + budget_left(llm)));
           }
-          execute (1e-3);
+          worker { forward (1e-3); }
         }
         pool kv on gpu { block 16; evict lru; }
         pool reqs on llm { }
@@ -927,7 +927,7 @@ fn enter_is_hold_next_to_a_pool_the_engine_admits() {
           tokens cap 64;
           request (n) {{ prefill (n) growing kv; cache (n); }}
           scheduler {{ advance running; admit waiting while (running.preempted == 0) taking reqs (1), kv (n); }}
-          execute (1);
+          worker {{ forward (1); }}
         }}
         pool kv on gpu {{ }} pool reqs on llm {{ }}
 
@@ -940,7 +940,7 @@ fn enter_is_hold_next_to_a_pool_the_engine_admits() {
             reqs cap 4;
             tokens cap 64;
             scheduler {{ advance running; admit waiting while (running.preempted == 0); }}
-            execute (1);
+            worker {{ forward (1); }}
           }}
           pool kv on gpu {{ }} pool reqs on llm {{ }}
           prefill (n) {{ hold reqs (cost(reqs, 1)), kv (cost(kv, n)) {{ run llm prefill (cost(llm, n)) growing kv; }} cache (cost(reqs, kv, n)); }}

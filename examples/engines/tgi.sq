@@ -47,7 +47,9 @@ fn main() {
       }
       set just = waiting.admitted > 0;
     }
-    execute (max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
+    worker {
+      forward (max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
+    }
   }
   pool kv on tgi.gpu { block 1; evict lru; preempt none; }
 

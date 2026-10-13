@@ -38,7 +38,7 @@ fn engine(
             decode (o - 1) growing kv;
           }}
           scheduler {{ {schedule} }}
-          execute (1);
+          worker {{ forward (1); }}
         }}
         pool kv on gpu {{ block bs; evict lru; preempt lifo; }}
         pool reqs on llm {{ }}
@@ -139,7 +139,7 @@ fn a_request_preempted_during_decode_resumes_from_its_outputs() {
             admit waiting while (running.preempted == 0)
               taking reqs (1), kv (min(known, 1000)) reserve (known);
           }
-          execute (1);
+          worker { forward (1); }
         }
         pool kv on gpu { block bs; evict lru; preempt lifo; }
         pool reqs on llm { }
@@ -202,7 +202,7 @@ fn preempted_twice(set_kept: &str, known_is: &str) -> String {
             admit waiting while (running.preempted == 0) each at most (8)
               taking reqs (1), kv (min(known, budget_left(llm))) reserve (known);
           }}
-          execute (1);
+          worker {{ forward (1); }}
         }}
         pool kv on gpu {{ block bs; evict lru; preempt lifo; }}
         pool reqs on llm {{ }}
@@ -305,7 +305,7 @@ fn preempted_twice_in_a_queue(set_kept: &str, known_is: &str) -> String {
               advance running each at most (8);
               admit waiting while (running.preempted == 0) each at most (8);
             }}
-            execute (1);
+            worker {{ forward (1); }}
           }}
           pool kv on gpu {{ block bs; evict lru; preempt lifo; }}
           pool reqs on D {{ queue fifo; }}
@@ -404,7 +404,7 @@ fn a_holder_preempted_before_its_first_step_has_computed_nothing() {
           engine on gpu {
             tokens cap 1000;
             scheduler { advance running; admit waiting while (running.preempted == 0); }
-            execute (1);
+            worker { forward (1); }
           }
           decode (prompt) {
             if (prompt == 64) {
@@ -469,7 +469,7 @@ fn serve_by_orders_residents_by_the_declared_keys() {
             advance running {order};
             admit waiting while (running.preempted == 0) taking kv (100);
           }}
-          execute (1);
+          worker {{ forward (1); }}
         }}
         pool kv on gpu {{ }}
         workload {{ arrive batch(2); init {{ set o = serial == 0 ? 10 : 3; }}
@@ -560,7 +560,7 @@ fn a_resident_admitted_mid_iteration_is_served_once_under_serve_by() {
             advance running by (remaining);
             admit waiting while (running.preempted == 0) taking reqs (1), kv (10);
           }
-          execute (1);
+          worker { forward (1); }
         }
         pool reqs on llm { }
         pool kv on gpu { }
@@ -714,7 +714,7 @@ fn next_turn_reuses_full_blocks_of_the_cached_prefix() {
             admit waiting while (running.preempted == 0)
               taking reqs (1), kv (c + min(prompt - c, 8192));
           }
-          execute (1);
+          worker { forward (1); }
         }
         pool kv on gpu { block bs; evict lru; preempt lifo; }
         pool reqs on llm { }
@@ -764,7 +764,7 @@ fn lru_eviction_drops_tail_blocks_first() {
             admit waiting while (running.preempted == 0)
               taking reqs (1), kv (c + min(prompt - c, 8192));
           }
-          execute (1);
+          worker { forward (1); }
         }
         pool kv on gpu { block bs; evict lru; preempt lifo; }
         pool reqs on llm { }

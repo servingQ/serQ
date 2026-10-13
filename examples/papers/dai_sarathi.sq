@@ -24,7 +24,9 @@ fn main() {
       advance running admission;
       admit waiting while (running.preempted == 0);
     }
-    execute (c + compute(batch.tokens));
+    worker {
+      forward (c + compute(batch.tokens));
+    }
   }
   // --8<-- [end:engine]
 

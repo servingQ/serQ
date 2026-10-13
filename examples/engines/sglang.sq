@@ -99,7 +99,9 @@ fn main() {
       }
       set backlog = waiting.count > 0;
     }
-    execute (max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
+    worker {
+      forward (max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
+    }
   }
   // FCFS, SGLang's default; `--lpm 1` is `--schedule-policy lpm`: the
   // waiting requests by their cached prefix, longest first, and FCFS while

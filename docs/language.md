@@ -70,13 +70,13 @@ poolopt  := cap expr ;                       -- capacity in units (default inf)
 kind     := fifo [ ( c ) ]                   -- c servers, one job each at rate 1
           | ps ( expr )                      -- throughput phi(present) shared equally; expr reads present
           | delay                            -- ps(present): every job at rate 1, no waiting
-resource := NAME ( NAME , ... ) = expr ;           -- a time resource: a demand to time, read in `execute`
+resource := NAME ( NAME , ... ) = expr ;           -- a time resource: a demand to time, read in `worker`
           | NAME cap expr ;                  -- a capacity, declared as a pool with `pool NAME on DEVICE`
 eitem    := NAME [ '[' N ']' ] cap expr ;    -- a capacity the engine holds (`reqs cap max_seqs;`); `[N]`: N queues it admits
           | tokens cap expr ;                -- the tokens one iteration computes (required; `inf` for none)
           | granule expr ; | state NAME = expr ;
           | scheduler { (let NAME = expr ;)* sstmt+ }   -- what each iteration does (required)
-          | execute ( expr ) ;               -- the batch's time over the device's resources (required)
+          | worker { forward ( expr ) ; }    -- what the worker does with the batch: its forward's time (required)
           | request ( NAME , ... ) { rstmt* [at admission { (NAME = expr ;)* }] rstmt* [cache ( expr ) ;] }
                                              -- what the engine does with one request (*An engine's request*):
                                              -- the statements when the call is reached, the admission's
@@ -394,7 +394,7 @@ whole:
 ```
 queue P[NP] : prefill {
   device gpu { …; kv cap blocksP * bs; }
-  engine on gpu { reqs cap max_seqsP; tokens cap B; scheduler { … } execute (…); }
+  engine on gpu { reqs cap max_seqsP; tokens cap B; scheduler { … } worker { forward (…); } }
   pool reqs on P { queue fifo; }
   pool kv on gpu { block bs; evict lru; preempt lifo; }
   prefill (prompt) {
@@ -918,7 +918,7 @@ An [engine](api/engine.md) runs iterations. A plain `run`'s work is time
 at rate 1, the clock's unit; an engine's `prefill` and `decode` work is in
 tokens, the unit of its `tokens cap`. The clock itself has no unit: a
 program whose costs are seconds runs in seconds, and
-`examples/oracle/vllm_request.sq` runs on the step clock with `execute
+`examples/oracle/vllm_request.sq` runs on the step clock with `forward
 (1)`, so its times are iterations.
 
 An iteration serves the running requests in the order its schedule's
@@ -942,7 +942,7 @@ the budget (scheduler.py:779-797) and its hold caches its position, not the
 chunk the iteration gave it ([vLLM correspondence](#7-vllm-v1-as-a-serq-program)); a grower that preempts itself ends the
 iteration's serving (scheduler.py:807-813); then `admit waiting` admits
 from the queues the engine admits. The iteration advances the clock by
-`execute`'s expression in `batch.tokens`, `batch.decoding`,
+`worker`'s expression in `batch.tokens`, `batch.decoding`,
 `batch.prefilled`, `batch.kv_decode`, `batch.kv_prefill`,
 `batch.attention` and `running.count`; its tokens are applied when it
 ends. A run of zero work completes at once. An iteration that schedules no
@@ -951,7 +951,7 @@ step that only preempted (vLLM's `schedule()` admits nothing in a step
 with `preempted_reqs`, `scheduler.py:869`, and the oracle driver counts
 the step; the Lean model's `startIteration` gives that step its cost, and
 `step` re-admits at the next event), and the next iteration re-admits the
-victim. It lasts `execute`'s time at zero tokens, which is a modelling
+victim. It lasts `worker`'s time at zero tokens, which is a modelling
 choice: the real engine skips the forward pass of an empty step, so the
 fixed part of the time overstates it. A hold whose body can never fit then
 preempts itself forever (vLLM refuses such a KV cache at start-up, above);
@@ -1048,7 +1048,9 @@ engine vllm on gpu {
     advance running each at most (threshold);
     admit waiting while (running.preempted == 0) each at most (threshold);
   }
-  execute (c0 + max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
+  worker {
+    forward (c0 + max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
+  }
 }
 pool kv on gpu { block bs; evict lru; preempt lifo; }
 pool reqs on vllm { queue fifo; }
@@ -1056,12 +1058,12 @@ pool reqs on vllm { queue fifo; }
 
 | Engine form | IR step stage (`CStep`) |
 |---|---|
-| `device D { f (x) = e; X cap c; }` | no field: `f` is written out where `execute` reads it; `X cap c` is the `cap` of the `pool X on D` that must declare it |
+| `device D { f (x) = e; X cap c; }` | no field: `f` is written out where `worker` reads it; `X cap c` is the `cap` of the `pool X on D` that must declare it |
 | `pool X on D { rules }` | a pool, `cap c` and the rules, no `admit_via`: a hold waiting for it is admitted as soon as it fits; `memory` when `D` is the engine's device |
 | `pool X on E.D { rules }` | the same, `admit_via` `E`: engine `E`, running on `D`, admits a hold waiting for it in an iteration |
 | `pool X on E { rules }` | a pool, `cap c` of `X cap c` in engine `E` and the rules, `admit_via` `E` |
 | `tokens cap B;` | `budget` `B` |
-| `execute (T);` | `cost` `T`, the device's time resources written out |
+| `worker { forward (T); }` | `cost` `T`, the device's time resources written out |
 | `each at most (e)` | `chunk` `e`: one cap per run for the whole iteration; `inf` is no cap, which the linker writes 0 as the kernel reads it |
 | `state NAME = c;` | a `Register` of the stage, `init` `c` |
 | `advance running [order]; admit waiting while (running.preempted == 0);` | `serve` `By([keys])` of the order (`By([])` for none, admission order), no `iteration` |
@@ -1092,9 +1094,9 @@ names each value one way in all its clauses, and none by the kernel's
 bare name: `running.…` is the residents as they stand, `waiting.…` the
 queues, `batch.…` the iteration's batch.
 
-| Value | `tokens cap` | `scheduler` | `execute` |
+| Value | `tokens cap` | `scheduler` | `worker` |
 |---|---|---|---|
-| `running.count`, `waiting.count` | yes | yes | yes |
+| `running.count`, `waiting.count` | yes | yes | no: the worker reads the batch |
 | `running.decoding`, `running.kv_decode`, `running.kv_prefill` | yes | yes | no: the batch's is `batch.…` |
 | `running.preempted`, `waiting.admitted` | no | yes | no |
 | `batch.tokens`, `batch.prefilled` | no | yes: the batch so far | yes |
@@ -1107,9 +1109,9 @@ iteration starts, read what `tokens cap` reads: `running.count`,
 `running.decoding`, `running.kv_…` and `waiting.count`.
 
 `tokens cap` bounds the batch before it is formed, so it reads no
-`batch.…`. `execute` times the batch, which a budget or an `only` can
-leave short of the residents, so it reads the batch's decodes and KV, not
-the residents'. `running.preempted` and `waiting.admitted` say what the
+`batch.…`. The worker times the batch the scheduler formed, which a
+budget or an `only` can leave short of the residents, so its `forward`
+reads the batch, `batch.…`, and nothing of the residents or the queues. `running.preempted` and `waiting.admitted` say what the
 schedule did, so only `scheduler` reads them. `engine` is a keyword: an
 engine is named for what it models (`vllm`, `sglang`, `tgi`) or `llm`.
 Inside a `queue`, `device gpu` is the member's and `engine on gpu` is the
@@ -1145,7 +1147,9 @@ engine vllm on gpu {
     admit waiting while (running.preempted == 0) each at most (threshold)
       taking reqs (1), kv (min(known, reused + budget_left(vllm))) reserve (known);
   }
-  execute (c0 + max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
+  worker {
+    forward (c0 + max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
+  }
 }
 ```
 

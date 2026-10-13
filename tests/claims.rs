@@ -20,7 +20,7 @@ engine llm on gpu {
   tokens cap bmax;
   request () { prefill (290); decode (990); }
   scheduler { SCHEDULE }
-  execute (c + a * ceil(batch.tokens / b0));
+  worker { forward (c + a * ceil(batch.tokens / b0)); }
 }
 workload { arrive renewal(46750); init { set t0 = now; }
   session { turn; end;
@@ -123,7 +123,7 @@ const BATCH: &str = "
           tokens cap 4;
           request (n) { prefill (n); }
           scheduler { advance running; admit waiting while (running.preempted == 0); }
-          execute (1);
+          worker { forward (1); }
         }
         workload { arrive batch(3); init { set n = serial == 0 ? 3 : serial; }
           session { turn; end;
@@ -229,7 +229,7 @@ fn arrived_counts_the_sessions_started_by_the_iteration() {
           tokens cap 4;
           request () { prefill (3); }
           scheduler { advance running; admit waiting while (running.preempted == 0); }
-          execute (1);
+          worker { forward (1); }
         }
         workload { arrive renewal(10);
           session { turn; end;
@@ -330,7 +330,7 @@ fn a_claim_over_a_member_of_an_array() {
           engine on gpu {
             tokens cap 4;
             scheduler { advance running; admit waiting while (running.preempted == 0); }
-            execute (1);
+            worker { forward (1); }
           }
           prefill (prompt) { run llm prefill (cost(llm, prompt)); }
         }

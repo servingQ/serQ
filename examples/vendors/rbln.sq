@@ -28,7 +28,9 @@ fn main() {
       admit waiting while (running.preempted == 0) each at most (128)
         taking reqs (1), kv (min(known, reused + min(128, left))) reserve (known);
     }
-    execute (0.002 + 0.00001 * batch.tokens);
+    worker {
+      forward (0.002 + 0.00001 * batch.tokens);
+    }
   }
   // --8<-- [end:schedule]
   // --8<-- [start:pools]

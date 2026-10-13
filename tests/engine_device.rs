@@ -1,5 +1,5 @@
 //! Engines on devices (`docs/design/engine-device.md`): `device`, `engine …
-//! on`, `pool … on`, `scheduler` and `execute` are parse-time sugar for the
+//! on`, `pool … on`, `scheduler` and `worker` are parse-time sugar for the
 //! kernel's step stage (`CStageKind::Step`), which no program writes any
 //! more, so each test reads the step an engine lowers to from the compiled
 //! `Program`; and every rule the design refuses does not link.
@@ -22,6 +22,7 @@ fn compiled(src: &str, ov: &Overrides) -> Program {
     compile_source(&common::main_source(src), ov).unwrap_or_else(|e| panic!("{e}\n{src}"))
 }
 
+#[track_caller]
 fn error(src: &str) -> String {
     match compile_source(&common::main_source(src), &common::horizon(10.0)) {
         Ok(_) => panic!("links:\n{src}"),
@@ -29,6 +30,7 @@ fn error(src: &str) -> String {
     }
 }
 
+#[track_caller]
 fn refused(src: &str, fragment: &str) {
     let e = error(src);
     assert!(e.contains(fragment), "missing {fragment:?}:\n{e}");
@@ -165,7 +167,7 @@ fn serve_only(p: CExpr) -> Vec<CIter> {
 
 /// `max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens))`
 /// with `hbm (k) = omega + beta * k` and `compute (t) = t * a`, the
-/// examples' constants: the `execute` of the three engines below.
+/// examples' constants: the `worker` of the three engines below.
 fn roofline() -> CExpr {
     CExpr::Call(
         Fun::Max,
@@ -191,7 +193,7 @@ fn reg(r: usize) -> CExpr {
 /// `examples/multi-turn/vllm.sq` is vLLM's procedure on the kernel's step:
 /// no body, residents in admission order, its memory `kv` admitted as soon
 /// as it fits (`on gpu`) and `reqs` by the engine. `tokens cap B` is the
-/// budget, `execute (c0 + …)` the cost, and the per-run cap the kernel's
+/// budget, `forward (c0 + …)` the cost, and the per-run cap the kernel's
 /// `chunk`, applied only while more than one request is in the engine
 /// (vLLM's `long_prefill_token_threshold`): `inf`, no cap, is its 0, and a cap of 512 is 512.
 #[test]
@@ -396,7 +398,7 @@ engine vllm on gpu {{
     decode (2){growing};
   }}
   scheduler {{ {schedule} }}
-  execute (step_time(batch.tokens));
+  worker {{ forward (step_time(batch.tokens)); }}
 }}
 pool reqs on vllm {{ }}
 pool kv on gpu {{ preempt lifo; }}
@@ -419,6 +421,37 @@ fn schedule_is_written_scheduler() {
     refused(&src, "an engine writes this as `scheduler { … }`");
 }
 
+/// The batch's time is the worker's forward (#555): `execute (T);` is
+/// refused with it, and a worker has one forward and nothing else yet.
+#[test]
+fn execute_is_the_workers_forward() {
+    let ok = engine("advance running; admit waiting while (running.preempted == 0);");
+    let forward = "worker { forward (step_time(batch.tokens)); }";
+    refused(
+        &ok.replace(forward, "execute (step_time(batch.tokens));"),
+        "an engine writes this as `worker { forward (T); }`",
+    );
+    refused(
+        &ok.replace(forward, "worker { }"),
+        "a worker needs `forward (T);`",
+    );
+    refused(
+        &ok.replace(
+            forward,
+            "worker { forward (1); forward (step_time(batch.tokens)); }",
+        ),
+        "`forward` twice",
+    );
+    refused(
+        &ok.replace(forward, "worker { set x = 1; }"),
+        "a worker takes `forward (T);`",
+    );
+    refused(
+        &ok.replace(forward, "worker { forward (running.count); }"),
+        "counts the residents",
+    );
+}
+
 /// Each form of the kernel's step is a schedule: the procedure is no body,
 /// an order is the serve keys, a common `only` is the body `serve only`
 /// is, `exclusive prefill` is its rule and a per-run cap the `chunk`; any
@@ -429,7 +462,7 @@ fn the_stage_forms_are_schedules() {
         &engine("advance running; admit waiting while (running.preempted == 0);"),
         &common::horizon(20.0),
     );
-    // the engine's clauses: `tokens cap` is the budget, `execute` the cost,
+    // the engine's clauses: `tokens cap` is the budget, `worker` the cost,
     // the device's pool the memory, admitted as soon as it fits, and the
     // engine's `reqs` cap a pool it admits
     let st = step(&p, "vllm");
@@ -522,14 +555,14 @@ fn the_stage_forms_are_schedules() {
 /// `kv_decode` are the residents' before the batch is formed and the
 /// batch's in `cost`, which a budget or an `only` may leave short, so an
 /// engine reads `running.decoding` in `tokens cap` and `scheduler` and
-/// `batch.decoding` in `execute` (#416).
+/// `batch.decoding` in `worker` (#416).
 #[test]
 fn an_engine_reads_its_lists_in_every_clause() {
     let ov = common::horizon(20.0);
     let ok = "advance running; admit waiting while (running.preempted == 0);";
     let reqs = pool(&compiled(&engine(ok), &ov), "reqs", None);
     // each value as the kernel's context variable it reads: in `tokens
-    // cap 8 + v`, the budget `8 + v`; in `execute (step_time(…) + v)`, the
+    // cap 8 + v`, the budget `8 + v`; in `forward (step_time(…) + v)`, the
     // cost `1 + v`
     let tokens_cap = |v: &str| {
         let p = compiled(
@@ -549,8 +582,8 @@ fn an_engine_reads_its_lists_in_every_clause() {
             &replaced(
                 &engine(ok),
                 &[(
-                    "execute (step_time(batch.tokens));",
-                    &format!("execute (step_time(batch.tokens) + {v});"),
+                    "worker { forward (step_time(batch.tokens)); }",
+                    &format!("worker {{ forward (step_time(batch.tokens) + {v}); }}"),
                 )],
             ),
             &ov,
@@ -574,10 +607,8 @@ fn an_engine_reads_its_lists_in_every_clause() {
         ("batch.kv_decode", ctx(CtxVar::Kvb)),
         ("batch.prefilled", ctx(CtxVar::Npre)),
         ("batch.attention", ctx(CtxVar::Attn)),
-        ("running.count", ctx(CtxVar::Nres)),
-        ("waiting.count", queued(reqs)),
     ] {
-        assert_eq!(execute(v), kernel, "execute {v}");
+        assert_eq!(execute(v), kernel, "forward {v}");
     }
     for (from, to, why) in [
         (
@@ -586,8 +617,8 @@ fn an_engine_reads_its_lists_in_every_clause() {
             "`residents` is `running.count`",
         ),
         (
-            "execute (step_time(batch.tokens));",
-            "execute (step_time(batch.tokens) + max(residents, 1));",
+            "worker { forward (step_time(batch.tokens)); }",
+            "worker { forward (step_time(batch.tokens) + max(residents, 1)); }",
             "`residents` is `running.count`",
         ),
         (
@@ -596,18 +627,18 @@ fn an_engine_reads_its_lists_in_every_clause() {
             "`decoders` is `running.decoding`",
         ),
         (
-            "execute (step_time(batch.tokens));",
-            "execute (step_time(batch.tokens) + running.decoding);",
+            "worker { forward (step_time(batch.tokens)); }",
+            "worker { forward (step_time(batch.tokens) + running.decoding); }",
             "counts the residents, in the batch or not, and the batch's is `batch.decoding`",
         ),
         (
-            "execute (step_time(batch.tokens));",
-            "execute (step_time(batch.tokens) + kv_decode);",
+            "worker { forward (step_time(batch.tokens)); }",
+            "worker { forward (step_time(batch.tokens) + kv_decode); }",
             "`kv_decode` is `batch.kv_decode` here",
         ),
         (
-            "execute (step_time(batch.tokens));",
-            "execute (step_time(batch.tokens) + tokens);",
+            "worker { forward (step_time(batch.tokens)); }",
+            "worker { forward (step_time(batch.tokens) + tokens); }",
             "`tokens` is `batch.tokens` here",
         ),
         (
@@ -618,7 +649,7 @@ fn an_engine_reads_its_lists_in_every_clause() {
         (
             "while (running.preempted == 0)",
             "while (batch.decoding == 0)",
-            "`batch.decoding` is the formed batch's, read in `execute`",
+            "`batch.decoding` is the formed batch's, read in `worker`",
         ),
         (
             "tokens cap 8;",
@@ -658,13 +689,13 @@ fn an_engine_reads_its_lists_in_every_clause() {
             "read in its `if`, `while` and `set`, not in `tokens cap`",
         ),
         (
-            "execute (step_time(batch.tokens));",
-            "execute (step_time(batch.tokens) + waiting.admitted);",
-            "read in its `if`, `while` and `set`, not in `execute`",
+            "worker { forward (step_time(batch.tokens)); }",
+            "worker { forward (step_time(batch.tokens) + waiting.admitted); }",
+            "read in its `if`, `while` and `set`, not in `worker`",
         ),
         (
-            "execute (step_time(batch.tokens));",
-            "execute (step_time(batch.tokens) + preempted);",
+            "worker { forward (step_time(batch.tokens)); }",
+            "worker { forward (step_time(batch.tokens) + preempted); }",
             "`running.preempted` is what the iteration's schedule did",
         ),
         (
@@ -816,10 +847,10 @@ fn the_design_refuses_what_it_says() {
         &engine(ok).replace("step_time(batch.tokens)", "step_time(no_such_name)"),
         "unknown name `no_such_name`",
     );
-    // a device's time resource is read in an engine's `execute` only
+    // a device's time resource is read in an engine's `worker` only
     refused(
         &engine(ok).replace("tokens cap 8;", "tokens cap step_time(1);"),
-        "read in an engine's `execute`",
+        "read in an engine's `worker`",
     );
     // a pool on a device or an engine takes its cap and its admitter from it
     refused(
@@ -872,8 +903,8 @@ fn the_design_refuses_what_it_says() {
         "needs `tokens cap B;`",
     );
     refused(
-        &engine(ok).replace("execute (step_time(batch.tokens));", ""),
-        "needs `execute (T);`",
+        &engine(ok).replace("worker { forward (step_time(batch.tokens)); }", ""),
+        "needs `worker { forward (T); }`",
     );
     refused(
         &engine(ok).replace("tokens cap 8;", "tokens cap 0;"),
@@ -1008,8 +1039,8 @@ fn the_design_refuses_what_it_says() {
     refused(
         &format!(
             "device gpu {{ t (x) = 1; }}
-engine e1 on gpu {{ tokens cap 4; scheduler {{ advance running; }} execute (t(batch.tokens)); }}
-engine e2 on gpu {{ tokens cap 4; scheduler {{ advance running; }} execute (t(batch.tokens)); }}
+engine e1 on gpu {{ tokens cap 4; scheduler {{ advance running; }} worker {{ forward (t(batch.tokens)); }} }}
+engine e2 on gpu {{ tokens cap 4; scheduler {{ advance running; }} worker {{ forward (t(batch.tokens)); }} }}
 {WORKLOAD}"
         ),
         "one device runs one engine",
@@ -1070,7 +1101,7 @@ engine e2 on gpu {{ tokens cap 4; scheduler {{ advance running; }} execute (t(ba
     assert!(e.starts_with("13:12: no device or engine `gpuu`"), "{e}");
     assert!(e.contains("did you mean `gpu`?"), "{e}");
     // a context variable's old name is answered with the engine's name
-    let e = error(&engine(ok).replace("execute (step_time(batch.tokens))", "execute (ntok)"));
+    let e = error(&engine(ok).replace("forward (step_time(batch.tokens))", "forward (ntok)"));
     assert!(
         e.contains("in an engine, `ntok` is `batch.tokens` here"),
         "{e}"
@@ -1083,8 +1114,8 @@ engine e2 on gpu {{ tokens cap 4; scheduler {{ advance running; }} execute (t(ba
 fn an_engine_reads_the_programs_own_names() {
     let with = |c: &str| {
         engine("advance running; admit waiting;").replace(
-            "execute (step_time(batch.tokens))",
-            &format!("execute (step_time(batch.tokens) + {c} * batch.attention)"),
+            "forward (step_time(batch.tokens))",
+            &format!("forward (step_time(batch.tokens) + {c} * batch.attention)"),
         )
     };
     let ov = common::horizon(10.0);
@@ -1111,7 +1142,7 @@ fn an_engine_reads_the_programs_own_names() {
 fn a_family_of_engines_is_a_queue_family() {
     refused(
         "device gpu[2] { kv cap 100; } pool kv on gpu { }
-engine vllm[2] on gpu { tokens cap 8; scheduler { advance running; admit waiting while (running.preempted == 0); } execute (1); }
+engine vllm[2] on gpu { tokens cap 8; scheduler { advance running; admit waiting while (running.preempted == 0); } worker { forward (1); } }
 workload { arrive batch(4); init { set prompt = 2; } }",
         "engine family `vllm[2]`: a family of engines is a queue family, `queue vllm[2] : ROLE",
     );
@@ -1120,7 +1151,7 @@ workload { arrive batch(4); init { set prompt = 2; } }",
         format!(
             "queue vllm[2] : decode {{
   device gpu {{ kv cap 100; }}
-  engine on gpu {{ tokens cap 8; scheduler {{ {schedule} }} execute (1); }}
+  engine on gpu {{ tokens cap 8; scheduler {{ {schedule} }} worker {{ forward (1); }} }}
   pool kv on {on} {{ }}
   decode (prompt) {{ hold kv (cost(kv, prompt)) {{ run vllm prefill (cost(vllm, prompt)) growing kv; }} }}
 }}
@@ -1194,7 +1225,7 @@ engine llm on gpu {
   reqs[2] cap 4;
   tokens cap 64 + waiting.count;
   scheduler { advance running; admit waiting while (running.preempted == 0); }
-  execute (1);
+  worker { forward (1); }
 }
 pool kv on gpu { }
 pool reqs on llm { }
@@ -1222,7 +1253,7 @@ fn a_queues_engine_holds_no_family_capacity() {
     reqs[2] cap 4;
     tokens cap 64;
     scheduler { advance running; admit waiting; }
-    execute (1);
+    worker { forward (1); }
   }
   pool kv on gpu { }
   pool reqs on Q { }
@@ -1301,7 +1332,7 @@ server {{ E.prefill (prompt); }}
         )
     };
     let device = "device gpu { t1 (x) = 1; kv cap 10; }";
-    let engine = "engine on gpu { tokens cap 4; scheduler { advance running; admit waiting while (running.preempted == 0); } execute (t1(batch.tokens)); }";
+    let engine = "engine on gpu { tokens cap 4; scheduler { advance running; admit waiting while (running.preempted == 0); } worker { forward (t1(batch.tokens)); } }";
     let ov = common::horizon(10.0);
     compiled(
         &pod(&format!("{device} {engine} pool kv on gpu {{ }}")),
@@ -1428,7 +1459,7 @@ fn an_argument_its_definition_drops_is_resolved_where_the_use_stands() {
     let ok = "advance running; admit waiting while (running.preempted == 0);";
     let ov = common::horizon(10.0);
     let ir = |src: &str| serde_json::to_string(&compiled(src, &ov)).unwrap();
-    // a value of the engine, read in `execute`
+    // a value of the engine, read in `worker`
     let execute = |e: &str| {
         one(engine(ok)).replace(
             "step_time(batch.tokens)",
@@ -1437,9 +1468,7 @@ fn an_argument_its_definition_drops_is_resolved_where_the_use_stands() {
     };
     // never evaluated, it is not checked for its moment: `prompt` alone
     // would be read for the stage, with no session
-    for unread in ["one(waiting.count)", "one(prompt)"] {
-        assert_eq!(ir(&execute(unread)), ir(&execute("1")));
-    }
+    assert_eq!(ir(&execute("one(prompt)")), ir(&execute("1")));
     // a schedule's `let`, read in `each at most`
     let capped = |c: &str| {
         one(engine(&format!(
@@ -1600,7 +1629,7 @@ fn a_name_is_a_number_only_where_its_function_takes_one() {
         format!(
             "{pre}
 device gpu {{ kv cap 100; }} pool kv on gpu {{ }}
-engine E on gpu {{ tokens cap inf; request () {{ prefill (1); }} scheduler {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
+engine E on gpu {{ tokens cap inf; request () {{ prefill (1); }} scheduler {{ advance running; admit waiting while (running.preempted == 0); }} worker {{ forward (1); }} }}
 workload {{ arrive batch(1); init {{ set prompt = 32; }} }}
 server {{ hold kv (cost(kv, {size})) {{ E (); }} }}"
         )

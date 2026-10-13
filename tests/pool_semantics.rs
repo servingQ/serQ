@@ -547,7 +547,7 @@ fn a_hold_that_can_never_fit_is_reported_stuck() {
             advance running;
             admit waiting while (running.preempted == 0) taking reqs (1), kv (100) reserve (100);
           }
-          execute (1);
+          worker { forward (1); }
         }
         pool reqs on llm { }
         pool kv on gpu { block 16; evict lru; preempt lifo; }
@@ -592,7 +592,7 @@ fn a_zero_cost_preempting_step_does_not_hang() {
             advance running;
             admit waiting while (running.preempted == 0) taking reqs (1), kv (100) reserve (100);
           }
-          execute (batch.tokens);
+          worker { forward (batch.tokens); }
         }
         pool reqs on llm { }
         pool kv on gpu { block 16; evict lru; preempt lifo; }
@@ -708,7 +708,7 @@ fn a_hold_without_cache_leaves_the_prefix_to_the_hold_that_caches() {
             advance running;
             admit waiting while (running.preempted == 0) taking kv (min(cachedin(kv), 992) + 8);
           }}
-          execute (batch.tokens * 1e-5 + 1e-4);
+          worker {{ forward (batch.tokens * 1e-5 + 1e-4); }}
         }}
         pool kv on gpu {{ block 16; evict lru; }}
         stage user : delay;
@@ -865,7 +865,7 @@ fn bad_amounts_and_indices_fail_the_run() {
           tokens cap 8;
           request (output) { decode (output); }
           scheduler { advance running; admit waiting while (running.preempted == 0); }
-          execute (1);
+          worker { forward (1); }
         }
         pool kv on gpu { }
         workload { arrive batch(1); init { set z = 0; }
@@ -916,7 +916,7 @@ fn a_hold_takes_a_pool_once() {
             advance running each at most (128);
             admit waiting while (running.preempted == 0) each at most (128){taking};
           }}
-          execute (0.001);
+          worker {{ forward (0.001); }}
         }}
         pool kv on gpu {{ block 16; }}
         workload {{ arrive batch(3);
@@ -1080,7 +1080,7 @@ fn a_held_reservation_counts_against_later_admissions() {
             advance running;
             admit waiting while (running.preempted == 0) taking reqs (1), kv (4) reserve (10);
           }}
-          execute (1);
+          worker {{ forward (1); }}
         }}
         pool reqs on llm {{ }}
         pool kv on gpu {{ preempt lifo; {held} }}
@@ -1191,7 +1191,7 @@ fn a_run_ends_at_its_start_plus_its_work() {
             advance running each at most (1);
             admit waiting each at most (1) taking reqs (1), kv (0);
           }}
-          execute (1);
+          worker {{ forward (1); }}
         }}
         pool reqs on llm {{ }}
         pool kv on gpu {{ preempt lifo; }}
@@ -1270,7 +1270,7 @@ fn a_resumed_growth_moves_the_position_once() {
             advance running;
             admit waiting taking reqs (1), kv (0);
           }
-          execute (1);
+          worker { forward (1); }
         }
         pool reqs on llm { }
         pool kv on gpu { }

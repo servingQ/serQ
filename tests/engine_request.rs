@@ -61,7 +61,7 @@ engine llm on gpu {
     admit waiting while (running.preempted == 0)
       taking reqs (1), kv (min(known, budget_left(llm))) reserve (known);
   }
-  execute (1);
+  worker { forward (1); }
 }
 ";
 
@@ -87,7 +87,7 @@ queue llm : prefill {
     reqs cap 2;
     tokens cap 8;
     scheduler { advance running; admit waiting while (running.preempted == 0); }
-    execute (1);
+    worker { forward (1); }
   }
   pool kv on gpu { block bs; evict lru; preempt lifo; }
   pool reqs on llm { queue fifo; }
@@ -164,7 +164,7 @@ engine llm on gpu {{
   tokens cap 8;
   request (prompt) {{ prefill (prompt); }}
   scheduler {{ advance running; admit waiting while (running.preempted == 0); }}
-  execute (1);
+  worker {{ forward (1); }}
 }}
 pool kv on gpu {{ block bs; }}
 workload {{ arrive batch(1); turn {{ set n = 6; }} }}
@@ -178,7 +178,7 @@ queue llm : prefill {
   engine on gpu {
     tokens cap 8;
     scheduler { advance running; admit waiting while (running.preempted == 0); }
-    execute (1);
+    worker { forward (1); }
   }
   pool kv on gpu { block bs; }
   prefill (prompt) { run llm prefill (cost(llm, prompt)); }
@@ -500,7 +500,7 @@ engine llm2 on gpu2 {
     prefill (prompt) growing kv2;
   }
   scheduler { advance running; admit waiting while (running.preempted == 0) taking kv2 (prompt); }
-  execute (1);
+  worker { forward (1); }
 }
 ";
     let src = format!("{DEVICE}{ENGINE}{POOLS}{second}{SERVER}");
@@ -515,8 +515,8 @@ fn an_engine_has_one_request() {
     let src = replaced(
         &program(),
         &[(
-            "  execute (1);\n",
-            "  execute (1);\n  request (prompt) { prefill (prompt); }\n",
+            "  worker { forward (1); }\n",
+            "  worker { forward (1); }\n  request (prompt) { prefill (prompt); }\n",
         )],
     );
     refused(&src, "`request` twice");
@@ -645,7 +645,7 @@ fn a_session_does_not_call_an_engine() {
                 &format!(
                     "pool reqs on llm {{ queue fifo; }}\ndevice npu {{ }}\n\
                      engine small on npu {{ tokens cap 8; request () {{ {body} }} \
-                     scheduler {{ advance running; admit waiting; }} execute (1); }}\n"
+                     scheduler {{ advance running; admit waiting; }} worker {{ forward (1); }} }}\n"
                 ),
             )],
         )
@@ -681,7 +681,7 @@ queue P : prefill {
     tokens cap 8;
     request (prompt) { prefill (prompt); }
     scheduler { advance running; admit waiting while (running.preempted == 0); }
-    execute (1);
+    worker { forward (1); }
   }
   prefill (prompt) { run P prefill (cost(P, prompt)); }
 }
@@ -701,7 +701,7 @@ engine llm[2] on gpu {
   tokens cap 8;
   request (prompt) { prefill (prompt); }
   scheduler { advance running; admit waiting while (running.preempted == 0); }
-  execute (1);
+  worker { forward (1); }
 }
 workload { arrive batch(1); turn { set n = 6; } }
 server { run llm[0] prefill (cost(llm, n)); }

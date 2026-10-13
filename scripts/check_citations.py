@@ -59,6 +59,9 @@ PATHS = {
     # vLLM's benchmark client: what a client counts of a request
     "benchmarks/serve.py": "vllm/benchmarks/serve.py",
     "sched/interface.py": "vllm/v1/core/sched/interface.py",
+    "sched/output.py": "vllm/v1/core/sched/output.py",
+    # the model runner's side of a KV connector: load before or after the forward, save after it
+    "kv_connector_model_runner_mixin.py": "vllm/v1/worker/kv_connector_model_runner_mixin.py",
     "input_processor.py": "vllm/v1/engine/input_processor.py",
     "nixl/push_worker.py": "vllm/distributed/kv_transfer/kv_connector/v1/nixl/push_worker.py",
     "config/scheduler.py": "vllm/config/scheduler.py",

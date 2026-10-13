@@ -34,7 +34,7 @@ fn source(schedule: &str, slot_cap: usize, kv_cap: usize) -> String {
             cache (100);
           }}
           scheduler {{ {schedule} }}
-          execute (1);
+          worker {{ forward (1); }}
         }}
         pool reqs on llm {{ }}
         pool kv on gpu {{ }}
@@ -167,7 +167,7 @@ fn resident_prefill_chunks_do_not_admit_another_waiting_request() {
             admit waiting while (running.preempted == 0) each at most (4)
               taking reqs (1), kv (4) reserve (6);
           }
-          execute (1);
+          worker { forward (1); }
         }
         pool reqs on llm { }
         pool kv on gpu { }
@@ -206,7 +206,7 @@ fn an_exhausted_decode_budget_defers_waiting_prefill() {
             }
           }
           scheduler { exclusive prefill; admit waiting while (running.preempted == 0) taking reqs (1); }
-          execute (1);
+          worker { forward (1); }
         }
         pool reqs on llm { }
         workload { arrive batch(3);
@@ -260,7 +260,7 @@ fn preemption_keeps_only_committed_progress_and_defers_readmission() {
             admit waiting while (running.preempted == 0) each at most (2)
               taking reqs (1), kv (min(known, left)) reserve (known) reuse (0);
           }
-          execute (1);
+          worker { forward (1); }
         }
         pool reqs on llm { }
         pool kv on gpu { preempt lifo; }

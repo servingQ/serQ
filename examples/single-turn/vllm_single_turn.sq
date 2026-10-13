@@ -46,7 +46,9 @@ fn main() {
       admit waiting while (running.preempted == 0) each at most (threshold)
         taking reqs (1), kv (min(known, reused + budget_left(vllm))) reserve (known);
     }
-    execute (c0 + max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
+    worker {
+      forward (c0 + max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
+    }
   }
   pool reqs on vllm { queue fifo; }
 

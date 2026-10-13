@@ -58,10 +58,12 @@ fn main() {
         taking reqs (1), kv (min(known, reused + budget_left(vllm))) reserve (known);
     }
     // --8<-- [end:waiting]
-    // --8<-- [start:execute]
-    execute (c0 + max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
+    // --8<-- [start:worker]
+    worker {
+      forward (c0 + max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
+    }
   }
-  // --8<-- [end:execute]
+  // --8<-- [end:worker]
   // --8<-- [start:queue]
   pool reqs on vllm { queue fifo; }
   // --8<-- [end:queue]

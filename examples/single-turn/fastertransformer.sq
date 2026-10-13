@@ -32,7 +32,9 @@ fn main() {
       advance running only (in_phase());
       admit waiting only (in_phase()) while (running.preempted == 0);
     }
-    execute (c + compute(batch.tokens));
+    worker {
+      forward (c + compute(batch.tokens));
+    }
   }
   // --8<-- [end:engine]
 

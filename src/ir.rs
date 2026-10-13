@@ -246,7 +246,7 @@ impl Moment {
             Moment::Evict => "an eviction key or spill clause",
             Moment::Ps => "a ps stage's capacity",
             Moment::Budget => "an engine's `tokens cap` or `each at most`",
-            Moment::Step => "an engine's `execute`",
+            Moment::Step => "an engine's `worker`",
             Moment::Serve => "an engine's `advance running by (…)` keys or an `only`",
             Moment::Victim => "a pool's preempt keys",
             Moment::Plan => "an engine's `scheduler`",

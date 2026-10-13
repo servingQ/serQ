@@ -21,7 +21,7 @@ fn engine(request: &str, taking: &str) -> String {
     format!(
         "let bs = 16;
     device gpu {{ kv cap 1e5; }} pool kv on gpu {{ block bs; evict lru; }}
-    engine llm on gpu {{ reqs cap 8; tokens cap 512; {request} scheduler {{ advance running; admit waiting while (running.preempted == 0) taking {taking}; }} execute (1e-3); }}
+    engine llm on gpu {{ reqs cap 8; tokens cap 512; {request} scheduler {{ advance running; admit waiting while (running.preempted == 0) taking {taking}; }} worker {{ forward (1e-3); }} }}
     pool reqs on llm {{ }}
 
     "
@@ -189,10 +189,10 @@ fn a_context_variable_outside_its_moment_is_rejected() {
     );
     assert!(e.contains("set x = tokens;\n"), "shows the line: {e}");
     assert!(e.contains("`tokens` is read in a session statement"), "{e}");
-    assert!(e.contains("exists only in an engine's `execute`"), "{e}");
+    assert!(e.contains("exists only in an engine's `worker`"), "{e}");
     // every other moment refuses what it does not supply, and says where it
     // was read and where it exists
-    const LLM: &str = "reqs cap 8; tokens cap 512; request (m) { prefill (m) growing kv; } scheduler { advance running; admit waiting while (running.preempted == 0) taking reqs (1), kv (m); } execute (1e-3);";
+    const LLM: &str = "reqs cap 8; tokens cap 512; request (m) { prefill (m) growing kv; } scheduler { advance running; admit waiting while (running.preempted == 0) taking reqs (1), kv (m); } worker { forward (1e-3); }";
     let engine = |pool: &str, llm: &str, session: &str| {
         format!(
             "let bs = 16;
@@ -217,7 +217,7 @@ fn a_context_variable_outside_its_moment_is_rejected() {
         (
             engine("evict by (tokens);", LLM, ""),
             "pool `kv`: `tokens` is read in an eviction key",
-            "an engine's `execute`",
+            "an engine's `worker`",
         ),
         (
             engine("queue by (age);", LLM, ""),
@@ -261,7 +261,7 @@ fn a_context_variable_outside_its_moment_is_rejected() {
                 "",
             ),
             "`tokens cap` is read before the batch is formed",
-            "`batch.tokens` is read in `execute`",
+            "`batch.tokens` is read in `worker`",
         ),
         (
             engine(
@@ -273,11 +273,11 @@ fn a_context_variable_outside_its_moment_is_rejected() {
                 "",
             ),
             "`each at most` is read before the batch is formed",
-            "`batch.attention` is read in `execute`",
+            "`batch.attention` is read in `worker`",
         ),
         (
-            engine("", &LLM.replace("execute (1e-3)", "execute (age)"), ""),
-            "engine `llm`: `age` is read in an engine's `execute`",
+            engine("", &LLM.replace("forward (1e-3)", "forward (age)"), ""),
+            "engine `llm`: `age` is read in an engine's `worker`",
             "an eviction key",
         ),
         (
@@ -302,7 +302,7 @@ fn a_context_variable_outside_its_moment_is_rejected() {
     }
     // what the table allows still links: `age`, `size` and a pool index in
     // an eviction key, `present` in a ps capacity, the residents' variables in a
-    // `tokens cap` and an `each at most`, the batch's in `execute`, `now` at
+    // `tokens cap` and an `each at most`, the batch's in `worker`, `now` at
     // every moment
     let src =
         "device gpu[2] { kv cap 1e5; }
@@ -316,7 +316,7 @@ fn a_context_variable_outside_its_moment_is_rejected() {
             advance running each at most (c);
             admit waiting while (running.preempted == 0) each at most (c);
           }
-          execute (1e-3 * batch.tokens + batch.prefilled * 0 + batch.attention * 0 + now * 0);
+          worker { forward (1e-3 * batch.tokens + batch.prefilled * 0 + batch.attention * 0 + now * 0); }
         }
         workload { arrive poisson(0.3); turn { set n = ~exp(500); }
           session {  turn; end;
@@ -337,7 +337,7 @@ fn advancing(advance: &str) -> String {
           tokens cap 512;
           request () {{ prefill (1) growing kv; }}
           scheduler {{ {advance} admit waiting while (running.preempted == 0) taking kv (1); }}
-          execute (1);
+          worker {{ forward (1); }}
         }}
         pool kv on gpu {{ }}
         workload {{ arrive batch(1);
@@ -405,7 +405,7 @@ fn a_hidden_attribute_is_not_read_by_the_scheduler() {
           tokens cap 512;
           {request}
           scheduler {{ advance running; admit waiting while (running.preempted == 0) taking {taking}; }}
-          execute (1e-3);
+          worker {{ forward (1e-3); }}
         }}
         pool kv on gpu {{ block bs; evict lru; }}
         pool reqs on llm {{ }}
@@ -455,7 +455,7 @@ fn a_hidden_attribute_is_not_read_by_the_scheduler() {
           tokens cap 512;
           request (n) { prefill (n) growing kv; }
           scheduler { advance running; admit waiting while (running.preempted == 0) taking kv (n); }
-          execute (1e-3);
+          worker { forward (1e-3); }
         }
         pool kv on gpu { block bs; evict lru; queue by (o); }
         workload { arrive poisson(0.3); hidden o; turn { set n = ~exp(500); set o = ~exp(200) + 1; }
@@ -475,7 +475,7 @@ fn a_hidden_attribute_is_not_read_by_the_scheduler() {
           tokens cap 512;
           request (n) { prefill (n) growing kv; }
           scheduler { advance running by (o); admit waiting while (running.preempted == 0) taking kv (n); }
-          execute (1e-3);
+          worker { forward (1e-3); }
         }
         pool kv on gpu { block bs; evict lru; }
         workload { arrive poisson(0.3); hidden o; turn { set n = ~exp(500); set o = ~exp(200) + 1; }
@@ -534,7 +534,7 @@ fn a_stage_reads_no_session_attribute() {
               tokens cap {tokens};
               request (prompt) {{ prefill (prompt) growing kv; }}
               scheduler {{ {schedule} }}
-              execute ({execute});
+              worker {{ forward ({execute}); }}
             }}
             pool kv on gpu {{ }}
             workload {{ arrive poisson(0.5); init {{ set prompt = 2; }} }}
@@ -545,7 +545,7 @@ fn a_stage_reads_no_session_attribute() {
     check(&engine("8", vllm, "1")).expect("links");
     for (src, moment) in [
         (engine("8 + prompt", vllm, "1"), "an engine's `tokens cap`"),
-        (engine("8", vllm, "1 + prompt"), "an engine's `execute`"),
+        (engine("8", vllm, "1 + prompt"), "an engine's `worker`"),
         (
             engine(
                 "8",
@@ -600,7 +600,7 @@ fn an_old_context_variable_name_says_the_new_one() {
             ("size", old)
         };
         let src = format!(
-            "device gpu {{ kv cap 10; }}\nengine e on gpu {{ tokens cap inf; scheduler {{ advance running; admit waiting while (running.preempted == 0); }} execute ({cost}); }}\npool kv on gpu {{ evict by ({key}); }}\nworkload {{ session {{ turn; end; \n}} }}\nserver {{\n}}\n"
+            "device gpu {{ kv cap 10; }}\nengine e on gpu {{ tokens cap inf; scheduler {{ advance running; admit waiting while (running.preempted == 0); }} worker {{ forward ({cost}); }} }}\npool kv on gpu {{ evict by ({key}); }}\nworkload {{ session {{ turn; end; \n}} }}\nserver {{\n}}\n"
         );
         let e = compile_source(&common::main_source(&src), &common::horizon(500.0)).unwrap_err();
         assert!(e.contains(says), "{e}");
@@ -623,7 +623,7 @@ fn cache_server(request: &str, taking: &str, pool: &str, server: &str) -> String
       tokens cap 512;
       {request}
       scheduler {{ advance running; admit waiting while (running.preempted == 0){taking}; }}
-      execute (1e-3);
+      worker {{ forward (1e-3); }}
     }}
     pool kv on gpu {{ block 16; evict lru; }}
     stage user : delay;
@@ -795,7 +795,7 @@ fn a_declaration_cannot_take_a_name_the_language_supplies() {
             "a parameter named `age`",
         ),
         (
-            "device gpu { kv cap 1; } engine served on gpu { execute (1); }",
+            "device gpu { kv cap 1; } engine served on gpu { worker { forward (1); } }",
             "an engine named `served`",
         ),
         // the engine's lists are the language's for #231's check too
@@ -984,7 +984,7 @@ fn a_declaration_cannot_share_its_name_with_a_binding() {
     // a queue's own pool is a declaration of the program too
     let e = check(
         "queue gw : gateway { route { E.decode (prompt); } }
-         queue E : decode { device gpu { kv cap 100; } pool kv on gpu { } engine on gpu { tokens cap inf; scheduler { advance running; admit waiting while (running.preempted == 0); } execute (1); }
+         queue E : decode { device gpu { kv cap 100; } pool kv on gpu { } engine on gpu { tokens cap inf; scheduler { advance running; admit waiting while (running.preempted == 0); } worker { forward (1); } }
            decode (prompt) { hold kv (cost(kv, prompt)) at admission (kv = prompt) { run E prefill (cost(E, 1)) growing kv; } } }
          workload { arrive batch(1); init { set prompt = 3; } session { turn; end; } } server { gw.route(); }
          ",
@@ -1010,7 +1010,7 @@ fn a_declaration_cannot_share_its_name_with_another() {
         workload { arrive closed(2); session { turn; } }
         server { run svc (cost(svc, 1)); OBSERVE observe response = now; }
         ";
-    const ENGINE: &str = "device gpu { } engine Q on gpu { tokens cap 8; scheduler { advance running; admit waiting while (running.preempted == 0); } execute (1); }";
+    const ENGINE: &str = "device gpu { } engine Q on gpu { tokens cap 8; scheduler { advance running; admit waiting while (running.preempted == 0); } worker { forward (1); } }";
     const QUEUE: &str = "queue Q { pool kv { cap 1; } serve fifo; }";
     let schedule_let =
         |l: &str| ENGINE.replace("scheduler { ", &format!("scheduler {{ let {l} = 1; "));

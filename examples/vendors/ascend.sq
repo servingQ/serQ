@@ -34,7 +34,9 @@ fn main() {
       admit waiting while (running.preempted == 0) each at most (128)
         taking reqs (1), kv (prompt + output);
     }
-    execute (0.001);
+    worker {
+      forward (0.001);
+    }
   }
   // --8<-- [end:engine]
   // --8<-- [start:queue]

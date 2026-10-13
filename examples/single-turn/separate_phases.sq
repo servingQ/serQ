@@ -19,7 +19,9 @@ fn main() {
       admit waiting while (running.preempted == 0) each at most (4)
         taking reqs (1), kv (min(prompt, left)) reserve (prompt);
     }
-    execute (1);
+    worker {
+      forward (1);
+    }
   }
   pool reqs on llm { queue fifo; }
   pool kv on gpu { }

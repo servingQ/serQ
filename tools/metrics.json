@@ -7,7 +7,7 @@
     "CtxVar": 23
   },
   "surface": {
-    "keywords": 115,
+    "keywords": 117,
     "functions": 29,
     "context_variables": 23
   },
@@ -19,9 +19,9 @@
     "decode (output - 1 - (known - prompt)) growing kv;",
     "device gpu { compute (t) = a * ceil(t / b0); }",
     "device gpu { kv cap blocks * bs; }",
-    "execute (c + compute(batch.tokens));",
-    "execute (c0 + max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));",
-    "execute (max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));",
+    "forward (c + compute(batch.tokens));",
+    "forward (c0 + max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));",
+    "forward (max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));",
     "hold kv (cost(kv, known)) reserve (cost(kv, known)), reqs (cost(reqs, 0)) reserve (cost(reqs, 1))",
     "if (more) { tool (~exp(Z)); } else { end; }",
     "known = max(kept, computed + 1);",
