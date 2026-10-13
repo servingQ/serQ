@@ -204,7 +204,7 @@ fn the_decode_leg_holds_its_blocks_during_the_prefill() {
         queue gw : gateway {{
           route {{
             set t0 = now;
-            branch ({concurrent}) {{ fork {{ P.prefill (prompt); }} }} else {{ P.prefill (prompt); }}
+            if ({concurrent}) {{ fork {{ P.prefill (prompt); }} }} else {{ P.prefill (prompt); }}
             D.decode (prompt) from P;
             observe parked_at = D.parked - t0;
             observe written_at = D.written - t0;
@@ -344,7 +344,7 @@ fn a_session_may_not_end_before_its_legs() {
           session { turn; end;
           }
         }
-        server { set x = 0; fork { run svc (cost(svc, 5)); } run svc (cost(svc, 1)); branch (x) { join; }
+        server { set x = 0; fork { run svc (cost(svc, 5)); } run svc (cost(svc, 1)); if (x) { join; }
         }
 
 "#,

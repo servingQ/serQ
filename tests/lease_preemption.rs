@@ -22,11 +22,11 @@ fn two(preempt: &str) -> String {
           session {{ turn; tool (serial == 0 ? 10 : 1); turn; }}
         }}
         server {{
-          branch (allocated(prog) > 0) {{
+          if (allocated(prog) > 0) {{
             grow prog (cost(prog, 4));
             observe grown = allocated(prog);
           }} else {{
-            branch (turn_no > 1) {{ observe again = serial; }}
+            if (turn_no > 1) {{ observe again = serial; }}
             hold prog (cost(prog, 4)) {{ observe let_in = now; }} lease prog (inf);
           }}
           run svc (cost(svc, 1));
@@ -156,7 +156,7 @@ fn a_grow_after_the_lease_ended_says_why() {
         pool prog { cap 10; }
         workload { arrive batch(1); session { turn; turn; } }
         server {
-          branch (turn_no > 1) { grow prog (cost(prog, 1)); }
+          if (turn_no > 1) { grow prog (cost(prog, 1)); }
           hold prog (cost(prog, 4)) { } lease prog (0.5);
           run svc (cost(svc, 1));
         }
@@ -203,7 +203,7 @@ fn a_lease_taken_while_its_session_runs_leaves_the_run_alone() {
         workload { arrive batch(2); session { turn; } }
         server {
           hold prog (cost(prog, 4)) { } lease prog (inf);
-          branch (serial == 1) { run svc (cost(svc, 1)); grow prog (cost(prog, 4)); }
+          if (serial == 1) { run svc (cost(svc, 1)); grow prog (cost(prog, 4)); }
           else { run svc (cost(svc, 10)); observe left = allocated(prog); observe done = now; }
         }
 "#;
@@ -226,7 +226,7 @@ fn a_lease_passed_from_a_leg_can_be_taken() {
         pool prog { cap 10; preempt leases by (serial); }
         workload { arrive batch(2); session { turn; } }
         server {
-          branch (serial == 0) {
+          if (serial == 0) {
             fork { hold prog (cost(prog, 4)) { } lease prog (inf); }
             join;
             run svc (cost(svc, 5));

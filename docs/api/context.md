@@ -23,7 +23,7 @@ an `observe`, a `stage`, a `pool`, a `device`, an `engine`, a `queue`, a
 | `Step` | an engine's `execute` | after the iteration is scheduled |
 | `Serve` | an engine's `by` keys and `only` predicates | for one running request |
 | `Victim` | a pool's `preempt by` keys | for one candidate victim, when a growth does not fit |
-| `Plan` | an engine's `schedule`: a `branch` guard, an `admit waiting`'s `while`, a register assignment | as the iteration is planned, from the running requests and what it has done so far |
+| `Plan` | an engine's `schedule`: an `if` guard, an `admit waiting`'s `while`, a register assignment | as the iteration is planned, from the running requests and what it has done so far |
 | `Gauge` | a gauge expression | after each instant settles, held until the next event |
 | `Given` | a claim's `given` | for each session, once its `init` has run |
 | `Iteration` | a claim over iterations | when an iteration starts, where the cost is read |

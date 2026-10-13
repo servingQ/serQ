@@ -64,7 +64,7 @@ fn main() {
     route {
       set t0 = now;
       set prompt = n;
-      branch (mode == 0) {
+      if (mode == 0) {
         choose j in N by (holders(E[j].reqs) + queued(E[j].kv));   // a request waits at the blocks
         E[j].decode (prompt);
         set first = E.first_token;
@@ -108,7 +108,7 @@ fn main() {
            at admission (known = max(kept, computed + 1)) {
         set kept = known;
         run E prefill (cost(E, known)) growing kv;
-        branch (known == prompt) { mark first_token; }   // not a resumed request's re-prefill
+        if (known == prompt) { mark first_token; }   // not a resumed request's re-prefill
         run E decode (cost(E, o - 1 - (known - prompt))) growing kv;
       }
     }
@@ -167,7 +167,7 @@ fn main() {
            at admission (known = max(kept, computed + 1)) {
         set kept = known;
         set c = 0;
-        branch (!transferred) {
+        if (!transferred) {
           mark admitted;
           transfer (prompt) from P to kv (prompt - 1);   // over P's NIC and this pod's
           mark read_done;
@@ -178,7 +178,7 @@ fn main() {
         // recomputed for its logits, or what a preemption lost
         hold reqs (cost(reqs, 1)) {
           run D prefill (cost(D, known - c)) growing kv;
-          branch (known == prompt) { mark first_token; }
+          if (known == prompt) { mark first_token; }
           run D decode (cost(D, o - 1 - (known - prompt))) growing kv;
         }
       }

@@ -255,7 +255,7 @@ fn every_admission_takes_the_same() {
         &program(),
         &[(
             "    advance running;\n",
-            "    advance running;\n    branch (running.count == 0) { admit waiting; }\n",
+            "    advance running;\n    if (running.count == 0) { admit waiting; }\n",
         )],
     );
     refused(&src, "write the same `taking` on each");
@@ -316,7 +316,7 @@ fn the_cache_is_the_request_s_last_item() {
 }
 
 /// The cache follows any statement, one that ends in a block too: it read
-/// as an unknown statement after a `branch`'s `}`, which only a hold's own
+/// as an unknown statement after an `if`'s `}`, which only a hold's own
 /// `} cache (…)` clause should be.
 #[test]
 fn the_cache_follows_a_block() {
@@ -329,8 +329,8 @@ fn the_cache_follows_a_block() {
     let plain = joint(&program());
     assert_eq!(plain, 1, "the plain request's cache is joint");
     for block in [
-        "    branch (prompt > 1) { decode (output - 1 - (known - prompt)) growing kv; }\n",
-        "    branch (prompt > 1) { decode (output - 1 - (known - prompt)) growing kv; } \
+        "    if (prompt > 1) { decode (output - 1 - (known - prompt)) growing kv; }\n",
+        "    if (prompt > 1) { decode (output - 1 - (known - prompt)) growing kv; } \
          else { decode (output - 1) growing kv; }\n",
     ] {
         let src = replaced(

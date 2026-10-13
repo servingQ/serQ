@@ -102,7 +102,7 @@ fn a_runtime_guard_error_exits_1_without_a_panic() {
           session { turn; end;
           }
         }
-        server { branch (c / K) { run svc (cost(svc, 1)); }
+        server { if (c / K) { run svc (cost(svc, 1)); }
         }
 ",
         ),
@@ -118,7 +118,7 @@ fn a_runtime_guard_error_exits_1_without_a_panic() {
     assert!(out.stdout.is_empty());
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("guard.sq: `branch (c / K)`: the guard is 0.5, not 0 or 1"),
+        stderr.contains("guard.sq: `if (c / K)`: the guard is 0.5, not 0 or 1"),
         "{stderr}"
     );
     assert!(!stderr.contains("panicked"), "{stderr}");

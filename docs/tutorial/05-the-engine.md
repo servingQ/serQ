@@ -81,7 +81,7 @@ request (prompt, output) {
   set hitmax = floor(prompt - 1, bs);
   at admission { reused = min(cachedin(kv), hitmax); }
   set c = min(cached, floor(prompt - 1, bs));
-  branch (computed == 0) { observe hit = c > 0; }
+  if (computed == 0) { observe hit = c > 0; }
   prefill (prompt - c) growing kv;
   decode (output - 1) growing kv;
   cache (prompt + output);

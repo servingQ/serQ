@@ -88,7 +88,7 @@ schedule {
   advance running [only (p)] [admission | by (k, …) | decode first] [each at most (c)];
   admit waiting [only (p)] [while (e)] [each at most (c)];
   exclusive prefill [each at most (c)];
-  branch (e) { … } [else { … }]
+  if (e) { … } [else { … }]
   set NAME = e;
 }
 ```
@@ -101,7 +101,7 @@ iteration ends. A running request is served at most once per iteration.
 | `advance running [only (p)] [order]` | Gives the running requests not yet served their tokens, in the order (admission order when none), while budget is left. A request `p` reads as 0 is skipped and stays unserved, for a later statement. A grower that preempts itself ends the statement. |
 | `admit waiting [only (p)] [while (e)]` | Admits the head of the queues the engine admits and serves the newcomer, one at a time, while budget is left, the head fits and `e` (read before each) is 1. A newcomer for which `p` is 0 is admitted and waits unserved. |
 | `exclusive prefill` | One prefill alone, or a decode-only batch; see below. |
-| `branch (e) { … } else { … }` | A test: the first statements when `e` is 1, the second when it is 0. |
+| `if (e) { … } else { … }` | A test: the first statements when `e` is 1, the second when it is 0. |
 | `set NAME = e` | Updates one of this engine's registers; see below. |
 
 vLLM's schedule serves the running requests, then admits the waiting
@@ -234,7 +234,7 @@ request is running (`examples/engines/tgi.sq`):
 state just = 0;
 schedule {
   advance running;
-  branch (just == 0 || running.count == 0) { admit waiting; }
+  if (just == 0 || running.count == 0) { admit waiting; }
   set just = waiting.admitted > 0;
 }
 ```

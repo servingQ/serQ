@@ -117,7 +117,7 @@ fn each_selection_reads_the_current_remaining_iteration_budget() {
           request (s) {
             observe selected = s;
             observe admitted_at = now;
-            branch (s == 0) { decode (1); }
+            if (s == 0) { decode (1); }
             else { prefill (s == 2 ? 1 : s == 1 ? 2 : 3); }
           }
           schedule { advance running; admit waiting while (running.preempted == 0) taking reqs (1); }
@@ -274,7 +274,7 @@ fn resumed_holds_keep_prepend_priority_over_recomputed_keys() {
             }
             observe selected = s;
             observe admitted_at = now;
-            branch (s == 2) { decode (1); }
+            if (s == 2) { decode (1); }
             else {
               prefill (known) growing kv;
               decode (3 - (known - 2)) growing kv;

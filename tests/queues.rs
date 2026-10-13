@@ -470,7 +470,7 @@ fn a_header_reads_a_local_both_arms_set() {
         "queue gw : gateway {{ route {{ E.decode (prompt); }} }}
          queue E : decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
            decode (prompt) {{
-             branch (prompt > 1) {{ set kept = prompt; }} else {{ set kept = 1; }}
+             if (prompt > 1) {{ set kept = prompt; }} else {{ set kept = 1; }}
              hold kv (cost(kv, kept)) {{ run E prefill (cost(E, 1)) growing kv; }}
            }} }}
          {WORKLOAD}"
@@ -486,10 +486,10 @@ fn a_header_does_not_read_a_local_set_below_or_beside_it() {
     for (above, inside, below) in [
         ("", "set kept = prompt;", ""),
         ("", "", "set kept = prompt;"),
-        ("branch (prompt > 1) { set kept = prompt; }", "", ""),
+        ("if (prompt > 1) { set kept = prompt; }", "", ""),
         ("while (prompt > 100) { set kept = prompt; }", "", ""),
         (
-            "branch (prompt > 1) { set kept = prompt; } else { set other = 1; }",
+            "if (prompt > 1) { set kept = prompt; } else { set other = 1; }",
             "",
             "",
         ),
@@ -900,13 +900,13 @@ fn a_family_size_is_a_constant() {
 fn server_routes_turns_to_gateways_before_their_declarations() {
     let queues = "
       workload { arrive batch(1); }
-      server { branch (1) { second.route(); } else { first.route(); } }
+      server { if (1) { second.route(); } else { first.route(); } }
       queue unused : gateway { route { observe never = 99; } }
       queue first : gateway { route { observe selected = 1; } }
       queue second : gateway { route { observe selected = 2; } }
       ";
     let flat = "workload { arrive batch(1); }
-      server { branch (1) { observe selected = 2; } else { observe selected = 1; } }
+      server { if (1) { observe selected = 2; } else { observe selected = 1; } }
       ";
     same_ir(queues, flat, &[]);
     same_ir(&queues.replace("second", "router"), flat, &[]);
@@ -1278,7 +1278,7 @@ fn the_contract_holds_at_every_edge() {
             "stage nic : delay;
              queue gw : gateway {{ route {{ P.prefill (prompt); D.decode (prompt) from P; }} }}
              queue P : prefill {{ pool kv {{ cap 100; }} serve fifo;
-               prefill (p) {{ branch (p > 1) {{ hold kv (cost(kv, p)) {{ run (cost(P, p)); }} cache (cost(kv, p)) lease kv (inf); }} else {{ run (cost(P, p)); }} }} }}
+               prefill (p) {{ if (p > 1) {{ hold kv (cost(kv, p)) {{ run (cost(P, p)); }} cache (cost(kv, p)) lease kv (inf); }} else {{ run (cost(P, p)); }} }} }}
              queue D : decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
                decode (p) {{ hold kv (cost(kv, p)) {{ run D prefill (cost(D, p)) growing kv; }} }}
                decode (p) from P {{ hold kv (cost(kv, p)) {{ transfer on nic (p) from P to kv (p); }} }} }}
@@ -1612,7 +1612,7 @@ fn an_entry_reaches_only_its_own() {
     refused(
         &format!(
             "stage nic : delay;
-             queue gw : gateway {{ route {{ branch (prompt > 5) {{ P.prefill (prompt); }} else {{ P.decode (prompt); }} D.decode (prompt) from P; }} }}
+             queue gw : gateway {{ route {{ if (prompt > 5) {{ P.prefill (prompt); }} else {{ P.decode (prompt); }} D.decode (prompt) from P; }} }}
              queue P : prefill, decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
                prefill (p) {{ hold kv (cost(kv, p)) {{ run P prefill (cost(P, p)) growing kv; }} cache (cost(kv, p)) lease kv (inf); }}
                decode (p) {{ hold kv (cost(kv, p)) {{ run P prefill (cost(P, p)) growing kv; }} }} }}

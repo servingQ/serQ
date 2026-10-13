@@ -100,7 +100,7 @@ fn a_leg_works_for_the_turn_it_was_forked_in() {
         "{}
 workload {{ arrive batch(1); session {{ turn; turn; }} }}
 server {{
-  branch (turn_no == 1) {{ fork {{ llm (4); }} }} else {{ join; }}
+  if (turn_no == 1) {{ fork {{ llm (4); }} }} else {{ join; }}
 }}",
         engine("request (output) { decode (output); }")
     ));
@@ -115,7 +115,7 @@ fn a_refused_turn_is_not_answered() {
     let r = run("stage svc : fifo;
 workload { arrive batch(2); init { set big = serial == 0; } session { turn; turn; } }
 server {
-  branch (big) { end; }
+  if (big) { end; }
   run svc (cost(svc, 1));
 }");
     // session 1 is answered twice, at 1 and 2; session 0 ends at its first turn

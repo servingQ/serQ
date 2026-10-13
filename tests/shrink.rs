@@ -15,7 +15,7 @@ fn a_shrunk_lease_lets_a_waiting_hold_in() {
         pool prog { cap 10; }
         workload { arrive batch(2); session { turn; } }
         server {
-          branch (serial == 0) {
+          if (serial == 0) {
             hold prog (cost(prog, 8)) { } lease prog (inf);
             run svc (cost(svc, 1));
             shrink prog (cost(prog, 6));
@@ -110,7 +110,7 @@ fn under_reserve_held_what_is_given_back_is_no_longer_reserved() {
         pool prog { cap 10; reserve held; }
         workload { arrive batch(2); session { turn; } }
         server {
-          branch (serial == 0) {
+          if (serial == 0) {
             hold prog (cost(prog, 8)) reserve (cost(prog, 8)) {
               run svc (cost(svc, 1));
               shrink prog (cost(prog, 6));

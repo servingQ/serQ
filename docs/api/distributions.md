@@ -93,7 +93,7 @@ of mean `mean / (2*(1-p))`.
 **Parameters:** `p` is a probability in `[0, 1]`.
 
 **Returns:** 1 with probability `p`, otherwise 0. The form
-`branch with (p)` uses this draw; see [`branch`](statements.md#branch).
+`if (~bernoulli(p))` uses this draw; see [`if`](statements.md#if).
 
 ## Validation and reproducibility
 

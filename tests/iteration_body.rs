@@ -1,5 +1,5 @@
 //! An engine's schedule as a body (#355): `advance running`, `admit
-//! waiting`, `branch` and `set` lower to the step's `iteration`, each
+//! waiting`, `if` and `set` lower to the step's `iteration`, each
 //! statement run once where written.
 
 mod common;
@@ -29,7 +29,7 @@ fn taking(schedule: &str, pools: &str) -> String {
 /// A stage without a body runs vLLM's procedure: every program of the
 /// corpus whose engines' schedule is the procedure gives the same report
 /// with the procedure written as a body. An engine's schedule that is the
-/// procedure lowers to no body; as both arms of a `branch` it is a body.
+/// procedure lowers to no body; as both arms of an `if` it is a body.
 #[test]
 fn the_vllm_body_is_the_procedure() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -59,7 +59,7 @@ fn the_vllm_body_is_the_procedure() {
 
 /// An engine's schedule `advance running …; admit waiting while
 /// (running.preempted == 0) …;`, vLLM's procedure, as both arms of a
-/// `branch`, which makes it a body; `None` for any other schedule.
+/// `if`, which makes it a body; `None` for any other schedule.
 fn procedure_as_body(src: &str) -> Option<String> {
     let i = src.find("advance running")?;
     let first = i + src[i..].find(';')? + 1;
@@ -76,7 +76,7 @@ fn procedure_as_body(src: &str) -> Option<String> {
     let j = first + rest.find(admit)?;
     let end = j + src[j..].find(';')? + 1;
     Some(format!(
-        "{}branch (running.count >= 0) {{ {p} }} else {{ {p} }}{}",
+        "{}if (running.count >= 0) {{ {p} }} else {{ {p} }}{}",
         &src[..i],
         &src[end..],
         p = &src[i..end]
@@ -121,7 +121,7 @@ fn several_prefills_run_alone_in_one_iteration() {
         )
     };
     let sglang = "advance running only (!decoding); admit waiting; \
-                  branch (batch.tokens == 0) { advance running; }";
+                  if (batch.tokens == 0) { advance running; }";
     let r = run(
         &prog(sglang),
         &Overrides {
@@ -166,7 +166,7 @@ fn a_gate_on_the_residents_admits_only_into_an_empty_engine() {
             prefill (1);
             decode (4);
           }
-          schedule { advance running; branch (running.count == 0) { admit waiting taking reqs (1); } }
+          schedule { advance running; if (running.count == 0) { admit waiting taking reqs (1); } }
           execute (1);
         }
         pool reqs on llm { }
@@ -235,7 +235,7 @@ fn a_body_that_may_schedule_nothing_does_not_link() {
         .unwrap_or_else(|| panic!("`{schedule}` linked"))
     };
     assert!(
-        err("branch (running.count > 0) { advance running; }")
+        err("if (running.count > 0) { advance running; }")
             .contains("neither advances `running` nor admits `waiting`")
     );
     assert!(err("advance running; admit waiting while (now < 5);").contains("now"));
@@ -267,7 +267,7 @@ fn a_body_that_may_schedule_nothing_does_not_link() {
 /// The procedure and its body agree where serving is by keys and
 /// preemption takes residents the iteration already served (their tokens
 /// go back to the budget) or the grower itself, paths no example takes.
-/// The body is the procedure as both arms of a `branch`, its order on each
+/// The body is the procedure as both arms of an `if`, its order on each
 /// `advance running` (`CIter::Serve`'s `by`) where the procedure's is the
 /// step's.
 #[test]
@@ -502,7 +502,7 @@ fn a_register_remembers_the_last_iteration() {
     let alternate = wait(
         "state just = 0; \
          schedule { \
-           advance running; branch (just == 0) { admit waiting; } \
+           advance running; if (just == 0) { admit waiting; } \
            set just = waiting.admitted > 0; \
          }",
     );
@@ -813,4 +813,52 @@ fn a_reserve_on_a_register_waits_for_the_iteration() {
     );
     assert_eq!(r.pool("kv").unwrap().rejected, 0, "{}", r.text());
     assert!(r.pool("reqs").unwrap().admissions > 20, "{}", r.text());
+}
+
+/// A schedule's `else if` is the `else` block holding one `if`.
+#[test]
+fn a_schedule_else_if_is_the_nested_if() {
+    let compile = |schedule: &str| {
+        let schedule = taking(schedule, "reqs (1)");
+        let src = format!(
+            r#"
+        device gpu {{ }}
+        engine llm on gpu {{
+          reqs cap 8;
+          tokens cap 8;
+          request () {{ prefill (2); }}
+          schedule {{ {schedule} }}
+          execute (1);
+        }}
+        pool reqs on llm {{ }}
+        workload {{ arrive batch(1);
+          session {{ turn; end;
+          }}
+        }}
+        server {{ llm ();
+        }}
+"#
+        );
+        compile_source(&common::main_source(&src), &common::horizon(20.0)).map(|p| p.to_json())
+    };
+    let ir = |schedule: &str| compile(schedule).unwrap_or_else(|e| panic!("`{schedule}`: {e}"));
+    // a `let` stands at the schedule's top, not in an `else if`'s block
+    let e = compile(
+        "advance running; if (running.count == 0) { admit waiting; } \
+         else if (running.count < 4) { let x = 1; admit waiting; }",
+    )
+    .expect_err("a `let` in an `else if` links");
+    assert!(e.contains("not in an `if`"), "{e}");
+    // and the retired `branch` says what it is now
+    let e = compile("advance running; branch (running.count == 0) { admit waiting; }")
+        .expect_err("`branch` links");
+    assert!(e.contains("is now `if (e)`"), "{e}");
+    assert_eq!(
+        ir("if (running.count == 0) { admit waiting; } \
+            else if (running.count < 4) { advance running; admit waiting; } \
+            else { advance running; }"),
+        ir("if (running.count == 0) { admit waiting; } \
+            else { if (running.count < 4) { advance running; admit waiting; } \
+            else { advance running; } }"),
+    );
 }

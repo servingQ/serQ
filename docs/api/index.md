@@ -15,7 +15,7 @@ operational semantics, see [The language](../language.md).
 | [Stage](stage.md) | `fifo`, `ps`, `delay` |
 | [Engine](engine.md) | `device`, `engine … on`, `tokens cap`, `schedule`, `execute`, `pool … on` |
 | [Workload](workload.md) | `arrive`, `trace`, `init`, `turn`, `hidden` |
-| [Statements](statements.md) | the kernel: `hold`, `run`, `grow`, `branch`, … |
+| [Statements](statements.md) | the kernel: `hold`, `run`, `grow`, `if`, … |
 | [Serving vocabulary](serving.md) | `transfer`, `tool` |
 | [Functions](functions.md) | arithmetic functions and observables |
 | [Distributions](distributions.md) | `~exp`, `~det`, `~uniform`, `~erlang`, `~h2`, `~bernoulli` |

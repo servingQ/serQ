@@ -180,7 +180,7 @@ pub enum Moment {
     /// A pool's `preempt by` keys: evaluated for one candidate victim when
     /// a growth does not fit.
     Victim,
-    /// A step stage's iteration body: a `branch` guard or an `admit`'s
+    /// A step stage's iteration body: an `if` guard or an `admit`'s
     /// `while`, read as the iteration is planned, from the residents and
     /// what the iteration has done so far.
     Plan,
@@ -2261,7 +2261,7 @@ impl Validator<'_> {
                     }
                 }
                 CIter::Branch(g, a, b) => {
-                    plan(g, "a `branch` in a `schedule`")?;
+                    plan(g, "an `if` in a `schedule`")?;
                     self.iteration(st, a)?;
                     self.iteration(st, b)?;
                 }
@@ -2613,7 +2613,7 @@ impl Validator<'_> {
     /// time pass: a `run` (a constant zero work does not count; a computed
     /// one is the run time's to catch), a `hold` whose body does, or `end`.
     /// The condition under which a `loop` blocks on every pass
-    /// (`docs/design/stochastic-model.md`, Lemma 1). A `branch` counts when
+    /// (`docs/design/stochastic-model.md`, Lemma 1). An `if` counts when
     /// both arms do; an inner `loop` is never left, so it counts when it does.
     fn lets_time_pass(&self, b: BlockId) -> bool {
         for s in &self.p.blocks[b] {
@@ -3308,10 +3308,10 @@ impl Program {
         s
     }
 
-    /// A `branch` guard, as a figure should label it.
+    /// An `if` guard, as a figure should label it.
     ///
-    /// `branch with (p)` is sugar for `branch (~bernoulli(p))`, so the draw
-    /// reaches here as a `Sample`. Rendering it `w.p. p` is what the lecture's
+    /// A draw is written `if (~bernoulli(p))`, so it reaches here as a
+    /// `Sample`. Rendering it `w.p. p` is what the lecture's
     /// own figure writes by hand ("resume w.p. p"), and it is the only thing
     /// that tells a reader this edge is a draw rather than a test.
     pub fn show_guard(&self, e: &CExpr) -> String {

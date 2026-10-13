@@ -304,12 +304,12 @@ fn an_engine_that_excludes_every_resident_waits_for_the_residents_to_change() {
 /// A key orders the residents and excludes none, so reading the clock
 /// cannot leave the engine waiting: a key may read `now` and `work(…)`, and
 /// may not draw, whichever form the `schedule` takes. A body refused the
-/// clock, with the reason that fits `only` (#453); a `branch` makes one.
+/// clock, with the reason that fits `only` (#453); an `if` makes one.
 #[test]
 fn a_key_is_checked_alike_in_either_form_of_schedule() {
     for body in [false, true] {
         let schedule = |key: &str| {
-            let branch = if body { " branch (1) { }" } else { "" };
+            let branch = if body { " if (1) { }" } else { "" };
             format!(
                 "advance running by ({key}); admit waiting while (running.preempted == 0);{branch}"
             )

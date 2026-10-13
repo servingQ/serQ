@@ -179,7 +179,7 @@ fn the_gaps_between_tokens_count_a_prefill_that_cuts_in() {
           request (prompt, s) {{
             at admission {{ left = budget_left(llm); }}
             prefill (prompt) growing kv;
-            branch (s == 0) {{ decode (3) growing kv; }}
+            if (s == 0) {{ decode (3) growing kv; }}
           }}
           schedule {{ {schedule} }}
           execute (1);
@@ -294,7 +294,7 @@ fn the_gaps_add_up_to_the_decode_time_through_preemptions() {
           request (prompt, output) {
             at admission { known = computed < prompt ? prompt : computed + 1; }
             prefill (known) growing kv;
-            branch (known == prompt) { mark first; }
+            if (known == prompt) { mark first; }
             decode (output - 1 - (known - prompt)) growing kv;
           }
           schedule {
@@ -405,7 +405,7 @@ fn a_step_stage_reports_what_its_iterations_carried() {
           request (prompt, s) {{
             at admission {{ left = budget_left(llm); }}
             prefill (prompt) growing kv;
-            branch (s == 0) {{ decode (2) growing kv; }}
+            if (s == 0) {{ decode (2) growing kv; }}
           }}
           schedule {{ {schedule} }}
           execute (1);
@@ -547,8 +547,8 @@ fn a_test_observe_that_never_held_is_noted() {
           observe always = serial >= 0;
           observe zero = 0;
           observe cond = serial < 0 ? 1 : 0;
-          branch (serial < 20) { observe mixed = serial < 0; } else { observe mixed = 0; }
-          branch (serial < 10) { observe few = serial > 100; }
+          if (serial < 20) { observe mixed = serial < 0; } else { observe mixed = 0; }
+          if (serial < 10) { observe few = serial > 100; }
         }
         ";
     let r = run_ir(

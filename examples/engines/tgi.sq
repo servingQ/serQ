@@ -42,7 +42,7 @@ fn main() {
     schedule {
       advance running;
       // blocks for the whole input plus max_new_tokens, at once
-      branch (just == 0 || running.count == 0) {
+      if (just == 0 || running.count == 0) {
         admit waiting taking kv (prompt + mnt - 1) reuse (prompt - 1);
       }
       set just = waiting.admitted > 0;
@@ -64,7 +64,7 @@ fn main() {
       loop {
         turn;
         set K = prompt + o;
-        branch (more) { tool (~exp(Z)); } else { end; }
+        if (more) { tool (~exp(Z)); } else { end; }
       }
     }
   }

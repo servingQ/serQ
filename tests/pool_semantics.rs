@@ -58,7 +58,7 @@ fn eviction_order_is_the_declared_key() {
           run gate (cost(gate, serial));                 // 0, 1, 2: sequential first turns
           hold kv (cost(kv, c)) {{ run svc (cost(svc, 0.1)); }} cache (cost(kv, c));
           run gate (cost(gate, 10));
-          branch (serial == 1) {{
+          if (serial == 1) {{
             hold kv (cost(kv, c)) {{ observe hit = cached >= c; run svc (cost(svc, 0.1)); }} cache (cost(kv, c));
           }}
         }}
@@ -94,22 +94,22 @@ fn queued_sessions_are_evicted_after_suspended_ones() {
           }}
         }}
         server {{
-          branch (serial == 0) {{
+          if (serial == 0) {{
             hold slot (cost(slot, 1)) {{ hold kv (cost(kv, 8)) {{ run svc (cost(svc, 1)); }} cache (cost(kv, 8)); }}
             run gate (cost(gate, 2));                                   // t = 3: queue for the slot
             hold slot (cost(slot, 1)) {{ hold kv (cost(kv, 8)) {{ observe hit0 = cached >= 8; run svc (cost(svc, 0.1)); }} cache (cost(kv, 0)); }}
           }}
-          branch (serial == 1) {{
+          if (serial == 1) {{
             run gate (cost(gate, 1));
             hold slot (cost(slot, 1)) {{ hold kv (cost(kv, 10)) {{ run svc (cost(svc, 1)); }} cache (cost(kv, 10)); }}
             run gate (cost(gate, 5));                                   // tool call t = 2..7
             hold slot (cost(slot, 1)) {{ hold kv (cost(kv, 10)) {{ observe hit1 = cached >= 10; run svc (cost(svc, 0.1)); }} cache (cost(kv, 0)); }}
           }}
-          branch (serial == 2) {{
+          if (serial == 2) {{
             run gate (cost(gate, 3.5));
             hold kv (cost(kv, 20)) {{ run svc (cost(svc, 0.1)); }}               // no slot needed: evicts at t = 3.5
           }}
-          branch (serial == 3) {{
+          if (serial == 3) {{
             run gate (cost(gate, 2));
             hold slot (cost(slot, 1)) {{ run gate (cost(gate, 2)); }}               // blocks the slot t = 2..4
           }}
@@ -154,7 +154,7 @@ fn block_pools_round_and_evict_by_block() {
           // s1 takes 70 -> needs 70 of 100 - 0 used; cached 50 -> evict 2 blocks
           hold kv (cost(kv, serial == 0 ? 55 : 70)) { observe used = used(kv); run svc (cost(svc, 1)); } cache (cost(kv, serial == 0 ? 55 : 0));
           run gate (cost(gate, 10));
-          branch (serial == 0) { hold kv (cost(kv, 55)) { observe cached0 = cached; run svc (cost(svc, 0.1)); } cache (cost(kv, 0)); }
+          if (serial == 0) { hold kv (cost(kv, 55)) { observe cached0 = cached; run svc (cost(svc, 0.1)); } cache (cost(kv, 0)); }
         }
 
 "#;
@@ -191,9 +191,9 @@ fn spill_to_a_tier_and_fetch_back() {
           run gate (cost(gate, serial));
           hold kv (cost(kv, c)) { run svc (cost(svc, 1)); } cache (cost(kv, c));
           run gate (cost(gate, 5));
-          branch (serial == 0) {
+          if (serial == 0) {
             observe in_tier = cachedin(tier);
-            branch (cachedin(tier) > 0) { run link (cost(link, cachedin(tier) / 100)); observe fetched = 1; drop tier; }
+            if (cachedin(tier) > 0) { run link (cost(link, cachedin(tier) / 100)); observe fetched = 1; drop tier; }
             hold kv (cost(kv, c)) { run svc (cost(svc, 0.1)); }
           }
         }
@@ -233,13 +233,13 @@ fn a_spill_predicate_sees_whether_the_session_is_queued() {
           }}
         }}
         server {{
-          branch (serial == 0) {{
+          if (serial == 0) {{
             hold kv (cost(kv, 6)) {{ run svc (cost(svc, 0.5)); }} cache (cost(kv, 6));
             run gate (cost(gate, 0.6));
             hold kv (cost(kv, 20)) {{ run svc (cost(svc, 0.1)); }}
           }}
-          branch (serial == 1) {{ run gate (cost(gate, 0.5)); hold kv (cost(kv, 24)) {{ run svc (cost(svc, 10)); }} }}
-          branch (serial == 2) {{ run gate (cost(gate, 1.2)); hold kv (cost(kv, 6)) {{ run svc (cost(svc, 1)); }} }}
+          if (serial == 1) {{ run gate (cost(gate, 0.5)); hold kv (cost(kv, 24)) {{ run svc (cost(svc, 10)); }} }}
+          if (serial == 2) {{ run gate (cost(gate, 1.2)); hold kv (cost(kv, 6)) {{ run svc (cost(svc, 1)); }} }}
         }}
         "
         )
@@ -270,7 +270,7 @@ fn grow_waits_under_preempt_none() {
           run gate (cost(gate, serial));
           hold kv (cost(kv, 50)) {
             run svc (cost(svc, 5));
-            branch (serial == 0) { set t = now; grow kv (cost(kv, 30)); observe grow_wait = now - t; }
+            if (serial == 0) { set t = now; grow kv (cost(kv, 30)); observe grow_wait = now - t; }
           }
           observe done = now;
         }
@@ -306,7 +306,7 @@ fn a_preempted_hold_caches_what_it_computed() {
           }
         }
         server {
-          branch (serial == 0) {
+          if (serial == 0) {
             hold kv (cost(kv, 5)) { run d (cost(d, 2)); grow kv (cost(kv, 5)); run d (cost(d, 10)); }
           } else {
             hold kv (cost(kv, 12)) {
@@ -611,7 +611,7 @@ fn a_zero_cost_preempting_step_does_not_hang() {
     assert_eq!(kv.stuck, 1, "{}", r.text());
 }
 
-/// A `branch` guard is a test, 0 or 1. A computed fraction used to be drawn
+/// An `if` guard is a test, 0 or 1. A computed fraction used to be drawn
 /// as a probability without anyone asking for a draw; now it is an error
 /// when evaluated (a constant one is a link error, `tests/lints.rs`).
 const GUARD: &str = "
@@ -620,7 +620,7 @@ const GUARD: &str = "
           session { turn; end;
           }
         }
-        server { branch (GUARD) { run svc (cost(svc, 1)); }
+        server { if (GUARD) { run svc (cost(svc, 1)); }
         }
         ";
 
@@ -661,7 +661,7 @@ fn a_negative_guard_is_an_error() {
 fn a_boolean_guard_and_a_declared_draw_run() {
     run(&GUARD.replace("GUARD", "c < K"), &common::horizon(100.0));
     run(
-        &GUARD.replace("branch (GUARD)", "branch with (c / K)"),
+        &GUARD.replace("if (GUARD)", "if (~bernoulli(c / K))"),
         &common::horizon(100.0),
     );
 }
@@ -1139,13 +1139,13 @@ fn a_held_reservation_is_each_live_hold_s() {
         }}
         server {{
           run gate (cost(gate, serial));
-          branch (serial == 0) {{
+          if (serial == 0) {{
             hold kv (cost(kv, 1)) reserve (cost(kv, 5)) {{
               hold kv (cost(kv, 1)) reserve (cost(kv, 5)) {{ run gate (cost(gate, 10)); }}
               {after_inner}
             }}
           }}
-          branch (serial == 1) {{
+          if (serial == 1) {{
             hold kv (cost(kv, {second})) {{ observe admitted_at = now; run gate (cost(gate, 1)); }}
           }}
         }}
@@ -1223,8 +1223,8 @@ fn a_run_ends_at_its_start_plus_its_work() {
         2,
         4,
         "request (prompt) {
-           branch (computed > 0) { observe at_prompt = computed == prompt; }
-           branch (computed == 0) {
+           if (computed > 0) { observe at_prompt = computed == prompt; }
+           if (computed == 0) {
              prefill (0.4) growing kv;
              prefill (1.2) growing kv;
            }
@@ -1258,7 +1258,7 @@ fn a_resumed_growth_moves_the_position_once() {
           tokens cap 4;
           request (id) {
             prefill (2) growing kv;
-            branch (id == 0) {
+            if (id == 0) {
               decode (1) growing kv;
               run gate (cost(gate, 5));
             } else {
@@ -1278,7 +1278,7 @@ fn a_resumed_growth_moves_the_position_once() {
         workload { arrive batch(2); session { turn; end; } }
         server {
           llm (serial);
-          branch (serial == 1) { observe extent = cachedin(kv); }
+          if (serial == 1) { observe extent = cachedin(kv); }
         }
 "#;
     let r = run(src, &common::horizon(50.0));

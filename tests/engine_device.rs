@@ -255,7 +255,7 @@ fn sglang_and_tgi_as_engines_are_bodies() {
     };
     assert_eq!(tgi.registers, vec![just]);
     assert_eq!((&st.budget, &st.cost), (&num(4096.0), &roofline()));
-    // `advance running; branch (just == 0 || running.count == 0) { admit
+    // `advance running; if (just == 0 || running.count == 0) { admit
     // waiting taking …; } set just = waiting.admitted > 0;`
     assert_eq!(
         st.iteration,
@@ -305,7 +305,7 @@ fn sglang_and_tgi_as_engines_are_bodies() {
     assert_eq!(
         st.iteration,
         Some(vec![
-            // branch (running.count == 0 && backlog == 0) { set ratio = r0; }
+            // if (running.count == 0 && backlog == 0) { set ratio = r0; }
             CIter::Branch(
                 bin(
                     BinOp::And,
@@ -322,7 +322,7 @@ fn sglang_and_tgi_as_engines_are_bodies() {
             },
             // admit waiting;
             admit(),
-            // branch (batch.tokens == 0) { advance running; branch … }
+            // if (batch.tokens == 0) { advance running; if … }
             CIter::Branch(
                 bin(BinOp::Eq, ctx(CtxVar::Ntok), num(0.0)),
                 vec![
@@ -482,7 +482,7 @@ fn the_stage_forms_are_schedules() {
             },
         ),
         (
-            "advance running; branch (running.count == 0) { admit waiting; }",
+            "advance running; if (running.count == 0) { admit waiting; }",
             Schedule {
                 body: Some(vec![
                     serve(),
@@ -631,7 +631,7 @@ fn an_engine_reads_its_lists_in_every_clause() {
         (
             "advance running;",
             "advance running only (running.preempted == 0);",
-            "read in its `branch`, `while` and `set`, not in `only`",
+            "read in its `if`, `while` and `set`, not in `only`",
         ),
         (
             "advance running;",
@@ -646,12 +646,12 @@ fn an_engine_reads_its_lists_in_every_clause() {
         (
             "tokens cap 8;",
             "tokens cap 8 - running.preempted;",
-            "read in its `branch`, `while` and `set`, not in `tokens cap`",
+            "read in its `if`, `while` and `set`, not in `tokens cap`",
         ),
         (
             "execute (step_time(batch.tokens));",
             "execute (step_time(batch.tokens) + waiting.admitted);",
-            "read in its `branch`, `while` and `set`, not in `execute`",
+            "read in its `if`, `while` and `set`, not in `execute`",
         ),
         (
             "execute (step_time(batch.tokens));",
@@ -674,7 +674,7 @@ fn an_engine_reads_its_lists_in_every_clause() {
     // a schedule reads the batch it has formed so far
     let tokens_below_8 = || bin(BinOp::Lt, ctx(CtxVar::Ntok), num(8.0));
     assert_eq!(
-        lowered("advance running; branch (batch.tokens < 8) { admit waiting; }").body,
+        lowered("advance running; if (batch.tokens < 8) { admit waiting; }").body,
         Some(vec![
             serve(),
             CIter::Branch(tokens_below_8(), vec![admit()], vec![])
@@ -683,7 +683,7 @@ fn an_engine_reads_its_lists_in_every_clause() {
     // and after an `only`, read for each resident, the statements read it again
     assert_eq!(
         lowered(
-            "advance running only (running.count > 0); branch (batch.tokens < 8) { admit \
+            "advance running only (running.count > 0); if (batch.tokens < 8) { admit \
              waiting; }"
         )
         .body,
@@ -884,7 +884,7 @@ fn the_design_refuses_what_it_says() {
         "stands before its statements",
     );
     refused(
-        &engine("let c = 4; advance running; branch (c > 1) { admit waiting; }"),
+        &engine("let c = 4; advance running; if (c > 1) { admit waiting; }"),
         "read only in `each at most`",
     );
     refused(
@@ -1025,7 +1025,7 @@ engine e2 on gpu {{ tokens cap 4; schedule {{ advance running; }} execute (t(bat
         "a queue named `waiting` would make the one word mean two things",
     );
     refused(
-        &engine("advance running; branch (residents == 0) { admit waiting; }"),
+        &engine("advance running; if (residents == 0) { admit waiting; }"),
         "`running.count`",
     );
     refused(
@@ -1035,11 +1035,11 @@ engine e2 on gpu {{ tokens cap 4; schedule {{ advance running; }} execute (t(bat
     refused(&engine("serve; admit waiting;"), "`advance running`");
     refused(&engine("advance running; admit;"), "`admit waiting;`");
     refused(
-        &engine("branch (running.size > 0) { advance running; }"),
+        &engine("if (running.size > 0) { advance running; }"),
         "`running` has `count`",
     );
     refused(
-        &engine("exclusive prefill; branch (running.count == 0) { admit waiting; }"),
+        &engine("exclusive prefill; if (running.count == 0) { admit waiting; }"),
         "takes back decodes already chosen",
     );
     // one engine per device, and a family of them a queue family (#539)

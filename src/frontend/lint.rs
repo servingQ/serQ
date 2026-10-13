@@ -111,8 +111,8 @@ fn stale_header_read(p: &Program, block: usize, out: &mut Vec<String>) {
     }
 }
 
-/// `branch (0.8)` reads as a test and cannot be one: a guard is 0 or 1, and
-/// a constant fraction was meant as a draw, which has its own spelling.
+/// `if (0.8)` reads as a test and cannot be one: a guard is 0 or 1, and
+/// a constant fraction was meant as a draw, `if (~bernoulli(p))`.
 fn constant_probability_guard(p: &Program, block: usize, out: &mut Vec<String>) {
     let Some(stmts) = p.blocks.get(block) else {
         return;
@@ -127,11 +127,11 @@ fn constant_probability_guard(p: &Program, block: usize, out: &mut Vec<String>) 
                     let g = crate::ir::show_num_exact(*x);
                     out.push(if *x > 0.0 && *x < 1.0 {
                         format!(
-                            "`branch ({g})` is not a test: a guard is 0 or 1, and a constant \
-                             strictly between them is a probability. Write `branch with ({g})`."
+                            "`if ({g})` is not a test: a guard is 0 or 1, and a constant \
+                             strictly between them is a probability. Write `if (~bernoulli({g}))`."
                         )
                     } else {
-                        format!("`branch ({g})` is not a test: a guard is 0 or 1.")
+                        format!("`if ({g})` is not a test: a guard is 0 or 1.")
                     });
                 }
                 constant_probability_guard(p, *t, out);

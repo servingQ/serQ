@@ -126,7 +126,7 @@ path reveals it when the run ends, since the end of a decode is the EOS the sche
 that the server may decide on it.
 
 Before it is revealed, these are link errors when they read it, or read an
-attribute the server set from it (`set long = o > 100;`): a `branch` or `while`
+attribute the server set from it (`set long = o > 100;`): an `if` or `while`
 condition, a `choose`, a `grow` or `load` amount, or the index that picks a pool or
 stage. An attribute set from it is revealed with it. What the workload sets
 from it before a request counts as set from it as well, in `init`, in `turn`
@@ -161,7 +161,7 @@ fn main() {
       loop {
         turn;
         set rounds = rounds - 1;
-        branch (rounds == 0) { end; }
+        if (rounds == 0) { end; }
       }
     }
   }

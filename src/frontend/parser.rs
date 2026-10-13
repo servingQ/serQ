@@ -40,7 +40,7 @@
 //!                 block ('cache' '(' expr ')')? ('lease' ref '(' expr ')')? ';'?
 //!           | 'grow' ref '(' expr ')' ';' | 'drop' ref ';'
 //!           | 'run' ref ('prefill' | 'decode')? '(' expr ')' ('growing' ref)? ';'
-//!           | 'branch' ('with')? '(' expr ')' block ('else' block)?
+//!           | 'if' '(' expr ')' block ('else' (block | 'if' …))?
 //!           | 'loop' block | 'end' ';'
 //!           | 'choose' IDENT 'in' expr 'by' '(' expr (',' expr)* ')' ';'
 //!           | serving
@@ -414,7 +414,7 @@ const MAX_FAMILY: usize = 10_000;
 /// parameter may not be one: a parameter is replaced token by token, and a
 /// keyword in the body is a token of the same spelling. `tests/docs_lexer.rs`
 /// keeps the list whole.
-pub const KEYWORDS: [&str; 114] = [
+pub const KEYWORDS: [&str; 113] = [
     "Cost",
     "Size",
     "admission",
@@ -426,7 +426,6 @@ pub const KEYWORDS: [&str; 114] = [
     "batch",
     "bernoulli",
     "block",
-    "branch",
     "budget",
     "by",
     "cache",
@@ -465,6 +464,7 @@ pub const KEYWORDS: [&str; 114] = [
     "hidden",
     "hold",
     "horizon",
+    "if",
     "in",
     "init",
     "iteration",
@@ -527,7 +527,6 @@ pub const KEYWORDS: [&str; 114] = [
     "warmup",
     "when",
     "while",
-    "with",
     "workload",
 ];
 
@@ -741,7 +740,7 @@ fn retired(word: &str) -> Option<&'static str> {
         .map(|(_, now)| *now)
 }
 
-const RETIRED: [(&str, &str); 5] = [
+const RETIRED: [(&str, &str); 6] = [
     (
         "enter",
         "`enter` is now `hold`: `hold P (u) … at admission (x = e) { … } cache (ℓ);`",
@@ -756,6 +755,10 @@ const RETIRED: [(&str, &str); 5] = [
     (
         "fit",
         "`fit` is gone: the pools of a `hold` are the condition",
+    ),
+    (
+        "branch",
+        "`branch (e)` is now `if (e)`, and `branch with (p)` is `if (~bernoulli(p))`",
     ),
 ];
 
@@ -1357,7 +1360,7 @@ fn pass_help(q: &QueueDecl, e: &queue::Entry, n: &str, header: bool) -> String {
 /// The expressions of an entry's body, the holds' headers apart from the
 /// rest: the header is the admission and sees less. Each header comes with
 /// the locals set above its hold (`set kept = prompt;` before it, in the
-/// entry's statement order: in both arms of a `branch`, not in a loop or a
+/// entry's statement order: in both arms of an `if`, not in a loop or a
 /// `fork` that may not have run), the only ones it reads. The index of every reference the body
 /// names (`run nic[k]`, `hold kv`, `release src`) is in `indices`: read as
 /// the body reads, and the only place a `from` name may stand as a number.
@@ -4535,7 +4538,7 @@ impl Parser {
                     }
                     if header && locals.contains(&v) {
                         return self.err_at(q.header_at.unwrap_or(at), format!(
-                            "{}: the admission header reads local `{v}`, which the entry does not set above this hold; a header sees the parameters, the queue's resources and the locals set before its hold, not a value its own body or a later statement calculates\nhelp: set `{v}` before the hold, in both arms of a `branch` and not in a loop or `fork` that ends before it, or write its value in the header",
+                            "{}: the admission header reads local `{v}`, which the entry does not set above this hold; a header sees the parameters, the queue's resources and the locals set before its hold, not a value its own body or a later statement calculates\nhelp: set `{v}` before the hold, in both arms of an `if` and not in a loop or `fork` that ends before it, or write its value in the header",
                             entry_name(q, &verb)
                         ));
                     }
@@ -4675,6 +4678,23 @@ impl Parser {
         }
         self.expect(&Tok::RBrace)?;
         Ok(w)
+    }
+
+    /// `if (e) { … } [else { … } | else if …]`, after the `if`. A draw is
+    /// `if (~bernoulli(p))`: the sample is a 0 or a 1 by the time the guard
+    /// sees it, and a bare `if (p)` with a fractional `p` is an error, not a
+    /// draw. `else if` is the `else` block holding one `if`.
+    fn if_rest(&mut self) -> PResult<Stmt> {
+        let guard = self.paren_expr()?;
+        let then = self.block()?;
+        let els = if !self.eat_kw("else") {
+            vec![]
+        } else if self.eat_kw("if") {
+            vec![self.if_rest()?]
+        } else {
+            self.block()?
+        };
+        Ok(Stmt::Branch(guard, then, els))
     }
 
     fn block(&mut self) -> PResult<Vec<Stmt>> {
@@ -5145,27 +5165,9 @@ impl Parser {
                     share,
                 })
             }
-            "branch" => {
+            "if" => {
                 self.advance();
-                // `branch with (p)` is a draw, and says so. It rewrites to
-                // `branch (~bernoulli(p))`: the sample is a 0 or a 1 by the
-                // time the guard sees it, and a bare `branch (p)` with a
-                // fractional `p` is an error, not a draw. So the sugar is
-                // free and the only way to write the draw.
-                let draw = self.eat_kw("with");
-                let e = self.paren_expr()?;
-                let guard = if draw {
-                    Expr::Sample("bernoulli".into(), vec![e])
-                } else {
-                    e
-                };
-                let then = self.block()?;
-                let els = if self.eat_kw("else") {
-                    self.block()?
-                } else {
-                    vec![]
-                };
-                Ok(Stmt::Branch(guard, then, els))
+                self.if_rest()
             }
             "while" => {
                 self.advance();
@@ -6163,7 +6165,7 @@ mod tests {
           session {
 
             loop { turn;
-              branch with (0.9) { run tool (cost(tool, Z));  } else { end; }
+              if (~bernoulli(0.9)) { run tool (cost(tool, Z));  } else { end; }
             }
 
           }
@@ -6244,7 +6246,7 @@ mod tests {
         same(
             &format!(
                 "{PD} workload {{ session {{ turn;
-            branch with (p) {{ tool Z;  }} else {{ end; }}
+            if (~bernoulli(p)) {{ tool Z;  }} else {{ end; }}
 
         }} }}
         server {{
@@ -6253,7 +6255,7 @@ mod tests {
             ),
             &format!(
                 "{PD} workload {{ session {{ turn;
-            branch with (p) {{ run tool (cost(tool, Z));  }} else {{ end; }}
+            if (~bernoulli(p)) {{ run tool (cost(tool, Z));  }} else {{ end; }}
 
         }} }}
         server {{
@@ -6436,7 +6438,7 @@ mod tests {
         for after in [
             "observe b = k;",
             "hold kv (cost(kv, k)) { }",
-            "branch (k > 1) { } else { }",
+            "if (k > 1) { } else { }",
         ] {
             let e = parse(&main_source(&format!(
                 "{ENGINE} workload {{ session {{ turn; \n}} }}\nserver {{ hold kv (cost(kv, 1)) at admission (k = 2) {{ observe a = k; }} {after}\n}}"
@@ -6895,7 +6897,7 @@ mod tests {
             loop {{
               turn;
               set K = prompt + o;
-              branch (more) {{ tool 3;  }} else {{ end; }}
+              if (more) {{ tool 3;  }} else {{ end; }}
             }}
           }}
         }}
@@ -6909,7 +6911,7 @@ mod tests {
           session {{
 
             loop {{ turn;
-              branch (more) {{ tool 3;  }} else {{ end; }}
+              if (more) {{ tool 3;  }} else {{ end; }}
             }}
 
           }}
@@ -6926,9 +6928,9 @@ mod tests {
     #[test]
     fn request_is_spliced_at_any_depth_and_as_often_as_written() {
         same(
-            "stage s : fifo; workload { session { branch (x) { turn; } else { loop { turn; end; } } } }
+            "stage s : fifo; workload { session { if (x) { turn; } else { loop { turn; end; } } } }
         server { run s (cost(s, 1)); }",
-            "stage s : fifo; workload { \n  session { branch (x) { turn; } else { loop { turn; end; } } \n  }\n} server { run s (cost(s, 1));\n}",
+            "stage s : fifo; workload { \n  session { if (x) { turn; } else { loop { turn; end; } } \n  }\n} server { run s (cost(s, 1));\n}",
         );
         // the kernel is written on either side
         same(

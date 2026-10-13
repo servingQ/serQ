@@ -80,7 +80,7 @@ fn main() {
     }
     schedule {
       // fully idle since the last iteration: no batch, and none waited
-      branch (running.count == 0 && backlog == 0) { set ratio = r0; }
+      if (running.count == 0 && backlog == 0) { set ratio = r0; }
       advance running only (!decoding);                  // the chunked request
       // and new prefills, alone. The reservation grows with the running
       // requests, as SGLang's test does; above the cap, the request waits
@@ -89,9 +89,9 @@ fn main() {
         taking reqs (1), kv (min(known, hit + budget_left(sglang)))
           reserve (known - hit + min(M - (known - prompt), clip) + 1
                    + ratio * min(M, clip) * holders(reqs));
-      branch (batch.tokens == 0) {                       // no prefill: a decode batch
+      if (batch.tokens == 0) {                           // no prefill: a decode batch
         advance running;
-        branch (running.preempted > 0) {
+        if (running.preempted > 0) {
           set ratio = max(r_min, min(1, retract_steps / M));   // the bound, see above
         } else {
           set ratio = max(r_min, ratio - r_decay);
@@ -121,7 +121,7 @@ fn main() {
       loop {
         turn;
         set K = prompt + o;
-        branch (more) { tool (~exp(Z)); } else { end; }
+        if (more) { tool (~exp(Z)); } else { end; }
       }
     }
   }

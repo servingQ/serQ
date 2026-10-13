@@ -38,7 +38,7 @@ fn main() {
       at admission { reused = min(cachedin(kv), hitmax); }
       // a request preempted runs again from here; count its hit once
       set c = min(cached, floor(prompt - 1, bs));
-      branch (computed == 0) { observe hit = c > 0; }
+      if (computed == 0) { observe hit = c > 0; }
       prefill (prompt - c) growing kv;
       decode (output - 1) growing kv;
       cache (prompt + output);
@@ -70,7 +70,7 @@ fn main() {
       loop {
         turn;
         set K = prompt + o;
-        branch with (p) { tool (~exp(Z)); } else { drop kv; end; }
+        if (~bernoulli(p)) { tool (~exp(Z)); } else { drop kv; end; }
       }
     }
   }
