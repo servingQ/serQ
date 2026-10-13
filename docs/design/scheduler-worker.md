@@ -40,13 +40,13 @@ the waiting queue or a request the scheduler did not schedule.
 
 - `scheduler { … }` was `schedule { … }`; the old word is refused with the
   new one. Its statements, and what they read, are unchanged.
-- `worker { forward (T); }` was `worker { forward (T); }`, refused with the new form.
+- `worker { forward (T); }` was `execute (T);`, refused with the new form.
   `forward` is the only item a worker takes until step 4 adds `load` and
   `save`; it is required, once.
 - The worker reads the batch, `batch.…`, the device's time resources, the
   constants and the program's definitions. It does not read `running.…` or
   `waiting.…`: what the residents and the queues hold beside the batch is
-  the scheduler's. `worker` read `running.count` and `waiting.count`; no
+  the scheduler's. `execute` read `running.count` and `waiting.count`; no
   program did, and the check is stricter, so the IR version does not move.
 
 ## Self-critique
