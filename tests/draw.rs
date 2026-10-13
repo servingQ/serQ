@@ -607,8 +607,28 @@ fn a_pool_leased_anew_in_a_loop_stays_held_after_it() {
     assert_eq!(pools_of(&p, &net, "s2"), ["p"]);
 }
 
+/// A lease one arm grows and the other shrinks is held after the branch:
+/// either acts on the session's lease (ThunderAgent's estimate, which a
+/// request may raise or lower).
+#[test]
+fn a_lease_grown_in_one_arm_and_shrunk_in_the_other_stays_held() {
+    let p = compile(
+        "pool p { cap 10; } stage s1 : delay; stage s2 : delay;
+        workload { arrive batch(1); init { set m = 1; } session { turn; } }
+        server {
+          hold p (cost(p, 2)) { run s1 (cost(s1, 1)); } lease p (inf);
+          if (m > 0) { grow p (cost(p, 1)); } else { shrink p (cost(p, 1)); }
+          run s2 (cost(s2, 1));
+        }
+        ",
+    );
+    let net = deployment::project(&p);
+    assert_eq!(pools_of(&p, &net, "s2"), ["p"]);
+}
+
 /// `examples/multi-turn/thunderagent.sq`: the router's `prog`, which a
-/// program holds as a lease it grows, encloses the replica (#568).
+/// program holds as a lease it grows, encloses the replica (#568), and the
+/// programs waiting for the router's tick are drawn before it.
 #[test]
 fn thunderagents_router_pool_is_drawn() {
     let t = texts("thunderagent");
@@ -618,10 +638,16 @@ fn thunderagents_router_pool_is_drawn() {
             .any(|x| x.contains("preempt leases by (reasoning, prompt)")),
         "{t:?}"
     );
-    // its queue order, on a line of its own (#571)
+    assert!(t.iter().any(|x| x == "pool waiting_queue"), "{t:?}");
+}
+
+/// A pool's queue order is a line of its own (#571).
+#[test]
+fn a_queue_order_is_a_line_of_its_own() {
+    let t = texts("kong_svf");
     assert!(
         t.iter()
-            .any(|x| x == "queue by (waited < 1800, turn_no == 0, prompt)"),
+            .any(|x| x == "queue by (s * o + floor((o * o + o) / 2))"),
         "{t:?}"
     );
 }

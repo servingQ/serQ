@@ -722,9 +722,12 @@ impl Walker<'_> {
                 // a turn draws the attributes of the `turn` block again
                 CStmt::Turn => self.known.clear(),
                 CStmt::Observe(..) => {}
-                // a `grow` of a pool held in no scope grows the session's
-                // lease of it: from here the request holds that pool
-                CStmt::Grow(r, _) if !self.holds.iter().any(|&(q, _, _)| q == r.base) => {
+                // a `grow` or `shrink` of a pool held in no scope acts on
+                // the session's lease of it: from here the request holds
+                // that pool, whichever of the two an arm takes
+                CStmt::Grow(r, _) | CStmt::Shrink(r, _)
+                    if !self.holds.iter().any(|&(q, _, _)| q == r.base) =>
+                {
                     let id = self.next_hold;
                     self.next_hold += 1;
                     self.net.holds.push(HoldSpan {
