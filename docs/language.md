@@ -866,7 +866,9 @@ whole run: every job on it, a single-stage `run` included, is a flow, and
 its utilisation is the capacity its flows carry, `Σ rate / φ`. The stages
 runs join, however indirectly, are one *fabric*, whose flows are solved
 together: a fabric has one policy, and runs that join their stages and
-name two do not link, while two fabrics that share no stage may name two.
+name two do not link, while two fabrics that share no stage may name two
+(`examples/pd-disaggregation/pd_two_fabrics.sq`: NVLink inside a node,
+RDMA between nodes).
 Every other `ps` stage serves as above.
 
 ### Engines
@@ -1418,6 +1420,7 @@ that program's paths ([use cases](use-cases/index.md), `docs/lean.md`).
 | `replay/vllm_replay.sq` | vLLM v1 on the A100 testbed replaying the short-context trace ([A100 testbed](#8-vllm-on-the-a100-testbed)) | the prefix-cache oracle `tools/oracle/cache_trace` (`tests/vllm_cache.rs`, theorem `vllm_cache_trace`) |
 | `pd-disaggregation/llmd_nixl_pull.sq` | llm-d's prefill/decode disaggregation with the NIXL connector, two prefill and two decode instances ([use case](use-cases/pd.md)) | the source (llm-d at 8a2f37d, the router at 13eebdb, vLLM at 0c87a197), `tests/pd_semantics.rs`; no scheduler oracle |
 | `pd-disaggregation/vllm_nixl_push.sq` | vLLM's push proxy in front of one prefill and one decode instance with the NIXL connector's push mode, on the A6000 testbed, replaying the short-context trace ([the push mode](https://github.com/servingQ/serQ/blob/main/docs/design/push-mode.md)) | the source (vLLM at 0c87a197), `tests/fork_join.rs`; no scheduler oracle |
+| `pd-disaggregation/pd_two_fabrics.sq` | prefill/decode on two nodes, the KV read over NVLink inside a node and over RDMA between them, each fabric under its own `share` | `make check` links and draws it; neither policy is measured ([bandwidth sharing](https://github.com/servingQ/serQ/blob/main/docs/design/bandwidth-sharing.md)) |
 | `papers/*.sq` | three scheduling papers' serving systems | their claims, proved in Lean ([use cases](use-cases/index.md)) |
 | `engines/sglang.sq`, `engines/tensorrt_llm.sq`, `engines/tgi.sq` | SGLang, TensorRT-LLM and TGI with their defaults, as close as serQ writes them today ([engine neutrality](https://github.com/servingQ/serQ/blob/main/docs/design/engine-neutrality.md)) | the source, read; `make check` links and draws them; no oracle |
 | `single-turn/fastertransformer.sq`, `single-turn/separate_phases.sq`, `vendors/*.sq`, the other `pd-disaggregation/*.sq` | the [use cases](use-cases/index.md) that describe them | `make check` links and draws them |
