@@ -1,20 +1,18 @@
-// Dai, Deng, Li, Peng, "Throughput-Optimal Scheduling Algorithms for LLM
-// Inference and AI Agents" (arXiv 2504.07347): the basic LLM queueing model
-// of §3.1 with Sarathi-Serve's scheduler (§4: decode first, chunked prefill,
-// mixed batches), at the operating point C of §6.2 without the batch-size
-// limit: CodeLlama-34B TP1, t_b = 11.28 + 35.47 ceil(b/128) ms, one request
-// every 467.5 ms with 290 prefill and 990 decode tokens. Time is in units of
-// 10 µs, so that every number of the model is an integer.
+// Dai et al., Sarathi-Serve in the basic LLM queueing model (arXiv 2504.07347),
+// as a serQ program. docs/use-cases/dai.md explains it a part at a time.
 
-let bmax = 128;          // token budget b_max
-let c = 1128;            // t_b = c + a ceil(b / b0), 10 µs
+// --8<-- [start:settings]
+let bmax = 128;  // token budget b_max
+let c = 1128;  // t_b = c + a ceil(b / b0), 10 µs
 let a = 3547;
-let b0 = 128;            // b0 divides b_max (the paper's Assumption 1)
-let gap = 46750;         // one arrival every 467.5 ms
+let b0 = 128;  // b0 divides b_max (the paper's Assumption 1)
+let gap = 46750;  // one arrival every 467.5 ms
 let vp = 290;
 let vd = 990;
+// --8<-- [end:settings]
 
 fn main() {
+  // --8<-- [start:engine]
   device gpu { compute (t) = a * ceil(t / b0); }
   engine sarathi on gpu {
     tokens cap bmax;
@@ -23,13 +21,14 @@ fn main() {
       decode (output);
     }
     schedule {
-      // admission order: decodes first, then the oldest prefills (no chunk cap)
       advance running admission;
       admit waiting while (running.preempted == 0);
     }
     execute (c + compute(batch.tokens));
   }
+  // --8<-- [end:engine]
 
+  // --8<-- [start:workload]
   workload {
     arrive renewal(gap);
     init { set t0 = now; }
@@ -39,17 +38,17 @@ fn main() {
     sarathi (vp, vd);
     observe response = now - t0;
   }
+  // --8<-- [end:workload]
 
-  // (8)-(9): a batch is full whenever the residents could fill it. Sarathi is
-  // work-conserving (§4).
+  // --8<-- [start:work_conserving]
   claim work_conserving: every iteration of sarathi (demand < bmax || tokens == bmax);
+  // --8<-- [end:work_conserving]
 
-  // Theorem 2(a): no scheduler serves more than b_max / t_{b_max} tokens per
-  // unit of time, so a load above it diverges.
+  // --8<-- [start:token_rate]
   claim token_rate: every iteration of sarathi (served * (c + a * bmax / b0) <= bmax * now);
+  // --8<-- [end:token_rate]
 
-  // Theorem 2(b), pathwise: at this load (one request's tokens per gap, which is
-  // exactly b_max / t_{b_max}) the work that has arrived and not been served
-  // never exceeds b_max + 1 requests' worth, however many arrive.
+  // --8<-- [start:bounded]
   claim bounded: every iteration of sarathi (arrived * (vp + vd) <= served + (bmax + 1) * (vp + vd));
+  // --8<-- [end:bounded]
 }

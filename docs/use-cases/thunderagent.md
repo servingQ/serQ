@@ -42,20 +42,188 @@ programs and never holds one back.
 
 ## In serQ
 
+The router admits programs, not requests. A program (a session, by its
+`program_id`) is placed on a replica at its first request and stays there,
+and it counts against that replica's KV capacity while it reasons and while
+it calls a tool, so that a program coming back from its tool still finds
+its prefix in the replica's cache. A new program is let in only where its
+tokens fit; otherwise it waits. A running program whose tokens outgrow the
+replica pauses idle ones, which are let in again at their next request.
+The sections below build the program a part at a time: what ThunderAgent
+or vLLM does, what the program needs for it, and how serQ writes it. The
+design record, `docs/design/thunderagent.md`, has the correspondence, the
+paper's results beside this program's, and what this program does not
+write.
+
+### Settings
+
+The settings name ThunderAgent's and vLLM's numbers. The model's constants
+are of the order of a 32B model on one GPU (an iteration of 20 ms), not a
+fit; the device's are arguments, so that `tools/thunderagent/sweep.py` can
+run the paper's scale:
+
 ```serq title="examples/multi-turn/thunderagent.sq"
---8<-- "examples/multi-turn/thunderagent.sq"
+--8<-- "examples/multi-turn/thunderagent.sq:settings"
 ```
 
-### The router
+- `S` is the system prompt and tool descriptions every program starts
+  with, in tokens, a multiple of the block and below the shortest first
+  prompt. It is the first segment of every request's `prefix`, which the
+  replica's cache shares across programs. The router counts it in every
+  program's tokens: `shared_tokens` is never subtracted at `7ddc861`.
+- `count_shared` 1 counts the shared prompt in every program, as the code
+  does; 0 counts it once, as the wiki's capacity, with `shared_tokens`
+  subtracted. `room` is the router's capacity either way.
+- `w` is `--acting-token-weight`: a program calling a tool counts `w` of its
+  tokens.
+- `dt` is `--scheduler-interval`: the router lets paused programs in at its
+  ticks.
+- The router counts a request's tokens before it is sent as its characters
+  over a ratio it learns from earlier responses, and the response's usage
+  after. `est` is that estimate's relative error, at most, drawn uniformly
+  per request (0: counted exactly).
 
-The router's view of a replica is the pool `prog[j]`, in tokens, beside
-the replica's own KV pool. A program holds its tokens there as a
-[`lease`](../api/statements.md#hold), which outlives the request so that the
-tokens stay counted through the tool call. A running program's next turn
-grows its lease; when the growth does not fit,
-[`preempt leases by`](../api/pool.md#preempt) ends idle programs' leases,
-the smaller first, and [`allocated`](../api/functions.md#allocated) tells
-a program whose lease has gone that it must be let in again.
+The snippet opens `fn main`; the parts below are its body.
+
+### A replica
+
+A replica is vLLM's engine on one device, its prefix cache in the blocks:
+`examples/pd-disaggregation/llmd_nixl_pull.sq`'s local decoder without its
+`max_model_len` cap. A request's prompt is the shared system prompt, then
+the program's own context. The cache shares the first across programs,
+allocated once however many read it (vLLM's `ref_cnt`) once a request that
+read it has ended, and keeps the second per program
+(`examples/multi-turn/vllm_system_prompt.sq`); that is the hold's
+`prefix (system: S, serial: inf)`.
+
+```serq
+--8<-- "examples/multi-turn/thunderagent.sq:replica"
+```
+
+- `g * batch.attention`: a prefill's attention over its context grows with
+  the square of what it recomputes (the paper's Eq. 8).
+- `kept` is the most tokens an attempt had: a preemption keeps the outputs.
+- `observe hit = c > S` is any block of the program's own; `reused_tokens`
+  is vLLM's `prefix_cache_hits`, and with `prefill_tokens` its queries.
+
+### The agents
+
+The agent is a task's first prompt, then a tool call and a short
+observation per step. Nothing here is ThunderAgent's. `hidden o` says the
+router knows the prompt, not the length of the answer.
+
+```serq
+--8<-- "examples/multi-turn/thunderagent.sq:workload"
+```
+
+### The router's waiting queue
+
+The router's `global_waiting_queue` holds, among others, the programs with
+a request pending (`docs/design/thunderagent.md`, item 1). It is drained at
+the scheduler's tick: those with a step first, then new ones, the smaller
+first in each (`_greedy_resume`). Each one let in takes its replica before
+the next is tried. A pool that acts `every (dt)` is that tick:
+
+```serq
+--8<-- "examples/multi-turn/thunderagent.sq:waiting_queue"
+```
+
+Pools tick in the order they are declared. This one is first, so the paused
+programs with no request pending come back after these, and the pause comes
+last.
+
+### The router's picture of a replica
+
+The router counts the tokens of the programs placed on a replica against
+vLLM's KV capacity (`cache_config.total_tokens_capacity`). A running
+program's tokens may grow past the capacity; at the router's next tick it
+pauses others while the replica is over: those calling a tool first, then
+those reasoning, the smaller first in each (`_pause_until_safe`). A paused
+program's tokens are no longer counted. At a later tick it is let in again,
+the smaller first, if it fits (`_greedy_resume`'s last group), and else its
+next request waits. In serQ that count is a pool per replica, whose
+[`preempt leases by`](../api/pool.md#preempt) is the pause and whose
+`suspend by` is the early resume:
+
+```serq
+--8<-- "examples/multi-turn/thunderagent.sq:prog"
+```
+
+A program holds its tokens there as a
+[`lease`](../api/statements.md#hold), which outlives the request so that
+the tokens stay counted through the tool call.
+[`allocated`](../api/functions.md#allocated) tells a program whose lease
+has gone that it must be let in again. `count_as(x)` makes the router's
+count of the program `x` (`state.total_tokens = x`), growing or shrinking
+the lease:
+
+```serq
+--8<-- "examples/multi-turn/thunderagent.sq:helpers"
+```
+
+### A request through the router
+
+A program's tokens are its prompt, the router's estimate before the request
+(`update_program_before_request`), and they stay counted through the tool
+call (`acting_token_weight` 1, the default): a lease of `prog`. The server
+opens with that count, `charged`. vLLM refuses a prompt its KV cannot hold
+(`max_model_len` is at most the KV, as in
+`examples/pd-disaggregation/llmd_nixl_pull.sq`), so the agent's trajectory
+ends there, in either mode. The `server` block continues in the next
+snippets:
+
+```serq
+--8<-- "examples/multi-turn/thunderagent.sq:charge"
+```
+
+A running program's next request goes to its replica at once, its count
+grown to the new prompt. The `else` branch, which continues below, is the
+rest:
+
+```serq
+--8<-- "examples/multi-turn/thunderagent.sq:running"
+```
+
+A paused program has not been let in again since its pause, so what it had
+is the router's: it releases it. It waits for the router's next tick, and
+so does a new program when another program waits or no replica has room for
+it (`_select_backend_for_new_program`). Each wait is a hold of
+`waiting_queue`: the next tick, at its place in the router's order. At each
+tick the program goes to the replica with the most room if one has room for
+it, wherever it was before (`_greedy_resume`), and else waits for the next
+tick. After 30 minutes it is let in whatever the capacity
+(`_wait_for_resume`), on the replica it chooses. A new one let in at once
+goes to the replica with the fewest program tokens among those it fits; in
+default mode, to the one with the fewest programs. It goes in with its
+buffer, then the rest: past the capacity only after 30 minutes, when
+`_wait_for_resume` lets it in whatever the room, and the next tick pauses
+others. The snippet ends by closing the `else`:
+
+```serq
+--8<-- "examples/multi-turn/thunderagent.sq:let_in"
+```
+
+After the request, the response's usage, the answer included, replaces the
+estimate (`update_program_after_request`), up to what a replica holds.
+Calling its tool now, the program counts at the acting weight, its buffer
+whole (`active_program_tokens`, `remaining_capacity`); its next request
+grows it back. The program is released when the session ends
+(`/programs/release`). The snippet closes the `server` block:
+
+```serq
+--8<-- "examples/multi-turn/thunderagent.sq:response"
+```
+
+`--tr 0` is the router's `default` mode: the replica with the fewest
+programs, no capacity.
+
+??? example "The whole program"
+
+    ```serq title="examples/multi-turn/thunderagent.sq"
+    --8<-- "examples/multi-turn/thunderagent.sq"
+    ```
+
+### The correspondence
 
 | ThunderAgent | The program |
 |---|---|

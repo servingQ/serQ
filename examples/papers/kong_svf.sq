@@ -1,16 +1,14 @@
-// Kong, Qi, Ye, Zhou, "Geometry-Aware Online Scheduling for LLM Serving"
-// (arXiv 2606.22327) §3: the burst case of Theorem 3.2. N requests arrive at
-// once; request i has a prompt of s_i tokens and an output of o_i, decodes
-// one token per step and is admitted only when its peak s_i + o_i fits next
-// to the active peaks, so nothing is ever preempted. Smallest Volume First
-// admits the waiting request of least volume vol_i = s_i o_i + (o_i^2 + o_i)/2.
-// Time is in steps.
+// Kong et al., Smallest Volume First (arXiv 2606.22327) §3, as a serQ program.
+// docs/use-cases/kong.md explains it a part at a time.
 
+// --8<-- [start:settings]
 let N = 200;
-let M = 20000;           // memory, tokens
-let P = 2500;            // the largest peak s + o; alpha = P / M
+let M = 20000;  // memory, tokens
+let P = 2500;  // the largest peak s + o; alpha = P / M
+// --8<-- [end:settings]
 
 fn main() {
+  // --8<-- [start:workload]
   workload {
     arrive batch(N);
     init {
@@ -18,30 +16,33 @@ fn main() {
       set o = floor(~uniform(10, 500));
     }
   }
+  // --8<-- [end:workload]
 
-  // not on the device: the paper's memory M is held, not read by the step (cost 1)
+  // --8<-- [start:memory]
   pool kv { cap M; queue by (s * o + floor((o * o + o) / 2)); }
+  // --8<-- [end:memory]
 
+  // --8<-- [start:engine]
   device gpu { }
   engine llm on gpu {
-    tokens cap 1000000;    // every active request decodes one token per step
+    tokens cap 1000000;
     request (output) { decode (output); }
     schedule { advance running; admit waiting while (running.preempted == 0); }
-    execute (1);           // one time unit per step
+    execute (1);
   }
+  // --8<-- [end:engine]
 
+  // --8<-- [start:server]
   server {
     observe output_tokens = o;
     observe vol = s * o + floor((o * o + o) / 2);
     hold kv (cost(kv, s + o)) { llm (o); }
     observe response = now;
   }
+  // --8<-- [end:server]
 
-  // Lemma A.2, summed over the requests: every step a request waits, the
-  // active peaks exceed (1 - alpha) M, and the requests ahead of it in volume
-  // order hold their peak o_i steps, with p_i o_i <= 2 vol_i. With
-  // Proposition 3.1 (OPT >= prefix_total(vol) / M, `examples/papers/Kong.lean`)
-  // this is Theorem 3.2: TEL(SVF) <= (1 + 2 / (1 - alpha)) TEL(OPT).
+  // --8<-- [start:claim]
   claim queueing_bound given (s + o <= P && o >= 1):
     at end ((M - P) * (total(response) - total(output_tokens)) <= 2 * (prefix_total(vol) - total(vol)));
+  // --8<-- [end:claim]
 }

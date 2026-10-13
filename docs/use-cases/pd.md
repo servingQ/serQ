@@ -33,27 +33,211 @@ hardware configuration.
 
 ## In serQ
 
+One request goes like this. The llm-d router picks a decode pod, the least
+busy, and asks its prefix-cache estimate how much of the prompt that pod
+already has. A long enough uncached suffix means a remote prefill, for
+which it picks a prefill pod: a cache-warm one, then the least loaded. A
+short one means the decode pod prefills the prompt itself. On a remote
+prefill the decode pod's sidecar sends the prompt to the prefiller with
+`max_tokens = 1`, waits for its answer, and only then sends the decode
+request to its own engine. The prefiller's scheduler frees the request's
+slot when the one token is sampled but keeps its blocks leased for the
+decoder's read. The decoder's scheduler takes the request when the whole
+prompt fits in its blocks and parks it (`WAITING_FOR_REMOTE_KVS`) while its
+worker reads the KV from the prefiller. The read done, the prefiller frees
+the lease (its full blocks stay cached), and the decoder's request queues
+once more for a running slot and a token of budget, recomputes the last
+prompt token for its logits, and decodes.
+
+The sections below write that a part at a time: what llm-d or vLLM does,
+what the program needs for it, and how serQ says it. The router and the
+sidecar are a gateway, each scheduler is its queue's entries, and the two
+NICs of a read are links.
+
+### Settings
+
+The constants come before `main` and the arguments open it; the rest of the
+program is inside `main`.
+
 ```serq title="examples/pd-disaggregation/llmd_nixl_pull.sq"
---8<-- "examples/pd-disaggregation/llmd_nixl_pull.sq"
+--8<-- "examples/pd-disaggregation/llmd_nixl_pull.sq:settings"
 ```
 
-### Routing
+| serQ | llm-d / vLLM | Meaning |
+|---|---|---|
+| `NP`, `ND` | — | prefill and decode instances |
+| `B` | `max_num_batched_tokens` | the token budget of one step |
+| `max_seqsP`, `max_seqsD` | `max_num_seqs` | requests resident at once on a prefiller, on a decoder |
+| `blocksP`, `blocksD` | `num_gpu_blocks` | KV capacity in blocks on a prefiller, on a decoder |
+| `bs` | `block_size` | tokens per KV block |
+| `max_model_len` | `max_model_len` | every KV pool holds one request of it: vLLM refuses to start otherwise (`kv_cache_utils.py:864-900`, called at `kv_cache_utils.py:2742`) |
+| `a`, `omega`, `beta`, `c0` | — | in seconds: `a` per scheduled token; `omega` per step, to read the weights; `beta` per step per resident context token, to read its KV; `c0` fixed per step |
+| `BwP`, `BwD` | — | NIXL bandwidth out of a prefiller and into a decoder, tokens/s (128 KB per token at 25 GB/s); one NIC each, so the tensor-parallel fan-out of the read is not modelled |
+| `x0` | — | per-read latency: posting the READ and the step that polls its completion (`nixl/pull_worker.py:545-558`) |
+| `thr`, `minp` | prefix-based-pd-decider `nonCachedTokens`, `promptTokens` | when to prefill remotely; `thr = 1` is the guide's always-disagg-pd-decider |
+| `Lambda`, `Z`, `p` | — | sessions per second, mean tool time, the chance a session continues |
+
+### The router
+
+The router has two profiles. The decode profile comes first: the least busy
+decode pod (active-request-scorer). Then the decider: a remote prefill only
+when the prompt's uncached suffix on that pod is long enough
+(prefix-based-pd-decider: `nonCachedTokens`, `promptTokens`). The prefill
+profile then takes a pod that has the prefix (prefix-cache-affinity-filter),
+then the least loaded (token-load-scorer). The sidecar sends the prefill
+with `max_tokens = 1`, waits for the answer, and then sends the decode
+request, its KV read from that prefiller.
+
+In serQ the router is a gateway queue whose `route` is the two `choose`s
+and the decider between them:
+
+```serq
+--8<-- "examples/pd-disaggregation/llmd_nixl_pull.sq:router"
+```
 
 The gateway selects a decoder by `holders + queued`, then compares its
-uncached prompt suffix with `thr`. For remote prefill, it selects a prefiller
-with a cached prefix first, then by load. It runs the prefill entry before
-the decode entry. The router reads the model's actual cache state rather
-than a delayed or approximate cache index.
+uncached prompt suffix with `thr`. It runs the prefill entry before the
+decode entry. `observe lease` is how long the prefiller's blocks stayed
+leased. The router reads the model's actual cache state rather than a
+delayed or approximate cache index. The model uses `thr = 1` for
+always-remote prefill and larger thresholds to keep short uncached suffixes
+on the decoder.
 
-The model uses `thr = 1` for always-remote prefill and larger thresholds to
-keep short uncached suffixes on the decoder. The server's `max_model_len`
-check and the decode entries' output cap limit request length.
+### A prefill instance
+
+A prefiller is vLLM's engine on one device ([the vLLM use case](vllm.md))
+with no decode. Its scheduler admits a request with a slot and the blocks
+of its first chunk, and room for the whole prompt
+(`scheduler_reserve_full_isl`). It computes the prompt in chunks and samples
+one token, which is discarded. When that token is sampled the request is
+finished on the prefiller: the slot goes and the blocks stay leased for the
+decoder's read (`request_finished`: `delay_free_blocks`), 30 s renewed by
+the decoder's heartbeats while it waits, so in effect until the read.
+
+The program needs the engine, the two pools, the pod's NIC that the reads
+out of it share, and an entry whose hold ends with a lease:
+
+```serq
+--8<-- "examples/pd-disaggregation/llmd_nixl_pull.sq:prefiller"
+```
+
+`lease kv (inf)` is the part that makes this disaggregation: the scope
+ends and the slot goes, but the blocks stay the session's until the
+transfer releases them.
+
+### A decode instance
+
+A decoder is vLLM's engine on one device with two ways in. Its scheduler
+serves its queues in this order: the requests whose KV has arrived first
+(vLLM's `skipped_waiting`, `scheduler.py:2383-2385`), then the new ones, and
+the first that does not fit stops the step's admissions. The `queue D`
+block stays open: its two entries, below, are the rest of it.
+
+```serq
+--8<-- "examples/pd-disaggregation/llmd_nixl_pull.sq:decoder"
+```
+
+`pool kv on D.gpu` says a decoder's request waits for its blocks, not for a
+slot, and the decoder's scheduler admits it in an iteration. `nic ps(BwD)`
+is the pod's NIC, which the reads into it share.
+
+### Decode with a local prefill
+
+When the router keeps the request local, the decode pod prefills the prompt
+itself, as [`examples/multi-turn/vllm.sq`](vllm.md) does. Two vLLM rules
+appear here: generation stops at `max_model_len` tokens
+(`sched/utils.py:114-120`), and a preemption keeps the outputs, so `kept`
+is the most tokens an attempt had.
+
+```serq
+--8<-- "examples/pd-disaggregation/llmd_nixl_pull.sq:local"
+```
+
+### Decode with remote KV
+
+The sidecar's decode request is taken when the whole prompt fits the
+blocks, at a step with budget left and a running slot free. It takes
+neither, since the request is parked, not running, and it reuses the full
+blocks it has of the prompt. In `WAITING_FOR_REMOTE_KVS` every block past
+the local hit is read from the prefiller over NIXL, through its NIC and
+this pod's at once; the read done, the prefiller's lease ends. There is one
+KV transfer per request (`nixl/pull_scheduler.py:187-189`). The last prompt
+token is recomputed for its logits. Back in the waiting queue the request
+needs a running slot and a token of budget. A request preempted on the
+decoder afterwards recomputes what it lost here, as any local prefill would
+(`do_remote_prefill` is spent).
+
+In serQ that is a `decode … from P` entry: an outer hold on the blocks that
+reserves a slot without taking one, the `transfer` inside it, and an inner
+hold that takes the slot. Its last brace closes `queue D`:
+
+```serq
+--8<-- "examples/pd-disaggregation/llmd_nixl_pull.sq:remote"
+```
+
+`reqs (cost(reqs, 0)) reserve (cost(reqs, 1))` is "a slot must be free,
+none is taken". `transferred` is `do_remote_prefill`, set once.
+`mark read_done` is the moment the router's `lease` observation reads.
+
+### The read
+
+The decoder's worker reads the KV (NIXL pull): it posts the READ and finds
+it done at a later step, a fixed wait per read, and the bytes cross the
+prefiller's NIC and the decoder's at once. How concurrent reads divide the
+two NICs is UCX's and the fabric's, not vLLM's: max-min fairness is the
+model, not a measurement ([Bandwidth
+sharing](https://github.com/servingQ/serQ/blob/main/docs/design/bandwidth-sharing.md)).
+`std/kvt` writes the topology, mode and policy in one line:
+
+```serq
+--8<-- "examples/pd-disaggregation/llmd_nixl_pull.sq:transfer"
+```
+
+### The client and the server
+
+Sessions arrive, each turn brings a prompt of `n` new tokens on a context
+of `K` and wants `o` back, and after a turn the session calls a tool and
+comes back with probability `p`. `hidden o` says the scheduler knows
+`max_tokens`, not the length (`sched/utils.py:98-119`). Lengths are whole
+tokens, as vLLM counts them: a fractional length can leave a request less
+than the one token its prefill samples (near `max_model_len`, or preempted
+in its last fraction of a token).
+
+```serq
+--8<-- "examples/pd-disaggregation/llmd_nixl_pull.sq:workload"
+```
+
+vLLM refuses a prompt of `max_model_len` tokens or more before it is
+scheduled (`input_processor.py:512-536`), so the session ends there:
+
+```serq
+--8<-- "examples/pd-disaggregation/llmd_nixl_pull.sq:server"
+```
+
+### How evenly the router spreads the decoders
+
+The gauges are read at every instant: the time average of a spread is not
+the spread of the per-pod averages. The KV usage is vLLM's `kv_cache_usage`
+(`block_pool.py:879-890`, of the free blocks; a cached block nobody holds is
+one, `block_pool.py:42-45`) but for its null block, which vLLM takes out of
+`num_gpu_blocks` and the pool here does not. The load is the active-request
+scorer's.
+
+```serq
+--8<-- "examples/pd-disaggregation/llmd_nixl_pull.sq:gauges"
+```
+
+??? example "The whole program"
+
+    ```serq title="examples/pd-disaggregation/llmd_nixl_pull.sq"
+    --8<-- "examples/pd-disaggregation/llmd_nixl_pull.sq"
+    ```
 
 ### Scheduler correspondence
 
 | vLLM | serQ | Where |
 |---|---|---|
-| a prompt of `max_model_len` tokens or more is refused before it is scheduled; a generation stops at `max_model_len` tokens; no KV cache smaller than one request of `max_model_len` is started | `set accepted = K + n < max_model_len; if (accepted) { gw.route(); }` in `server`; `set produced = min(o, max_model_len - prompt)` in each decode entry; `max_model_len = 16384` below every pool | `input_processor.py:512-536`; `sched/utils.py:114-120`; `kv_cache_utils.py:864-900`, called at `kv_cache_utils.py:2742` |
+| a prompt of `max_model_len` tokens or more is refused before it is scheduled; a generation stops at `max_model_len` tokens; no KV cache smaller than one request of `max_model_len` is started | `if (K + n >= max_model_len) { end; }` in `server`; `set produced = min(o, max_model_len - prompt)` in each decode entry; `max_model_len = 16384` below every pool | `input_processor.py:512-536`; `sched/utils.py:114-120`; `kv_cache_utils.py:864-900`, called at `kv_cache_utils.py:2742` |
 | the prefiller admits like any vLLM engine: a slot, the blocks of the first chunk, room for the whole prompt, the prefix hit looked up when the scheduler takes the request | `hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, hit + budget_left(P)))) reserve (cost(kv, prompt)) at admission (hit = …)` in `P`'s `prefill` entry | the waiting loop, `scheduler.py:868-1128`; [the vLLM use case](vllm.md) |
 | the prefiller computes the prompt in chunks and samples one token, which the sidecar discards | `run P prefill (cost(P, prompt - c)) growing kv` | `scheduler.py:624-823`; the truncation for Mamba and MTP only, `nixl/base_scheduler.py:409-436` |
 | the request finishes on the prefiller: its slot is freed, its blocks are not — `request_finished` returns `delay_free_blocks` and a lease of `kv_lease_duration` (30 s), renewed by the decoder's heartbeats while the request waits | `} cache (prompt) lease kv (inf);` — the scope ends, the slot goes, the blocks stay the session's | `nixl/pull_scheduler.py:191-292`; `_free_request`, `scheduler.py:2628-2657`; the renewal, `nixl/base_scheduler.py:199-238`, `nixl/base_worker.py:3010-3030` |

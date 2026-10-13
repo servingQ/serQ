@@ -1,88 +1,57 @@
-// Prefill/decode disaggregation as llm-d runs it on vLLM: the llm-d router
-// (llm-d/llm-d at 8a2f37d, llm-d/llm-d-inference-scheduler at 13eebdb) in
-// front of NP prefill and ND decode instances that hand the KV over with the
-// NIXL connector in its pull mode (ref/vllm at 0c87a197,
-// `vllm/distributed/kv_transfer/kv_connector/v1/nixl/`).
-//
-// One request: the router picks a decode pod (the least busy) and asks its
-// prefix-cache estimate how much of the prompt that pod already has; a long
-// enough uncached suffix means a remote prefill, for which it picks a prefill
-// pod (a cache-warm one, then the least loaded); a short one means the decode
-// pod prefills the prompt itself. On a remote prefill the decode pod's sidecar
-// sends the prompt to the prefiller with max_tokens = 1, waits for its
-// answer, and only then sends the decode request to its own engine. The
-// prefiller's scheduler frees the request's slot when the one token is
-// sampled but keeps its blocks leased for the decoder's read; the decoder's
-// scheduler takes the request when the whole prompt fits in its blocks and
-// parks it (WAITING_FOR_REMOTE_KVS) while its worker reads the KV from the
-// prefiller; the read done, the prefiller frees the lease (its full blocks
-// stay cached), and the decoder's request queues once more for a running slot
-// and a token of budget, recomputes the last prompt token for its logits,
-// and decodes. docs/use-cases/pd.md has the line-by-line correspondence.
+// Prefill/decode disaggregation as llm-d runs it on vLLM, the KV handed over by NIXL in pull mode.
+// docs/use-cases/pd.md explains it a part at a time.
 use "std/args";
 use "std/kvt";
 use "std/share";
 
-let NP = 2;            // prefill instances
-let ND = 2;            // decode instances
-let B = 8192;          // max_num_batched_tokens
-let max_seqsP = 16;    // max_num_seqs on a prefiller
-let max_seqsD = 64;    // max_num_seqs on a decoder
-let blocksP = 10000;   // num_gpu_blocks on a prefiller
-let bs = 16;           // block_size
-let max_model_len = 16384;  // every KV pool holds one request of it: vLLM refuses to start otherwise (kv_cache_utils.py:864-900, called at kv_cache_utils.py:2742)
-let a = 2e-5;          // compute per scheduled token (s)
-let omega = 2e-4;      // weights read per iteration (s)
-let beta = 2e-9;       // KV read per iteration per resident context token (s)
-let c0 = 0;            // fixed cost per iteration (s)
-let BwP = 2e5;         // NIXL bandwidth out of a prefiller, tokens/s (128 KB per token at 25 GB/s)
-let BwD = 2e5;         // and into a decoder (one NIC each: the tensor-parallel fan-out of the read is not modelled)
-let x0 = 0.002;        // per-read latency: posting the READ and the step that polls its completion (s; nixl/pull_worker.py:545-558)
-let minp = 0;          // prefix-based-pd-decider promptTokens
-let p = 0.9;           // continue after a turn
-let Z = 3.0;           // tool time (s)
+// --8<-- [start:settings]
+let NP = 2;  // prefill instances
+let ND = 2;  // decode instances
+let B = 8192;  // max_num_batched_tokens
+let max_seqsP = 16;  // max_num_seqs on a prefiller
+let max_seqsD = 64;  // max_num_seqs on a decoder
+let blocksP = 10000;  // num_gpu_blocks on a prefiller
+let bs = 16;  // block_size
+let max_model_len = 16384;  // max_model_len
+let a = 2e-5;  // compute per scheduled token (s)
+let omega = 2e-4;  // weights read per iteration (s)
+let beta = 2e-9;  // KV read per iteration per resident context token (s)
+let c0 = 0;  // fixed cost per iteration (s)
+let BwP = 2e5;  // NIXL bandwidth out of a prefiller, tokens/s
+let BwD = 2e5;  // NIXL bandwidth into a decoder, tokens/s
+let x0 = 0.002;  // per-read latency (s)
+let minp = 0;  // prefix-based-pd-decider promptTokens
+let p = 0.9;  // continue after a turn
+let Z = 3.0;  // tool time (s)
 
 fn main() {
-  let blocksD = args.number("blocksD", 10000);   // num_gpu_blocks on a decoder
-  let thr = args.number("thr", 512);         // prefix-based-pd-decider nonCachedTokens (1: the guide's always-disagg-pd-decider)
-  let Lambda = args.number("Lambda", 0.6);      // sessions per second
+  let blocksD = args.number("blocksD", 10000);  // num_gpu_blocks on a decoder
+  let thr = args.number("thr", 512);  // prefix-based-pd-decider nonCachedTokens
+  let Lambda = args.number("Lambda", 0.6);  // sessions per second
+  // --8<-- [end:settings]
 
-  // The deployment: what the router, the sidecar and the two schedulers do
-  // with one request. The router and the sidecar are the gateway; each
-  // scheduler is its queue's entries, and the two NICs of a read are links.
+  // --8<-- [start:router]
   queue gw : gateway {
     route {
       set prompt = K + n;
-      // The router. Decode profile first: the least busy decode pod
-      // (active-request-scorer). Then the decider: a remote prefill only when the
-      // prompt's uncached suffix on that pod is long enough
-      // (prefix-based-pd-decider: nonCachedTokens, promptTokens); the estimate is
-      // the router's own prefix-cache picture of the pod.
       choose j in ND by (holders(D[j].kv) + queued(D[j].kv));
       set hitD = min(cachedin(D[j].kv), floor(prompt - 1, bs));
       set remote_prefill = prompt >= minp && prompt - hitD >= thr;
       if (remote_prefill) {
-        // Prefill profile: a pod that has the prefix (prefix-cache-affinity-filter),
-        // then the least loaded (token-load-scorer).
         choose i in NP by (cachedin(P[i].kv) > 0 ? 0 : 1, work(P[i]) + queued(P[i].reqs));
-        P[i].prefill (prompt);              // the sidecar: max_tokens = 1, wait for the answer
+        P[i].prefill (prompt);
         set t1 = now;
-        D[j].decode (prompt) from P[i];     // then the decode request, its KV read from P[i]
-        observe lease = D.read_done - t1;   // how long the prefiller's blocks stayed leased
+        D[j].decode (prompt) from P[i];
+        observe lease = D.read_done - t1;
       } else {
         D[j].decode (prompt);
       }
       observe remote = remote_prefill;
     }
   }
+  // --8<-- [end:router]
 
-  // A prefill instance: vLLM's engine on one device (examples/multi-turn/vllm.sq)
-  // with no decode. The scheduler admits a request with a slot and the blocks
-  // of its first chunk, and room for the whole prompt
-  // (scheduler_reserve_full_isl). When the one token is sampled the request is
-  // finished on the prefiller: the slot goes and the blocks stay leased for the
-  // decoder's read (request_finished: delay_free_blocks), 30 s renewed by the
-  // decoder's heartbeats while it waits, so in effect until the read.
+  // --8<-- [start:prefiller]
   queue P[NP] : prefill {
     device gpu { compute (t) = t * a; hbm (k) = omega + beta * k; kv cap blocksP * bs; }
     engine on gpu {
@@ -93,20 +62,18 @@ fn main() {
     }
     pool reqs on P { queue fifo; }
     pool kv on gpu { block bs; evict lru; preempt lifo; }
-    nic ps(BwP);                          // the pod's NIC: the reads out of it share it
+    nic ps(BwP);
     prefill (prompt) {
       hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, reused + budget_left(P)))) reserve (cost(kv, prompt))
            at admission (reused = min(cachedin(kv), floor(prompt - 1, bs))) {
         set c = cached;
-        run P prefill (cost(P, prompt - c)) growing kv;      // chunked; one token is sampled and discarded
+        run P prefill (cost(P, prompt - c)) growing kv;
       } cache (cost(reqs, kv, prompt)) lease kv (inf);
     }
   }
+  // --8<-- [end:prefiller]
 
-  // A decode instance: vLLM's engine on one device, with two ways in. Its
-  // scheduler serves its queues in this order: the requests whose KV has
-  // arrived first (vLLM's `skipped_waiting`, scheduler.py:2383-2385), then the
-  // new ones, and the first that does not fit stops the step's admissions.
+  // --8<-- [start:decoder]
   queue D[ND] : decode {
     device gpu { compute (t) = t * a; hbm (k) = omega + beta * k; kv cap blocksD * bs; }
     engine on gpu {
@@ -117,12 +84,13 @@ fn main() {
     }
     pool reqs on D { queue fifo; }
     pool kv on D.gpu { block bs; evict lru; preempt lifo; }
-    nic ps(BwD);                          // the pod's NIC: the reads into it share it
+    nic ps(BwD);
+    // --8<-- [end:decoder]
 
-    // Decode only: the pod prefills the prompt itself (examples/multi-turn/vllm.sq).
+    // --8<-- [start:local]
     decode (prompt) {
-      set produced = min(o, max_model_len - prompt);   // generation stops at max_model_len tokens (sched/utils.py:114-120)
-      set kept = prompt;   // the most tokens an attempt had: a preemption keeps the outputs
+      set produced = min(o, max_model_len - prompt);
+      set kept = prompt;
       hold kv (cost(kv, min(known, reused + budget_left(D)))) reserve (cost(kv, known)), reqs (cost(reqs, 1))
            at admission (known = max(kept, computed + 1),
                          reused = min(cachedin(kv), floor(known - 1, bs))) {
@@ -133,34 +101,25 @@ fn main() {
         run D decode (cost(D, produced - 1 - (known - prompt))) growing kv;
       } cache (cost(kv, reqs, prompt + produced));
     }
+    // --8<-- [end:local]
 
-    // With remote KV. The sidecar's decode request is taken when the whole
-    // prompt fits the blocks, at a step with budget left and a running slot
-    // free - it takes neither (the request is parked, not running) - and
-    // reuses the full blocks it has of the prompt.
+    // --8<-- [start:remote]
     decode (prompt) from P {
-      set produced = min(o, max_model_len - prompt);   // generation stops at max_model_len tokens (sched/utils.py:114-120)
-      set transferred = 0;   // one KV transfer per request (nixl/pull_scheduler.py:187-189)
-      set kept = prompt;     // the most tokens an attempt had: a preemption keeps the outputs
+      set produced = min(o, max_model_len - prompt);
+      set transferred = 0;
+      set kept = prompt;
       hold kv (cost(kv, known)) reserve (cost(kv, known)), reqs (cost(reqs, 0)) reserve (cost(reqs, 1))
            reuse (cost(kv, reqs, floor(known - 1, bs)))
            at admission (known = max(kept, computed + 1)) {
         set kept = known;
         set c = cached;
         if (!transferred) {
-          // WAITING_FOR_REMOTE_KVS: every block past the local hit is read
-          // from the prefiller over NIXL, through its NIC and this pod's at
-          // once; the read done, the prefiller's lease ends. The last prompt
-          // token is recomputed for its logits.
           observe remote_tokens = prompt - c;
-          transfer (prompt - c) from P to kv (prompt - 1 - c);   // over P's NIC and this pod's
+          transfer (prompt - c) from P to kv (prompt - 1 - c);
           mark read_done;
           set transferred = 1;
           set c = prompt - 1;
         }
-        // Back in the waiting queue: a running slot and a token of budget.
-        // A request preempted on the decoder afterwards recomputes what it
-        // lost here, as any local prefill would (do_remote_prefill is spent).
         hold reqs (cost(reqs, 1)) {
           run D prefill (cost(D, known - c)) growing kv;
           run D decode (cost(D, produced - 1 - (known - prompt))) growing kv;
@@ -168,25 +127,18 @@ fn main() {
       } cache (cost(kv, reqs, prompt + produced));
     }
   }
+  // --8<-- [end:remote]
 
-  // The decoder's worker reads the KV (NIXL pull): it posts the READ and finds
-  // it done at a later step, a fixed wait per read, and the bytes cross the
-  // prefiller's NIC and the decoder's at once. How concurrent reads divide the
-  // two NICs is UCX's and the fabric's, not vLLM's: max-min fairness is the
-  // model, not a measurement (docs/design/bandwidth-sharing.md).
+  // --8<-- [start:transfer]
   kvt.nixl_pull (P, D, latency = x0, share = share.maxmin);
+  // --8<-- [end:transfer]
 
-  // The client: sessions arrive, each turn brings a prompt of n new tokens on
-  // a context of K and wants o tokens back, and after a turn the session calls
-  // a tool and comes back with probability p.
+  // --8<-- [start:workload]
   workload {
     arrive poisson(Lambda);
-    hidden o;              // the scheduler knows max_tokens, not the length (sched/utils.py:98-119)
+    hidden o;
     init { set K = 0; }
     turn {
-      // Whole tokens, as vLLM counts them: a fractional length can leave a
-      // request less than the one token its prefill samples (near
-      // max_model_len, or preempted in its last fraction of a token).
       set n = ceil(K == 0 ? ~uniform(1000, 3000) : ~exp(500));
       set o = floor(~exp(200)) + 1;
       set more = ~bernoulli(p);
@@ -200,25 +152,21 @@ fn main() {
       }
     }
   }
+  // --8<-- [end:workload]
 
+  // --8<-- [start:server]
   server {
-    // vLLM refuses a prompt of max_model_len tokens or more before it is
-    // scheduled (input_processor.py:512-536): the session ends there.
     observe too_long = K + n >= max_model_len;
     if (K + n >= max_model_len) { end; }
     gw.route();
   }
+  // --8<-- [end:server]
 
-  // How evenly the router spreads the decoders, read at every instant: the
-  // time average of a spread is not the spread of the per-pod averages. The
-  // KV usage is vLLM's `kv_cache_usage` (block_pool.py:879-890, of the free
-  // blocks; a cached block nobody holds is one, block_pool.py:42-45) but for
-  // its null block, which vLLM takes out of
-  // num_gpu_blocks and the pool here does not; the load is the
-  // active-request scorer's.
+  // --8<-- [start:gauges]
   gauge running_spread = max k in ND (used(D[k].reqs)) - min k in ND (used(D[k].reqs));
   gauge kv_usage_max = max k in ND (used(D[k].kv) / (used(D[k].kv) + free(D[k].kv)));
   gauge kv_usage_mean = sum k in ND (used(D[k].kv) / (used(D[k].kv) + free(D[k].kv))) / ND;
   gauge load_spread = max k in ND (holders(D[k].kv) + queued(D[k].kv))
                     - min k in ND (holders(D[k].kv) + queued(D[k].kv));
+  // --8<-- [end:gauges]
 }

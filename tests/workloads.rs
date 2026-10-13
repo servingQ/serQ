@@ -6,7 +6,8 @@
 //! `c0`, the declarations from `device gpu` to `pool reqs on vllm`, among
 //! them the `engine vllm` block with its `request`, and the `server` that
 //! calls it. Held to the text, not the IR, because the request is spliced
-//! into the session and the IR has no engine to compare.
+//! into the session and the IR has no engine to compare. Snippet markers
+//! (`// --8<-- [start:…]`) are not text a reader sees, so they are skipped.
 
 use serq::program_path;
 
@@ -14,6 +15,7 @@ fn engine(name: &str) -> Vec<String> {
     let src = std::fs::read_to_string(program_path(name)).unwrap();
     let lines: Vec<&str> = src
         .lines()
+        .filter(|l| !l.contains("--8<--"))
         .map(|l| l.strip_prefix("  ").unwrap_or(l))
         .collect();
     let span = |from: &str, to: &dyn Fn(&str) -> bool| -> Vec<String> {

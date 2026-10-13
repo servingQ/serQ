@@ -43,8 +43,54 @@ compiled shapes.
 
 ![vllm-rbln deployment in serQ](../assets/rbln.deployment.svg)
 
+`examples/vendors/rbln.sq` is an executable approximation of the native
+`RBLNScheduler`: a step runs one prefill or a decode-only batch, over
+vLLM's prefix cache and preemption. PP caps, remote-KV admission and
+sub-block copying are not modeled. The sections below build it a part at a
+time: what the plugin does, what the program needs for it, and how serQ
+writes it.
+
+### The device and the engine
+
+One NPU with 8192 tokens of KV, and an engine that keeps at most four
+requests resident and schedules at most 256 tokens a step. The engine block
+stays open for the request and the schedule below:
+
 ```serq title="examples/vendors/rbln.sq"
---8<-- "examples/vendors/rbln.sq"
+--8<-- "examples/vendors/rbln.sq:engine"
+```
+
+### What a request does
+
+The RBLN scheduler treats one request as vLLM does: prefill what the cache
+does not hold, then decode. `RBLNScheduler` hands a preemption to upstream
+vLLM ([`_preempt_request`][resume]), which keeps the generated tokens and
+drops their KV, so a resumed request prefills from what it had computed.
+The program needs the same two values as `examples/multi-turn/vllm.sq`:
+`known`, every token the request has (`kept` remembers the most an earlier
+attempt had), and `reused`, the cached full blocks of `known − 1`. Both are
+read when the scheduler admits the request, and so is the live token
+budget, `left`, rather than captured before queuing:
+
+```serq
+--8<-- "examples/vendors/rbln.sq:request"
+```
+
+A waiting request looks up its prefix hit ([`get_computed_blocks`][hit]),
+which is `cachedin(kv)` read at admission. The step's blocks are cached
+once scheduling is final ([`cache_blocks`][cached]), which is `cache
+(prompt + output)`.
+
+### One prefill or a decode-only batch
+
+`RBLNScheduler.schedule` constrains a batch to decodes or a lone prefill,
+and the waiting path calls `allocate_slots` with
+`full_sequence_must_fit=True` ([Scheduler][native]). In serQ the first is
+`exclusive prefill`, and the second is a `reserve` beside the units the
+admission takes. The step's cost follows and closes the engine block:
+
+```serq
+--8<-- "examples/vendors/rbln.sq:schedule"
 ```
 
 `exclusive prefill` selects either one prefill or a decode-only batch.
@@ -54,28 +100,45 @@ already acquired allocation stays held. A selected prefill stops further
 waiting admission. Ordinary capacity, budget-exhaustion and preemption gates
 still apply. See the [`exclusive prefill` reference](../api/engine.md#exclusive-prefill).
 
-`reserve (known)` tests the current sequence's capacity (the prompt, or what a resumed request had computed), while `taking` allocates
-only the initial chunk and `growing kv` extends it as computation advances.
-The live token budget is bound at admission, rather than captured before
-queuing.
+The admission takes the reused prefix plus a chunk of at most 128, if the
+whole sequence fits. `reserve (known)` tests the current sequence's capacity
+(the prompt, or what a resumed request had computed), while `taking`
+allocates only the initial chunk and `growing kv` extends it as computation
+advances.
 
-The native scheduler keeps vLLM's prefix cache and preemption. A waiting
-request looks up its prefix hit ([`get_computed_blocks`][hit]), the step's
-blocks are cached once scheduling is final ([`cache_blocks`][cached]), and a
-failed allocation preempts the last running request under FCFS
-([`running.pop()`][preempt]). The program says the same for a session's own
-prefix, with the hit bound at admission, `cache (prompt + out)` and `preempt
-lifo` on `kv`. `RBLNScheduler` hands a preemption to upstream vLLM
-([`_preempt_request`][resume]), which keeps the generated tokens and drops
-their KV, so a resumed request prefills from what it had computed (`known`,
-as `examples/multi-turn/vllm.sq` cites). In this workload neither fires: the six requests
-are separate sessions, and serQ's cache is keyed by session where vLLM's is
-shared by content hash, so none hits another's prefix; four slots of at most
-272 tokens never fill 8192 tokens (512 blocks) of KV.
+### The prefix cache and preemption
+
+A failed allocation preempts the last running request under FCFS
+([`running.pop()`][preempt]). That is `preempt lifo` on `kv`, beside the
+16-token blocks and LRU eviction of vLLM's prefix cache; the waiting queue
+is FCFS:
+
+```serq
+--8<-- "examples/vendors/rbln.sq:pools"
+```
+
+### The workload
+
+Six requests at once, each a 256-token prompt wanting 16 tokens back:
+
+```serq
+--8<-- "examples/vendors/rbln.sq:workload"
+```
+
+In this workload neither the prefix cache nor preemption fires: the six
+requests are separate sessions, and serQ's cache is keyed by session where
+vLLM's is shared by content hash, so none hits another's prefix; four slots
+of at most 272 tokens never fill 8192 tokens (512 blocks) of KV.
 
 The example covers local phase isolation. PP caps, remote-KV decode-ready
 admission guards and sub-block copy semantics remain outside it. The hand-derived
 interpreter regressions do not establish native scheduler equivalence.
+
+??? example "The whole program"
+
+    ```serq title="examples/vendors/rbln.sq"
+    --8<-- "examples/vendors/rbln.sq"
+    ```
 
 ## Remaining gaps
 

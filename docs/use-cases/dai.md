@@ -19,31 +19,65 @@ The operating point of the program is the paper's point C (§6.2): CodeLlama-34B
 
 ## The system in serQ
 
+`examples/papers/dai_sarathi.sq` is the basic model of §3.1 with
+Sarathi-Serve's scheduler (§4: decode first, chunked prefill, mixed batches)
+at operating point C. The sections below build it a part at a time: what the
+paper's model says, what the program needs for it, and how serQ writes it.
+
+### Settings
+
+The batch time is $t_b = c + a\lceil b/b_0\rceil$ with $b_0$ dividing
+$b_{\max}$ (Assumption 1), and at point C it is $11.28 + 35.47\lceil
+b/128\rceil$ ms. Time is in units of 10 µs, so that every number of the
+model is an integer: $c = 1128$, $a = 3547$, and one arrival every 467.5 ms
+is `gap = 46750`. Each request brings 290 prefill and 990 decode tokens:
+
 ```serq title="examples/papers/dai_sarathi.sq"
---8<-- "examples/papers/dai_sarathi.sq"
+--8<-- "examples/papers/dai_sarathi.sq:settings"
+```
+
+### The engine and Sarathi-Serve
+
+A batch holds at most $b_{\max}$ tokens and costs $t_b$; a request is its
+prefill followed by its decode. Sarathi-Serve serves the decodes first, then
+the oldest prefills, with no chunk cap. serQ writes the budget as `tokens
+cap`, the batch time as the device's `compute` plus the fixed `c`, and the
+order as `advance running admission`: residents are served in admission
+order, and without a chunk cap that order is decodes first
+(`Serve.serve_eq_decode_first`).
+
+```serq
+--8<-- "examples/papers/dai_sarathi.sq:engine"
+```
+
+### Deterministic arrivals
+
+Requests arrive one per gap, and each is one call to the engine:
+
+```serq
+--8<-- "examples/papers/dai_sarathi.sq:workload"
 ```
 
 | Paper | serQ |
 |---|---|
 | batch budget $b_{\max}$ | `tokens cap bmax;` |
 | batch time $t_b = c + a\lceil b/b_0\rceil$ | `compute (t) = a * ceil(t / b0);` on the device, `execute (c + compute(batch.tokens));` (time in 10 µs, so every number is an integer) |
-| request $i$ with $v_p$, $v_d$ | `request () { prefill (vp); decode (vd); }`, called as `sarathi ();` |
+| request $i$ with $v_p$, $v_d$ | `request (prompt, output) { prefill (prompt); decode (output); }`, called as `sarathi (vp, vd);` |
 | deterministic arrivals | `arrive renewal(gap);` |
-| Sarathi-Serve: decodes first, then the oldest prefills | `advance running admission;`: residents are served in admission order, and without a chunk cap that order is decodes first (`Serve.serve_eq_decode_first`) |
+| Sarathi-Serve: decodes first, then the oldest prefills | `advance running admission;` |
 
-FasterTransformer is the same program with its schedule changed:
+??? example "The whole program"
 
-```serq title="examples/papers/dai_fastertransformer.sq (the engine)"
-// decodes while any request decodes, else prefills: never both
-def in_phase() { running.decoding > 0 ? decoding : !decoding }
-engine fastertransformer on gpu {
-  tokens cap bmax;
-  schedule {
-    advance running only (in_phase());
-    admit waiting only (in_phase()) while (running.preempted == 0);
-  }
-  execute (c + compute(batch.tokens));
-}
+    ```serq title="examples/papers/dai_sarathi.sq"
+    --8<-- "examples/papers/dai_sarathi.sq"
+    ```
+
+### FasterTransformer
+
+FasterTransformer decodes while any request decodes, and prefills otherwise: never both. `examples/papers/dai_fastertransformer.sq` models it at Sarathi-Serve's operating point, in the same units of 10 µs; it is the same program with its schedule changed:
+
+```serq title="examples/papers/dai_fastertransformer.sq"
+--8<-- "examples/papers/dai_fastertransformer.sq:engine"
 ```
 
 `only` serves only the decodes while any request decodes, and only the prefills otherwise: decode first, no mixed batches. The running and the waiting requests share the one predicate `in_phase()`.
@@ -85,20 +119,36 @@ with $b_0$ dividing $b_{\max}$.
 
 ## The propositions in serQ
 
-The two programs express these results as [claims](../api/program.md#claim):
+The two programs express these results as [claims](../api/program.md#claim).
+
+Work conservation, (8)–(9): a batch is full whenever the residents could
+fill it. Sarathi is work-conserving (§4):
 
 ```serq
-// (8)-(9): a batch is full whenever the residents could fill it.
-claim work_conserving: every iteration of sarathi (demand < bmax || tokens == bmax);
+--8<-- "examples/papers/dai_sarathi.sq:work_conserving"
+```
 
-// Theorem 2(a): no scheduler serves more than b_max / t_{b_max} tokens per unit of time.
-claim token_rate: every iteration of sarathi (served * (c + a * bmax / b0) <= bmax * now);
+Theorem 2(a): no scheduler serves more than $b_{\max}/t_{b_{\max}}$ tokens
+per unit of time, so a load above it diverges:
 
-// §4 (dai_fastertransformer.sq): FasterTransformer is not work-conserving.
-claim not_work_conserving: some iteration of fastertransformer (demand >= bmax && tokens < bmax);
+```serq
+--8<-- "examples/papers/dai_sarathi.sq:token_rate"
+```
 
-// Theorem 2(b), pathwise: arrived and unserved work stays below b_max + 1 requests' worth.
-claim bounded: every iteration of sarathi (arrived * (vp + vd) <= served + (bmax + 1) * (vp + vd));
+FasterTransformer is not work-conserving (§4, `dai_fastertransformer.sq`): some batch is not full although the residents could fill it:
+
+```serq
+--8<-- "examples/papers/dai_fastertransformer.sq:not_work_conserving"
+```
+
+Theorem 2(a), `token_rate`, holds for it as for every scheduler; the program claims it too.
+
+Theorem 2(b), pathwise: at this load, one request's tokens per gap, which is
+exactly $b_{\max}/t_{b_{\max}}$, the work that has arrived and not been
+served never exceeds $b_{\max} + 1$ requests' worth, however many arrive:
+
+```serq
+--8<-- "examples/papers/dai_sarathi.sq:bounded"
 ```
 
 `demand` is the paper's $\sum_i (p_i + \mathbf 1\{p_i=0\})$: what the residents could take with an unlimited budget. `served` is the tokens of the earlier iterations and `now` the start of this one, so `token_rate` says the served tokens never exceed the rate $b_{\max}/t_{b_{\max}}$ times the elapsed time. `arrived` is the requests that have arrived by the iteration's start, so `arrived * (vp + vd) - served` is the backlog in tokens. `some iteration` claims existence: one workload of the program's family and one iteration of one of its paths.

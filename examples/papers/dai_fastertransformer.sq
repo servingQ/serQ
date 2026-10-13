@@ -1,8 +1,5 @@
-// Dai, Deng, Li, Peng (arXiv 2504.07347) §4: FasterTransformer's scheduler
-// in the basic LLM queueing model, at the operating point of
-// `dai_sarathi.sq`. Decode first and no mixed batches: while a request
-// decodes, an iteration batches only decodes and the prefills wait. Time is
-// in units of 10 µs.
+// Dai et al., FasterTransformer's scheduler in the basic LLM queueing model
+// (arXiv 2504.07347 §4). docs/use-cases/dai.md explains it.
 
 let bmax = 128;
 let c = 1128;
@@ -14,7 +11,7 @@ let vd = 990;
 
 fn main() {
   device gpu { compute (t) = a * ceil(t / b0); }
-  // decodes while any request decodes, else prefills: never both
+  // --8<-- [start:engine]
   def in_phase() { running.decoding > 0 ? decoding : !decoding }
   engine fastertransformer on gpu {
     tokens cap bmax;
@@ -28,6 +25,7 @@ fn main() {
     }
     execute (c + compute(batch.tokens));
   }
+  // --8<-- [end:engine]
 
   workload {
     arrive renewal(gap);
@@ -39,10 +37,8 @@ fn main() {
     observe response = now - t0;
   }
 
-  // §4: FasterTransformer is not work-conserving. Some batch is not full
-  // although the residents could fill it.
+  // --8<-- [start:not_work_conserving]
   claim not_work_conserving: some iteration of fastertransformer (demand >= bmax && tokens < bmax);
-
-  // Theorem 2(a) holds for it as for every scheduler.
+  // --8<-- [end:not_work_conserving]
   claim token_rate: every iteration of fastertransformer (served * (c + a * bmax / b0) <= bmax * now);
 }
