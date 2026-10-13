@@ -270,6 +270,9 @@ pub struct Report {
     pub claims: Vec<ClaimReport>,
     pub stages: Vec<StageReport>,
     pub pools: Vec<PoolReport>,
+    /// The log of the run, when it was asked for (`Interp::logged`): what
+    /// each session did, when. In the JSON only then, as `log`.
+    pub log: Option<crate::engine::log::Log>,
 }
 
 impl Report {
@@ -686,7 +689,11 @@ impl Report {
                 p.growing_stalled
             );
         }
-        s.push_str("]}");
+        s.push(']');
+        if let Some(l) = &self.log {
+            let _ = write!(s, ",\"log\":{}", l.json());
+        }
+        s.push('}');
         s
     }
 }

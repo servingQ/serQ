@@ -92,7 +92,9 @@ their previous preemption, which a run would otherwise hide).
 
 `--json` prints the same report as JSON, and `--dump DIR` writes every
 observation as `DIR/<name>.csv` with `time,session,turn,value` — one row per
-sample, which is what you pair against a measured run.
+sample, which is what you pair against a measured run. `--log FILE` writes
+what each session did, when ([the run log](reference/log.md)): the run as a
+replay rather than a summary.
 
 ## Checking without running
 

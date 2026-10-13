@@ -1,4 +1,4 @@
-//! `serq run FILE [--seed N] [--horizon T] [--warmup T] [--arrivals N] [--instance F] [--def k=expr]... [--trace F] [--json] [--dump DIR] [--name value]...`
+//! `serq run FILE [--seed N] [--horizon T] [--warmup T] [--arrivals N] [--instance F] [--def k=expr]... [--trace F] [--json] [--dump DIR] [--log FILE] [--name value]...`
 //! `serq check FILE [--instance F] [--def k=expr]... [--name value]...`
 //! `serq ir FILE [--instance F] [--def k=expr]... [--seed N] [--horizon T] [--warmup T] [--arrivals N] [--trace F] [--inline-trace] [--name value]...`
 //! `serq draw FILE [--format tikz|svg] [--out PATH] [--name value]...` (experimental)
@@ -18,7 +18,7 @@ use serq::Overrides;
 fn usage(cmd: &str) -> &'static str {
     match cmd {
         "run" => {
-            "serq run FILE [--seed N] [--horizon T] [--warmup T] [--arrivals N] [--instance F] [--def name=expr]... [--trace F] [--json] [--dump DIR] [--name value]..."
+            "serq run FILE [--seed N] [--horizon T] [--warmup T] [--arrivals N] [--instance F] [--def name=expr]... [--trace F] [--json] [--dump DIR] [--log FILE] [--name value]..."
         }
         "check" => "serq check FILE [--instance F] [--def name=expr]... [--name value]...",
         "ir" => {
@@ -132,6 +132,7 @@ fn main() {
     let mut ov = Overrides::default();
     let mut json = false;
     let mut dump: Option<String> = None;
+    let mut log: Option<String> = None;
     let mut inline = false;
     let mut format = String::from("tikz");
     let mut out: Option<String> = None;
@@ -163,7 +164,7 @@ fn main() {
         let allowed: &[&str] = match flag {
             "--def" | "--instance" => &["run", "check", "ir", "draw", "target"],
             "--seed" | "--horizon" | "--warmup" | "--arrivals" | "--trace" => &["run", "ir"],
-            "--json" | "--dump" => &["run"],
+            "--json" | "--dump" | "--log" => &["run"],
             "--inline-trace" => &["ir"],
             "--format" | "--out" => &["draw"],
             _ => unreachable!("`{flag}` is in args::OPTIONS but has no arm"),
@@ -224,6 +225,7 @@ fn main() {
             }
             "--json" => json = true,
             "--dump" => dump = Some(next(&mut i)),
+            "--log" => log = Some(next(&mut i)),
             "--inline-trace" => inline = true,
             "--format" => {
                 format = next(&mut i);
@@ -289,7 +291,17 @@ fn main() {
             }
         }
         "run" => {
-            let r = serq::run_ir(&prog, base).unwrap_or_else(|e| fail(file, e));
+            let r = match &log {
+                None => serq::run_ir(&prog, base),
+                Some(_) => serq::run_ir_logged(&prog, base, usize::MAX),
+            }
+            .unwrap_or_else(|e| fail(file, e));
+            if let Some(path) = &log
+                && let Err(e) = std::fs::write(path, r.log.as_ref().expect("a logged run").json())
+            {
+                eprintln!("cannot write {path}: {e}");
+                exit(1)
+            }
             if let Some(d) = &dump
                 && let Err(e) = r.dump(Path::new(d))
             {

@@ -130,6 +130,7 @@ nav:
           - The IR: ir.md
   - CLI Reference:
       - reference/cli.md
+      - The run log: reference/log.md
   - Python Reference:
       - python.md
       - Compilation and execution:
