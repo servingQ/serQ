@@ -1236,11 +1236,14 @@ impl<'p> Interp<'p> {
         // The memory invariant, `allocated + cached <= cap` in every
         // reachable configuration (`SerqLang.Step.invariant` proves it for
         // the pool relation; this checks the interpreter on every debug run:
-        // `make check` runs the tests once more in a debug build).
+        // `make check` runs the tests once more in a debug build). A pool
+        // that acts at its ticks is over its cap between them by design,
+        // outside the Lean fragment: then it has nothing cached.
         #[cfg(debug_assertions)]
         for (cp, pl) in self.p.pools.iter().zip(&self.pools) {
+            let ticks = matches!(cp.preempt, Preempt::Leases { every: Some(_), .. });
             debug_assert!(
-                pl.used + pl.cached <= pl.cap + 1e-6,
+                pl.used + pl.cached <= pl.cap + 1e-6 || ticks && pl.cached <= 1e-6,
                 "pool `{}`: used {} + cached {} > cap {} at t = {}",
                 cp.name,
                 pl.used,
@@ -1286,10 +1289,11 @@ impl<'p> Interp<'p> {
                         .flat_map(|h| &h.pools)
                         .filter(|e| e.pool == k)
                         .map(|e| (e.alloc - e.shared, &e.path));
+                    // a lease set aside holds nothing (`suspend`)
                     let leases = s
                         .leases
                         .iter()
-                        .filter(|l| l.pool == k)
+                        .filter(|l| l.pool == k && !l.suspended)
                         .map(|l| (l.alloc - l.shared, &l.path));
                     holds.chain(leases)
                 })
@@ -1331,7 +1335,10 @@ impl<'p> Interp<'p> {
                         .flat_map(|h| &h.pools)
                         .filter(|e| e.pool == k)
                         .count()
-                        + s.leases.iter().filter(|l| l.pool == k).count()
+                        + s.leases
+                            .iter()
+                            .filter(|l| l.pool == k && !l.suspended)
+                            .count()
                 })
                 .sum();
             debug_assert_eq!(
@@ -2657,8 +2664,19 @@ impl<'p> Interp<'p> {
         self.ready.push_back(sid);
     }
 
-    /// Evict cached prefixes until `need` more units fit.
+    /// Evict cached prefixes until `need` more units fit, after a guard
+    /// that passed.
     fn make_room(&mut self, pl: usize, need: f64) {
+        self.evict_for(pl, need);
+        debug_assert!(
+            self.pools[pl].used + need <= self.pools[pl].cap + EPS,
+            "make_room called without a passing guard"
+        );
+    }
+
+    /// Evict cached prefixes until `need` more units fit, or none is left:
+    /// a growth a pool's tick lets past the cap evicts all it can.
+    fn evict_for(&mut self, pl: usize, need: f64) {
         let over = |s: &Self| s.pools[pl].used + s.pools[pl].cached + need > s.pools[pl].cap + EPS;
         // one victim is a linear scan; the heap pays off only for several
         let short = self.pools[pl].used + self.pools[pl].cached + need - self.pools[pl].cap;
@@ -2692,10 +2710,6 @@ impl<'p> Interp<'p> {
                 }
             }
         }
-        debug_assert!(
-            self.pools[pl].used + need <= self.pools[pl].cap + EPS,
-            "make_room called without a passing guard"
-        );
     }
 
     /// The session a cache node's eviction key and spill read: its writer,
@@ -3127,8 +3141,13 @@ impl<'p> Interp<'p> {
         if let (Grown::Lease(_), Preempt::Leases { every: Some(_), .. }) =
             (g, &self.p.pools[pl].preempt)
         {
-            // the pool acts at its ticks: the growth is let through now
-            self.add_alloc(sid, pl, g, need);
+            // the pool acts at its ticks: the growth is let through now,
+            // past the cap if it must, where no guard has passed
+            self.evict_for(pl, need);
+            self.pools[pl].used += need;
+            if let Grown::Lease(i) = g {
+                self.sessions[sid].leases[i].alloc += need;
+            }
             self.schedule_tick(pl);
             return true;
         }
@@ -3524,6 +3543,8 @@ impl<'p> Interp<'p> {
                 if self.pools[pl].used + alloc > self.pools[pl].cap + EPS {
                     continue;
                 }
+                // cached units give way, as to any admission
+                self.make_room(pl, alloc);
                 self.pools[pl].used += alloc;
                 self.pools[pl].holders.push(s);
                 self.sessions[s].leases[i].suspended = false;
