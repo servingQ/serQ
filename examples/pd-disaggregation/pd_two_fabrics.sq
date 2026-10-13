@@ -59,7 +59,7 @@ fn main() {
     choose j in ND by (holders(kvD[j]) + queued(kvD[j]));
     hold kvD[j] (cost(kvD, n + o)) {
       set t1 = now;
-      branch (floor(i / NPn) == floor(j / NDn)) {
+      if (floor(i / NPn) == floor(j / NDn)) {
         // the same node: NVLink, each read its equal share at the tighter
         // of its two ports, the rest of the other left unused
         transfer on nvl_out[i], nvl_in[j] (n, share = share.bottleneck) from kvP[i] to kvD[j] (n);
