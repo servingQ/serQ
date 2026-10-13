@@ -323,15 +323,19 @@ The gain is a closed workload's, and it is paid in waiting. At 32 agents
 mode's 81 s, but its 99th percentile is 1 817 s against 140 s (1 817-1 818 s
 over seeds 1-4): a program the router holds back waits for room, and
 since the router lets the smaller in first, the largest wait until the
-force-resume lets them in at 30 minutes. With the waiters in the order
-they reach the tick the 99th percentile is 639 s (seed 1) and the
-throughput the same. Under open Poisson arrivals of
+force-resume lets them in at 30 minutes: 14 % of the resumes (2 % of
+the turns, seed 1) wait exactly that long, programs with prompts 2.7
+times the others'. Without the size in the order (those with a step
+still first) the 99th percentile is 639-788 s over seeds 1-4, and with
+the waiters in the order they reach the tick 409-486 s, at 1.5 % fewer
+steps/min. Under open Poisson arrivals of
 programs (the same program with `arrive poisson`), at rates default mode
 keeps up with, 0.01-0.02 a second, the two serve the same turns and TR
 mode's TTFT is a little lower (0.46 s against 1.05 s at 0.02). At 0.04 a
 second default mode falls behind and its queue grows with the run (TTFT
 126-216 s at 25 000 s, 243-449 s at 50 000 s, seeds 1-2), while TR mode
-keeps up (2-5 s, 4-7 s in the longer run: it is near its limit). At 0.05 neither does: the turns offered, 30 a minute, are more
+is at the edge of its limit: its TTFT is low but still grows with the run
+(2-5 s, 4-7 s in the longer run). At 0.05 neither keeps up: the turns offered, 30 a minute, are more
 than TR mode serves at its knee.
 
 The example's ratio, 1.4-1.5, is below the paper's, and its hit rates are
@@ -397,7 +401,10 @@ Runs are 25 000 s long with 5 000 s of warm-up, four seeds a row. A
 shorter run measures the agents before the longest of them have grown,
 and reads default mode about a sixth too fast at the paper's scale. The
 seeds' ratios at one point spread over up to 0.5 (3.01-3.52 at N = 96),
-about 0.2 of standard deviation, so differences below that are noise. At the paper's scale (`tools/thunderagent/sweep.py --preset
+about 0.2 of standard deviation, but that is default mode's spread (6 %),
+and every row runs the same seeds: default mode's runs are the same in
+every row that does not change it, so rows are compared seed by seed,
+where TR mode's spread is about 1 %. At the paper's scale (`tools/thunderagent/sweep.py --preset
 paper`), one factor at a time:
 
 | Setting | ratio at N = 96, 144, 192 | TR hit | default hit |
@@ -455,10 +462,9 @@ programs, with hit rates falling to 30 % and 93 %:
   = 0.22, which S was chosen to bring near the paper's 30-38 %; the paper
   does not state its prompts' length.
 - **The tool time bounds the gain.** With 10 s tools the ratio is 2.0-2.1;
-  with 1 s tools it is 3.6, above the preset's 3.2 by less than twice the
-  seeds' standard deviation, so the 10 s case is the stronger evidence.
-  With 10 s tools TR mode's decode batch falls from 20 to 11 while default
-  mode's stays at 31-33. The paper's smallest gains are on its workloads with
+  with 1 s tools it is 3.6, above the preset's 3.2 on every seed (TR mode
+  11 % faster). With 10 s tools TR mode's decode batch falls from 16 to 11
+  while default mode's stays at 31-34. The paper's smallest gains are on its workloads with
   the longest and most variable tools, ScienceAgent (1.24) and
   ToolOrchestra (1.48); ScienceAgent runs OpenHands on GLM-4.6 as the
   coding agents do, and ToolOrchestra runs Qwen3-8B on an RTX 5090.
@@ -469,7 +475,7 @@ programs, with hit rates falling to 30 % and 93 %:
   reproduces a panel.
 - **The tick's interval, against the paper's ablation, does not agree.**
   With `dt` 2, 5 and 10 s TR mode serves 317-318, 319-320 and 318-319
-  steps/min: flat within the seeds' spread, though a paused program sends
+  steps/min: flat, within 0.6 % seed by seed, though a paused program sends
   fewer of the turns the longer the tick (0.10, 0.06 and 0.03), since a
   longer tick lets the pool's overflow and its early resume stand longer.
   Fig. 6b (p. 11, read from the figure) gives 363, 378, 370 and 343 for
@@ -478,7 +484,7 @@ programs, with hit rates falling to 30 % and 93 %:
   program does not write (item 4). At 50 ms, a waiting program is let in
   as soon as room appears, wherever it appears: a fifth of the turns come
   from paused programs, against a twentieth at 5 s, and the ratio is
-  3.0, within the seeds' spread of the preset's.
+  3.0: TR mode 5-8 % slower than at 5 s, on every seed.
 - **The router's estimate costs nothing measurable.** With the estimate
   off by up to 20 % either way per request (`est` 0.2) the ratio is 3.2,
   as counted exactly.
@@ -521,8 +527,9 @@ What the program does not reproduce:
    marked REASONING program's tokens counted until its response arrives,
    and so marks every REASONING program on the replica once the ACTING
    ones are paused (above); the program's lease is set aside at once. A reasoning
-   program's lease is taken in 0.02 % of the preset's turns, 1.4 % with
-   `count_shared` 0 and 10 % at `w` 0.5.
+   program's lease is taken in 0.02 % of the preset's turns at N = 96,
+   1.4 % with `count_shared` 0 (2.3-2.8 % at N = 192) and 10 % at `w`
+   0.5.
 3. **The estimate's error.** ThunderAgent estimates a request's tokens from
    the payload's characters by a ratio it learns
    ([`scheduler/router.py#L479-L491`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L479-L491))
@@ -544,7 +551,7 @@ What the program does not reproduce:
    others: at 0.5 paused programs send a sixth of the turns (0.18 against
    0.05), about half of them resume on the other replica, as at 1, and
    recompute, and prefill is 2.2 times the tokens a turn.
-   The code's default, 1, is as good as any of these. The `2^-t` decay the
+   The code's default, 1, is within 1 % of the best of these, 0.9. The `2^-t` decay the
    paper's experiments use is not this: it weighs an acting program by the
    time it has called its tool, and only in the resume check
    ([`backend/state.py#L196-L214`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/backend/state.py#L196-L214),

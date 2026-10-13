@@ -135,8 +135,8 @@ program held back waits for the router's ticks until a replica has room
 for it; the router lets the smaller in first, so the largest wait until
 the force-resume lets them in at 30 minutes. Under open arrivals of programs the two
 modes serve alike at rates default mode keeps up with; a little above
-them (0.04 programs a second) only TR mode keeps up, and above that
-neither does.
+them (0.04 programs a second) default mode falls behind while TR mode is
+at the edge of its limit, and above that neither keeps up.
 
 `tools/thunderagent/sweep.py --preset paper` runs the scale of the paper's
 evaluation instead. Each replica is a GLM-4.6-class model in FP8 weights
