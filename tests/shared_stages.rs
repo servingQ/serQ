@@ -166,6 +166,10 @@ fn a_run_over_several_stages_names_its_share() {
     // as `run`'s, and says so (#582)
     let e = server("transfer on A (1, share = share.maxmin) from kvP to kvD (1);");
     assert!(e.contains("`transfer on A` holds one stage"), "{e}");
+    let e = err(&format!(
+        "{HEAD} stage link : ps(1); use \"std/share\"; workload {{ {HEAD_WORKLOAD} session {{ turn; end; \n}} }}\nserver {{ transfer (1, share = share.maxmin) from kvP to kvD (1);\n}} "
+    ));
+    assert!(e.contains("`transfer` holds one stage"), "{e}");
     let e = server("tool on A (1, share = share.maxmin);");
     assert!(e.contains("`tool on A` holds one stage"), "{e}");
     let e = server("transfer on A (1, 2) from kvP to kvD (1);");
@@ -187,6 +191,15 @@ fn a_policy_is_no_value() {
     let e = server("observe x = share.fair;");
     assert!(
         e.contains("`share.fair`: std/share has no policy `fair`, and its policies are read only in `share = …`"),
+        "{e}"
+    );
+    // without the import, and with no queue `share` to read, the policy is
+    // still what the reader meant
+    let e = err(&format!(
+        "{HEAD} workload {{ {HEAD_WORKLOAD} session {{ turn; end; \n}} }}\nserver {{ observe x = share.maxmin;\n}} "
+    ));
+    assert!(
+        e.contains("`share.maxmin` is a sharing policy of std/share (`use \"std/share\";`)"),
         "{e}"
     );
 }

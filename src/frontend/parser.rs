@@ -2265,17 +2265,25 @@ impl Parser {
                                     .any(|e| e.locals.iter().any(|l| l == field)))
                     });
                 // with the import, `share` is std/share and no queue (the
-                // import refuses a declaration by its name)
-                if !ok && qn == "share" && self.share_imported {
-                    let msg = if crate::ir::Share::ALL.iter().any(|(n, _)| *n == field) {
-                        format!(
+                // import refuses a declaration by its name); without it, a
+                // read of a policy that no queue `share` explains is one
+                // the import was meant for
+                let policy = crate::ir::Share::ALL.iter().any(|(n, _)| *n == field);
+                let module =
+                    self.share_imported || (policy && !self.queues.iter().any(|q| q.name == qn));
+                if !ok && qn == "share" && module {
+                    let msg = match (policy, self.share_imported) {
+                        (true, true) => format!(
                             "`{name}` is a sharing policy of std/share, read only in `share = …`"
-                        )
-                    } else {
-                        format!(
+                        ),
+                        (true, false) => format!(
+                            "`{name}` is a sharing policy of std/share (`use \"std/share\";`), \
+                             read only in `share = …`"
+                        ),
+                        _ => format!(
                             "`{name}`: std/share has no policy `{field}`, and its policies are \
                              read only in `share = …`"
-                        )
+                        ),
                     };
                     return self.err_at(at, msg);
                 }
