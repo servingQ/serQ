@@ -1071,9 +1071,11 @@ impl Program {
     /// for every other stage. The stages runs join, however indirectly, are
     /// one fabric: their flows are solved together, so a fabric has one
     /// policy, and one whose runs name two is an error, as is a run over
-    /// several stages that names none. Every job on a stage with a policy
-    /// is a flow of it; every other stage serves as its kind says.
-    pub fn stage_shares(&self) -> Result<Vec<Option<Share>>, String> {
+    /// several stages that names none; the error is about the run that
+    /// names none, or the first that names a policy its fabric's runs did
+    /// not. Every job on a stage with a policy is a flow of it; every other
+    /// stage serves as its kind says.
+    pub fn stage_shares(&self) -> Result<Vec<Option<Share>>, Invalid> {
         let n = self.stages.len();
         let mut up: Vec<usize> = (0..n).collect();
         fn root(up: &mut [usize], mut k: usize) -> usize {
@@ -1084,8 +1086,8 @@ impl Program {
             k
         }
         let mut runs = vec![];
-        for b in &self.blocks {
-            for st in b {
+        for (bi, b) in self.blocks.iter().enumerate() {
+            for (si, st) in b.iter().enumerate() {
                 if let CStmt::Run {
                     stage, also, share, ..
                 } = st
@@ -1100,18 +1102,22 @@ impl Program {
                         up[a] = b;
                     }
                     if let Some(&k) = ks.first() {
-                        runs.push((k, *share));
+                        runs.push((k, *share, bi, si));
                     }
                 }
             }
         }
         let mut policy: Vec<Option<Share>> = vec![None; n];
-        for (k, share) in runs {
+        for (k, share, bi, si) in runs {
             let Some(share) = share else {
-                return Err(format!(
-                    "the run over several stages from stage `{}` names no `share`: \
-                     `share.maxmin` or `share.bottleneck`",
-                    self.stages[k].name
+                return Err(Invalid::at(
+                    format!(
+                        "the run over several stages from stage `{}` names no `share`: \
+                         `share.maxmin` or `share.bottleneck`",
+                        self.stages[k].name
+                    ),
+                    bi,
+                    si,
                 ));
             };
             let r = root(&mut up, k);
@@ -1124,12 +1130,17 @@ impl Program {
                             joined.push(name);
                         }
                     }
-                    return Err(format!(
-                        "runs join the stages `{}`, so their flows are solved together, and \
-                         the runs name `share.{}` and `share.{}`: one fabric has one policy",
-                        joined.join("`, `"),
-                        p.name(),
-                        share.name()
+                    return Err(Invalid::at(
+                        format!(
+                            "this run names `share.{}`, and an earlier run on its fabric \
+                             `share.{}`: runs join the stages `{}`, so their flows are solved \
+                             together, and one fabric has one policy",
+                            share.name(),
+                            p.name(),
+                            joined.join("`, `"),
+                        ),
+                        bi,
+                        si,
                     ));
                 }
                 _ => policy[r] = Some(share),
@@ -1366,7 +1377,13 @@ impl Program {
     /// names its `share`, one per fabric (`stage_shares`); a run on one
     /// stage names none, and every run on a shared stage is plain.
     fn validate_flows(&self) -> Result<(), String> {
-        let shared: Vec<bool> = self.stage_shares()?.iter().map(Option::is_some).collect();
+        // `validate_located` checked the fabrics, with their statements
+        let shared: Vec<bool> = self
+            .stage_shares()
+            .map_err(|e| e.message)?
+            .iter()
+            .map(Option::is_some)
+            .collect();
         for (k, on) in shared.iter().enumerate() {
             if *on && !matches!(self.stages[k].kind, CStageKind::Ps(CExpr::Num(c)) if c > 0.0) {
                 return Err(format!(
@@ -1535,6 +1552,7 @@ impl Program {
     /// maps back to the program's text (#279).
     pub fn validate_located(&self) -> Result<(), Invalid> {
         self.validate_statements()?;
+        self.stage_shares()?;
         self.validate_declarations()?;
         self.validate_types()?;
         Ok(())

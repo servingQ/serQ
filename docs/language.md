@@ -129,8 +129,8 @@ stmt     := turn ;                           -- draw attributes, submit, wait fo
           | serving                          -- the serving vocabulary, sugar for run
 serving  := transfer [ '[' expr ']' | on STAGE [, STAGE]* ] expr from POOL to POOL ( expr ) ;
                                              -- the KV moves: run link; load; release
-                                             -- on several stages, expr is ( expr , share = POLICY )
           | tool     [ '[' expr ']' | on STAGE [, STAGE]* ] expr ;
+                                             -- transfer and tool on several stages: expr is ( expr , share = POLICY )
           | kvt.l2_load ( CACHE , POOL , expr , per_token = expr ) ;   -- std/kvt: copy the cache's KV in, the cache keeps it
           | kvt.l2_store ( POOL , CACHE , expr , per_token = expr ) ;  -- std/kvt: the session's entry in the cache comes to hold expr tokens
 POLICY   := share.maxmin | share.bottleneck   -- std/share: how the flows of a fabric divide it (below, *Stages*)

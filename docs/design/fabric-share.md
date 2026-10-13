@@ -117,6 +117,14 @@ decoder's NIC, say).
 where the capacity is, but a fabric joins several stages, and each would
 repeat the policy and have to agree. The run is where stages are joined.
 
+**`share = maxmin`, without the module.** Shorter, and it reads `share`
+once; the name would be read from `Share::ALL` only in the argument's
+place, so it needs no import. It was weighed against a policy that names
+where it comes from: `share.maxmin` is the library's value, the way
+`kvt.nixl_pull` is the library's function, so a reader sees that the
+language supplies the mechanism and the program picks from it, and a bare
+`maxmin` would be the only library name written without its module.
+
 **A clause after the work.** `run a, b (w) share share.maxmin;` reads as
 `share` twice in a row; inside the parentheses it reads as the relation's
 keyword argument does.

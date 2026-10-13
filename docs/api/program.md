@@ -2,7 +2,7 @@
 
 ```
 program := (let | def | use)* fn main() { item* }
-item    := let | def | use | pool | stage | queue | workload | server | share | kvt.CALL | gauge | claim
+item    := let | def | use | pool | stage | queue | workload | server | kvt.CALL | gauge | claim
 ```
 
 `fn main()` is the single execution entry point: it constructs the deployment and

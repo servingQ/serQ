@@ -366,8 +366,10 @@ fn a_fabric_has_one_policy() {
     );
     assert!(
         e.contains(
-            "runs join the stages `A`, `B`, `E`, so their flows are solved together, and the runs name `share.maxmin` and `share.bottleneck`: one fabric has one policy"
+            "this run names `share.bottleneck`, and an earlier run on its fabric `share.maxmin`: runs join the stages `A`, `B`, `E`, so their flows are solved together, and one fabric has one policy"
         ),
         "{e}"
     );
+    // at the run that names the second policy
+    assert!(e.contains("run B, E[0]"), "{e}");
 }
