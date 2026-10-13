@@ -2099,6 +2099,7 @@ impl Parser {
         }
         served.shared = shared;
         self.check_engine_runs(&prog)?;
+        self.relations(&mut prog)?;
         self.assemble(&mut prog, &mut served)?;
         self.link_engines(&mut prog)?;
         self.check_binding_names(&prog)?;
@@ -2138,6 +2139,62 @@ impl Parser {
     }
 
     /// Expand queue entries, then insert the server after each turn draw.
+    /// A queue's engine's `connector C` that names no L2 reads by its queue's
+    /// KV relation, which `kvt.nixl_pull (C, Q, …)` or `kvt.nixl_push`
+    /// declared, below the engine as often as above it.
+    fn relations(&self, prog: &mut Program) -> PResult<()> {
+        for st in &mut prog.stages {
+            let StageKind::Step(sp) = &mut st.kind else {
+                continue;
+            };
+            let Some(c) = &mut sp.connector else {
+                continue;
+            };
+            if !matches!(c.kind, ConnectorKind::Relation(None)) {
+                continue;
+            }
+            let q = self.queues.iter().find(|q| q.name == st.name);
+            let takes = q
+                .and_then(|q| q.takes.as_ref())
+                .filter(|t| t.source == c.queue);
+            let source = self.queues.iter().find(|s| s.name == c.queue);
+            let (Some(q), Some(t), Some(source)) = (q, takes, source) else {
+                let at = self
+                    .engines
+                    .iter()
+                    .find(|e| e.name == st.name)
+                    .map_or(0, |e| e.at);
+                return self.err_at(
+                    at,
+                    format!(
+                        "engine `{}`'s `connector {}`: queue `{}` reads KV from no `{}`; \
+                         declare `kvt.nixl_pull ({}, {}, …);` or `kvt.nixl_push`",
+                        st.name, c.queue, st.name, c.queue, c.queue, st.name
+                    ),
+                );
+            };
+            let Some(leased) = &source.leased else {
+                return self.err_at(
+                    source.at,
+                    format!(
+                        "engine `{}`'s `connector {}` reads what `{}` leases, and no entry of \
+                         `{}` leases a pool",
+                        st.name, c.queue, c.queue, c.queue
+                    ),
+                );
+            };
+            c.kind = ConnectorKind::Relation(Some(Relation {
+                source: source.name.clone(),
+                leased: format!("{}.{leased}", source.name),
+                reader: q.name.clone(),
+                latency: t.latency.clone(),
+                push: t.push,
+                share: t.share,
+            }));
+        }
+        Ok(())
+    }
+
     fn assemble(&mut self, prog: &mut Program, served: &mut Served) -> PResult<()> {
         if self.wl_session.is_none() && self.server.is_some() {
             if prog.workload.is_none() {
@@ -2241,10 +2298,7 @@ impl Parser {
                     .get(&record)
                     .is_some_and(|fields| fields.iter().any(|f| f == field))
                     || (REQUEST_ATTRS.contains(&field)
-                        && self
-                            .engines
-                            .iter()
-                            .any(|e| e.name == qn && !e.device.contains('.')))
+                        && self.engines.iter().any(|e| e.name == qn && e.request))
                     || (CONNECTOR_ATTRS.contains(&field)
                         && self.engines.iter().any(|e| e.name == qn && e.connector))
                     || self.queues.iter().any(|q| {
@@ -4315,6 +4369,16 @@ impl Parser {
                 || self.consts.iter().any(|(c, _)| c == n)
                 || in_context(n)
                 || (!header && n == "now")
+                // after its call, what the queue's engine records of it
+                || (!header
+                    && n.split_once('.').is_some_and(|(q, field)| {
+                        q == qname
+                            && self.engines.iter().any(|e| {
+                                e.name == q
+                                    && ((e.request && REQUEST_ATTRS.contains(&field))
+                                        || (e.connector && CONNECTOR_ATTRS.contains(&field)))
+                            })
+                    }))
         };
         // an L2 queue's pool and stage are every entry's to read
         let cache_ref = |n: &str| self.cache_of(n).is_some();

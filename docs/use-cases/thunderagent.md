@@ -93,7 +93,7 @@ A replica is vLLM's engine on one device, its prefix cache in the blocks:
 the program's own context. The cache shares the first across programs,
 allocated once however many read it (vLLM's `ref_cnt`) once a request that
 read it has ended, and keeps the second per program
-(`examples/multi-turn/vllm_system_prompt.sq`); that is the hold's
+(`examples/multi-turn/vllm_system_prompt.sq`); that is the admission's
 `prefix (system: S, serial: inf)`.
 
 ```serq
@@ -102,9 +102,12 @@ read it has ended, and keeps the second per program
 
 - `g * batch.attention`: a prefill's attention over its context grows with
   the square of what it recomputes (the paper's Eq. 8).
-- `kept` is the most tokens an attempt had: a preemption keeps the outputs.
-- `observe hit = c > S` is any block of the program's own; `reused_tokens`
-  is vLLM's `prefix_cache_hits`, and with `prefill_tokens` its queries.
+- `request.known` is every token the request has: a preemption keeps the
+  outputs.
+- `observe hit = E.reused > S` is any block of the program's own at the
+  request's last admission. The engine records what each admission reused,
+  `E.reused` (vLLM's `prefix_cache_hits`), and prefilled, `E.prefill` (with
+  it, its queries).
 
 ### The agents
 
@@ -254,11 +257,12 @@ cargo run --release -- run examples/multi-turn/thunderagent.sq --horizon 25000 -
 cargo run --release -- run examples/multi-turn/thunderagent.sq --horizon 25000 --warmup 5000 --tr 0
 ```
 
-The report's `reused_tokens` and `prefill_tokens` give the token hit rate
-of the tables below, reused over the two together (vLLM's
-`prefix_cache_hits` over `prefix_cache_queries`); the report's own `hit`
-row is something else, the share of turns with any block of the
-program's own cached. Steps/min are `turns` × 60 / (horizon − warm-up). `resume_wait` is how long a paused program waited
+The report's `E.reused` and `E.prefill`, what the replicas' engine records
+of each admission, give the token hit rate of the tables below, reused
+over the two together (vLLM's `prefix_cache_hits` over
+`prefix_cache_queries`); the report's own `hit` row is something else, the
+share of turns whose last admission found a block of the program's own
+cached. Steps/min are `turns` × 60 / (horizon − warm-up). `resume_wait` is how long a paused program waited
 to be let in again. `tools/thunderagent/sweep.py` runs both modes over the
 agent counts, four seeds each, and prints the tables below. A run needs
 thousands of seconds before the agents' contexts settle: a 3 000 s run

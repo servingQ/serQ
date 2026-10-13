@@ -34,6 +34,8 @@ pub(super) struct EngineDecl {
     pub caps: Vec<Capacity>,
     /// Whether it has a `connector`, whose records its caller may read.
     pub connector: bool,
+    /// Whether it admits requests (`taking`), whose records its caller reads.
+    pub request: bool,
 }
 
 /// What `pool NAME on …` names: the device or engine that owns the
@@ -114,6 +116,51 @@ pub const ENGINE_VALUES: [(&str, &str, &[&str]); 20] = [
     ("request.loaded", "request.loaded", &["taking"]),
     ("request.preempted", "request.preempted", &["taking"]),
 ];
+
+/// Apply `f` to every pool or stage reference of an engine's admission.
+fn qualify_request(r: &mut RequestSpec, f: &dyn Fn(&mut Ref)) {
+    fn expr(e: &mut Expr, f: &dyn Fn(&mut Ref)) {
+        match e {
+            Expr::Located(_, x) | Expr::Unary(_, x) => expr(x, f),
+            Expr::Binary(_, a, b) | Expr::Over(_, _, a, b) => {
+                expr(a, f);
+                expr(b, f);
+            }
+            Expr::Cond(c, a, b) => {
+                expr(c, f);
+                expr(a, f);
+                expr(b, f);
+            }
+            Expr::Sample(_, xs) => xs.iter_mut().for_each(|x| expr(x, f)),
+            Expr::Call(_, args) | Expr::Unread(args, _) => {
+                for a in args.iter_mut() {
+                    match a {
+                        Arg::Ref(r) => f(r),
+                        Arg::Expr(x) => expr(x, f),
+                    }
+                }
+                if let Expr::Unread(_, body) = e {
+                    expr(body, f);
+                }
+            }
+            Expr::Num(_) | Expr::Var(_) => {}
+        }
+    }
+    for (q, u, reserve) in &mut r.pools {
+        f(q);
+        expr(u, f);
+        if let Some(x) = reserve {
+            expr(x, f);
+        }
+    }
+    for x in r.reuse.iter_mut().chain(&mut r.cache) {
+        expr(x, f);
+    }
+    for (k, n) in r.prefix.iter_mut().flatten() {
+        expr(k, f);
+        expr(n, f);
+    }
+}
 
 /// The name an engine reads the kernel's context variable `var` by in
 /// `clause` (`tokens cap`, `scheduler`, `worker`), if it reads it there: a
@@ -562,17 +609,19 @@ impl Parser {
             .collect();
         // a queue's engine admits by its entries, which hold its pools
         let in_queue = device.contains('.');
-        let taking = self.engine_request(&name, &takeable)?;
+        let mut taking = self.engine_request(&name, &takeable)?;
         if !in_queue {
             s.request = Some(taking);
         } else if !taking.pools.is_empty() {
-            return self.err_at(
-                at,
-                format!(
-                    "`taking` in queue `{}`'s engine: a queue's entries hold its pools",
-                    device.split('.').next().unwrap_or_default()
-                ),
-            );
+            // a queue's engine takes its queue's pools, `E.kv`; a member of
+            // a family its own (the linker writes the member)
+            let q = device.split('.').next().unwrap_or_default().to_string();
+            qualify_request(&mut taking, &|r: &mut Ref| {
+                if takeable.contains(&r.name) {
+                    r.name = format!("{q}.{}", r.name);
+                }
+            });
+            s.request = Some(taking);
         }
         self.stages.push(name.clone());
         self.engines.push(EngineDecl {
@@ -582,6 +631,7 @@ impl Parser {
             stage: prog.stages.len(),
             caps,
             connector: s.connector.is_some(),
+            request: s.request.is_some() || !in_queue,
         });
         prog.stages.push(StageDecl {
             span,
@@ -602,12 +652,18 @@ impl Parser {
         let c_at = self.pos;
         let span = Some(self.span());
         let c = self.ident()?;
-        let Some((stage, pool)) = self.cache_of(&c).filter(|(name, _)| *name == c) else {
+        // an L2 declared above, or the source of the engine's queue's KV
+        // relation, which may be declared below (`relations`)
+        let l2 = self.cache_of(&c).filter(|(name, _)| *name == c);
+        if l2.is_none() && !self.queues.iter().any(|q| q.name == c) {
             return self.err_at(
                 c_at,
-                format!("`connector {c}`: `{c}` is not a queue that plays `l2` declared above"),
+                format!(
+                    "`connector {c}`: `{c}` is not a queue that plays `l2` declared above, nor \
+                     a queue a queue's engine reads KV from"
+                ),
             );
-        };
+        }
         let r = |name: String| Ref {
             span,
             name,
@@ -653,19 +709,42 @@ impl Parser {
             self.expect(&Tok::Semi)?;
         }
         self.expect(&Tok::RBrace)?;
-        let Some(per_token) = per_token else {
-            return self.err_at(
-                c_at,
-                "a connector needs `per_token (r);`: the time a token's copy takes",
-            );
+        let kind = match l2 {
+            Some((stage, pool)) => {
+                let Some(per_token) = per_token else {
+                    return self.err_at(
+                        c_at,
+                        "a connector needs `per_token (r);`: the time a token's copy takes",
+                    );
+                };
+                if load.is_none() && save.is_none() {
+                    return self.err_at(c_at, "a connector needs `load (n);`, `save (n);` or both");
+                }
+                ConnectorKind::L2 {
+                    stage: r(stage),
+                    pool: r(pool),
+                    per_token,
+                }
+            }
+            // a read over the NICs the relation declares, whose time is
+            // theirs, of what the source leased: there is nothing to save
+            None => {
+                if per_token.is_some() || save.is_some() || load.is_none() {
+                    return self.err_at(
+                        c_at,
+                        format!(
+                            "`connector {c}` reads the KV queue `{c}` leased, over the NICs \
+                             `kvt.nixl_pull` or `kvt.nixl_push` declares: it takes `load (n);` \
+                             alone"
+                        ),
+                    );
+                }
+                ConnectorKind::Relation(None)
+            }
         };
-        if load.is_none() && save.is_none() {
-            return self.err_at(c_at, "a connector needs `load (n);`, `save (n);` or both");
-        }
         Ok(ConnectorSpec {
-            stage: r(stage),
-            pool: r(pool),
-            per_token,
+            queue: c,
+            kind,
             load,
             save,
         })

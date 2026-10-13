@@ -58,7 +58,7 @@ def run(n, tr, seed, sets):
     r = json.loads(subprocess.run(args, capture_output=True, text=True, check=True).stdout)
     o = r["observes"]
     total = lambda k: o[k]["mean"] * o[k]["count"] if o.get(k) and o[k]["count"] else 0.0
-    reused, fresh = total("reused_tokens"), total("prefill_tokens")
+    reused, fresh = total("E.reused"), total("E.prefill")
     resumes = o["resume_wait"]["count"] if o.get("resume_wait") else 0
     return {
         "spm": r["turns"] / (r["end"] - r["warmup"]) * 60,

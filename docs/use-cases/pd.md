@@ -130,8 +130,16 @@ transfer releases them.
 A decoder is vLLM's engine on one device with two ways in. Its scheduler
 serves its queues in this order: the requests whose KV has arrived first
 (vLLM's `skipped_waiting`, `scheduler.py:2383-2385`), then the new ones, and
-the first that does not fit stops the step's admissions. The `queue D`
-block stays open: its two entries, below, are the rest of it.
+the first that does not fit stops the step's admissions. The engine's
+`connector P` is NIXL: a request whose prefill was remote reads every block
+past its local hit from the prefiller it came `from`, once, and a preempted
+one loads nothing (`do_remote_prefill` is spent). Its admission is
+[`examples/multi-turn/vllm.sq`](vllm.md)'s for a request the pod prefills.
+A request that reads its KV (`request.loaded > 0`) is taken when the whole
+prompt fits the blocks and a running slot could be had, and takes no slot
+while it reads (`WAITING_FOR_REMOTE_KVS`); back in the waiting queue it
+takes one (`scheduler.py:1264-1267, 3075-3076`). The `queue D` block stays
+open: its two entries, below, are the rest of it.
 
 ```serq
 --8<-- "examples/pd-disaggregation/llmd_nixl_pull.sq:decoder"
@@ -144,10 +152,9 @@ is the pod's NIC, which the reads into it share.
 ### Decode with a local prefill
 
 When the router keeps the request local, the decode pod prefills the prompt
-itself, as [`examples/multi-turn/vllm.sq`](vllm.md) does. Two vLLM rules
-appear here: generation stops at `max_model_len` tokens
-(`sched/utils.py:114-120`), and a preemption keeps the outputs, so `kept`
-is the most tokens an attempt had.
+itself, as [`examples/multi-turn/vllm.sq`](vllm.md) does. Generation
+stops at `max_model_len` tokens (`sched/utils.py:114-120`); the engine
+keeps the outputs across a preemption, as vLLM does.
 
 ```serq
 --8<-- "examples/pd-disaggregation/llmd_nixl_pull.sq:local"
@@ -167,17 +174,18 @@ needs a running slot and a token of budget. A request preempted on the
 decoder afterwards recomputes what it lost here, as any local prefill would
 (`do_remote_prefill` is spent).
 
-In serQ that is a `decode … from P` entry: an outer hold on the blocks that
-reserves a slot without taking one, the `transfer` inside it, and an inner
-hold that takes the slot. Its last brace closes `queue D`:
+In serQ that is a `decode … from P` entry: the same call as the local one,
+the request's KV read `from` the prefiller by the engine's connector, whose
+admission above reserves a slot without taking one. Its last brace closes
+`queue D`:
 
 ```serq
 --8<-- "examples/pd-disaggregation/llmd_nixl_pull.sq:remote"
 ```
 
-`reqs (cost(reqs, 0)) reserve (cost(reqs, 1))` is "a slot must be free,
-none is taken". `transferred` is `do_remote_prefill`, set once.
-`mark read_done` is the moment the router's `lease` observation reads.
+`reqs (0) reserve (1)` is "a slot must be free, none is taken". The engine
+records when the read ends, `D.load_done`, the moment the router's `lease`
+observation reads.
 
 ### The read
 
@@ -242,13 +250,13 @@ scorer's.
 | the prefiller computes the prompt in chunks and samples one token, which the sidecar discards | `run P prefill (cost(P, prompt - c)) growing kv` | `scheduler.py:624-823`; the truncation for Mamba and MTP only, `nixl/base_scheduler.py:409-436` |
 | the request finishes on the prefiller: its slot is freed, its blocks are not — `request_finished` returns `delay_free_blocks` and a lease of `kv_lease_duration` (30 s), renewed by the decoder's heartbeats while the request waits | `} cache (prompt) lease kv (inf);` — the scope ends, the slot goes, the blocks stay the session's | `nixl/pull_scheduler.py:191-292`; `_free_request`, `scheduler.py:2628-2657`; the renewal, `nixl/base_scheduler.py:199-238`, `nixl/base_worker.py:3010-3030` |
 | the prefiller keeps every computed full block of the prompt cached once the lease ends | `cache (prompt)` on that hold, applied when the lease ends | `_connector_finished`, `scheduler.py:2929-2982`; `kv_cache_manager.py:610-619` |
-| the decoder's scheduler looks at its waiting queue only at a step with budget left and a running slot free | `pool reqs on D` and `pool kv on D.gpu`: `D` admits both; `reqs (0) reserve (1)` — a slot must be free, none is taken | `scheduler.py:872-879` |
-| the decoder's local prefix hit, then the connector: for a remote prefill every prompt token beyond the local hit is external and loaded asynchronously | `kv (known) reserve (known)` with `reuse (floor(known - 1, bs))` in `D`'s `decode … from` entry; `c = cached` is the local hit | `scheduler.py:932-954`; `nixl/pull_scheduler.py:34-66` |
-| blocks are allocated for the whole prompt, and the request is parked, `WAITING_FOR_REMOTE_KVS`, holding them and no slot; one transfer per request | the hold on `kv`; `transferred` is `do_remote_prefill`, spent | `scheduler.py:1199-1226, 1264-1294`; `nixl/pull_scheduler.py:108-189` |
-| the worker reads the blocks from the prefiller over NIXL (pull mode: a NIXL READ issued by the decoder) | `transfer (prompt - c) from P to kv (prompt - 1 - c)` in `D`'s entry, and `kvt.nixl_pull (P, D, latency = x0);`: the decoder reads; a fixed wait, then the bytes out of the prefiller's NIC and into the decoder's at once, the two shared max-min fairly (a model, not a measurement: [Bandwidth sharing](https://github.com/servingQ/serQ/blob/main/docs/design/bandwidth-sharing.md)) | `nixl/pull_scheduler.py:168-177`; the worker's `_read_blocks`, `nixl/pull_worker.py:392-575` |
-| the read done, the blocks are cached, the last prompt token is marked uncomputed (its logits are needed), and the request is back in the waiting queue, served before new arrivals | the `load D.kv[j] (cost(D.kv, prompt - 1 - c))` the transfer stands for; `hold reqs (cost(reqs, 1))`, with `reqs` declared before `kv` | `_update_waiting_for_remote_kv`, `scheduler.py:3032-3077`; `_try_promote_blocked_waiting_request`, `scheduler.py:3079-3092`; `scheduler.py:2383-2385` |
-| the prefiller frees the leased blocks when the read completes | the `release P.kv[i]` the transfer stands for takes the lease | `_update_from_kv_xfer_finished`, `scheduler.py:3113-3138` |
-| the decoder recomputes the last prompt token and decodes; a request preempted afterwards is rescheduled without a second transfer, prefilling locally what it lost | `run D prefill (cost(D, known - c)) growing kv; run D decode (cost(D, o - 1 - (known - prompt))) growing kv;` with `known` from `computed` | `scheduler.py:1560-1561`; `nixl/pull_scheduler.py:187-189` |
+| the decoder's scheduler looks at its waiting queue only at a step with budget left and a running slot free | `pool reqs on D` and `pool kv on D.gpu`: `D` admits both; `reqs (request.loaded > 0 ? 0 : 1) reserve (1)` — a slot must be free, none is taken while the request loads | `scheduler.py:872-879` |
+| the decoder's local prefix hit, then the connector: for a remote prefill every prompt token beyond the local hit is external and loaded asynchronously | the engine's `connector P { load (request.preempted ? 0 : request.input - request.hit); }`, with `reuse (floor(request.known - 1, bs))`; `request.hit` is the local hit; a request `D`'s plain `decode` entry made loads nothing | `scheduler.py:932-954`; `nixl/pull_scheduler.py:34-66` |
+| blocks are allocated for the whole prompt, and the request is parked, `WAITING_FOR_REMOTE_KVS`, holding them and no slot; one transfer per request | `kv (request.loaded > 0 ? request.known : …) reserve (request.known)`; `request.preempted` is `do_remote_prefill`, spent | `scheduler.py:1199-1226, 1264-1294`; `nixl/pull_scheduler.py:108-189` |
+| the worker reads the blocks from the prefiller over NIXL (pull mode: a NIXL READ issued by the decoder) | the connector's load for a request its entry `decode (prompt) from P` made, and `kvt.nixl_pull (P, D, latency = x0);`: the decoder reads; a fixed wait, then the bytes out of the prefiller's NIC and into the decoder's at once, the two shared max-min fairly (a model, not a measurement: [Bandwidth sharing](https://github.com/servingQ/serQ/blob/main/docs/design/bandwidth-sharing.md)) | `nixl/pull_scheduler.py:168-177`; the worker's `_read_blocks`, `nixl/pull_worker.py:392-575` |
+| the read done, the blocks are cached, the last prompt token is marked uncomputed (its logits are needed), and the request is back in the waiting queue, served before new arrivals | after a load the engine computes the last token again and reads the admission again, waiting for the `reqs` it took none of, with `reqs` declared before `kv`; `D.load_done` records when | `_update_waiting_for_remote_kv`, `scheduler.py:3032-3077`; `_try_promote_blocked_waiting_request`, `scheduler.py:3079-3092`; `scheduler.py:2383-2385` |
+| the prefiller frees the leased blocks when the read completes | the load ends the lease `P.kv[i]` the entry took `from P` | `_update_from_kv_xfer_finished`, `scheduler.py:3113-3138` |
+| the decoder recomputes the last prompt token and decodes; a request preempted afterwards is rescheduled without a second transfer, prefilling locally what it lost | the engine's request: `D (prompt, produced);` in both entries, its tokens kept across a preemption | `scheduler.py:1560-1561`; `nixl/pull_scheduler.py:187-189` |
 | a parked request is in no `running` list and is not preempted; nor is the prefiller's finished one | `preempt lifo` takes the last admitted *resident* of the engine | `scheduler.py:742-813` |
 | the decoder keeps the prompt's and the output's full blocks cached | `} cache (prompt + o)` | `kv_cache_manager.py:602-606` |
 
@@ -284,10 +292,10 @@ the queue the request is handed to: `P[i].prefill (prompt)`, then
 `D[j].decode (prompt) from P[i]`. Inside an entry nothing is indexed — `kv`,
 `reqs`, `P` are the member's own. `from P[i]` is the pool `P`'s entry
 leases, and the read's NICs are the relation's: the source member's
-`P.nic[i]` and the reader's own `D.nic[j]`. The transfer's `load` and
-`release` name the pool as the holds did, index included. The admission, the
-allocation and the two runs are the entries' and appear once each: the
-router's body has no `hold`.
+`P.nic[i]` and the reader's own `D.nic[j]`. The decoder's entries call its
+engine, `D (prompt, produced);`, and its engine's `taking` and `connector
+P` say the admission and the read once for every member, each taking its
+own pools: the router's body has no `hold`.
 
 Change `NP` and `ND` in the source to change the instance counts. The
 router and queue entries use these family sizes directly.

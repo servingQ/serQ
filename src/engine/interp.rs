@@ -173,6 +173,11 @@ struct Hold<'p> {
     /// The hold of an engine's request: no body frame; a preemption puts
     /// the request back in the queue, and its end goes on with the request.
     request: bool,
+    /// Part of the request's hold: the pools its admission, read again after
+    /// its connector's load, takes of what it had taken none (a running
+    /// slot, vLLM's waiting request once its remote KV has arrived). No body
+    /// frame; it goes with the request's hold.
+    part: bool,
 }
 
 /// A request to an engine (`CStmt::Request`), as vLLM keeps a `Request`:
@@ -214,6 +219,8 @@ struct Req<'p> {
 enum Phase {
     Admitted,
     Loading,
+    /// Loaded, waiting for the pools its admission takes now.
+    Waiting,
     Prefill,
     Decode,
     Saving,
@@ -323,6 +330,9 @@ struct Pending<'p> {
     queued_at: f64,
     /// An engine's request's admission (`Hold::request`).
     request: bool,
+    /// The pools a request's admission read after its load and had taken
+    /// none of (`Hold::part`).
+    part: bool,
 }
 
 /// A session, or a leg of one (`fork`).
@@ -2235,6 +2245,7 @@ impl<'p> Interp<'p> {
                         body: *body,
                         queued_at: self.now,
                         request: false,
+                        part: false,
                     };
                     self.enqueue_hold(sid, pending, false);
                     return;
@@ -2383,6 +2394,7 @@ impl<'p> Interp<'p> {
             body: 0,
             queued_at: self.now,
             request: true,
+            part: false,
         };
         self.enqueue_hold(sid, pending, front);
     }
@@ -2401,7 +2413,16 @@ impl<'p> Interp<'p> {
         self.sessions[sid].req.as_mut().expect("a request").hit = hit;
         // what its connector loads beyond it, which `taking` reads
         let st = self.sessions[sid].req.as_ref().expect("a request").stage;
-        let loaded = match self.connector(st).and_then(|c| c.load.as_ref()) {
+        // a request that took its KV `from` no source has none to read
+        let remote = self
+            .connector(st)
+            .and_then(|c| c.from)
+            .is_none_or(|a| self.sessions[sid].attrs[a] >= 0.0);
+        let loaded = match self
+            .connector(st)
+            .and_then(|c| c.load.as_ref())
+            .filter(|_| remote)
+        {
             Some((e, _)) => {
                 let what = format!("connector of {} load", self.p.stages[st].name);
                 self.amount(e, sid, &what)
@@ -2409,6 +2430,79 @@ impl<'p> Interp<'p> {
             None => 0.0,
         };
         self.sessions[sid].req.as_mut().expect("a request").loaded = loaded;
+    }
+
+    /// The request's load has ended: when, and a request that has KV for
+    /// every token it has computes its last again, to sample the next
+    /// (scheduler.py:3075-3076).
+    fn load_ended(&mut self, sid: usize) {
+        let r = self.sessions[sid].req.as_ref().expect("a request");
+        let (st, known) = (r.stage, r.known);
+        if let Some(c) = self.connector(st) {
+            self.sessions[sid].attrs[c.load_done] = self.now;
+        }
+        if let Some((hi, k)) = self.request_kv(sid) {
+            let e = &mut self.sessions[sid].holds[hi].pools[k];
+            if e.pos >= known && known >= 1.0 {
+                e.pos = known - 1.0;
+            }
+        }
+    }
+
+    /// After its load, the request's admission is read again, with nothing
+    /// left to load: the pools it takes now that it had taken none of, it
+    /// waits for, as a part of its hold (a running slot: vLLM's request
+    /// whose remote KV has arrived waits again, scheduler.py:1264-1267).
+    /// Whether it waits.
+    fn request_more(&mut self, sid: usize) -> bool {
+        let r = self.sessions[sid].req.as_mut().expect("a request");
+        r.loaded = 0.0;
+        r.phase = Phase::Waiting;
+        let Some(spec) = r.spec else {
+            return false;
+        };
+        let Some(hi) = self.sessions[sid].holds.iter().rposition(|h| h.request) else {
+            return false;
+        };
+        let wanted = self.wanted(&spec.pools, sid);
+        let held: Vec<(usize, f64)> = self.sessions[sid].holds[hi]
+            .pools
+            .iter()
+            .map(|e| (e.pool, e.alloc))
+            .collect();
+        let more: Vec<Wanted<'p>> = wanted
+            .into_iter()
+            .filter(|w| {
+                w.units > 0.0 && held.iter().all(|&(pl, alloc)| pl != w.pool || alloc <= 0.0)
+            })
+            .collect();
+        if more.is_empty() {
+            return false;
+        }
+        let pending = Pending {
+            pools: more,
+            reuse: None,
+            cache: None,
+            chain: Vec::new().into(),
+            lease: None,
+            body: 0,
+            queued_at: self.now,
+            request: false,
+            part: true,
+        };
+        self.enqueue_hold(sid, pending, false);
+        true
+    }
+
+    /// Give back the request's parts (`Hold::part`), which go with it.
+    fn end_parts(&mut self, sid: usize) {
+        while let Some(i) = self.sessions[sid].holds.iter().rposition(|h| h.part) {
+            let h = self.sessions[sid].holds.remove(i);
+            for e in &h.pools {
+                let read = (&h.chain[..], e.shared, &e.path[..]);
+                self.release_units(sid, e.pool, e.alloc, e.pos, None, read);
+            }
+        }
     }
 
     /// Engine `st`'s connector, if it has one.
@@ -2458,12 +2552,19 @@ impl<'p> Interp<'p> {
         r.phase = Phase::Admitted;
         let (known, spec, loaded, st) = (r.known, r.spec, r.loaded, r.stage);
         if let Some(spec) = spec {
+            // what it computes: past what it read and loads, and its last
+            // token again when a load brings every one (`load_ended`)
+            let prefill = if loaded > 0.0 && known >= 1.0 {
+                known - (pos + loaded).min(known - 1.0)
+            } else {
+                known - pos - loaded
+            };
             self.observe_for(sid, spec.records.reused, pos);
-            self.observe_for(sid, spec.records.prefill, known - pos - loaded);
+            self.observe_for(sid, spec.records.prefill, prefill);
             let attrs = &mut self.sessions[sid].attrs;
             attrs[spec.records.admitted] = now;
             attrs[spec.records.last_reused] = pos;
-            attrs[spec.records.last_prefill] = known - pos - loaded;
+            attrs[spec.records.last_prefill] = prefill;
         }
         if let Some(c) = self.connector(st) {
             self.observe_for(sid, c.record, loaded);
@@ -2487,6 +2588,15 @@ impl<'p> Interp<'p> {
         {
             return true;
         }
+        // its load done: when, the last token computed again, and the pools
+        // its admission takes now
+        if r.phase == Phase::Loading {
+            self.load_ended(sid);
+            if self.request_more(sid) {
+                return false;
+            }
+        }
+        let r = self.sessions[sid].req.clone().expect("a request");
         // its connector loads first, into the hold it was admitted with
         let load = self
             .connector(r.stage)
@@ -2499,14 +2609,14 @@ impl<'p> Interp<'p> {
             return true;
         }
         match r.phase {
-            Phase::Admitted | Phase::Loading if r.known > 0.0 => {
+            Phase::Admitted | Phase::Loading | Phase::Waiting if r.known > 0.0 => {
                 let work = r.known - self.request_pos(sid);
                 self.sessions[sid].req.as_mut().unwrap().phase = Phase::Prefill;
                 self.start_job(r.stage, Some(sid), work, RunMode::Prefill, grow);
                 return false;
             }
             // nothing to prefill: it decodes from its first iteration
-            Phase::Admitted | Phase::Loading => {}
+            Phase::Admitted | Phase::Loading | Phase::Waiting => {}
             Phase::Prefill => {
                 let now = self.now;
                 let req = self.sessions[sid].req.as_mut().unwrap();
@@ -2556,6 +2666,7 @@ impl<'p> Interp<'p> {
     fn request_end(&mut self, sid: usize) -> bool {
         self.sessions[sid].req.as_mut().expect("a request").finished = true;
         if let Some(hi) = self.sessions[sid].holds.iter().rposition(|h| h.request) {
+            self.end_parts(sid);
             let h = self.sessions[sid].holds.remove(hi);
             self.end_hold(sid, &h);
             for e in &h.pools {
@@ -3050,7 +3161,10 @@ impl<'p> Interp<'p> {
         self.next_adm += 1;
         let s = &mut self.sessions[sid];
         s.adm_seq = seq;
-        s.attrs[p.slot_cached] = cached_first.unwrap_or(0.0);
+        // a request's part reads no cache: `cached` stays its admission's
+        if !pending.part {
+            s.attrs[p.slot_cached] = cached_first.unwrap_or(0.0);
+        }
         s.pending = None;
         s.status = Status::Ready;
         s.holds.push(Hold {
@@ -3061,8 +3175,9 @@ impl<'p> Interp<'p> {
             lease: pending.lease,
             body: pending.body,
             request: pending.request,
+            part: pending.part,
         });
-        if !pending.request {
+        if !pending.request && !pending.part {
             s.frames.push(Frame {
                 block: pending.body,
                 pc: 0,
@@ -3823,6 +3938,12 @@ impl<'p> Interp<'p> {
                 r.generated = r.known - r.input;
                 r.preempted = true;
             }
+            self.end_parts(victim);
+            let hi = self.sessions[victim]
+                .holds
+                .iter()
+                .rposition(|h| h.request)
+                .expect("the request's hold");
             let h = self.sessions[victim].holds.remove(hi);
             for e in &h.pools {
                 let read = (&h.chain[..], e.shared, &e.path[..]);
@@ -3910,6 +4031,7 @@ impl<'p> Interp<'p> {
             body,
             queued_at: self.now,
             request: false,
+            part: false,
         };
         // back at the head (vLLM's `prepend_request`), or with `requeue
         // tail` at the back, a newcomer to the queue's keys and `waited`

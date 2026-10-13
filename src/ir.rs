@@ -887,6 +887,13 @@ pub struct CConnector {
     /// copies to.
     pub loaded: usize,
     pub saved: usize,
+    /// Attribute slot: when its latest load ended (`E.load_done`).
+    pub load_done: usize,
+    /// A KV relation's (`kvt.nixl_pull`): the attribute its request's entry
+    /// sets to the source's member it took `from`, -1 for none, which loads
+    /// nothing (`E.from`, vLLM's `do_remote_prefill`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<usize>,
     /// The observation the engine records for each admission, `E.loaded`.
     pub record: usize,
 }
@@ -1808,6 +1815,15 @@ impl Program {
                     .filter(|q| Some(q.base) == st.memory)
                     .map(|q| (*q, None))
                     .collect();
+                // a KV relation's load ends the lease its request's entry
+                // took `from` the source, the member `E.from` names
+                let mut leased = leased.clone();
+                if c.from.is_some() {
+                    leased.extend(self.blocks[*b].iter().filter_map(|s| match s {
+                        CStmt::Release(r) => Some(r),
+                        _ => None,
+                    }));
+                }
                 self.enclosed(*b, &mut held, &leased).map_err(fail)?;
             }
             if let Some((_, b)) = &c.save {
@@ -3052,6 +3068,10 @@ impl Validator<'_> {
             ));
         }
         self.attr(c.loaded)?;
+        self.attr(c.load_done)?;
+        if let Some(a) = c.from {
+            self.attr(a)?;
+        }
         self.attr(c.saved)
     }
 

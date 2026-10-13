@@ -2,6 +2,9 @@
   "BinOp": [
     "Pow"
   ],
+  "RunMode": [
+    "Decode"
+  ],
   "CtxVar": [
     "Age",
     "Last",

@@ -406,6 +406,20 @@ impl Ctx<'_> {
         for s in stmts {
             match s {
                 Stmt::Run { stage, work, .. } if stage.name == PULL => out.extend(self.copy(work)?),
+                // a queue that reads KV (`kvt.nixl_pull`): its engine's
+                // request reads it from the member of the source the entry
+                // took `from`, or from none (a connector's `E.from`, -1)
+                Stmt::EngineRequest { .. } if self.q.takes.is_some() => {
+                    let member = match &self.from {
+                        Some((_, src)) => src.index.as_deref().cloned().unwrap_or(Expr::Num(0.0)),
+                        None => Expr::Num(-1.0),
+                    };
+                    out.push(Stmt::Set(
+                        format!("{}.{}", self.q.name, crate::frontend::link::RELATION_FROM),
+                        member,
+                    ));
+                    out.push(self.stmt(s)?);
+                }
                 _ => out.push(self.stmt(s)?),
             }
         }
@@ -507,7 +521,7 @@ impl Ctx<'_> {
                 input,
                 output,
             } => Stmt::EngineRequest {
-                stage: stage.clone(),
+                stage: self.reference(stage)?,
                 input: self.expr(input)?,
                 output: self.expr(output)?,
             },

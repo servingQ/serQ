@@ -67,7 +67,7 @@ fn main() {
       if (mode == 0) {
         choose j in N by (holders(E[j].reqs) + queued(E[j].kv));   // a request waits at the blocks
         E[j].decode (prompt);
-        set first = E.first_token;
+        set first = E.first;
       } else {
         choose i in NP by (holders(P[i].reqs) + queued(P[i].reqs));
         P[i].prefill (prompt);
@@ -75,10 +75,10 @@ fn main() {
         // a request parked for its read holds blocks, not a running slot
         choose j in ND by (holders(D[j].kv) + queued(D[j].kv));
         D[j].decode (prompt) from P[i];
-        set first = D.first_token;
+        set first = D.first;
         observe admit_wait = D.admitted - t_prefill;  // the decoder's admission: the prompt's blocks
-        observe transfer = D.read_done - D.admitted;  // the read: the wait before it and both NICs
-        observe lease = D.read_done - t_prefill;      // how long the prefiller's blocks stayed leased
+        observe transfer = D.load_done - D.admitted;  // the read: the wait before it and both NICs
+        observe lease = D.load_done - t_prefill;      // how long the prefiller's blocks stayed leased
       }
       observe ttft = first - t0;
       observe decode_time = now - first;
@@ -96,7 +96,8 @@ fn main() {
       tokens cap B;
       scheduler {
         exclusive prefill each at most (chunk_cap);
-        admit waiting while (running.preempted == 0) each at most (chunk_cap);
+        admit waiting while (running.preempted == 0) each at most (chunk_cap)
+          taking kv (min(request.known, budget_left(E))) reserve (request.known), reqs (1);
       }
       worker {
         forward (c0 + max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
@@ -105,14 +106,7 @@ fn main() {
     pool reqs on E { queue fifo; }
     pool kv on E.gpu { block bs; evict lru; preempt lifo; }
     decode (prompt) {
-      set kept = prompt;   // the most tokens an attempt had: a preemption keeps the outputs
-      hold kv (cost(kv, min(known, budget_left(E)))) reserve (cost(kv, known)), reqs (cost(reqs, 1))
-           at admission (known = max(kept, computed + 1)) {
-        set kept = known;
-        run E prefill (cost(E, known)) growing kv;
-        if (known == prompt) { mark first_token; }   // not a resumed request's re-prefill
-        run E decode (cost(E, o - 1 - (known - prompt))) growing kv;
-      }
+      E (prompt, o);
     }
   }
 
@@ -155,9 +149,16 @@ fn main() {
       tokens cap B;
       // no exclusive steps: the one prompt token a decoder recomputes rides
       // with the decodes, as in vLLM
+      // NIXL: the prompt's KV, read from the prefiller the request came
+      // `from`, once
+      connector P { load (request.preempted ? 0 : request.input); }
       scheduler {
         advance running each at most (chunk_cap);
-        admit waiting while (running.preempted == 0) each at most (chunk_cap);
+        // the whole prompt's blocks, and a running slot only once the KV
+        // has arrived; a request preempted here recomputes what it lost
+        admit waiting while (running.preempted == 0) each at most (chunk_cap)
+          taking kv (request.known) reserve (request.known),
+                 reqs (request.loaded > 0 ? 0 : 1) reserve (1);
       }
       worker {
         forward (c0 + max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
@@ -167,27 +168,7 @@ fn main() {
     pool kv on D.gpu { block bs; evict lru; preempt lifo; }
     nic ps(Bw);
     decode (prompt) from P {
-      set transferred = 0;
-      set kept = prompt;
-      hold kv (cost(kv, known)) reserve (cost(kv, known)), reqs (cost(reqs, 0)) reserve (cost(reqs, 1))
-           at admission (known = max(kept, computed + 1)) {
-        set kept = known;
-        set c = 0;
-        if (!transferred) {
-          mark admitted;
-          transfer (prompt) from P to kv (prompt - 1);   // over P's NIC and this pod's
-          mark read_done;
-          set transferred = 1;
-          set c = prompt - 1;
-        }
-        // a running slot and a token of budget: the last prompt token
-        // recomputed for its logits, or what a preemption lost
-        hold reqs (cost(reqs, 1)) {
-          run D prefill (cost(D, known - c)) growing kv;
-          if (known == prompt) { mark first_token; }
-          run D decode (cost(D, o - 1 - (known - prompt))) growing kv;
-        }
-      }
+      D (prompt, o);
     }
   }
 

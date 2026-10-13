@@ -77,8 +77,9 @@ eitem    := NAME [ '[' N ']' ] cap expr ;    -- a capacity the engine holds (`re
           | granule expr ; | state NAME = expr ;
           | scheduler { (let NAME = expr ;)* sstmt+ }   -- what each iteration does (required)
           | worker { forward ( expr ) ; }    -- what the worker does with the batch: its forward's time (required)
-          | connector QUEUE { per_token ( expr ) ; [load ( expr ) ;] [save ( expr ) ;] }
-                                             -- its KV connector to an `l2` queue (*An engine's request*)
+          | connector QUEUE { [per_token ( expr ) ;] [load ( expr ) ;] [save ( expr ) ;] }
+                                             -- its KV connector: to an `l2` queue, or from the source of
+                                             -- its queue's KV relation (*An engine's request*)
 sstmt    := advance running [only ( expr )] [admission | by ( expr , ... ) | decode first] [each at most ( expr )] ;
           | admit waiting [only ( expr )] [while ( expr )] [each at most ( expr )]
                 [taking POOL ( expr ) [reserve ( expr )] , ... [reuse ( expr )]
@@ -456,10 +457,15 @@ from which, and how the reads share the NICs:
 ```
 queue P[NP] : prefill { … nic ps(BwP); prefill (prompt) { … } }
 queue D[ND] : decode {
+  engine on gpu {
+    …
+    connector P { load (request.preempted ? 0 : request.input - request.hit); }
+    …
+  }
   … nic ps(BwD);
   decode (prompt) from P {
-    …
-    transfer (prompt - c) from P to kv (prompt - 1 - c);   // over P's NIC and this pod's
+    set produced = min(o, max_model_len - prompt);   // generation stops at max_model_len tokens (sched/utils.py:114-120)
+    D (prompt, produced);
   }
 }
 kvt.nixl_pull (P, D, latency = x0, share = share.maxmin);
@@ -470,9 +476,13 @@ policy: the KV goes from `P` to `D`, the source first as the bytes go,
 `D` starts the read (NIXL pull), `D` waits `x0` before each one (a number
 or a constant over `let`s; `latency = …` may be left out), and concurrent
 reads divide the two NICs by its `share` (*Stages*), which the relation
-must name: it is not left to a default. Inside an entry of `D` called `from P[i]`, a `transfer`
-without `on` is the read: the kernel's `run D.nic.latency[j] (x0); run
-P.nic[i], D.nic[j] (…); load D.kv[j] (…); release P.kv[i];`. Both queues
+must name: it is not left to a default. The decoder's engine reads the KV
+with its `connector P` (*An engine's request*): for a request its entry
+was called `from P[i]` with, the kernel's `run D.nic.latency[j] (x0); run
+P.nic[i], D.nic[j] (…); load D.kv[j] (…); release P.kv[i];`, and nothing
+for a request its entry took from no source. Inside an entry of `D` called
+`from P[i]`, a `transfer` without `on` is the same read written by the
+entry. Both queues
 are declared above the relation and have a `nic`; a reader has one source;
 an entry of `D` `from` another queue is an error, and so is a reader with
 no entry `from` its source (the queues the wrong way round), and a
@@ -486,8 +496,9 @@ worker posts the write, so the wait before each copy is `P`'s, the delay
 stage `P.nic.latency`, indexed by the source member. A push says who moves
 the bytes, not when the decoder is asked for its blocks: that is the
 dispatch, written where it happens, with `fork` (below,
-`examples/pd-disaggregation/vllm_nixl_push.sq`). The wait is a delay, so a
-push and a pull of the same constants run the same numbers. A queue waits
+`examples/pd-disaggregation/vllm_nixl_push.sq`); the decoder's connector
+waits for the dispatch's leg (`join`) before the copy. The wait is a delay,
+so a push and a pull of the same constants run the same numbers. A queue waits
 before the copies it posts for one relation: one `latency` per poster.
 
 An L2 KV cache outside the engine, an LMCache server or a Mooncake store,
@@ -552,8 +563,9 @@ pool its `from` names. That is the `hidden` rule
 at the queue's boundary: vLLM's scheduler knows `max_tokens`, not the length,
 so `o` is not a parameter of `decode` and the body alone reads it. What the
 body `set`s is the queue's (`D.known`); what it `observe`s is the program's;
-a moment the caller needs is `mark read_done;`, read afterwards as
-`D.read_done` — the request's attribute, so without a member index. The gateway is the exception on the session's side: its
+a moment the caller needs is `mark prefill_done;`, read afterwards as
+`P.prefill_done` (`examples/pd-disaggregation/pd_batching.sq`) — the
+request's attribute, so without a member index. The gateway is the exception on the session's side: its
 `route` reads the request's attributes as a `server` does and sets the ones
 the session reads back (`prompt`).
 
@@ -782,8 +794,9 @@ there when the hold executes again. An engine carries it itself: its
 request keeps the tokens it has, `request.known`, which after a
 preemption is `max(known, computed + 1)` (the token sampled at `computed`
 is the request's too), and generates only the rest (*An engine's
-request*). The decoders of `examples/pd-disaggregation/`, queue entries,
-carry it in the program: `set kept = prompt;` above the hold, `known =
+request*), a queue's engine too, which its entries call
+(`examples/pd-disaggregation/`). A kernel hold that runs an engine carries
+it in the program: `set kept = prompt;` above the hold, `known =
 max(kept, computed + 1)` at admission and `set kept = known;` at the top
 of the body; an entry's header reads what the entry sets above the hold
 (#475). A program that recomputes from the prompt alone says so by not
@@ -1160,7 +1173,7 @@ without `taking` takes nothing and admits a request as it is called.
 |---|---|---|
 | `request.input`, `request.output` | the call's arguments | `taking`, `reuse`, `prefix`, `cache` |
 | `request.known` | the tokens the request has, its input and what it has generated | `taking`, `reuse`, `prefix`, `cache` |
-| `request.hit` | `min(cachedin(P), reuse)` on the engine's memory `P` | `taking`, `reuse`, `prefix` |
+| `request.hit` | `min(cachedin(P), reuse)` on the engine's memory `P` | `taking`, a connector's `load` |
 | `request.preempted` | 1 once the request has been preempted | `taking`, a connector's `load` |
 | `request.loaded` | what the connector's `load` read | `taking` |
 | `request.finished` | 1 at the release that ends the request, 0 at a preemption | `cache` |
@@ -1172,8 +1185,9 @@ it), and so is the output when the admission reads `request.output`. The
 engine's records are attributes the caller reads after the call: `E.reused`
 (the cached tokens its latest admission read), `E.prefill` (the tokens its
 prefill computes), `E.admitted` (when) and `E.first` (when its first token
-was sampled). `E.reused` and `E.prefill` are observations of the report
-too, one per admission.
+was sampled); a connector adds `E.loaded`, `E.saved` and `E.load_done`
+(below). `E.reused`, `E.prefill` and `E.loaded` are observations of the
+report too, one per admission.
 
 The server, a gateway's `route` and the session may not run an engine's
 prefill or decode, nor hold a pool an engine admits (`pool P on E`, `pool
@@ -1181,8 +1195,13 @@ kv on E.gpu`, an engine's capacity); each is refused with the `taking` and
 the call to write instead (#539). A pool no engine admits (a top-level
 pool, one `on DEVICE`) is held anywhere, around the call too, as
 `examples/single-turn/fastertransformer.sq` holds its `reqs`. A queue's
-entries run their own engine and no other; a queue's engine has no
-`taking`, its entries being its requests.
+entries run their own engine and no other. A queue's engine admits by
+its `taking` as any engine does, and the queue's entries call it, `E
+(input, output);` (`examples/multi-turn/thunderagent.sq`); the server and
+the gateway call the entry (`E[j].decode (prompt);`), not the engine. A
+family's `taking` names its pools without an index, and each member takes
+its own. An entry may still run its engine in the kernel's words (`run E
+prefill (…)`, the prefillers of `examples/pd-disaggregation/`).
 
 An engine's `connector C { per_token (r); load (n); save (n); }` copies a
 request's KV through the L2 queue `C` (vLLM's KV connector; *Queues*). At
@@ -1193,10 +1212,33 @@ counts them as computed, before its prefill. When it has generated its
 output it reads `save` (as `cache` is read) and, before it gives its pools
 back, copies to its entry in `C` the part of `n` tokens the entry lacks
 (LMCache's `request_finished` keeps the blocks until the save is done,
-`lmcache_mp_connector.py:952`). The engine records `E.loaded` for each
-admission and sets `E.loaded` and `E.saved` for the caller. `per_token`
-may not read `cached` or `computed`, which during a copy are the L2
-entry's.
+`lmcache_mp_connector.py:952`). `per_token` may not read `cached` or
+`computed`, which during a copy are the L2 entry's.
+
+A queue's engine's `connector P { load (n); }` reads instead from the
+source of its queue's KV relation (`kvt.nixl_pull (P, D, …)`,
+`kvt.nixl_push`; *Queues*): for a request its entry was called `from P[i]`
+with, the `n` tokens' KV crosses `P`'s NIC and the decoder's, as the
+relation says (in a push, once the dispatch's leg has joined), and the
+lease the entry took ends; a request its entry took from no source loads
+nothing. Such a connector has no `per_token` or `save`.
+
+After any connector's load, a request that has KV for every token it has
+computes its last again, to sample the next (`scheduler.py:3075-3076`),
+and its admission is read again: a pool it took none of and takes now, it
+waits for, as vLLM's request whose remote KV has arrived goes back to the
+waiting queue (`scheduler.py:1264-1267`). So a decoder that reads its KV
+holds blocks and no running slot while it reads:
+
+```serq
+          taking kv (request.loaded > 0 ? request.known : min(request.known, request.hit + budget_left(D)))
+                   reserve (request.known),
+                 reqs (request.loaded > 0 ? 0 : 1) reserve (1)
+```
+
+(`examples/pd-disaggregation/llmd_nixl_pull.sq`). The engine records
+`E.loaded` for each admission and sets `E.loaded`, `E.saved` and
+`E.load_done` (when its latest load ended) for the caller.
 
 ### `at admission`
 
@@ -1204,13 +1246,12 @@ Everything in a hold's header — the units, `reserve`,
 `reuse` — is evaluated when the session is admitted, and a `set` above the
 hold is not (`cache` is read when the session releases, `Serq/Exec.lean`'s
 `release` and the interpreter agree). `at admission (x = e)` gives the
-header a place to name what it is written in terms of, as the decoder of
+header a place to name what it is written in terms of, as the prefiller of
 `examples/pd-disaggregation/vllm_nixl_push.sq` does:
 
 ```
-hold kv (cost(kv, known)) reserve (cost(kv, known)), reqs (cost(reqs, 0)) reserve (cost(reqs, 1))
-     reuse (cost(kv, reqs, floor(known - 1, bs)))
-     at admission (known = max(kept, computed + 1)) { … }
+hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, reused + budget_left(P)))) reserve (cost(kv, prompt))
+     at admission (reused = min(cachedin(kv), floor(prompt - 1, bs))) { … }
 ```
 
 The bindings are substituted into the header's expressions by the parser, so
@@ -1220,7 +1261,7 @@ later binding sees the earlier ones. A binding may not draw (`~`): it is
 substituted, so a name used twice would draw twice.
 
 The body sees a binding too. One the body reads is set at its top, `set
-known = e;`, which is its admission value because the body starts at the
+x = e;`, which is its admission value because the body starts at the
 admission's instant and `e` reads only attributes and constants; that `set`
 is in the AST and the IR like any other. A binding that reads live state —
 an observable such as `cachedin(kv)`, a context variable, or `cached`, which

@@ -411,16 +411,45 @@ pub struct StepSpec {
 /// read for each request (`ir::CConnector`).
 #[derive(Clone, Debug, PartialEq)]
 pub struct ConnectorSpec {
-    /// The L2 queue: its stage, whose bandwidth the copies share, and its
-    /// pool (`C.kv`).
-    pub stage: Ref,
-    pub pool: Ref,
-    /// The time one token's copy takes.
-    pub per_token: Expr,
+    /// The queue it names, as written.
+    pub queue: String,
+    pub kind: ConnectorKind,
     /// The tokens a request loads at its admission.
     pub load: Option<Expr>,
     /// The tokens the L2 holds of a request once it has ended.
     pub save: Option<Expr>,
+}
+
+/// What a connector copies through.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ConnectorKind {
+    /// An L2 queue (`queue C : l2`): its stage, whose bandwidth the copies
+    /// share, its pool (`C.kv`), and the time one token's copy takes.
+    L2 {
+        stage: Ref,
+        pool: Ref,
+        per_token: Expr,
+    },
+    /// The source of the KV relation of the engine's queue (`kvt.nixl_pull
+    /// (C, Q, …)`, `kvt.nixl_push`): a load reads, from the lease the
+    /// request's entry took `from C`, over the two NICs. `None` until the
+    /// program is read, where the relation may be declared below.
+    Relation(Option<Relation>),
+}
+
+/// A connector's KV relation, as `kvt.nixl_pull` or `kvt.nixl_push`
+/// declared it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Relation {
+    /// The source queue, and the pool its entries lease (`P.kv`).
+    pub source: String,
+    pub leased: String,
+    /// The engine's queue, which reads.
+    pub reader: String,
+    /// The wait before each copy, at the poster's `X.nic.latency`.
+    pub latency: Option<Expr>,
+    pub push: bool,
+    pub share: crate::ir::Share,
 }
 
 /// An engine's `taking P (u) [reserve (r)], … [reuse (e)] [prefix (…)]

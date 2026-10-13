@@ -60,7 +60,7 @@ fn main() {
         P.prefill (prompt);              // the sidecar's order: the prefill's answer first
       }
       D.decode (prompt) from P;          // the decode request; it waits for the prefill's KV inside
-      observe parked = D.written - D.parked;   // how long the decoder's blocks waited for the KV
+      observe parked = D.load_done - D.admitted;   // how long the decoder's blocks waited for the KV
       observe sent = t0;
     }
   }
@@ -102,7 +102,23 @@ fn main() {
     engine on gpu {
       reqs cap max_seqsD;
       tokens cap B;
-      scheduler { advance running; admit waiting while (running.preempted == 0); }
+      // NIXL push: the blocks registered with the prefiller, which writes
+      // every block past the local hit once its own prefill has ended
+      // (nixl/push_worker.py:254-264), over its NIC and this pod's; the last
+      // prompt token is recomputed for its logits
+      connector P { load (request.preempted ? 0 : request.input - request.hit); }
+      // a request is taken when the whole prompt fits the blocks, at a step
+      // with budget left and a running slot free - it takes neither while it
+      // is parked - and reuses the full blocks it has of the prompt; back in
+      // the waiting queue it takes a slot
+      scheduler {
+        advance running;
+        admit waiting while (running.preempted == 0)
+          taking kv (request.known) reserve (request.known),
+                 reqs (request.loaded > 0 ? 0 : 1) reserve (1)
+          reuse (floor(request.known - 1, bs))
+          cache (request.input + request.output);
+      }
       worker {
         forward (cD + aP * batch.prefilled + bP * batch.attention);
       }
@@ -111,39 +127,9 @@ fn main() {
     pool kv on D.gpu { block bs; evict lru; preempt lifo; }
     nic ps(Bw);                           // the pod's NIC: the writes into it share it
 
-    // Every request has a remote prefill, so this is the only entry. The
-    // decode request is taken when the whole prompt fits the blocks, at a
-    // step with budget left and a running slot free - it takes neither (the
-    // request is parked, not running) - and reuses the full blocks it has of
-    // the prompt.
+    // Every request has a remote prefill, so this is the only entry.
     decode (prompt) from P {
-      set transferred = 0;   // one KV transfer per request
-      set kept = prompt;     // the most tokens an attempt had: a preemption keeps the outputs
-      hold kv (cost(kv, known)) reserve (cost(kv, known)), reqs (cost(reqs, 0)) reserve (cost(reqs, 1))
-           reuse (cost(kv, reqs, floor(known - 1, bs)))
-           at admission (known = max(kept, computed + 1)) {
-        set kept = known;
-        set c = cached;
-        if (!transferred) {
-          // WAITING_FOR_REMOTE_KVS: the blocks are registered with the
-          // prefiller, which writes every block past the local hit once its
-          // own prefill has ended, through its NIC and this pod's at once; the
-          // write done, the prefiller's lease ends. The last prompt token is
-          // recomputed for its logits.
-          mark parked;
-          observe d_cached = c;
-          join;                                                     // P's finished blocks meet the registration: the write can start (nixl/push_worker.py:254-264)
-          transfer (prompt - c) from P to kv (prompt - 1 - c);   // P's WRITE over both NICs
-          mark written;
-          set transferred = 1;
-          set c = prompt - 1;
-        }
-        // Back in the waiting queue: a running slot and a token of budget.
-        hold reqs (cost(reqs, 1)) {
-          run D prefill (cost(D, known - c)) growing kv;
-          run D decode (cost(D, out - 1 - (known - prompt))) growing kv;
-        }
-      } cache (cost(kv, reqs, prompt + out));
+      D (prompt, out);
     }
   }
 

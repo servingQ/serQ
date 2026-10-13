@@ -295,6 +295,9 @@ struct Walker<'a> {
     /// Attributes this path has set to a constant, by slot. A guard that
     /// reads only these is decided, and only its arm is drawn.
     known: Vec<(usize, f64)>,
+    /// What this path last set each attribute to: a connector's block reads
+    /// its request's source by one (`E.from`).
+    set_to: Vec<(usize, CExpr)>,
 }
 
 impl Walker<'_> {
@@ -515,7 +518,72 @@ impl Walker<'_> {
         let Some(stmts) = self.p.blocks.get(block) else {
             return;
         };
-        for s in stmts.clone() {
+        self.walk_stmts(stmts.clone());
+    }
+
+    /// A connector's block as its request's call says it: the engine's own
+    /// member the call's (`D.nic[j]`, not member 0's), and the source the
+    /// member the entry set `E.from` to (`P.nic[i]`).
+    fn at_call(&self, b: usize, call: &CRef, from: Option<usize>) -> Vec<CStmt> {
+        let p = self.p;
+        let from = from.and_then(|slot| {
+            self.set_to
+                .iter()
+                .find(|(s, _)| *s == slot)
+                .map(|(_, e)| e.clone())
+        });
+        let fix = |r: &mut CRef, pools: bool| {
+            let (name, index) = if pools {
+                (&p.pools[r.base].name, p.pools[r.base].index)
+            } else {
+                (&p.stages[r.base].name, p.stages[r.base].index)
+            };
+            match r.index.as_deref() {
+                // the source member the entry named
+                Some(CExpr::Attr(_)) => {
+                    if let Some(e) = &from {
+                        r.index = Some(Box::new(e.clone()));
+                    }
+                }
+                // a member of the engine's family, the call's
+                Some(CExpr::Num(_)) | None if call.index.is_some() => {
+                    let k = match r.index.as_deref() {
+                        Some(CExpr::Num(k)) => *k as usize,
+                        _ => index.map_or(0, |k| k as usize),
+                    };
+                    if r.count == 1 && index.is_some() {
+                        r.base -= k;
+                        r.count = if pools {
+                            p.pools.iter().filter(|q| &q.name == name).count()
+                        } else {
+                            p.stages.iter().filter(|q| &q.name == name).count()
+                        };
+                    }
+                    if r.count == call.count {
+                        r.index = call.index.clone();
+                    }
+                }
+                _ => {}
+            }
+        };
+        let mut stmts = p.blocks[b].clone();
+        for s in &mut stmts {
+            match s {
+                CStmt::Run { stage, also, .. } => {
+                    fix(stage, false);
+                    for r in also {
+                        fix(r, false);
+                    }
+                }
+                CStmt::Load(r, _) | CStmt::Release(r) | CStmt::Grow(r, _) => fix(r, true),
+                _ => {}
+            }
+        }
+        stmts
+    }
+
+    fn walk_stmts(&mut self, stmts: Vec<CStmt>) {
+        for s in stmts {
             match s {
                 CStmt::Run {
                     stage,
@@ -584,26 +652,54 @@ impl Walker<'_> {
                             .unwrap_or_default(),
                         _ => vec![],
                     };
-                    let id = self.next_hold;
-                    if !pools.is_empty() {
-                        self.next_hold += 1;
-                        self.net.holds.push(HoldSpan {
-                            queue: Some(pools[0].0.base),
-                            visits: vec![],
-                        });
-                        for (r, units, _) in &pools {
-                            let encloses = !self.value(units).is_some_and(|(v, _)| v == 0.0);
-                            self.holds.push((r.base, id, encloses));
-                        }
-                    }
                     // its connector's load, then the engine, then its save,
                     // inside the request's hold
                     let connector = match &self.p.stages[stage.base].kind {
                         CStageKind::Step(st) => st.connector.clone(),
                         _ => None,
                     };
-                    if let Some((_, b)) = connector.as_ref().and_then(|c| c.load.as_ref()) {
-                        self.walk(*b);
+                    // a call from no source (`E.from` -1) loads nothing
+                    let sourceless = connector.as_ref().and_then(|c| c.from).is_some_and(|slot| {
+                        self.set_to
+                            .iter()
+                            .any(|(s, e)| *s == slot && matches!(e, CExpr::Num(v) if *v < 0.0))
+                    });
+                    let load = connector
+                        .as_ref()
+                        .and_then(|c| c.load.as_ref().map(|(_, b)| (*b, c.from)))
+                        .filter(|_| !sourceless);
+                    // a pool it takes none of while it loads (its units 0 with
+                    // `request.loaded` above 0) it takes once the load is done
+                    // (`Interp::request_more`)
+                    let after_load = |e: &CExpr| {
+                        load.is_some()
+                            && e.any(&|x| matches!(x, CExpr::Ctx(CtxVar::Loaded)))
+                            && self.value(&with_loaded(e)).is_some_and(|(v, _)| v == 0.0)
+                    };
+                    let deferred: Vec<bool> = pools.iter().map(|(_, u, _)| after_load(u)).collect();
+                    let id = self.next_hold;
+                    let mut later = vec![];
+                    if !pools.is_empty() {
+                        self.next_hold += 1;
+                        self.net.holds.push(HoldSpan {
+                            queue: Some(pools[0].0.base),
+                            visits: vec![],
+                        });
+                        for ((r, units, _), defer) in pools.iter().zip(deferred) {
+                            if defer {
+                                later.push(r.base);
+                                continue;
+                            }
+                            let encloses = !self.value(units).is_some_and(|(v, _)| v == 0.0);
+                            self.holds.push((r.base, id, encloses));
+                        }
+                    }
+                    if let Some((b, from)) = load {
+                        let stmts = self.at_call(b, &stage, from);
+                        self.walk_stmts(stmts);
+                    }
+                    for q in later {
+                        self.holds.push((q, id, true));
                     }
                     self.last_flow = None;
                     let label = self.p.show_stage_ref(&stage);
@@ -813,6 +909,8 @@ impl Walker<'_> {
                     }
                 }
                 CStmt::Set(slot, e) => {
+                    self.set_to.retain(|(s, _)| *s != slot);
+                    self.set_to.push((slot, e.clone()));
                     let v = self.value(&e).map(|(v, _)| v);
                     self.known.retain(|&(s, _)| s != slot);
                     if let Some(v) = v {
@@ -1308,6 +1406,7 @@ pub fn project(p: &Program) -> Net {
         decisions: vec![],
         ticks: vec![],
         known: vec![],
+        set_to: vec![],
     };
     w.enter(p.session, false);
     w.settle_instances();
@@ -2562,4 +2661,18 @@ fn pool_notes(p: &Program, i: usize, cached: bool) -> Vec<String> {
 pub fn figure(p: &Program) -> Figure {
     let net = project(p);
     layout(p, &net)
+}
+
+/// `e` with `request.loaded` a positive number: what an admission takes
+/// while its connector loads.
+fn with_loaded(e: &CExpr) -> CExpr {
+    let f = with_loaded;
+    match e {
+        CExpr::Ctx(CtxVar::Loaded) => CExpr::Num(1.0),
+        CExpr::Cost(t, x) => CExpr::Cost(t.clone(), Box::new(f(x))),
+        CExpr::Unary(o, x) => CExpr::Unary(*o, Box::new(f(x))),
+        CExpr::Binary(o, a, b) => CExpr::Binary(*o, Box::new(f(a)), Box::new(f(b))),
+        CExpr::Cond(c, a, b) => CExpr::Cond(Box::new(f(c)), Box::new(f(a)), Box::new(f(b))),
+        other => other.clone(),
+    }
 }

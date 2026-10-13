@@ -53,7 +53,7 @@ MODES = {
     "split": ([("let NP = 2;", "let NP = 3;"), ("let ND = 2;", "let ND = 1;")], {"thr": 1}),
 }
 # What the prefill pods compute of a prompt, which the program does not
-# observe: the decode pods' own prefill is `local_tokens`.
+# observe: the decode pods' own prefill is the engine's record `D.prefill`.
 P_TOKENS = ("        run P prefill (cost(P, prompt - c)) growing kv;",
             "        observe p_tokens = prompt - c;\n        run P prefill (cost(P, prompt - c)) growing kv;")
 OPEN = [1, 2, 3]          # sessions per second
@@ -118,7 +118,7 @@ def row(mode, workload, x, seed, rep):
         "remote": obs["remote"]["mean"],
         # prompt tokens computed by whichever pod prefills, per prefill
         # (a turn, but for the few preempted and run again)
-        "prefill_tokens": obs["p_tokens" if split else "local_tokens"]["mean"],
+        "prefill_tokens": obs["p_tokens" if split else "D.prefill"]["mean"],
         "mean_itl": sum(w * g for w, g in zip(weight, gaps)) / sum(weight),
         "itl_p99": max([num(s["itl_p99"]) for s in dec], default=math.nan),
         "batch": mean([num(s["mean_decode_batch"]) for s in dec]),
