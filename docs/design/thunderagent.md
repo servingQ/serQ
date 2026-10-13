@@ -314,8 +314,11 @@ figures except the printed ratios:
 The gain is a closed workload's, and it is paid in waiting. At 32 agents
 (seed 1), TR mode's mean time to first token is 55 s against default
 mode's 81 s, but its 99th percentile is 1 817 s against 140 s (1 817-1 818 s
-over seeds 1-4): a program the router holds back waits for room, and the
-last of them until the force-resume lets it in at 30 minutes. Under open Poisson arrivals of
+over seeds 1-4): a program the router holds back waits for room, and
+since the router lets the smaller in first, the largest wait until the
+force-resume lets them in at 30 minutes. With the waiters in the order
+they reach the tick the 99th percentile is 639 s (seed 1) and the
+throughput the same. Under open Poisson arrivals of
 programs (the same program with `arrive poisson`), at rates default mode
 keeps up with, 0.01-0.02 a second, the two serve the same turns and TR
 mode's TTFT is a little lower (0.46 s against 1.05 s at 0.02). At 0.04 a

@@ -132,7 +132,8 @@ it runs and serves about 1.5 times the steps. The gain is paid in
 waiting: TR mode's mean time to first token is lower (55 s against 81 s
 at 32 agents), but its 99th percentile is 1 817 s against 140 s, since a
 program held back waits for the router's ticks until a replica has room
-for it, or until the force-resume lets it in at 30 minutes. Under open arrivals of programs the two
+for it; the router lets the smaller in first, so the largest wait until
+the force-resume lets them in at 30 minutes. Under open arrivals of programs the two
 modes serve alike at rates default mode keeps up with; a little above
 them (0.04 programs a second) only TR mode keeps up, and above that
 neither does.
