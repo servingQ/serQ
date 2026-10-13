@@ -50,13 +50,13 @@ and [input reference](docs/api/std/args.md).
 As a dependency, pin a release tag:
 
 ```toml
-serq = { git = "https://github.com/servingQ/serQ", tag = "v0.1.4" }
+serq = { git = "https://github.com/servingQ/serQ", tag = "v0.1.5" }
 ```
 
 Or install the CLI directly:
 
 ```bash
-cargo install --git https://github.com/servingQ/serQ --tag v0.1.4 --locked --root <dir>
+cargo install --git https://github.com/servingQ/serQ --tag v0.1.5 --locked --root <dir>
 ```
 
 Working on serQ itself, the gate is:
