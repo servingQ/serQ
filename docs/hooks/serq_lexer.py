@@ -26,7 +26,7 @@ from pygments.lexers import _mapping
 from pygments.token import Comment, Keyword, Name, Number, Operator, Punctuation, String, Text
 
 # The blocks a program is made of.
-STRUCTURE = ("fn", "let", "def", "use", "device", "engine", "pool", "stage", "workload", "session", "server", "queue", "gateway", "link", "route", "gauge", "claim")
+STRUCTURE = ("fn", "let", "def", "use", "device", "engine", "connector", "pool", "stage", "workload", "session", "server", "queue", "gateway", "link", "route", "gauge", "claim")
 
 # Statements, in the session and server blocks.
 STATEMENTS = (
@@ -39,7 +39,7 @@ STATEMENTS = (
 
 # Pool and stage options, workload forms, and the resource cost constructor.
 OPTIONS = (
-    "cap", "block", "evict", "lru", "preempt", "lifo", "leases", "suspend", "held", "requeue", "head", "tail", "none", "queue", "fifo",
+    "cap", "per_token", "save", "block", "evict", "lru", "preempt", "lifo", "leases", "suspend", "held", "requeue", "head", "tail", "none", "queue", "fifo",
     "admit", "while", "state", "taking", "via", "spill", "when", "ps", "delay", "cost",
     "granule", "serve", "latency", "nic", "exclusive", "first", "only", "arrive", "arrivals", "poisson", "renewal", "closed", "hidden",
     "batch", "trace", "ordered", "init", "horizon", "warmup", "seed",
@@ -64,6 +64,8 @@ ENGINE_VALUES = (
     "waiting.count", "waiting.admitted",
     "batch.tokens", "batch.prefilled", "batch.decoding", "batch.kv_decode",
     "batch.kv_prefill", "batch.attention",
+    "request.input", "request.output", "request.known", "request.hit", "request.finished",
+    "request.loaded", "request.preempted",
 )
 
 # Observables and arithmetic: things a program reads rather than declares.

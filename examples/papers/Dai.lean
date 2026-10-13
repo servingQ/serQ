@@ -69,7 +69,7 @@ theorem token_rate : Claims.DaiFastertransformer.token_rate :=
     exact staircase_rate 1128 3547 128 1 st.tokens (by norm_num) (by have : st.tokens ≤ 128 := h; omega)) _ _
 
 /-- Two requests, the second arriving 467.5 ms after the first. -/
-def witness : Workload := ⟨[[(10, 46750)], [(10, 93500)]], [], none, 0, some 8, some 10⟩
+def witness : Workload := ⟨[[(14, 46750)], [(14, 93500)]], [], none, 0, some 8, some 14⟩
 
 theorem reach_iterate (D : Deployment) (w : Workload) (P : Prog) :
     ∀ k, Reach D w P ((step D)^[k] (Exec.start D w.init.length w.attr P w))

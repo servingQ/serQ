@@ -223,7 +223,7 @@ struct Linker<'a> {
 /// rejects it, as it does a `let` and an attribute of one name): the
 /// expression that meant the context variable would read the attribute
 /// instead (#231).
-pub const CONTEXT_VARS: [(&str, CtxVar); 23] = [
+pub const CONTEXT_VARS: [(&str, CtxVar); 30] = [
     ("now", CtxVar::Now),
     ("waited", CtxVar::Waited),
     ("size", CtxVar::Size),
@@ -247,11 +247,31 @@ pub const CONTEXT_VARS: [(&str, CtxVar); 23] = [
     ("arrived", CtxVar::Arrived),
     ("admitted", CtxVar::Admitted),
     ("preempted", CtxVar::Preempted),
+    // an engine's request, read as `request.…` (no bare name, so no
+    // attribute is named like one)
+    ("request.input", CtxVar::Input),
+    ("request.output", CtxVar::Output),
+    ("request.known", CtxVar::Known),
+    ("request.hit", CtxVar::Hit),
+    ("request.finished", CtxVar::Finished),
+    ("request.loaded", CtxVar::Loaded),
+    ("request.preempted", CtxVar::Requeued),
 ];
+
+/// What an engine sets on the session of a request, read by its caller
+/// after the call as `E.admitted` and `E.first`: when the request was last
+/// admitted and when its first token was sampled (`ir::RequestRecords`).
+pub(crate) const REQUEST_ATTRS: [&str; 4] = ["admitted", "first", "reused", "prefill"];
+
+/// What an engine's connector sets on the session of a request, read by
+/// its caller after the call as `E.loaded` and `E.saved`: the tokens its
+/// latest admission loaded, and the tokens the L2 holds of it after its
+/// save (`ir::CConnector`).
+pub(crate) const CONNECTOR_ATTRS: [&str; 2] = ["loaded", "saved"];
 
 /// The names an engine reads its values under: `running.count`,
 /// `waiting.count`, `batch.tokens` (`parser/device.rs`).
-pub(crate) const LISTS: [&str; 3] = ["running", "waiting", "batch"];
+pub(crate) const LISTS: [&str; 4] = ["running", "waiting", "batch", "request"];
 
 /// What the language supplies under a name read as a value: a context
 /// variable, or `inf`.
@@ -684,6 +704,21 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
                     }
                 },
                 serve: serve(&lk, &sp.serve)?,
+                request: sp
+                    .request
+                    .as_ref()
+                    .map(|r| lk.request(r, &s.name).map(Box::new))
+                    .transpose()?,
+                // its records are attributes now, so that its caller reads
+                // them; its blocks are written after the session's, below
+                connector: {
+                    if sp.connector.is_some() {
+                        for a in CONNECTOR_ATTRS {
+                            lk.attr(&format!("{}.{a}", s.name));
+                        }
+                    }
+                    None
+                },
                 memory: sp.memory.as_ref().map(|m| lk.pool_base(m)).transpose()?,
                 iteration: match &sp.schedule {
                     Schedule::Body(b) => Some(iteration(&lk, lk.stages[&s.name].0, b)?),
@@ -801,7 +836,35 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
         }
     }
     if let Some(w) = prog.workload.as_ref() {
-        hidden_in_server(&w.init, &w.turn, &prog.session, &prog.server, &w.hidden)?;
+        // what each engine's admission reads of a request: `taking`, `reuse`
+        // and `prefix`, read when its scheduler admits it
+        let admissions: BTreeMap<String, Vec<Expr>> = prog
+            .stages
+            .iter()
+            .filter_map(|s| match &s.kind {
+                StageKind::Step(sp) => {
+                    let r = sp.request.as_ref()?;
+                    let read = r
+                        .pools
+                        .iter()
+                        .flat_map(|(_, u, f)| std::iter::once(u).chain(f))
+                        .chain(&r.reuse)
+                        .chain(r.prefix.iter().flatten().flat_map(|(k, n)| [k, n]))
+                        .cloned()
+                        .collect();
+                    Some((s.name.clone(), read))
+                }
+                _ => None,
+            })
+            .collect();
+        hidden_in_server(
+            &w.init,
+            &w.turn,
+            &prog.session,
+            &prog.server,
+            &w.hidden,
+            &admissions,
+        )?;
     }
     let mut gauges = vec![];
     for (name, e) in &prog.gauges {
@@ -842,6 +905,34 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
             kind,
             expr,
         });
+    }
+    // an engine's connector: its blocks after the session's, which keep
+    // their numbers
+    for (decl, st) in prog.stages.iter().zip(&mut stages) {
+        if let (StageKind::Step(sp), CStageKind::Step(step)) = (&decl.kind, &mut st.kind)
+            && let Some(c) = &sp.connector
+        {
+            let taken = sp.memory.as_ref().filter(|m| {
+                sp.request
+                    .as_ref()
+                    .is_some_and(|r| r.pools.iter().any(|(q, _, _)| q.name == m.name))
+            });
+            step.connector = Some(Box::new(lk.connector(c, &decl.name, taken)?));
+        }
+    }
+    // what an engine records of its requests, after the program's own
+    // observations, which keep their places
+    for st in &mut stages {
+        if let CStageKind::Step(step) = &mut st.kind
+            && let Some(r) = &mut step.request
+        {
+            let name = |what: &str| format!("{}.{what}", st.name);
+            r.records = crate::ir::RequestRecords {
+                reused: lk.observe_slot(&name("reused")),
+                prefill: lk.observe_slot(&name("prefill")),
+                ..r.records
+            };
+        }
     }
     let slot = |lk: &Linker, n: &str| lk.attr_index[n];
     let mut linked = Linked {
@@ -1101,6 +1192,7 @@ fn hidden_in_server(
     session: &[Stmt],
     server: &[Stmt],
     hidden: &[String],
+    admissions: &BTreeMap<String, Vec<Expr>>,
 ) -> LResult<()> {
     #[derive(Clone, Default, PartialEq)]
     struct Origins {
@@ -1226,16 +1318,20 @@ fn hidden_in_server(
         };
         LinkError::new(format!(
             "{why}, but the server's {what} reads it before a run reveals it\nhelp: an engine's \
-             request may run work by a hidden attribute (`decode (o);`: the model ends the run), cache by \
-             it at release and observe it, and decide on it once that run has ended; before, a \
-             decision on it is the scheduler reading what it cannot see"
+             request may generate a hidden attribute's tokens (`E (n, o);`: the model ends the \
+             run), cache by it at release and observe it, and decide on it once that run has \
+             ended; before, a decision on it is the scheduler reading what it cannot see"
         ))
         .at(span)
     }
     fn index(r: &Ref) -> Option<&Expr> {
         r.index.as_deref()
     }
-    fn walk(stmts: &[Stmt], t: &mut Taint) -> LResult<()> {
+    fn walk(
+        stmts: &[Stmt],
+        t: &mut Taint,
+        admissions: &BTreeMap<String, Vec<Expr>>,
+    ) -> LResult<()> {
         let check = |e: &Expr, what: &str, t: &Taint| {
             for n in names(e) {
                 if let Some(from) = t.attrs.get(&n)
@@ -1304,7 +1400,7 @@ fn hidden_in_server(
                     if let Some((_, e)) = lease {
                         check(e, "lease", t)?;
                     }
-                    walk(body, t)?;
+                    walk(body, t, admissions)?;
                 }
                 Stmt::Grow(r, e) | Stmt::Shrink(r, e) | Stmt::Load(r, e) => {
                     if let Some(i) = index(r) {
@@ -1312,11 +1408,42 @@ fn hidden_in_server(
                     }
                     check(e, "allocation", t)?;
                 }
+                // the engine admits a request by its input, as it admits a
+                // hold by its header; the output is what the request runs,
+                // and its end reveals what it reads, as a run's does
+                Stmt::EngineRequest {
+                    stage,
+                    input,
+                    output,
+                } => {
+                    if let Some(i) = index(stage) {
+                        check(i, "choice of an engine", t)?;
+                    }
+                    // the input is the request's prompt, which the
+                    // scheduler knows
+                    check(input, "admission", t)?;
+                    // the admission's clauses, as a hold's header: the
+                    // hidden attribute itself `Program::validate` refuses
+                    let mut derived = t.clone();
+                    derived.attrs.retain(|_, from| from.derived);
+                    let read = admissions.get(&stage.name).map_or(&[][..], Vec::as_slice);
+                    for e in read {
+                        check(e, "admission", &derived)?;
+                    }
+                    // and the call's output, when they read `request.output`
+                    let reads_output = read
+                        .iter()
+                        .any(|e| names(e).iter().any(|n| n == "request.output"));
+                    if reads_output {
+                        check(output, "admission", t)?;
+                    }
+                    t.revealed.extend(origins(output, t, "the server").certain);
+                }
                 Stmt::Branch(c, a, b) => {
                     check(c, "`if`", t)?;
                     let mut other = t.clone();
-                    walk(a, t)?;
-                    walk(b, &mut other)?;
+                    walk(a, t, admissions)?;
+                    walk(b, &mut other, admissions)?;
                     join(t, &other);
                 }
                 // The loop header can receive hidden values after arbitrarily
@@ -1328,7 +1455,7 @@ fn hidden_in_server(
                     }
                     let before = t.clone();
                     let mut after = before.clone();
-                    walk(body, &mut after)?;
+                    walk(body, &mut after, admissions)?;
                     join(t, &after);
                     if *t == before {
                         break;
@@ -1344,7 +1471,7 @@ fn hidden_in_server(
                 // reveals stays in it
                 Stmt::Fork(body) => {
                     let mut leg = t.clone();
-                    walk(body, &mut leg)?;
+                    walk(body, &mut leg, admissions)?;
                 }
                 Stmt::Declare(..)
                 | Stmt::Side(_)
@@ -1444,7 +1571,7 @@ fn hidden_in_server(
     for h in hidden {
         tainted.attrs.insert(h.clone(), unrevealed(h));
     }
-    walk(server, &mut tainted)
+    walk(server, &mut tainted, admissions)
 }
 
 /// Member `i` of an `n`-family's counterpart in a family of `count` from
@@ -2070,6 +2197,134 @@ impl Linker<'_> {
         })
     }
 
+    /// An engine's `taking`, read for each request; `link` fills in its
+    /// records once the program's observations have their places.
+    fn request(
+        &mut self,
+        r: &crate::frontend::ast::RequestSpec,
+        engine: &str,
+    ) -> LResult<crate::ir::CRequest> {
+        let pools = r
+            .pools
+            .iter()
+            .map(|(q, u, f)| {
+                Ok((
+                    self.pool_ref(q)?,
+                    self.expr(u)?,
+                    f.as_ref().map(|f| self.expr(f)).transpose()?,
+                ))
+            })
+            .collect::<LResult<Vec<_>>>()?;
+        let prefix = r
+            .prefix
+            .as_ref()
+            .map(|segs| {
+                segs.iter()
+                    .map(|(k, n)| Ok((self.expr(k)?, self.expr(n)?)))
+                    .collect::<LResult<Vec<_>>>()
+            })
+            .transpose()?;
+        Ok(crate::ir::CRequest {
+            pools,
+            reuse: r.reuse.as_ref().map(|e| self.expr(e)).transpose()?,
+            cache: r.cache.as_ref().map(|e| self.expr(e)).transpose()?,
+            prefix,
+            // the attributes now, so that the caller's `E.first` reads one
+            records: crate::ir::RequestRecords {
+                reused: 0,
+                prefill: 0,
+                admitted: self.attr(&format!("{engine}.{}", REQUEST_ATTRS[0])),
+                first: self.attr(&format!("{engine}.{}", REQUEST_ATTRS[1])),
+                last_reused: self.attr(&format!("{engine}.{}", REQUEST_ATTRS[2])),
+                last_prefill: self.attr(&format!("{engine}.{}", REQUEST_ATTRS[3])),
+            },
+        })
+    }
+
+    /// An engine's connector: its amounts, read for the request, and the
+    /// kernel blocks they mean, which read them as `E.loaded` and `E.saved`
+    /// (`ir::CConnector`). A load computes into the request's hold on
+    /// `memory`, the engine's memory its `taking` takes; a save is the hold
+    /// on the L2's pool that copies what its entry lacks and caches the rest.
+    fn connector(
+        &mut self,
+        c: &ConnectorSpec,
+        engine: &str,
+        memory: Option<&Ref>,
+    ) -> LResult<crate::ir::CConnector> {
+        let [loaded, saved] = CONNECTOR_ATTRS.map(|a| format!("{engine}.{a}"));
+        let (loaded_slot, saved_slot) = (self.attr(&loaded), self.attr(&saved));
+        let var = |n: &str| Expr::Var(n.into());
+        let times = |e: Expr| Expr::Binary(BinOp::Mul, Box::new(e), Box::new(c.per_token.clone()));
+        let one = std::slice::from_ref;
+        let run = |work: Expr| Stmt::Run {
+            stage: c.stage.clone(),
+            mode: RunMode::Plain,
+            work: Expr::cost(one(&c.stage), times(work)),
+            growing: None,
+            also: vec![],
+            share: None,
+        };
+        let side = self.side;
+        self.side = crate::ir::Side::Server;
+        let load = match &c.load {
+            None => None,
+            Some(n) => {
+                let Some(kv) = memory else {
+                    return Err(LinkError::new(format!(
+                        "engine `{engine}`'s connector loads into the engine's memory, the pool \
+                         on its device, which its `taking` does not take"
+                    )));
+                };
+                let body = vec![
+                    run(var(&loaded)),
+                    Stmt::Load(kv.clone(), Expr::cost(one(kv), var(&loaded))),
+                ];
+                Some((self.expr(n)?, self.block(&body)?))
+            }
+        };
+        let save = match &c.save {
+            None => None,
+            Some(n) => {
+                // the part of what the L2 is to hold that its entry lacks
+                let new = Expr::Call(
+                    "max".into(),
+                    vec![
+                        Arg::Expr(Expr::Num(0.0)),
+                        Arg::Expr(Expr::Binary(
+                            BinOp::Sub,
+                            Box::new(var(&saved)),
+                            Box::new(var("cached")),
+                        )),
+                    ],
+                );
+                let kv = &c.pool;
+                let held = Expr::Call("cachedin".into(), vec![Arg::Ref(kv.clone())]);
+                let body = vec![Stmt::Hold {
+                    pools: vec![(kv.clone(), Expr::cost(one(kv), held), None)],
+                    reuse: None,
+                    body: vec![
+                        Stmt::Grow(kv.clone(), Expr::cost(one(kv), new.clone())),
+                        run(new.clone()),
+                        Stmt::Load(kv.clone(), Expr::cost(one(kv), new)),
+                    ],
+                    cache: Some(Expr::cost(one(kv), var(&saved))),
+                    prefix: None,
+                    lease: None,
+                }];
+                Some((self.expr(n)?, self.block(&body)?))
+            }
+        };
+        self.side = side;
+        Ok(crate::ir::CConnector {
+            load,
+            save,
+            loaded: loaded_slot,
+            saved: saved_slot,
+            record: self.observe_slot(&loaded),
+        })
+    }
+
     fn observe_slot(&mut self, name: &str) -> usize {
         if let Some(i) = self.observes.iter().position(|o| o == name) {
             return i;
@@ -2183,6 +2438,15 @@ impl Linker<'_> {
                 Stmt::Drop(r) => CStmt::Drop(self.pool_ref(r)?),
                 Stmt::Release(r) => CStmt::Release(self.pool_ref(r)?),
                 Stmt::Load(r, e) => CStmt::Load(self.pool_ref(r)?, self.expr(e)?),
+                Stmt::EngineRequest {
+                    stage,
+                    input,
+                    output,
+                } => CStmt::Request {
+                    stage: self.stage_ref(stage)?,
+                    input: self.expr(input)?,
+                    output: self.expr(output)?,
+                },
                 Stmt::Run {
                     stage,
                     mode,

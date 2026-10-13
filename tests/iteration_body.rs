@@ -96,11 +96,6 @@ fn several_prefills_run_alone_in_one_iteration() {
         engine llm on gpu {{
           reqs cap 8;
           tokens cap 8;
-          request (t0) {{
-            prefill (2) growing kv;
-            observe ttft = now - t0;
-            decode (2) growing kv;
-          }}
           scheduler {{ {schedule} }}
           worker {{ forward (1); }}
         }}
@@ -114,7 +109,8 @@ fn several_prefills_run_alone_in_one_iteration() {
         }}
         server {{
           set t0 = now;
-          llm (t0);
+          llm (2, 3);
+          observe ttft = llm.first - t0;
         }}
 
 "#
@@ -161,11 +157,6 @@ fn a_gate_on_the_residents_admits_only_into_an_empty_engine() {
         engine llm on gpu {
           reqs cap 8;
           tokens cap 64;
-          request () {
-            observe start = now;
-            prefill (1);
-            decode (4);
-          }
           scheduler { advance running; if (running.count == 0) { admit waiting taking reqs (1); } }
           worker { forward (1); }
         }
@@ -180,7 +171,8 @@ fn a_gate_on_the_residents_admits_only_into_an_empty_engine() {
         server {
           run gap (cost(gap, serial < 2 ? 0 : 0.5));
           set t0 = now;
-          llm ();
+          llm (1, 5);
+          observe start = llm.admitted;
         }
 
 "#;
@@ -211,7 +203,6 @@ fn a_body_that_may_schedule_nothing_does_not_link() {
         engine llm on gpu {{
           reqs cap 8;
           tokens cap 8;
-          request () {{ prefill (2); }}
           scheduler {{ {schedule} }}
           worker {{ forward (1); }}
         }}
@@ -220,7 +211,7 @@ fn a_body_that_may_schedule_nothing_does_not_link() {
           session {{ turn; end;
           }}
         }}
-        server {{ llm ();
+        server {{ llm (2, 1);
         }}
 
 "#
@@ -260,7 +251,7 @@ fn a_body_that_may_schedule_nothing_does_not_link() {
     assert!(e.contains("takes back"), "{e}");
     // `admitted` and `preempted` are a body's
     let src = prog("advance running; admit waiting;")
-        .replace("prefill (2);", "prefill (2); set x = admitted;");
+        .replace("llm (2, 1);", "llm (2, 1); set x = admitted;");
     assert!(compile_source(&common::main_source(&src), &common::horizon(20.0)).is_err());
 }
 
@@ -290,10 +281,6 @@ fn the_vllm_body_is_the_procedure_under_keys_and_preemption() {
         engine llm on gpu {{
           reqs cap 6;
           tokens cap {budget};
-          request (n, s) {{
-            prefill (n) growing kv;
-            decode (6 + s - 3 * floor(s / 3)) growing kv;
-          }}
           scheduler {{
             advance running{order}{cap};
             admit waiting while (running.preempted == 0){cap} taking reqs (1), kv (1);
@@ -310,7 +297,7 @@ fn the_vllm_body_is_the_procedure_under_keys_and_preemption() {
         }}
         server {{
           set n = 3 + serial - 5 * floor(serial / 5);
-          llm (n, serial);
+          llm (n, 7 + serial - 3 * floor(serial / 3));
         }}
 
 "#
@@ -389,7 +376,6 @@ fn an_engine_idle_with_work_is_named() {
         engine llm on gpu {
           reqs cap 8;
           tokens cap 8;
-          request () { prefill (2); }
           scheduler { advance running; admit waiting while (batch.tokens > 0) taking reqs (1); }
           worker { forward (1); }
         }
@@ -398,7 +384,7 @@ fn an_engine_idle_with_work_is_named() {
           session { turn; end;
           }
         }
-        server { llm ();
+        server { llm (2, 1);
         }
 
 "#;
@@ -422,7 +408,6 @@ fn a_guard_that_is_not_a_test_fails_the_run() {
         engine llm on gpu {
           reqs cap 8;
           tokens cap 8;
-          request () { prefill (2); }
           scheduler { advance running; admit waiting while (running.count + 2) taking reqs (1); }
           worker { forward (1); }
         }
@@ -431,7 +416,7 @@ fn a_guard_that_is_not_a_test_fails_the_run() {
           session { turn; end;
           }
         }
-        server { llm ();
+        server { llm (2, 1);
         }
 
 "#;
@@ -463,11 +448,6 @@ fn a_register_remembers_the_last_iteration() {
         engine llm on gpu {{
           reqs cap 64;
           tokens cap 64;
-          request (t0) {{
-            observe wait = now - t0;
-            prefill (1);
-            decode (30);
-          }}
           {items}
           worker {{ forward (1); }}
         }}
@@ -480,7 +460,8 @@ fn a_register_remembers_the_last_iteration() {
         }}
         server {{
           set t0 = now;
-          llm (t0);
+          llm (1, 31);
+          observe wait = llm.admitted - t0;
         }}
 
 "#
@@ -528,7 +509,6 @@ fn a_set_in_an_iteration_that_is_none_is_undone() {
           reqs cap 1;
           tokens cap 4;
           state n = 0;
-          request () { prefill (100); }
           scheduler {
             set n = n + 1;
             advance running only (decoding);
@@ -541,7 +521,7 @@ fn a_set_in_an_iteration_that_is_none_is_undone() {
           session { turn; end;
           }
         }
-        server { llm ();
+        server { llm (100, 1);
         }
         gauge count = n;
 
@@ -568,7 +548,7 @@ fn a_register_is_the_stage_s_own() {
             r#"
         device gpu {{ }}
         device tpu {{ }}
-        engine llm on gpu {{ reqs cap 8; tokens cap 8; request () {{ prefill (2); }} {items} worker {{ forward (1); }} }}
+        engine llm on gpu {{ reqs cap 8; tokens cap 8; {items} worker {{ forward (1); }} }}
         pool reqs on llm {{ }}
         engine other on tpu {{
           tokens cap 8;
@@ -580,7 +560,7 @@ fn a_register_is_the_stage_s_own() {
           session {{ turn; end;
           }}
         }}
-        server {{ llm (); {session}
+        server {{ llm (2, 1); {session}
         }}
 
 "#
@@ -660,7 +640,6 @@ fn a_register_is_read_where_its_stage_orders_the_read() {
           reqs cap 8;
           tokens cap 8;
           state go = 0;
-          request () {{ prefill (2); }}
           scheduler {{ advance running; admit waiting{taking}; set go = 1; }}
           worker {{ forward (1); }}
         }}
@@ -683,7 +662,7 @@ fn a_register_is_read_where_its_stage_orders_the_read() {
             &common::horizon(20.0),
         )
     };
-    let call = "b ();";
+    let call = "b (2, 1);";
     let base = "reqs (1)";
     // its pool's header and keys, a gauge
     assert!(ok("gauge g = go;", "reqs (1 + go)", call).is_ok());
@@ -708,7 +687,7 @@ fn a_register_is_read_where_its_stage_orders_the_read() {
             base,
             call,
         ),
-        ("", "", "hold other (cost(other, 1 + go)) { b (); }"),
+        ("", "", "hold other (cost(other, 1 + go)) { b (2, 1); }"),
     ] {
         let e = ok(extra, taking, server)
             .err()
@@ -738,7 +717,6 @@ fn a_try_that_admitted_keeps_its_sets() {
           reqs cap 4;
           tokens cap 8;
           state k = 0;
-          request () { prefill (2); }
           scheduler {
             advance running only (decoding);
             set k = k + 1;
@@ -751,7 +729,7 @@ fn a_try_that_admitted_keeps_its_sets() {
           session { turn; end;
           }
         }
-        server { llm ();
+        server { llm (2, 1);
         }
         gauge seen = k;
 
@@ -780,10 +758,6 @@ fn a_reserve_on_a_register_waits_for_the_iteration() {
           reqs cap 16;
           tokens cap 512;
           state r = 5000;
-          request () {
-            prefill (100);
-            decode (9) growing kv;
-          }
           scheduler {
             set r = 10;
             advance running;
@@ -800,7 +774,7 @@ fn a_reserve_on_a_register_waits_for_the_iteration() {
           }
         }
         server {
-          llm ();
+          llm (100, 10);
         }
 
 "#;
@@ -827,7 +801,6 @@ fn a_schedule_else_if_is_the_nested_if() {
         engine llm on gpu {{
           reqs cap 8;
           tokens cap 8;
-          request () {{ prefill (2); }}
           scheduler {{ {schedule} }}
           worker {{ forward (1); }}
         }}
@@ -836,7 +809,7 @@ fn a_schedule_else_if_is_the_nested_if() {
           session {{ turn; end;
           }}
         }}
-        server {{ llm ();
+        server {{ llm (2, 1);
         }}
 "#
         );

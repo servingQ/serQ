@@ -70,8 +70,8 @@ use std::fmt;
 use crate::frontend::ast::*;
 use crate::frontend::lexer::{LexError, Tok, Token, lex};
 use crate::frontend::link::{
-    AGGREGATES, BUILTIN_ATTRS, CONTEXT_VARS, Constants, FOLDED, KEY_ATTRS, LISTS, LResult,
-    LinkError, RENAMED, SCHEDULER_ATTRS, Supplied, supplied, takes_supplied,
+    AGGREGATES, BUILTIN_ATTRS, CONNECTOR_ATTRS, Constants, FOLDED, KEY_ATTRS, LISTS, LResult,
+    LinkError, RENAMED, REQUEST_ATTRS, SCHEDULER_ATTRS, Supplied, supplied, takes_supplied,
 };
 use crate::frontend::queue::{self, QueueDecl};
 use crate::ir::{DistKind, Fun};
@@ -222,12 +222,7 @@ struct Parser {
     device_scope: Option<String>,
     /// The `taking` of each `admit waiting` of the engine being read, with
     /// its position: its request's admission (`request::engine_request`).
-    takings: Vec<(usize, Option<Vec<Token>>)>,
-    /// The engine whose request is being read: `prefill (e)` is its run.
-    in_request: Option<String>,
-    /// Each engine's request: the engine, where the request is, and the
-    /// names it sets, which are its own.
-    request_names: Vec<request::RequestNames>,
+    takings: Vec<(usize, Option<request::Taking>)>,
     /// The `hold`s and `fork`s the statement being parsed is inside: a
     /// server's `end` is refused there.
     holds_open: usize,
@@ -414,7 +409,7 @@ const MAX_FAMILY: usize = 10_000;
 /// parameter may not be one: a parameter is replaced token by token, and a
 /// keyword in the body is a token of the same spelling. `tests/docs_lexer.rs`
 /// keeps the list whole.
-pub const KEYWORDS: [&str; 117] = [
+pub const KEYWORDS: [&str; 120] = [
     "Cost",
     "Size",
     "admission",
@@ -434,6 +429,7 @@ pub const KEYWORDS: [&str; 117] = [
     "chunk",
     "claim",
     "closed",
+    "connector",
     "cost",
     "decode",
     "def",
@@ -489,6 +485,7 @@ pub const KEYWORDS: [&str; 117] = [
     "on",
     "only",
     "ordered",
+    "per_token",
     "poisson",
     "pool",
     "preempt",
@@ -503,6 +500,7 @@ pub const KEYWORDS: [&str; 117] = [
     "reserve",
     "reuse",
     "run",
+    "save",
     "schedule",
     "scheduler",
     "seed",
@@ -772,14 +770,9 @@ fn says(b: &[Token], w: &str) -> bool {
         .any(|x| x[0].tok == Tok::Ident(w.into()) && x[1].tok == Tok::Semi)
 }
 
-/// The error for an entry that reads a pool or stage not its queue's.
-/// An entry as an error names it: `Q.verb`, or an engine's request.
+/// An entry as an error names it: `Q.verb`.
 fn entry_name(q: &QueueDecl, verb: &str) -> String {
-    if q.engine {
-        format!("engine `{}`'s request", q.name)
-    } else {
-        format!("`{}.{verb}`", q.name)
-    }
+    format!("`{}.{verb}`", q.name)
 }
 
 fn not_its_own(queue: &str, verb: &str, name: &str) -> String {
@@ -973,6 +966,11 @@ fn stmt_reads(s: &Stmt, n: &str) -> bool {
         Stmt::Grow(r, e) | Stmt::Shrink(r, e) | Stmt::Load(r, e) => {
             ref_reads(r, n) || expr_reads(e, n)
         }
+        Stmt::EngineRequest {
+            stage,
+            input,
+            output,
+        } => ref_reads(stage, n) || expr_reads(input, n) || expr_reads(output, n),
         Stmt::Drop(r) | Stmt::Release(r) => ref_reads(r, n),
         Stmt::Run {
             stage,
@@ -1404,6 +1402,15 @@ fn split_reads<'a>(
                 bodies.push(e);
             }
             Stmt::Drop(r) | Stmt::Release(r) => index(r, indices),
+            Stmt::EngineRequest {
+                stage,
+                input,
+                output,
+            } => {
+                index(stage, indices);
+                bodies.push(input);
+                bodies.push(output);
+            }
             Stmt::Hold {
                 pools,
                 reuse,
@@ -1590,8 +1597,6 @@ impl Parser {
             in_engine: None,
             device_scope: None,
             takings: vec![],
-            in_request: None,
-            request_names: vec![],
             holds_open: 0,
             forks_open: 0,
         }
@@ -2093,7 +2098,6 @@ impl Parser {
             shared.extend(q.marks.iter().map(|m| format!("{}.{m}", q.name)));
         }
         served.shared = shared;
-        self.check_request_names(&prog)?;
         self.check_engine_runs(&prog)?;
         self.assemble(&mut prog, &mut served)?;
         self.link_engines(&mut prog)?;
@@ -2155,35 +2159,20 @@ impl Parser {
                     if let Some(n) = &e.header_refused {
                         let message = self
                             .place_refusal(prog, q, &e.verb, n)
-                            .or_else(|| self.names_device(q, n).then(|| a_device(&q.name, &e.verb, n)))
+                            .or_else(|| {
+                                self.names_device(q, n)
+                                    .then(|| a_device(&q.name, &e.verb, n))
+                            })
                             .unwrap_or_else(|| {
-                                if q.engine {
-                                    // a context variable moves, and a parameter of it
-                                    // would be refused where the header reads it
-                                    let help = if CONTEXT_VARS.iter().any(|(c, _)| c == n) {
-                                        String::new()
-                                    } else {
-                                        format!(". Pass `{n}` as a parameter")
-                                    };
-                                    format!(
-                                        "engine `{}`'s admission (its request's `prefix`, its \
-                                         `taking` and `at admission`) reads `{n}`: it sees the \
-                                         request's parameters, what the request sets before `at \
-                                         admission`, its bindings, the engine's pools and stage \
-                                         and the constants{help}",
-                                        q.name
-                                    )
-                                } else {
-                                    format!(
-                                        "`{}.{}`: the header reads `{n}`; an entry's header sees its \
-                                         parameters and the queue's pools and stage. {}",
-                                        q.name,
-                                        e.verb,
-                                        pass_help(q, e, n, true)
-                                    )
-                                }
+                                format!(
+                                    "`{}.{}`: the header reads `{n}`; an entry's header sees its \
+                                     parameters and the queue's pools and stage. {}",
+                                    q.name,
+                                    e.verb,
+                                    pass_help(q, e, n, true)
+                                )
                             });
-                        return self.err_at(q.header_at.unwrap_or(e.at), message);
+                        return self.err_at(e.at, message);
                     }
                     if let Some(n) = e.reads.iter().find(|n| !hidden.contains(n)) {
                         if let Some(message) = self.place_refusal(prog, q, &e.verb, n) {
@@ -2213,18 +2202,6 @@ impl Parser {
                                 format!(
                                     "{} reads `{n}`, which nothing sets: an unknown name\nhelp: {help}",
                                     entry_name(q, &e.verb)
-                                ),
-                            );
-                        }
-                        if q.engine {
-                            return self.err_at(
-                                e.at,
-                                format!(
-                                    "engine `{}`'s request reads `{n}`, a session attribute set \
-                                     outside it: a request sees its parameters, the engine's pools, \
-                                     the context and the session's `hidden` attributes; pass `{n}` \
-                                     as a parameter",
-                                    q.name
                                 ),
                             );
                         }
@@ -2263,6 +2240,13 @@ impl Parser {
                     .cost_records
                     .get(&record)
                     .is_some_and(|fields| fields.iter().any(|f| f == field))
+                    || (REQUEST_ATTRS.contains(&field)
+                        && self
+                            .engines
+                            .iter()
+                            .any(|e| e.name == qn && !e.device.contains('.')))
+                    || (CONNECTOR_ATTRS.contains(&field)
+                        && self.engines.iter().any(|e| e.name == qn && e.connector))
                     || self.queues.iter().any(|q| {
                         q.name == qn
                             && (q.marks.iter().any(|m| m == field)
@@ -2731,166 +2715,32 @@ impl Parser {
             })
     }
 
-    /// `kvt.l2_load (C, P, n, per_token = r);`: the KV of `n` tokens the L2
-    /// queue `C` holds is copied into the enclosing hold on `P`, at `C`'s
-    /// bandwidth, and stays in `C`: `run C (cost(C, n·r)); load P (cost(P,
-    /// n));`, which a request may also write, as `transfer` stays beside its
-    /// kernel. `kvt.l2_store (P, C, n, per_token = r);`: the session's entry
-    /// in `C` comes to hold `n` tokens, and the part it does not hold yet is
-    /// copied: `hold C.kv (cost(C.kv, cachedin(C.kv))) { grow C.kv (cost(C.kv,
-    /// m)); run C (cost(C, m·r)); load C.kv (cost(C.kv, m)); } cache
-    /// (cost(C.kv, n));` with `m =
-    /// max(0, n - cached)`. The hold takes the entry it has at its admission
-    /// and grows by the rest in its body, so that `n` may read what a header
-    /// may not (a request's hidden length). LMCache's and Mooncake's L2,
-    /// from std/kvt.
+    /// `kvt.l2_load (…);` and `kvt.l2_store (…);`, a request's copies in and
+    /// out of an L2 queue, are an engine's connector since #555: the engine
+    /// keeps the request's state, and its `connector C { … }` says what it
+    /// loads at the admission and saves at the end (`docs/design/scheduler-worker.md`).
     fn kvt_copy(&mut self) -> PResult<Vec<Stmt>> {
         let at = self.pos;
-        let span = Some(self.span());
         self.advance(); // `kvt`
         self.expect(&Tok::Dot)?;
-        let f_at = self.pos;
         let function = self.ident()?;
-        if !self.kvt_imported {
-            return self.err_at(at, format!("`kvt.{function}` needs `use \"std/kvt\";`"));
-        }
-        // a module's functions, not keywords (`args.number` likewise)
-        let load = function == "l2_load";
-        if !load && function != "l2_store" {
+        if function == "l2_load" || function == "l2_store" {
             return self.err_at(
-                f_at,
+                at,
                 format!(
-                    "std/kvt has no statement `{function}`; it has \
-                     `l2_load (CACHE, POOL, n, per_token = r)` and \
-                     `l2_store (POOL, CACHE, n, per_token = r)`"
+                    "`kvt.{function}` is an engine's connector now: `connector C {{ per_token \
+                     (r); load (n); save (n); }}` in the engine, which loads at a request's \
+                     admission and saves at its end (docs/design/scheduler-worker.md)"
                 ),
             );
         }
-        let written = format!("`kvt.{function}`");
-        self.expect(&Tok::LParen)?;
-        // the source first, as the bytes go
-        let cache = |p: &mut Self| -> PResult<(String, String)> {
-            let c_at = p.pos;
-            let c = p.ident()?;
-            match p.cache_of(&c).filter(|(name, _)| *name == c) {
-                Some(found) => Ok(found),
-                None => p.err_at(
-                    c_at,
-                    format!("{written}: `{c}` is not a queue that plays `l2` declared above"),
-                ),
-            }
-        };
-        let (c, pool) = if load {
-            let c = cache(self)?;
-            self.expect(&Tok::Comma)?;
-            (c, self.own_pool(&format!("kvt.{function} (…,")))
-        } else {
-            let pool = self.own_pool(&format!("kvt.{function} ("));
-            self.expect(&Tok::Comma)?;
-            (cache(self)?, pool)
-        };
-        let pool = pool?;
-        let (cache_stage, cache_pool) = c;
-        self.expect(&Tok::Comma)?;
-        let n_at = self.pos;
-        let n = self.expr()?;
-        // the one named argument, required: the time a token takes
-        let r_at = self.pos;
-        let name = if self.eat(&Tok::Comma) {
-            self.ident()?
-        } else {
-            String::new()
-        };
-        if name != "per_token" {
-            let found = if name.is_empty() {
-                String::new()
-            } else {
-                format!(", not `{name} = …`")
-            };
-            return self.err_at(
-                r_at,
-                format!(
-                    "{written} names the time a token takes at `{cache_stage}`'s bandwidth: \
-                     `per_token = …`{found}"
-                ),
-            );
-        }
-        self.expect(&Tok::Assign)?;
-        let rate = self.expr()?;
-        self.expect(&Tok::RParen)?;
-        self.expect(&Tok::Semi)?;
-        let r = |name: &str| Ref {
-            span,
-            name: name.into(),
-            index: None,
-        };
-        let stage = r(&cache_stage);
-        let times = |e: Expr| Expr::Binary(BinOp::Mul, Box::new(e), Box::new(rate.clone()));
-        if load {
-            return Ok(vec![
-                Stmt::Run {
-                    stage: stage.clone(),
-                    mode: RunMode::Plain,
-                    work: Expr::cost(std::slice::from_ref(&stage), times(n.clone())),
-                    growing: None,
-                    also: vec![],
-                    share: None,
-                },
-                Stmt::Load(pool.clone(), Expr::cost(&[pool], n)),
-            ]);
-        }
-        // the store's hold is a scope of its own: `cached` and `computed`
-        // there are the cache's, not the enclosing hold's the program meant
-        for w in ["cached", "computed"] {
-            if expr_reads(&n, w) || expr_reads(&rate, w) {
-                return self.err_at(
-                    n_at,
-                    format!(
-                        "{written} reads `{w}`, which inside the copy would be the cache's \
-                         entry, not the enclosing hold's: name it above, `set c = {w};`"
-                    ),
-                );
-            }
-        }
-        let new = Expr::Call(
-            "max".into(),
-            vec![
-                Arg::Expr(Expr::Num(0.0)),
-                Arg::Expr(Expr::Binary(
-                    BinOp::Sub,
-                    Box::new(n.clone()),
-                    Box::new(Expr::Var("cached".into())),
-                )),
-            ],
-        );
-        let kv = r(&cache_pool);
-        let held = Expr::Call("cachedin".into(), vec![Arg::Ref(kv.clone())]);
-        Ok(vec![Stmt::Hold {
-            pools: vec![(
-                kv.clone(),
-                Expr::cost(std::slice::from_ref(&kv), held),
-                None,
-            )],
-            reuse: None,
-            body: vec![
-                Stmt::Grow(
-                    kv.clone(),
-                    Expr::cost(std::slice::from_ref(&kv), new.clone()),
-                ),
-                Stmt::Run {
-                    stage: stage.clone(),
-                    mode: RunMode::Plain,
-                    work: Expr::cost(std::slice::from_ref(&stage), times(new.clone())),
-                    growing: None,
-                    also: vec![],
-                    share: None,
-                },
-                Stmt::Load(kv.clone(), Expr::cost(std::slice::from_ref(&kv), new)),
-            ],
-            cache: Some(Expr::cost(&[kv], n)),
-            prefix: None,
-            lease: None,
-        }])
+        self.err_at(
+            at,
+            format!(
+                "std/kvt has no statement `{function}`; it declares `kvt.nixl_pull (…);` and \
+                 `kvt.nixl_push (…);`"
+            ),
+        )
     }
 
     /// A declaration or a parameter may not take a name the language
@@ -3671,7 +3521,7 @@ impl Parser {
                         ),
                     );
                 }
-            } else if self.queues.iter().any(|q| q.name == owner && !q.engine)
+            } else if self.queues.iter().any(|q| q.name == owner)
                 && self.engines.iter().any(|e| e.name == owner)
             {
                 return self.err_at(
@@ -3989,9 +3839,6 @@ impl Parser {
             latency: None,
             nic: false,
             takes: None,
-            engine: false,
-            registers: vec![],
-            header_at: None,
             at,
         });
         let qi = self.queues.len() - 1;
@@ -4228,7 +4075,7 @@ impl Parser {
             }
             // an L2 is its pool and its `serve`: std/kvt copies through them
             if sig.name == "l2" {
-                if roles.len() > 1 || q.engine || q.nic || q.pools.len() != 1 || !q.has_stage {
+                if roles.len() > 1 || q.nic || q.pools.len() != 1 || !q.has_stage {
                     return self.err_at(
                         at,
                         format!(
@@ -4468,10 +4315,8 @@ impl Parser {
                 || self.consts.iter().any(|(c, _)| c == n)
                 || in_context(n)
                 || (!header && n == "now")
-                || q.registers.iter().any(|r| r == n)
         };
-        // an L2 queue's pool and stage are every entry's to read and copy
-        // through (std/kvt's `l2_load`, `l2_store`)
+        // an L2 queue's pool and stage are every entry's to read
         let cache_ref = |n: &str| self.cache_of(n).is_some();
         let own_ref = |r: &Ref| -> bool {
             q.pools.contains(&r.name)
@@ -4501,16 +4346,6 @@ impl Parser {
                     && from.as_deref() != Some(r.name.as_str())
                     && !cache_ref(&r.name)
             }) {
-                if q.engine {
-                    return self.err_at(
-                        at,
-                        format!(
-                            "engine `{qname}`'s request holds `{}`, which its `taking` does not \
-                             take: a request grows and loads the pools it was admitted with",
-                            r.name
-                        ),
-                    );
-                }
                 return self.err_at(
                     at,
                     format!(
@@ -4572,7 +4407,7 @@ impl Parser {
                         continue;
                     }
                     if header && locals.contains(&v) {
-                        return self.err_at(q.header_at.unwrap_or(at), format!(
+                        return self.err_at(at, format!(
                             "{}: the admission header reads local `{v}`, which the entry does not set above this hold; a header sees the parameters, the queue's resources and the locals set before its hold, not a value its own body or a later statement calculates\nhelp: set `{v}` before the hold, in both arms of an `if` and not in a loop or `fork` that ends before it, or write its value in the header",
                             entry_name(q, &verb)
                         ));
@@ -4622,14 +4457,6 @@ impl Parser {
             }
         }
         let leases = always_leases(&body);
-        let engine = q.engine;
-        if engine {
-            self.request_names.push(request::RequestNames {
-                engine: qname,
-                at,
-                names: locals.clone(),
-            });
-        }
         let q = &mut self.queues[qi];
         q.entries.push(queue::Entry {
             verb,
@@ -4637,7 +4464,7 @@ impl Parser {
             from,
             leases,
             body,
-            locals: if is_gateway || engine { vec![] } else { locals },
+            locals: if is_gateway { vec![] } else { locals },
             reads,
             header_refused,
             at,
@@ -4769,20 +4596,6 @@ impl Parser {
             out.extend(self.kvt_copy()?);
             return Ok(());
         }
-        if let Some(engine) = self.in_request.clone() {
-            if matches!(self.peek(), Tok::Ident(s) if s == "prefill" || s == "decode")
-                && *self.peek_at(1) == Tok::LParen
-            {
-                out.push(self.request_run(&engine)?);
-                return Ok(());
-            }
-            if matches!(self.peek(), Tok::Ident(_)) && *self.peek_at(1) == Tok::Assign {
-                return self.err(
-                    "an admission binding goes in the request's `at admission { … }`: it is \
-                     read when the request is admitted",
-                );
-            }
-        }
         if let Tok::Ident(s) = self.peek()
             && (s == "prefill" || s == "decode")
         {
@@ -4807,7 +4620,7 @@ impl Parser {
 
     fn cost_scope(&self) -> Option<String> {
         self.in_queue
-            .filter(|&qi| !self.entry_gateway && !self.queues[qi].engine)
+            .filter(|_| !self.entry_gateway)
             .map(|qi| self.queues[qi].name.clone())
     }
 
@@ -6899,16 +6712,12 @@ mod tests {
         engine llm on gpu {
           reqs cap 4;
           tokens cap 64;
-          request (prompt, output) {
-            at admission { hit = min(cachedin(kv), prompt - 1); }
-            prefill (prompt - cached) growing kv;
-            decode (output - 1) growing kv;
-            cache (prompt + output);
-          }
           scheduler {
             advance running;
             admit waiting while (running.preempted == 0)
-              taking reqs (1), kv (min(prompt, hit + budget_left(llm)));
+              taking reqs (1), kv (min(request.known, request.hit + budget_left(llm)))
+              reuse (request.known - 1)
+              cache (request.input + request.output);
           }
           worker { forward (1); }
         }

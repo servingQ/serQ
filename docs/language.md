@@ -77,16 +77,14 @@ eitem    := NAME [ '[' N ']' ] cap expr ;    -- a capacity the engine holds (`re
           | granule expr ; | state NAME = expr ;
           | scheduler { (let NAME = expr ;)* sstmt+ }   -- what each iteration does (required)
           | worker { forward ( expr ) ; }    -- what the worker does with the batch: its forward's time (required)
-          | request ( NAME , ... ) { rstmt* [at admission { (NAME = expr ;)* }] rstmt* [cache ( expr ) ;] }
-                                             -- what the engine does with one request (*An engine's request*):
-                                             -- the statements when the call is reached, the admission's
-                                             -- bindings, the statements while admitted, what it leaves cached
-rstmt    := stmt
-          | prefill ( expr ) [ growing POOL ] ;   -- the engine's run in that mode
-          | decode ( expr ) [ growing POOL ] ;
+          | connector QUEUE { per_token ( expr ) ; [load ( expr ) ;] [save ( expr ) ;] }
+                                             -- its KV connector to an `l2` queue (*An engine's request*)
 sstmt    := advance running [only ( expr )] [admission | by ( expr , ... ) | decode first] [each at most ( expr )] ;
           | admit waiting [only ( expr )] [while ( expr )] [each at most ( expr )]
-                [taking POOL ( expr ) [reserve ( expr )] , ... [reuse ( expr )]] ;   -- what the admission takes of the request
+                [taking POOL ( expr ) [reserve ( expr )] , ... [reuse ( expr )]
+                        [prefix ( expr : expr , ... )] [cache ( expr )]] ;
+                                             -- what the admission takes of a request, reads of its
+                                             -- cache, and what its release leaves cached
           | exclusive prefill [each at most ( expr )] ;
           | if ( expr ) { sstmt* } [else ( { sstmt* } | if … )]
           | set NAME = expr ;
@@ -126,15 +124,13 @@ stmt     := turn ;                           -- draw attributes, submit, wait fo
           | end ;
           | QUEUE [ '[' expr ']' ] . VERB ( expr, ... ) [ from QUEUE [ '[' expr ']' ] ] [ to POOL ( expr ) ] ;
                                              -- a queue's entry, in its place (*Queues*)
-          | mark NAME ;                        -- in an entry or a request: the moment, read by the caller as QUEUE.NAME or ENGINE.NAME
-          | ENGINE ( expr, ... ) ;           -- in a server: the engine's request, in its place
+          | mark NAME ;                        -- in an entry: the moment, read by the caller as QUEUE.NAME
+          | ENGINE ( expr , expr ) ;         -- in a server: a request to the engine, its input and output tokens
           | serving                          -- the serving vocabulary, sugar for run
 serving  := transfer [ '[' expr ']' | on STAGE [, STAGE]* ] expr from POOL to POOL ( expr ) ;
                                              -- the KV moves: run link; load; release
           | tool     [ '[' expr ']' | on STAGE [, STAGE]* ] expr ;
                                              -- transfer and tool on several stages: expr is ( expr , share = POLICY )
-          | kvt.l2_load ( CACHE , POOL , expr , per_token = expr ) ;   -- std/kvt: copy the cache's KV in, the cache keeps it
-          | kvt.l2_store ( POOL , CACHE , expr , per_token = expr ) ;  -- std/kvt: the session's entry in the cache comes to hold expr tokens
 POLICY   := share.maxmin | share.bottleneck   -- std/share: how the flows of a fabric divide it (below, *Stages*)
 ```
 
@@ -232,8 +228,8 @@ inputs. Defaults and supplied expressions are resolved at link time; the
 result is the same IR as a program written with those values. An input that
 would change a parse-time array size is refused. See [std/args](api/std/args.md)
 for the full input contract. `use "std/kvt";` supplies the KV-transfer
-vocabulary ([std/kvt](api/std/kvt.md)), `kvt.nixl_pull (…)`, `kvt.nixl_push (…)`, `kvt.l2_load (…)` and
-`kvt.l2_store (…)` (below, *Queues*), and `use "std/share";` the sharing
+vocabulary ([std/kvt](api/std/kvt.md)), `kvt.nixl_pull (…)` and `kvt.nixl_push (…)`
+(below, *Queues*), and `use "std/share";` the sharing
 policies ([std/share](api/std/share.md)), `share.maxmin` and
 `share.bottleneck` (below, *Stages*).
 Syntax snippets elsewhere may show just a main body or one of its nested
@@ -254,11 +250,10 @@ sugar: the parser rewrites each to the kernel statement it stands for, so
 the IR (`serq ir` prints the kernel), the interpreter and the Lean model
 know nothing of them. Prefill and decode are not forms: on a step engine
 they are the mode of the run, written only where the engine's own work is.
-In an engine's `request`, `prefill (e)` is `run E prefill (cost(E, e))` on
-that engine (*An engine's request*); a queue's entry runs its queue's
-engine as `run P prefill (cost(P, T))`. The server, a gateway's `route`
-and the session call the engine's request (`E (…);`) and do not run an
-engine themselves.
+An engine keeps a request's state and runs its prefill and decode itself
+(*An engine's request*); a queue's entry runs its queue's engine as `run P
+prefill (cost(P, T))`. The server, a gateway's `route` and the session
+call the engine (`E (input, output);`) and do not run an engine themselves.
 
 | Serving form | Kernel |
 |---|---|
@@ -352,8 +347,7 @@ workload {
 }
 
 server {
-  set prompt = K + n;
-  vllm (prompt, o);                       // the engine's request
+  vllm (K + n, o);
 }
 ```
 
@@ -432,7 +426,7 @@ Five roles are built into the parser, and a queue declares which it plays:
 | `prefill` | `prefill (prompt)` | computes the prompt; how it leaves the KV (`lease`, `cache`, a transfer) is the entry's |
 | `decode` | `decode (prompt)`, `decode (prompt) from Q`, either or both | a local prefill, or with the KV `Q`'s entry leased for this request; a pod that only decodes what it reads has no `decode (prompt)` |
 | `link` | `transfer (n)`, or none | the NIC: the body is the time to read `n` tokens; without one, the `serve` is the cost, and its `latency` a wait before it |
-| `l2` | none | an L2 KV cache (an LMCache server, a Mooncake store): one pool, the KV it holds, and a `serve`, the bandwidth its copies divide; std/kvt's `l2_load` and `l2_store` copy through it (below) |
+| `l2` | none | an L2 KV cache (an LMCache server, a Mooncake store): one pool, the KV it holds, and a `serve`, the bandwidth its copies divide; an engine's `connector` copies through it (below) |
 
 The server selects a gateway with `gw.route();`. The parser checks the
 queue and its entry, then expands the route at the call site. Declarations
@@ -499,34 +493,34 @@ before the copies it posts for one relation: one `latency` per poster.
 An L2 KV cache outside the engine, an LMCache server or a Mooncake store,
 is a queue that plays `l2`: one pool, the KV it holds, and a `serve`,
 the bandwidth the copies in and out of it divide. It has no engine, `nic`
-or entry, and it is one queue, not a family. Any entry or engine's
-request may read its pool (`cachedin(lmc.kv)`, at admission or in the
-body) and copy through it with std/kvt:
+or entry, and it is one queue, not a family. Any entry or engine may read
+its pool (`cachedin(lmc.kv)`), and an engine copies through it with its
+`connector` (*An engine's request*). From
+`examples/multi-turn/vllm_lmcache.sq`:
 
-```
-queue lmc : l2 { device host { kv cap l2_cap; } pool kv on host { block chunk; evict lru; } serve ps(1); }
+```serq
+queue lmc : l2 {
+  device host { kv cap l2_cap; }
+  pool kv on host { block chunk; evict lru; }
+  serve ps(1);
+}
 …
-    kvt.l2_load (lmc, kv, got, per_token = r);                          // in: the cache keeps it
-    …
-    kvt.l2_store (kv, lmc, floor(prompt + output, chunk), per_token = r);  // out: the part it lacks
+engine vllm on gpu {
+  …
+  connector lmc {
+    per_token (r);
+    load (request.preempted ? 0 : beyond(request.known, request.hit));
+    save (floor(request.input + request.output, chunk));
+  }
+  …
+}
 ```
 
-`kvt.l2_load (C, P, n, per_token = r)` is `run C (cost(C, n · r)); load P
-(cost(P, n));`: the KV of `n` tokens arrives in the enclosing hold on `P`
-and nothing is released; a request may write those two statements
-itself, and `kvt.l2_load` stays beside them as `transfer` stays beside its
-kernel, to say which copy it is. `kvt.l2_store (P, C, n, per_token = r)` is `hold
-C.kv (cost(C.kv, cachedin(C.kv))) { grow C.kv (cost(C.kv, m)); run C
-(cost(C, m · r)); load C.kv (cost(C.kv, m)); } cache (cost(C.kv, n));`
-with `m = max(0, n - cached)`: the session's entry in the cache comes to
-hold `n` tokens, and only the part it lacks is copied. Its hold takes the
-entry the cache has and grows in its body, so `n` may read what a header
-may not, such as a request's hidden length; it may not read `cached` or
-`computed`, which inside the copy are the cache's. The source comes
-first in both, as the bytes go; `per_token` is required. The entry is the
-session's, as a pool's cache is (*Known limitations*). See
-`examples/multi-turn/vllm_lmcache.sq` and [the KV-transfer
-library](https://github.com/servingQ/serQ/blob/main/docs/design/kv-transfer.md).
+The copies run at the L2's `serve`, `per_token` seconds a token, and
+keep their KV there: a load leaves the L2 its entry, and a save copies
+only the part of the session's entry it lacks. See [the KV-transfer
+library](https://github.com/servingQ/serQ/blob/main/docs/design/kv-transfer.md)
+for why the entry is the session's (*Known limitations*).
 
 `transfer on L[k], M[l] (n) from S to P (m)` names the stages itself, as
 a `server` does: link queues, or any `ps` stages. `latency x` on a link's
@@ -645,8 +639,8 @@ the session's own; written out, that chain does not link, and a chain
 whose other segments are of length 0 in a run is the session's own there
 (`prefix (system: S, serial: inf)` with `S` 0). Only the last
 segment may be endless, and a hold with `prefix` has `cache` (else it
-reads and keeps nothing, and does not link). An engine's request writes
-its chain as its first item, `prefix (k: n, …);` (*An engine's
+reads and keeps nothing, and does not link). An engine's admission
+writes its chain as `prefix (k: n, …)` after its `taking` (*An engine's
 request*). A session's *entry* is what hangs under the key of its own
 serial (`serial` is the run's number for the session, and no program sets it); the rest is shared, and no
 session's `reuse`, `cache`, `drop` or consumption takes it. A hold with
@@ -724,9 +718,8 @@ A family of engines is a queue family, `queue S[N] : ROLE { device gpu { … }
 engine on gpu { … } … }`: each member's engine serves the member's pools
 and counts its own `kv` (`examples/pd-disaggregation/llmd_nixl_pull.sq` is
 the xPyD case, `docs/use-cases/pd.md` §Writing xPyD). `engine S[N]` and an
-engine's family of capacities (`reqs[N] cap c;`) are refused: an engine
-runs through its request, which a family does not have, and a request's
-`taking` names one pool (#539). An engine that serves several queues tries them in
+engine's family of capacities (`reqs[N] cap c;`) are refused: an engine's
+`taking` names one pool, and a call names no member (#539). An engine that serves several queues tries them in
 the order their pools are declared, and the first head that does not fit
 stops the iteration's admissions; `examples/pd-disaggregation/llmd_nixl_pull.sq` declares the
 decoder's queue of requests whose KV has arrived before its queue of new
@@ -785,14 +778,16 @@ has are the most any attempt had (vLLM's `num_tokens` is the length of its
 token list, which a preemption does not shorten: `request.py:295-296`), and
 that is the program's to carry. A preemption undoes the hold's allocation
 and position, not what its body set: `kept` set at the top of the body is
-there when the hold executes again. The
-vLLM programs `set kept = prompt;` above the hold, write `known = max(kept,
-computed + 1)` (the token sampled at `computed` is the request's too) and
-`set kept = known;` at the top of the body, then `prefill (known - c)`
-and `decode (output - 1 - (known - prompt))` in the engine's request. The decoders of `examples/pd-disaggregation/` carry it the same
-way: an entry's header reads what the entry sets above the hold (#475). A
-program that recomputes from the prompt alone says so by not reading
-`computed`.
+there when the hold executes again. An engine carries it itself: its
+request keeps the tokens it has, `request.known`, which after a
+preemption is `max(known, computed + 1)` (the token sampled at `computed`
+is the request's too), and generates only the rest (*An engine's
+request*). The decoders of `examples/pd-disaggregation/`, queue entries,
+carry it in the program: `set kept = prompt;` above the hold, `known =
+max(kept, computed + 1)` at admission and `set kept = known;` at the top
+of the body; an entry's header reads what the entry sets above the hold
+(#475). A program that recomputes from the prompt alone says so by not
+reading `computed`.
 
 `preempt leases by (k₁, …)` takes leases instead of holds. A growth that
 does not fit ends the lease with the least keys among the sessions that
@@ -1119,33 +1114,23 @@ queue's stage, named after the queue, so its pool is `pool reqs on Q`.
 
 ### An engine's request
 
-An engine says what it does with one request
-([the design](design/engine-request.md)), and the server calls it. From
-`examples/multi-turn/vllm.sq`, its comments elided:
+An engine keeps a request's state, as vLLM's scheduler keeps a `Request`
+([the design](design/scheduler-worker.md)), and the server calls it:
+`vllm (K + n, o);` is a request of `K + n` tokens of prompt that generates
+`o`. From `examples/multi-turn/vllm.sq`, its comments elided:
 
 ```serq
 engine vllm on gpu {
   reqs cap max_seqs;
   tokens cap B;
-  request (prompt, output) {
-    set kept = prompt;
-    at admission {
-      known = max(kept, computed + 1);
-      reused = min(cachedin(kv), floor(known - 1, blocksize(kv)));
-    }
-    set kept = known;
-    set c = min(cached, floor(known - 1, blocksize(kv)));
-    observe hit = c > 0;
-    observe prefill_tokens = known - c;
-    prefill (known - c) growing kv;
-    decode (output - 1 - (known - prompt)) growing kv;
-    cache (prompt + output);
-  }
   scheduler {
     let threshold = running.count + waiting.count > 1 ? chunk_cap : inf;
     advance running each at most (threshold);
     admit waiting while (running.preempted == 0) each at most (threshold)
-      taking reqs (1), kv (min(known, reused + budget_left(vllm))) reserve (known);
+      taking reqs (1), kv (min(request.known, request.hit + budget_left(vllm)))
+        reserve (request.known)
+      reuse (floor(request.known - 1, blocksize(kv)))
+      cache (request.input + request.output);
   }
   worker {
     forward (c0 + max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
@@ -1153,45 +1138,65 @@ engine vllm on gpu {
 }
 ```
 
-It is parse-time sugar for a hold of the engine's pools, and the call
-`vllm (prompt, o);` is replaced by it, each parameter substituted by its
-argument (one that draws is refused). It is the only way to that hold: the
-server, a gateway's `route` and the session may not run an engine's
+The request waits in the queue of the first pool its admission takes. When
+an `admit waiting` reaches it, the engine reads its `hit`, what it may read
+of the cache in the engine's memory (`min(cachedin(P), reuse)`), then the
+units and `reserve` of each pool it `taking`s; the admission reads the
+cached prefix, at most `reuse`, as a hold with `cache` does. The engine
+computes what of the tokens it has, `known`, the cache did not supply,
+chunked by the scheduler as a prefill is, and samples a token when they
+are all computed; it decodes one token an iteration until it has generated
+`output`; the KV pool grows with the position, as a `growing` run's. A
+request with no input decodes from its first iteration. A preempted request
+gives its pools back, caching what it computed, keeps its tokens and what
+it generated (`scheduler.py:1561`), and waits at the head of the queue (or
+the tail, `requeue tail`); its `known` is then `max(known, computed + 1)`.
+When it has generated `output` it gives its pools back with `cache`, and
+the session goes on. Every `admit waiting` of the engine writes the same
+`taking`, which names the engine's capacities and its device's; an engine
+without `taking` takes nothing and admits a request as it is called.
+
+| Value | What | Read in |
+|---|---|---|
+| `request.input`, `request.output` | the call's arguments | `taking`, `reuse`, `prefix`, `cache` |
+| `request.known` | the tokens the request has, its input and what it has generated | `taking`, `reuse`, `prefix`, `cache` |
+| `request.hit` | `min(cachedin(P), reuse)` on the engine's memory `P` | `taking`, `reuse`, `prefix` |
+| `request.preempted` | 1 once the request has been preempted | `taking`, a connector's `load` |
+| `request.loaded` | what the connector's `load` read | `taking` |
+| `request.finished` | 1 at the release that ends the request, 0 at a preemption | `cache` |
+
+The clauses also read the session's attributes, the engine's pools,
+`cached`, `computed` and the constants, and `taking` the engine's `state`
+registers. The input is the scheduler's (a `hidden` attribute may not be
+it), and so is the output when the admission reads `request.output`. The
+engine's records are attributes the caller reads after the call: `E.reused`
+(the cached tokens its latest admission read), `E.prefill` (the tokens its
+prefill computes), `E.admitted` (when) and `E.first` (when its first token
+was sampled). `E.reused` and `E.prefill` are observations of the report
+too, one per admission.
+
+The server, a gateway's `route` and the session may not run an engine's
 prefill or decode, nor hold a pool an engine admits (`pool P on E`, `pool
-kv on E.gpu`, an engine's capacity); each is refused with the `request`
-and the `taking` to write instead (#539). A pool no engine admits (a
-top-level pool, one `on DEVICE`) is held anywhere, around the call too, as
-`examples/single-turn/fastertransformer.sq` holds its `reqs`; a pool `on
-DEVICE` that the request also takes is then held twice, which the program
-says by writing both. A queue's entries and an engine's request run their
-own engine and no other, and a request writes its run `prefill (e);`, not
-`run E prefill (cost(E, e))`.
+kv on E.gpu`, an engine's capacity); each is refused with the `taking` and
+the call to write instead (#539). A pool no engine admits (a top-level
+pool, one `on DEVICE`) is held anywhere, around the call too, as
+`examples/single-turn/fastertransformer.sq` holds its `reqs`. A queue's
+entries run their own engine and no other; a queue's engine has no
+`taking`, its entries being its requests.
 
-| Request | Kernel at the call |
-|---|---|
-| the statements before `at admission` | the same statements, before the hold |
-| `taking P (u) reserve (r), …` | `hold P (cost(P, u)) reserve (cost(P, r)), …`, the pools in the order written |
-| `prefix (k: n, …);`, the request's first item | the hold's `prefix (k: n, …)`, after its pools |
-| `taking … reuse (e)` | the hold's `reuse (cost(P₁, …, e))` |
-| `at admission { x = e; … }` | the hold's `at admission (x = e, …)` |
-| the statements after it | the hold's body |
-| `prefill (e) growing P;`, `decode (e) …` | `run E prefill (cost(E, e)) growing P;`, `run E decode …` |
-| `mark m;` | `set E.m = now;`, read afterwards as `E.m` |
-| `cache (e);`, the last item | the hold's `cache (cost(P₁, …, e))` over the pools taken |
-
-Without `at admission`, the admission is at the request's top. A request
-without `taking` holds nothing, and has no `at admission` and no `cache`.
-`taking` names the engine's capacities and its device's. Every `admit
-waiting` of the engine writes the same `taking`. The rules are a queue
-entry's: the admission reads the parameters, what the request sets before
-it, the engine's pools and stage, `cached`, `computed` and the constants;
-`taking`, its `reserve` and `reuse` also read the engine's `state`
-registers, at the engine's admission (a binding does not: the hold sets it at
-its body's top, a session statement); a parameter may not be named like a register; the statements also read `now`, what the request sets and the
-`hidden` attributes; a request sets no parameter. Its names keep their
-spelling in the IR (`kept`, not `vllm.kept`), and the rest of the program
-neither reads nor sets them: the caller reads what it marks. An engine has
-one request; a queue's engine has none, its entries being its requests.
+An engine's `connector C { per_token (r); load (n); save (n); }` copies a
+request's KV through the L2 queue `C` (vLLM's KV connector; *Queues*). At
+the admission, after `hit`, it reads `load`, which `taking` reads as
+`request.loaded`; a request that loads copies `n` tokens at `C`'s
+bandwidth, `r` seconds a token, into its hold on the engine's memory, which
+counts them as computed, before its prefill. When it has generated its
+output it reads `save` (as `cache` is read) and, before it gives its pools
+back, copies to its entry in `C` the part of `n` tokens the entry lacks
+(LMCache's `request_finished` keeps the blocks until the save is done,
+`lmcache_mp_connector.py:952`). The engine records `E.loaded` for each
+admission and sets `E.loaded` and `E.saved` for the caller. `per_token`
+may not read `cached` or `computed`, which during a copy are the L2
+entry's.
 
 ### `at admission`
 
@@ -1199,13 +1204,13 @@ Everything in a hold's header — the units, `reserve`,
 `reuse` — is evaluated when the session is admitted, and a `set` above the
 hold is not (`cache` is read when the session releases, `Serq/Exec.lean`'s
 `release` and the interpreter agree). `at admission (x = e)` gives the
-header a place to name what it is written in terms of, as the request of
-`examples/multi-turn/vllm.sq` lowers to:
+header a place to name what it is written in terms of, as the decoder of
+`examples/pd-disaggregation/vllm_nixl_push.sq` does:
 
 ```
-hold reqs (cost(reqs, 1)), kv (cost(kv, min(known, reused + budget_left(vllm)))) reserve (cost(kv, known))
-     at admission (known = max(kept, computed + 1),
-                   reused = min(cachedin(kv), floor(known - 1, blocksize(kv)))) { … }
+hold kv (cost(kv, known)) reserve (cost(kv, known)), reqs (cost(reqs, 0)) reserve (cost(reqs, 1))
+     reuse (cost(kv, reqs, floor(known - 1, bs)))
+     at admission (known = max(kept, computed + 1)) { … }
 ```
 
 The bindings are substituted into the header's expressions by the parser, so
@@ -1457,10 +1462,10 @@ that program's paths ([use cases](use-cases/index.md), `docs/lean.md`).
 | `multi-turn/routing.sq` | four replicas, five routing policies | — |
 | `multi-turn/thunderagent.sq` | ThunderAgent's router in TR mode in front of two vLLM replicas, a fixed number of agents at once ([use case](use-cases/thunderagent.md)) | the source (ThunderAgent at 7ddc861), read; `tests/thunderagent.rs` against the router's default mode; no oracle |
 | `multi-turn/vllm.sq` | vLLM v1's engine under a multi-turn agent workload | its engine is the other vLLM workloads' (`tests/workloads.rs`) |
-| `multi-turn/vllm_lmcache.sq` | `vllm.sq` with an LMCache server as its L2 (`queue lmc : l2`, `kvt.l2_load`, `kvt.l2_store`) | the source (vLLM at 0c87a197); `tests/kvt_l2.rs`; no scheduler oracle |
-| `multi-turn/vllm_system_prompt.sq` | `vllm.sq` serving the sessions of `M` products, each with its own system prompt, shared across sessions (its request's `prefix (product: system, serial: inf);`) | the source (vLLM at 0c87a197); `tests/shared_prefix.rs`; no scheduler oracle |
+| `multi-turn/vllm_lmcache.sq` | `vllm.sq` with an LMCache server as its L2 (`queue lmc : l2`, the engine's `connector lmc { … }`) | the source (the LMCache connector at vLLM v0.31.0, the scheduler at 0c87a197); `tests/connector.rs`; no scheduler oracle |
+| `multi-turn/vllm_system_prompt.sq` | `vllm.sq` serving the sessions of `M` products, each with its own system prompt, shared across sessions (its admission's `prefix (product: floor(S, bs), serial: inf)`) | the source (vLLM at 0c87a197); `tests/shared_prefix.rs`; no scheduler oracle |
 | `single-turn/vllm_single_turn.sq`, `multi-turn/vllm_chat.sq`, `subagent/vllm_subagents.sq` | the same engine under a single-turn, a chat and an approximated subagent workload ([use case](use-cases/workloads.md)) | `tests/workloads.rs` |
-| `oracle/vllm_shared_prompt.sq` | `vllm_replay.sq` with a system prompt every session shares (its request's `prefix (product: system, serial: inf);`), on the scenario `tools/oracle/shared_trace` | the upstream oracle, `tests/vllm_cache.rs`; no Lean theorem |
+| `oracle/vllm_shared_prompt.sq` | `vllm_replay.sq` with a system prompt every session shares (its admission's `prefix (system: floor(S, bs), serial: inf)`), on the scenario `tools/oracle/shared_trace` | the upstream oracle, `tests/vllm_cache.rs`; no Lean theorem |
 | `oracle/vllm_request.sq` | one vLLM v1 request on the step clock, compiled per scenario to `tools/oracle/{alone,chunked,hol,longchunk,mixed,preempt,seqcap}.ir.json` | the upstream oracle ([vLLM correspondence](#7-vllm-v1-as-a-serq-program)), `tests/vllm_oracle.rs`, the Lean theorems generated from the same IR |
 | `replay/vllm_replay.sq` | vLLM v1 on the A100 testbed replaying the short-context trace ([A100 testbed](#8-vllm-on-the-a100-testbed)) | the prefix-cache oracle `tools/oracle/cache_trace` (`tests/vllm_cache.rs`, theorem `vllm_cache_trace`) |
 | `pd-disaggregation/llmd_nixl_pull.sq` | llm-d's prefill/decode disaggregation with the NIXL connector, two prefill and two decode instances ([use case](use-cases/pd.md)) | the source (llm-d at 8a2f37d, the router at 13eebdb, vLLM at 0c87a197), `tests/pd_semantics.rs`; no scheduler oracle |
@@ -1478,23 +1483,23 @@ scheduler at the pinned revision (`ref/vllm` at 0c87a197; the A100 testbed
 runs vLLM 0.30.0, whose scheduler gives the same answers on the first six
 scenarios below). It is a correspondence under synchronous scheduling at that
 revision, not to the latest vLLM ([the vLLM use case](use-cases/vllm.md)).
-The request of `examples/multi-turn/vllm.sq`'s engine, the engine of the
-workload examples, is a simpler one: it reserves `known` as this one does, but takes its hit
-from the cache alone rather than from the previous prompt, and caches `prompt + o`.
+The admission of `examples/multi-turn/vllm.sq`'s engine, the engine of the
+workload examples, is a simpler one: it reserves `request.known` as this one does, but takes its hit
+from the cache alone rather than from the previous prompt, and caches `request.input + request.output`.
 
 | vLLM | serQ | Where |
 |---|---|---|
 | a token budget per step, running requests first in `running` order, then waiting requests with the budget left | `engine vllm on gpu { tokens cap B; scheduler { advance running; admit waiting while (running.preempted == 0); } … }`, residents in admission order; `pool reqs on vllm` | `scheduler.py:577, 624-823, 868-1128` |
 | `max_num_seqs` | `reqs cap max_seqs;` in `engine vllm`, held as `pool reqs on vllm` | `scheduler.py:877-879` |
 | FCFS, head-of-line blocking (`if new_blocks is None: break`) | pool queue `fifo`; the first request that does not fit blocks | `scheduler.py:1228-1235` |
-| admission needs blocks for the whole prompt (`scheduler_reserve_full_isl = True`), but only the first chunk is allocated | `kv (reused + min(known − reused, budget_left(vllm))) reserve (known)` | `kv_cache_manager.py:515-531`, `config/scheduler.py:191` |
+| admission needs blocks for the whole prompt (`scheduler_reserve_full_isl = True`), but only the first chunk is allocated | `kv (request.hit + min(request.known − request.hit, budget_left(vllm))) reserve (request.known)` | `kv_cache_manager.py:515-531`, `config/scheduler.py:191` |
 | a waiting request's prefix is looked up and its blocks touched only when it is scheduled | units evaluated at admission; the queue served by the engine | `scheduler.py:932-939`, `block_pool.py:754-770` |
-| chunked prefill, `long_prefill_token_threshold` | `prefill (n) growing kv` in the request, `each at most (threshold)` with `let threshold = running.count + waiting.count > 1 ? c : inf;`: the cap only while more than one request is running or waiting; `waiting.count` counts the queues the engine admits, as vLLM counts `waiting`, whose `skipped_waiting` these programs leave empty; a constant cap is not vLLM's, and `serq target` refuses it | `scheduler.py:606-616, 675-676, 1115-1128` |
-| `allocate_slots` block by block as the request advances | `growing kv` | `kv_cache_manager.py:371-608` |
-| preemption of `running[-1]`, `waiting.prepend_request`, `num_computed_tokens = 0`, no admission in a step that preempted | `preempt lifo`, re-queued at the head, hold re-executed; `admit waiting while (running.preempted == 0)` | `scheduler.py:742-813, 869, 1539-1582` |
-| a preempted request keeps its output tokens: it is rescheduled with `num_tokens = prompt + outputs`, reserves and recomputes that many, and generates the rest | `computed` read by the re-executed hold, and `kept`, the most an earlier attempt had: `known = max(kept, computed + 1)`, `prefill (known - c)`, `decode (output - 1 - (known - prompt))` | `scheduler.py:1560-1561`, `request.py:295-296`, `kv_cache_manager.py:515-531` |
+| chunked prefill, `long_prefill_token_threshold` | the engine's prefill, `each at most (threshold)` with `let threshold = running.count + waiting.count > 1 ? c : inf;`: the cap only while more than one request is running or waiting; `waiting.count` counts the queues the engine admits, as vLLM counts `waiting`, whose `skipped_waiting` these programs leave empty; a constant cap is not vLLM's, and `serq target` refuses it | `scheduler.py:606-616, 675-676, 1115-1128` |
+| `allocate_slots` block by block as the request advances | the memory pool grows with the request's position | `kv_cache_manager.py:371-608` |
+| preemption of `running[-1]`, `waiting.prepend_request`, `num_computed_tokens = 0`, no admission in a step that preempted | `preempt lifo`, re-queued at the head, admitted again; `admit waiting while (running.preempted == 0)` | `scheduler.py:742-813, 869, 1539-1582` |
+| a preempted request keeps its output tokens: it is rescheduled with `num_tokens = prompt + outputs`, reserves and recomputes that many, and generates the rest | the engine keeps the request's tokens: `request.known` is `max(known, computed + 1)` after a preemption, it computes what the cache does not hold of them and generates the rest | `scheduler.py:1560-1561`, `request.py:295-296`, `kv_cache_manager.py:515-531` |
 | the scheduler reserves by `num_tokens` (prompt and generated so far), never by the final length: it knows `max_tokens` and learns the length when `check_stop` sees EOS or the cap | `hidden o;`: no header, key or budget reads `o` | `kv_cache_manager.py:517, 533-534`, `config/scheduler.py:191`, `scheduler.py:639, 2426`, `sched/utils.py:98-119` |
-| the prefix cache holds every *computed* full block, generated tokens included; a hit is the longest run of cached full blocks, at most `num_tokens − 1` | `cache (prompt + out − 1)`; `reuse (floor(min(prev prompt, prompt − 1), bs))`; the unmatched blocks stay cached, dead | `kv_cache_manager.py:289-300, 602-606`, `single_type_kv_cache_manager.py:743-838` |
+| the prefix cache holds every *computed* full block, generated tokens included; a hit is the longest run of cached full blocks, at most `num_tokens − 1` | `cache (request.input + request.output − 1)`; `reuse (floor(min(prev prompt, prompt − 1), bs))`; the unmatched blocks stay cached, dead | `kv_cache_manager.py:289-300, 602-606`, `single_type_kv_cache_manager.py:743-838` |
 | the free queue: freed blocks appended tail first (LRU), in the order requests finish | `evict lru` per block from the tail, ties by release order | `block_pool.py:776-805`, `single_type_kv_cache_manager.py:557-585` |
 | a finished session's blocks stay in the free queue | `end` keeps the cache | `block_pool.py:776-805` |
 | a forced miss (a nonce at the head of the prompt) matches nothing; the old blocks stay | `reuse (0)` | trace |

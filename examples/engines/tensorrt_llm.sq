@@ -38,20 +38,15 @@ fn main() {
     reqs cap max_batch;
     tokens cap B;
     granule inf;
-    // What TensorRT-LLM does with one request: it prefills what the block
-    // reuse does not hold and decodes, and leaves every computed token
-    // cached.
-    request (prompt, output) {
-      set c = min(cached, floor(prompt - 1, blocksize(kv)));
-      prefill (prompt - c) growing kv;
-      decode (output) growing kv;
-      cache (prompt + output - 1);
-    }
     scheduler {
       advance running;
-      // it allocates its prompt and reserves up to max_tokens
+      // it allocates its prompt and reserves up to max_tokens; it reuses
+      // whole blocks of the prompt, never all of it, and leaves cached what
+      // it computed but the last token
       admit waiting while (running.preempted == 0)
-        taking reqs (1), kv (prompt) reserve (prompt + mt);
+        taking reqs (1), kv (request.input) reserve (request.input + mt)
+        reuse (floor(request.input - 1, blocksize(kv)))
+        cache (request.input + request.output - 2);
     }
     worker {
       forward (max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
@@ -81,6 +76,6 @@ fn main() {
   // A turn is one request to the engine.
   server {
     set prompt = K + n;
-    trtllm (prompt, o);
+    trtllm (prompt, o + 1);   // the model's o decode steps after the prefill's token
   }
 }

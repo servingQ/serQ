@@ -18,10 +18,6 @@ fn main() {
   def in_mode() { running.decoding >= bcol || running.decoding == running.count ? decoding : !decoding }
   engine E on gpu {
     tokens cap bcol;
-    request (prompt, output) {
-      prefill (prompt);
-      decode (output);
-    }
     scheduler {
       advance running only (in_mode()) each at most (bcol);
       admit waiting only (in_mode()) while (running.preempted == 0) each at most (bcol);
@@ -45,7 +41,7 @@ fn main() {
   }
 
   server {
-    E (vp, vd);
+    E (vp, vd + 1);   // the model's decode steps after the prefill's sampled token
     observe response = now - t0;
   }
   // --8<-- [end:workload]

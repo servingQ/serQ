@@ -18,23 +18,19 @@ fn samples(r: &serq::Report, name: &str) -> Vec<f64> {
     r.client(name).unwrap().samples.clone()
 }
 
-/// An engine `llm` that does `request` with one request.
-fn engine(request: &str) -> String {
-    format!(
-        "
-device gpu {{ }}
-engine llm on gpu {{
+/// An engine `llm` that takes nothing at admission: a request prefills its
+/// input, samples a token, and decodes the rest of its output.
+fn engine() -> String {
+    "
+device gpu { }
+engine llm on gpu {
   tokens cap 8;
-  {request}
-  scheduler {{ advance running; admit waiting while (running.preempted == 0); }}
-  worker {{ forward (1); }}
-}}
-"
-    )
+  scheduler { advance running; admit waiting while (running.preempted == 0); }
+  worker { forward (1); }
 }
-
-/// The request most tests send: a prefill, then a decode.
-const PREFILL_DECODE: &str = "request (prompt, output) { prefill (prompt); decode (output); }";
+"
+    .to_string()
+}
 
 /// One request: a prefill of 8 tokens in the first iteration samples the
 /// first token at 1; the decode's two tokens come at 2 and 3.
@@ -43,8 +39,8 @@ fn a_request_s_first_token_and_the_tokens_after_it() {
     let r = run(&format!(
         "{}
 workload {{ arrive batch(1); }}
-server {{ llm (8, 2); }}",
-        engine(PREFILL_DECODE)
+server {{ llm (8, 3); }}",
+        engine()
     ));
     assert_eq!(samples(&r, "ttft"), [1.0]);
     assert_eq!(samples(&r, "tpot"), [1.0]);
@@ -59,8 +55,8 @@ fn a_turn_ends_where_the_server_does() {
         "{}
 stage pause : delay;
 workload {{ arrive batch(1); session {{ turn; run pause (cost(pause, 5)); turn; }} }}
-server {{ llm (8, 1); }}",
-        engine(PREFILL_DECODE)
+server {{ llm (8, 2); }}",
+        engine()
     ));
     assert_eq!(samples(&r, "ttft"), [1.0, 1.0]);
     assert_eq!(samples(&r, "response"), [2.0, 2.0]);
@@ -84,8 +80,8 @@ fn a_decode_alone_samples_the_first_token() {
     let r = run(&format!(
         "{}
 workload {{ arrive batch(1); }}
-server {{ llm (3); }}",
-        engine("request (output) { decode (output); }")
+server {{ llm (0, 3); }}",
+        engine()
     ));
     assert_eq!(samples(&r, "ttft"), [1.0]);
     assert_eq!(samples(&r, "tpot"), [1.0]);
@@ -100,9 +96,9 @@ fn a_leg_works_for_the_turn_it_was_forked_in() {
         "{}
 workload {{ arrive batch(1); session {{ turn; turn; }} }}
 server {{
-  if (turn_no == 1) {{ fork {{ llm (4); }} }} else {{ join; }}
+  if (turn_no == 1) {{ fork {{ llm (0, 4); }} }} else {{ join; }}
 }}",
-        engine("request (output) { decode (output); }")
+        engine()
     ));
     assert_eq!(samples(&r, "response"), [0.0, 4.0]);
     assert_eq!(r.client("ttft").unwrap().count, 0);
@@ -130,8 +126,8 @@ fn one_output_token_has_no_tpot() {
     let r = run(&format!(
         "{}
 workload {{ arrive batch(1); }}
-server {{ llm (8, 0); }}",
-        engine(PREFILL_DECODE)
+server {{ llm (8, 1); }}",
+        engine()
     ));
     assert_eq!(samples(&r, "ttft"), [1.0]);
     assert_eq!(r.client("tpot").unwrap().count, 0);
@@ -146,20 +142,18 @@ device g1 { }
 device g2 { }
 engine p on g1 {
   tokens cap 8;
-  request (prompt) { prefill (prompt); }
   scheduler { advance running; admit waiting while (running.preempted == 0); }
   worker { forward (1); }
 }
 engine d on g2 {
   tokens cap 8;
-  request (prompt, output) { prefill (prompt); decode (output); }
   scheduler { advance running; admit waiting while (running.preempted == 0); }
   worker { forward (1); }
 }
 workload { arrive batch(1); }
 server {
-  p (8);
-  d (1, 2);
+  p (8, 1);
+  d (1, 3);
 }");
     assert_eq!(samples(&r, "ttft"), [2.0]);
     assert_eq!(samples(&r, "tpot"), [1.0]);
@@ -172,10 +166,8 @@ fn a_program_s_observe_keeps_its_name() {
     let r = run(&format!(
         "{}
 workload {{ arrive batch(1); }}
-server {{ llm (8, 2); }}",
-        engine(
-            "request (prompt, output) { prefill (prompt); observe ttft = 42; decode (output); }"
-        )
+server {{ llm (8, 3); observe ttft = 42; }}",
+        engine()
     ));
     assert_eq!(r.observe("ttft").unwrap().samples, [42.0]);
     assert_eq!(samples(&r, "ttft"), [1.0]);

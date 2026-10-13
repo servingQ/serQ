@@ -30,13 +30,19 @@ in this repository that cites it. That is the earliest signal that a rule
 the program encodes may have changed upstream; whether the rule changed is
 then read from the diff, not guessed from a hash.
 
-Usage:  scripts/check_citations.py [--bless | --paths | --tip DIR]
+A file in `RELEASED` is cited at a release tag instead of the pin (the
+LMCache connector at vLLM v0.31.0, the first release that contains the pin,
+where the file is the same): its text is read from that tag in `ref/vllm`,
+which `scripts/fetch_vllm_ref.sh` fetches (`--releases` lists the tags).
+
+Usage:  scripts/check_citations.py [--bless | --paths | --releases | --tip DIR]
 """
 
 import hashlib
 import json
 import pathlib
 import re
+import subprocess
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -79,6 +85,7 @@ PATHS = {
     "kv_connector/factory.py": "vllm/distributed/kv_transfer/kv_connector/factory.py",
     "factory.py": "vllm/distributed/kv_transfer/kv_connector/factory.py",
     "lmcache_mp_connector.py": "vllm/distributed/kv_transfer/kv_connector/v1/lmcache_mp_connector.py",
+    "sampling_params.py": "vllm/sampling_params.py",
     "disagg_proxy_pushconnector_demo.py": "examples/disaggregated/disaggregated_serving/disagg_proxy_pushconnector_demo.py",
     # the proxy vLLM's NIXL tests put in front of a prefiller and a decoder
     "nixl_integration/toy_proxy_server.py": "tests/v1/kv_connector/nixl_integration/toy_proxy_server.py",
@@ -89,6 +96,25 @@ SOURCES = ["docs/**/*.md", "src/**/*.rs", "tests/**/*.rs", "examples/*/*.sq", "R
 # `scheduler.py:742-813, 869, 1539-1582` -- one file, then a list of ranges.
 CITE = re.compile(r"\b((?:[\w.]+/)?[\w.]+\.py):((?:\s*\d+(?:-\d+)?\s*,)*\s*\d+(?:-\d+)?)")
 RANGE = re.compile(r"(\d+)(?:-(\d+))?")
+
+
+# Files cited at a release rather than at the pin, by path: their text is
+# read at the tag.
+RELEASED = {
+    "vllm/distributed/kv_transfer/kv_connector/v1/lmcache_mp_connector.py": "v0.31.0",
+}
+
+
+def pinned_lines(rel):
+    """The lines of `rel` where it is cited: at its release tag if it has
+    one, else at the pin; None if it does not exist there."""
+    tag = RELEASED.get(rel)
+    if tag is None:
+        f = REF / rel
+        return f.read_text(encoding="utf-8").splitlines() if f.exists() else None
+    p = subprocess.run(["git", "-C", str(REF), "show", f"{tag}:{rel}"],
+                       capture_output=True, text=True)
+    return p.stdout.splitlines() if p.returncode == 0 else None
 
 
 def sources():
@@ -121,11 +147,11 @@ def digest(name, lo, hi, cache):
     if rel is None:
         return None, f"no path declared for `{name}` -- add it to PATHS"
     if rel not in cache:
-        f = REF / rel
-        cache[rel] = f.read_text(encoding="utf-8").splitlines() if f.exists() else None
+        cache[rel] = pinned_lines(rel)
     lines = cache[rel]
     if lines is None:
-        return None, f"{rel} does not exist at the pinned revision"
+        at = RELEASED.get(rel, "the pinned revision")
+        return None, f"{rel} does not exist at {at}"
     if hi > len(lines):
         return None, f"{rel}:{lo}-{hi} is past the end of the file ({len(lines)} lines)"
     body = "\n".join(lines[lo - 1 : hi])
@@ -149,8 +175,7 @@ def drift(tip_dir):
         if rel is None:
             continue
         if rel not in cache:
-            f = REF / rel
-            cache[rel] = f.read_text(encoding="utf-8").splitlines() if f.exists() else None
+            cache[rel] = pinned_lines(rel)
             t = tip_dir / rel
             tips[rel] = t.read_text(encoding="utf-8") if t.exists() else None
         lines, tip = cache[rel], tips[rel]
@@ -191,6 +216,10 @@ def main():
             print("usage: scripts/check_citations.py --tip DIR", file=sys.stderr)
             return 2
         return drift(sys.argv[at])
+    if "--releases" in sys.argv:
+        # the tags `RELEASED` names, which the fetch script fetches
+        print("\n".join(sorted(set(RELEASED.values()))))
+        return 0
     if "--paths" in sys.argv:
         # What a checkout has to contain for this script to run. The fetch
         # script reads it, so adding a citation to a new file widens the
@@ -237,7 +266,8 @@ def main():
             print(f"  {k}")
     if errors or moved or new:
         return 1
-    print(f"OK: {len(have)} citations resolve at the pinned revision")
+    at = ", ".join(sorted(set(RELEASED.values())))
+    print(f"OK: {len(have)} citations resolve at the pinned revision ({at} for the files cited at a release)")
     return 0
 
 

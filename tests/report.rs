@@ -176,11 +176,6 @@ fn the_gaps_between_tokens_count_a_prefill_that_cuts_in() {
         engine llm on gpu {{
           reqs cap 2;
           tokens cap 4;
-          request (prompt, s) {{
-            at admission {{ left = budget_left(llm); }}
-            prefill (prompt) growing kv;
-            if (s == 0) {{ decode (3) growing kv; }}
-          }}
           scheduler {{ {schedule} }}
           worker {{ forward (1); }}
         }}
@@ -194,7 +189,7 @@ fn the_gaps_between_tokens_count_a_prefill_that_cuts_in() {
         }}
         server {{
           run gate (cost(gate, 2 * serial));
-          llm (prompt, serial);
+          llm (prompt, serial == 0 ? 4 : 1);   // A decodes three after its prefill's token
         }}
         "
         );
@@ -212,12 +207,12 @@ fn the_gaps_between_tokens_count_a_prefill_that_cuts_in() {
         (s.mean_itl, s.itl_p99)
     };
     let (mean, p99) = itl(
-        "exclusive prefill each at most (4); admit waiting while (running.preempted == 0) each at most (4) taking reqs (1), kv (min(prompt, left)) reserve (prompt);",
+        "exclusive prefill each at most (4); admit waiting while (running.preempted == 0) each at most (4) taking reqs (1), kv (min(request.input, budget_left(llm))) reserve (request.input);",
     );
     assert_eq!(mean, 4.0 / 3.0);
     assert!(near(p99, 2.0), "{p99}");
     let (mean, p99) = itl(
-        "advance running each at most (4); admit waiting while (running.preempted == 0) each at most (4) taking reqs (1), kv (min(prompt, left)) reserve (prompt);",
+        "advance running each at most (4); admit waiting while (running.preempted == 0) each at most (4) taking reqs (1), kv (min(request.input, budget_left(llm))) reserve (request.input);",
     );
     assert_eq!(mean, 1.0);
     assert!(near(p99, 1.0), "{p99}");
@@ -236,16 +231,11 @@ fn a_gap_holds_the_transfer_between_two_engines() {
         device gpu_d {{ }}
         engine p on gpu_p {{
           tokens cap inf;
-          request () {{ prefill (2); }}
           scheduler {{ advance running; admit waiting while (running.preempted == 0); }}
           worker {{ forward (1); }}
         }}
         engine d on gpu_d {{
           tokens cap inf;
-          request () {{
-            {recompute}
-            decode (2);
-          }}
           scheduler {{ advance running; admit waiting while (running.preempted == 0); }}
           worker {{ forward (1); }}
         }}
@@ -257,9 +247,9 @@ fn a_gap_holds_the_transfer_between_two_engines() {
           }}
         }}
         server {{
-          p ();
+          p (2, 1);
           run link (cost(link, 5));
-          d ();
+          d ({recompute});
         }}
         "
         );
@@ -277,8 +267,9 @@ fn a_gap_holds_the_transfer_between_two_engines() {
         assert!(p.mean_itl.is_nan(), "a first token has no gap");
         d.mean_itl
     };
-    assert_eq!(itl(""), 3.5);
-    assert_eq!(itl("prefill (1);"), 1.0);
+    // no prefill: two decodes; or one token recomputed, then two decodes
+    assert_eq!(itl("0, 2"), 3.5);
+    assert_eq!(itl("1, 3"), 1.0);
 }
 
 #[test]
@@ -291,16 +282,10 @@ fn the_gaps_add_up_to_the_decode_time_through_preemptions() {
         engine llm on gpu {
           reqs cap 64;
           tokens cap 2048;
-          request (prompt, output) {
-            at admission { known = computed < prompt ? prompt : computed + 1; }
-            prefill (known) growing kv;
-            if (known == prompt) { mark first; }
-            decode (output - 1 - (known - prompt)) growing kv;
-          }
           scheduler {
             advance running;
             admit waiting while (running.preempted == 0)
-              taking kv (min(known, budget_left(llm))) reserve (known), reqs (1);
+              taking kv (min(request.known, budget_left(llm))) reserve (request.known), reqs (1);
           }
           worker { forward (0.001 + 1e-6 * batch.tokens); }
         }
@@ -402,11 +387,6 @@ fn a_step_stage_reports_what_its_iterations_carried() {
         engine llm on gpu {{
           reqs cap 2;
           tokens cap 4;
-          request (prompt, s) {{
-            at admission {{ left = budget_left(llm); }}
-            prefill (prompt) growing kv;
-            if (s == 0) {{ decode (2) growing kv; }}
-          }}
           scheduler {{ {schedule} }}
           worker {{ forward (1); }}
         }}
@@ -420,7 +400,7 @@ fn a_step_stage_reports_what_its_iterations_carried() {
         }}
         server {{
           run gate (cost(gate, serial));
-          llm (prompt, serial);
+          llm (prompt, serial == 0 ? 3 : 1);   // A decodes two after its prefill's token
         }}
         "
         )
@@ -448,13 +428,13 @@ fn a_step_stage_reports_what_its_iterations_carried() {
     };
     assert_eq!(
         stage(
-            "exclusive prefill each at most (4); admit waiting while (running.preempted == 0) each at most (4) taking reqs (1), kv (min(prompt, left)) reserve (prompt);"
+            "exclusive prefill each at most (4); admit waiting while (running.preempted == 0) each at most (4) taking reqs (1), kv (min(request.input, budget_left(llm))) reserve (request.input);"
         ),
         (0.1, 0.1, 0.0, 0.1, 1.0, 1.0)
     );
     assert_eq!(
         stage(
-            "advance running each at most (4); admit waiting while (running.preempted == 0) each at most (4) taking reqs (1), kv (min(prompt, left)) reserve (prompt);"
+            "advance running each at most (4); admit waiting while (running.preempted == 0) each at most (4) taking reqs (1), kv (min(request.input, budget_left(llm))) reserve (request.input);"
         ),
         (0.05, 0.0, 0.1, 0.1, 1.0, 1.0)
     );
@@ -584,18 +564,17 @@ fn a_growth_left_waiting_is_noted() {
     let src = "device gpu { kv cap 2015; }
         engine llm on gpu {
           tokens cap 8192;
-          request () {
-            at admission { hit = min(cachedin(kv), 992); }
-            prefill (1000 - cached) growing kv;
-            cache (1000);
+          scheduler {
+            advance running;
+            admit waiting while (running.preempted == 0)
+              taking kv (request.hit + 8) reuse (992) cache (1000);
           }
-          scheduler { advance running; admit waiting while (running.preempted == 0) taking kv (hit + 8); }
           worker { forward (1e-4 + 1e-5 * batch.tokens); }
         }
         pool kv on gpu { block 16; evict lru; }
         workload { arrive batch(1); session { loop { turn; } } }
         server {
-          hold kv (cost(kv, 1000)) { llm (); }
+          hold kv (cost(kv, 1000)) { llm (1000, 1); }
         }
         ";
     let r = run_ir(
@@ -615,11 +594,12 @@ fn a_growth_left_waiting_is_noted() {
     );
 }
 
-/// The note is a line of text, not a lint error, because one shipped program
-/// earns it by design: `vllm_single_turn.sq` never reads its cache back, so
-/// its `hit` is 0 all run long. Every other example and
-/// tutorial program runs without a note; a new one that earns it shows up
-/// here, to be judged.
+/// The note is a line of text, not a lint error, because a shipped program
+/// may earn it by design (`vllm_single_turn.sq` earned it for its `hit`,
+/// which it no longer observes: the engine records what each admission
+/// reused, `vllm.reused`, a count and no test). Every example and tutorial
+/// program runs without a note; a new one that earns it shows up here, to
+/// be judged.
 #[test]
 fn the_corpus_earns_one_note() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -657,11 +637,5 @@ fn the_corpus_earns_one_note() {
         }
     }
     assert_eq!(rejected, Vec::<(String, String)>::new());
-    assert_eq!(
-        noted,
-        [(
-            "examples/single-turn/vllm_single_turn.sq".to_string(),
-            "hit".to_string()
-        )]
-    );
+    assert_eq!(noted, Vec::<(String, String)>::new());
 }

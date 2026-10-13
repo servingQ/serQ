@@ -350,6 +350,21 @@ impl Program {
                     CStmt::Grow(r, _) | CStmt::Shrink(r, _) | CStmt::Load(r, _) => {
                         server_pools[r.base..r.base + r.count].fill(true);
                     }
+                    // a request holds what its engine's admission takes, and
+                    // its connector copies through the L2's stage and pool
+                    // (in its blocks, which are the server's)
+                    CStmt::Request { stage, .. } => {
+                        server_stages[stage.base..stage.base + stage.count].fill(true);
+                        for k in stage.base..stage.base + stage.count {
+                            if let CStageKind::Step(st) = &self.stages[k].kind
+                                && let Some(r) = &st.request
+                            {
+                                for (q, _, _) in &r.pools {
+                                    server_pools[q.base..q.base + q.count].fill(true);
+                                }
+                            }
+                        }
+                    }
                     CStmt::Run {
                         stage,
                         also,

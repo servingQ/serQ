@@ -93,10 +93,13 @@ fn check(name: &str) {
         a => panic!("{name}: arrival {a:?}"),
     };
     let rep = run_ir(&ir, None).unwrap();
-    // every observation records the serial of the session that made it
+    // every observation records the serial of the session that made it; the
+    // first token's time is what the engine records, `vllm.first`, observed
+    // after the call
     let mut got = vec![(0.0, 0.0); n];
-    for &(t, s, _) in &rep.observe("first").unwrap().records {
-        got[s as usize].0 = t;
+    let first = rep.observe("first").unwrap();
+    for (&(_, s, _), &v) in first.records.iter().zip(&first.samples) {
+        got[s as usize].0 = v;
     }
     for &(t, s, _) in &rep.observe("done").unwrap().records {
         got[s as usize].1 = t;

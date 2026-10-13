@@ -23,12 +23,12 @@ open Exec
 
 namespace BariRad
 
-/-- The session program of `examples/papers/bari_rad.sq`. Attributes: 0 = cached, 1 = serial, 2 = turn_no, 3 = new, 4 = out, 5 = think, 6 = more, 7 = forced, 8 = computed, 9 = t0, 10 = vp, 11 = vd, 12 = arrive. Observations: 0 = response. -/
+/-- The session program of `examples/papers/bari_rad.sq`. Attributes: 0 = cached, 1 = serial, 2 = turn_no, 3 = new, 4 = out, 5 = think, 6 = more, 7 = forced, 8 = computed, 9 = t0, 10 = vp, 11 = vd, 12 = E.admitted, 13 = E.first, 14 = E.reused, 15 = E.prefill, 16 = arrive. Observations: 0 = response, 1 = E.reused, 2 = E.prefill. -/
 def prog : Prog := [route|
-  run 1 (x.attr 12);
+  run 1 (x.attr 16);
   set 9 = x.now;
   run 0 prefill (x.attr 10);
-  run 0 decode (x.attr 11);
+  run 0 decode (((x.attr 11) + 1) - 1);
   observe 0 = x.now - (x.attr 9);
   stop]
 
@@ -41,7 +41,8 @@ def family_token_rate (w : Workload) : Prop :=
     w.turns = [] ∧
     w.turnSlot = none ∧
     w.computedSlot = some 8 ∧
-    w.arriveSlot = some 12
+    w.arriveSlot = some 16 ∧
+    ∀ i < w.init.length, 1 ≤ w.attr i 10
 
 /-- `claim token_rate` of `bari_rad.sq`. -/
 def token_rate : Prop :=
@@ -53,8 +54,8 @@ def family_optimal_tiling (w : Workload) : Prop :=
     w.turns = [] ∧
     w.turnSlot = none ∧
     w.computedSlot = some 8 ∧
-    w.arriveSlot = some 12 ∧
-    ∀ i < w.init.length, (((w.attr i 10) = (128 * ((w.attr i 10) / 128))))
+    w.arriveSlot = some 16 ∧
+    ∀ i < w.init.length, (((w.attr i 10) = (128 * ((w.attr i 10) / 128)))) ∧ 1 ≤ w.attr i 10
 
 /-- `claim optimal_tiling` of `bari_rad.sq`. -/
 def optimal_tiling : Prop :=
@@ -66,9 +67,9 @@ end BariRad
 
 namespace DaiFastertransformer
 
-/-- The session program of `examples/papers/dai_fastertransformer.sq`. Attributes: 0 = cached, 1 = serial, 2 = turn_no, 3 = new, 4 = out, 5 = think, 6 = more, 7 = forced, 8 = computed, 9 = t0, 10 = arrive. Observations: 0 = response. -/
+/-- The session program of `examples/papers/dai_fastertransformer.sq`. Attributes: 0 = cached, 1 = serial, 2 = turn_no, 3 = new, 4 = out, 5 = think, 6 = more, 7 = forced, 8 = computed, 9 = t0, 10 = fastertransformer.admitted, 11 = fastertransformer.first, 12 = fastertransformer.reused, 13 = fastertransformer.prefill, 14 = arrive. Observations: 0 = response, 1 = fastertransformer.reused, 2 = fastertransformer.prefill. -/
 def prog : Prog := [route|
-  run 1 (x.attr 10);
+  run 1 (x.attr 14);
   set 9 = x.now;
   run 0 prefill (290);
   run 0 decode (990);
@@ -84,8 +85,8 @@ def family_not_work_conserving (w : Workload) : Prop :=
     w.turns = [] ∧
     w.turnSlot = none ∧
     w.computedSlot = some 8 ∧
-    w.arriveSlot = some 10 ∧
-    ∀ i < w.init.length, w.attr i 10 = (i + 1) * 46750
+    w.arriveSlot = some 14 ∧
+    ∀ i < w.init.length, w.attr i 14 = (i + 1) * 46750
 
 /-- `claim not_work_conserving` of `dai_fastertransformer.sq`. -/
 def not_work_conserving : Prop :=
@@ -97,8 +98,8 @@ def family_token_rate (w : Workload) : Prop :=
     w.turns = [] ∧
     w.turnSlot = none ∧
     w.computedSlot = some 8 ∧
-    w.arriveSlot = some 10 ∧
-    ∀ i < w.init.length, w.attr i 10 = (i + 1) * 46750
+    w.arriveSlot = some 14 ∧
+    ∀ i < w.init.length, w.attr i 14 = (i + 1) * 46750
 
 /-- `claim token_rate` of `dai_fastertransformer.sq`. -/
 def token_rate : Prop :=
@@ -110,9 +111,9 @@ end DaiFastertransformer
 
 namespace DaiSarathi
 
-/-- The session program of `examples/papers/dai_sarathi.sq`. Attributes: 0 = cached, 1 = serial, 2 = turn_no, 3 = new, 4 = out, 5 = think, 6 = more, 7 = forced, 8 = computed, 9 = t0, 10 = arrive. Observations: 0 = response. -/
+/-- The session program of `examples/papers/dai_sarathi.sq`. Attributes: 0 = cached, 1 = serial, 2 = turn_no, 3 = new, 4 = out, 5 = think, 6 = more, 7 = forced, 8 = computed, 9 = t0, 10 = sarathi.admitted, 11 = sarathi.first, 12 = sarathi.reused, 13 = sarathi.prefill, 14 = arrive. Observations: 0 = response, 1 = sarathi.reused, 2 = sarathi.prefill. -/
 def prog : Prog := [route|
-  run 1 (x.attr 10);
+  run 1 (x.attr 14);
   set 9 = x.now;
   run 0 prefill (290);
   run 0 decode (990);
@@ -128,8 +129,8 @@ def family_work_conserving (w : Workload) : Prop :=
     w.turns = [] ∧
     w.turnSlot = none ∧
     w.computedSlot = some 8 ∧
-    w.arriveSlot = some 10 ∧
-    ∀ i < w.init.length, w.attr i 10 = (i + 1) * 46750
+    w.arriveSlot = some 14 ∧
+    ∀ i < w.init.length, w.attr i 14 = (i + 1) * 46750
 
 /-- `claim work_conserving` of `dai_sarathi.sq`. -/
 def work_conserving : Prop :=
@@ -141,8 +142,8 @@ def family_token_rate (w : Workload) : Prop :=
     w.turns = [] ∧
     w.turnSlot = none ∧
     w.computedSlot = some 8 ∧
-    w.arriveSlot = some 10 ∧
-    ∀ i < w.init.length, w.attr i 10 = (i + 1) * 46750
+    w.arriveSlot = some 14 ∧
+    ∀ i < w.init.length, w.attr i 14 = (i + 1) * 46750
 
 /-- `claim token_rate` of `dai_sarathi.sq`. -/
 def token_rate : Prop :=
@@ -154,8 +155,8 @@ def family_bounded (w : Workload) : Prop :=
     w.turns = [] ∧
     w.turnSlot = none ∧
     w.computedSlot = some 8 ∧
-    w.arriveSlot = some 10 ∧
-    ∀ i < w.init.length, w.attr i 10 = (i + 1) * 46750
+    w.arriveSlot = some 14 ∧
+    ∀ i < w.init.length, w.attr i 14 = (i + 1) * 46750
 
 /-- `claim bounded` of `dai_sarathi.sq`. -/
 def bounded : Prop :=
@@ -167,7 +168,7 @@ end DaiSarathi
 
 namespace KongSvf
 
-/-- The session program of `examples/papers/kong_svf.sq`. Attributes: 0 = cached, 1 = serial, 2 = turn_no, 3 = new, 4 = out, 5 = think, 6 = more, 7 = forced, 8 = computed, 9 = s, 10 = o. Observations: 0 = output_tokens, 1 = vol, 2 = response. -/
+/-- The session program of `examples/papers/kong_svf.sq`. Attributes: 0 = cached, 1 = serial, 2 = turn_no, 3 = new, 4 = out, 5 = think, 6 = more, 7 = forced, 8 = computed, 9 = s, 10 = o, 11 = llm.admitted, 12 = llm.first, 13 = llm.reused, 14 = llm.prefill. Observations: 0 = output_tokens, 1 = vol, 2 = response, 3 = llm.reused, 4 = llm.prefill. -/
 def prog : Prog := [route|
   observe 0 = x.attr 10;
   observe 1 = ((x.attr 9) * (x.attr 10)) + ((((x.attr 10) * (x.attr 10)) + (x.attr 10)) / 2);

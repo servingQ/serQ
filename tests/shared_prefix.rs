@@ -567,31 +567,32 @@ fn serial_is_not_set() {
     );
 }
 
-/// A request's chain is its first item, read before the request does
-/// anything: a name the request sets is not yet set there, and the chain
-/// may not read it (the fourth review of #374).
+/// A request's chain names what its prompt is made of, the same while it
+/// waits and when it is admitted: it may not read what the admission reads
+/// of the cache (`request.hit`), as a hold's may not read `cached` (the
+/// fourth review of #374).
 #[test]
-fn a_request_s_chain_reads_nothing_the_request_sets() {
+fn a_request_s_chain_reads_nothing_the_admission_reads() {
     let src = r#"
         device gpu { kv cap 100000; }
         pool kv on gpu { block 16; evict lru; preempt lifo; }
         engine llm on gpu {
           tokens cap 8192;
-          request (n, product, system, session) {
-            prefix (product: system, session: k);
-            set k = n;
-            at admission { reused = min(cachedin(kv), floor(n - 1, 16)); }
-            prefill (n - cached) growing kv;
-            cache (n);
+          scheduler {
+            advance running;
+            admit waiting while (running.preempted == 0)
+              taking kv (request.input) prefix (sys: request.hit, serial: inf) cache (request.input);
           }
-          scheduler { advance running; admit waiting while (running.preempted == 0) taking kv (n); }
           worker { forward (batch.tokens * 1e-5 + 1e-4); }
         }
         workload { arrive batch(1); init { set sys = 7; } session { turn; } }
-        server { llm (1600, sys, 1200, serial); }
+        server { llm (1600, 1); }
 "#;
     let error = run_source(&common::main_source(src), &options(10.0), None).unwrap_err();
-    assert!(error.contains("which the request sets after it"), "{error}");
+    assert!(
+        error.contains("`prefix` segment reads the state"),
+        "{error}"
+    );
 }
 
 /// A chain says what a hold reads and keeps of the cache, which a hold
@@ -618,9 +619,9 @@ fn a_chain_without_cache_or_with_an_endless_middle_does_not_link() {
     }
 }
 
-/// An engine's request says what its prompt is made of, its first item:
-/// `prefix (product: system, session: inf);`, read by the hold of its
-/// admission. The system prompt is computed once, by the first session,
+/// An engine's admission says what a request's prompt is made of:
+/// `prefix (sys: 1200, serial: inf)`, the system prompt `sys` and the
+/// session's own. The system prompt is computed once, by the first session,
 /// and every later one reads it, prefilling only its own (#374).
 #[test]
 fn an_engine_s_request_takes_a_chain() {
@@ -631,17 +632,11 @@ fn an_engine_s_request_takes_a_chain() {
         pool kv on gpu {{ block 16; evict lru; preempt lifo; }}
         engine llm on gpu {{
           tokens cap 8192;
-          request (n, product, system, session) {{
-            {prefix}
-            at admission {{ reused = min(cachedin(kv), floor(n - 1, 16)); }}
-            set c = min(cached, floor(n - 1, 16));
-            observe got = c;
-            prefill (n - c) growing kv;
-            cache (n);
-          }}
           scheduler {{
             advance running;
-            admit waiting while (running.preempted == 0) taking kv (n) ;
+            admit waiting while (running.preempted == 0)
+              taking kv (request.input) reuse (floor(request.input - 1, 16)) {prefix}
+              cache (request.input);
           }}
           worker {{ forward (batch.tokens * 1e-5 + 1e-4); }}
         }}
@@ -649,33 +644,20 @@ fn an_engine_s_request_takes_a_chain() {
         workload {{ arrive batch(4); init {{ set sys = 7; }} session {{ turn; }} }}
         server {{
           run user (cost(user, serial * 10));
-          llm (1600, sys, 1200, serial);
+          llm (1600, 1);
         }}
 "#
         )
     };
-    let r = run(
-        &src("prefix (product: system, session: inf);"),
-        &options(100.0),
-    );
+    let r = run(&src("prefix (sys: 1200, serial: inf)"), &options(100.0));
     assert_eq!(
-        r.observe("got").unwrap().samples,
+        r.observe("llm.reused").unwrap().samples,
         [0.0, 1200.0, 1200.0, 1200.0],
         "{}",
         r.text()
     );
     let own = run(&src(""), &options(100.0));
-    assert_eq!(own.observe("got").unwrap().samples, [0.0; 4]);
-    for (body, said) in [
-        (
-            "set x = 1; prefix (product: system, session: inf);",
-            "is its first item",
-        ),
-        ("prefix (product: system, session: inf)", "ends with `;`"),
-    ] {
-        let error = run_source(&common::main_source(&src(body)), &options(10.0), None).unwrap_err();
-        assert!(error.contains(said), "{body}: {error}");
-    }
+    assert_eq!(own.observe("llm.reused").unwrap().samples, [0.0; 4]);
 }
 
 /// SGLang's LPM order over the shared cache: `queue by (-cachedin(kv))`

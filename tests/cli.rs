@@ -19,10 +19,6 @@ const STUCK: &str = r#"
         engine llm on gpu {
           reqs cap 4;
           tokens cap 1000;
-          request () {
-            prefill (100) growing kv;
-            decode (100) growing kv;
-          }
           scheduler {
             advance running;
             admit waiting while (running.preempted == 0) taking reqs (1), kv (100) reserve (100);
@@ -37,7 +33,7 @@ const STUCK: &str = r#"
 
           }
         }
-        server { llm (); }
+        server { llm (100, 101); }
 
 "#;
 

@@ -233,6 +233,13 @@ pub enum Moment {
     /// A claim `at end`: read once, when the run ends, from the constants,
     /// `now` (the end) and the aggregates of the run's observations.
     End,
+    /// An engine's request at its admission: what it takes, its `reuse` and
+    /// its `prefix`, read for the request the scheduler admits, from the
+    /// call's arguments, the tokens it has and its cache hit.
+    Request,
+    /// An engine's request when it gives its pools back: its `cache`, read at
+    /// a preemption (`finished` 0) and at its end (`finished` 1).
+    Release,
 }
 
 impl Moment {
@@ -254,6 +261,8 @@ impl Moment {
             Moment::Given => "a claim's `given`",
             Moment::Iteration => "a claim over iterations",
             Moment::End => "a claim `at end`",
+            Moment::Request => "an engine's `taking`, `reuse` or `prefix`",
+            Moment::Release => "an engine's `cache` or a connector's `save`",
         }
     }
 
@@ -275,6 +284,8 @@ impl Moment {
             Moment::Given => "read on one session's attributes",
             Moment::Iteration => "read when an iteration starts",
             Moment::End => "read when the run ends",
+            Moment::Request => "read when the scheduler admits the request",
+            Moment::Release => "read when the request gives its pools back",
         }
     }
 }
@@ -343,6 +354,27 @@ pub enum CtxVar {
     /// Iteration claims: the sessions the workload has started by the
     /// iteration's start (an arrival at that instant included).
     Arrived,
+    /// An engine's request: the tokens of its prompt (the call's first
+    /// argument).
+    Input,
+    /// An engine's request: the tokens it generates (the call's second
+    /// argument).
+    Output,
+    /// An engine's request: the tokens it has, its input and what it has
+    /// generated (vLLM's `num_tokens`).
+    Known,
+    /// An engine's request at its admission: the cached tokens it may read,
+    /// `min(cachedin(P), reuse)` on the engine's memory pool `P`.
+    Hit,
+    /// An engine's request at a release: 1 when it has generated its output,
+    /// 0 at a preemption.
+    Finished,
+    /// An engine's request at its admission: the tokens its connector loads
+    /// (`CConnector::load`), read after `Hit`.
+    Loaded,
+    /// An engine's request at its admission: 1 once it has been preempted
+    /// (vLLM's `RequestStatus.PREEMPTED`, which a connector may read).
+    Requeued,
 }
 
 /// How an expression's printer names a context variable (`show_expr_with`).
@@ -375,6 +407,13 @@ impl CtxVar {
             CtxVar::Demand => "demand",
             CtxVar::Served => "served",
             CtxVar::Arrived => "arrived",
+            CtxVar::Input => "request.input",
+            CtxVar::Output => "request.output",
+            CtxVar::Known => "request.known",
+            CtxVar::Hit => "request.hit",
+            CtxVar::Finished => "request.finished",
+            CtxVar::Loaded => "request.loaded",
+            CtxVar::Requeued => "request.preempted",
         }
     }
 
@@ -407,6 +446,10 @@ impl CtxVar {
             CtxVar::Admission => &[Moment::Serve, Moment::Victim],
             CtxVar::Position => &[Moment::Victim],
             CtxVar::Demand | CtxVar::Served | CtxVar::Arrived => &[Moment::Iteration],
+            CtxVar::Input | CtxVar::Output | CtxVar::Known => &[Moment::Request, Moment::Release],
+            CtxVar::Hit => &[Moment::Request],
+            CtxVar::Finished => &[Moment::Release],
+            CtxVar::Loaded | CtxVar::Requeued => &[Moment::Request],
         }
     }
 }
@@ -720,6 +763,16 @@ pub enum CStmt {
     Fork(BlockId),
     /// Wait until every leg the session has forked has ended.
     Join,
+    /// A request to an engine: `input` tokens of prompt, `output` tokens to
+    /// generate. The engine keeps its state (the tokens it has, its KV
+    /// position, what it has generated), admits it by its `request`, runs its
+    /// prefill and its decode, and the session goes on when it has generated
+    /// `output` (`docs/design/scheduler-worker.md`, step 3).
+    Request {
+        stage: CRef,
+        input: CExpr,
+        output: CExpr,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -799,6 +852,86 @@ pub struct CStep {
     /// !preempted}]`, which the linker writes (#355).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub iteration: Option<Vec<CIter>>,
+    /// What the engine's admission takes of a request and what its release
+    /// leaves cached (`CStmt::Request`). `None`: the engine takes nothing
+    /// and caches nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request: Option<Box<CRequest>>,
+    /// The engine's KV connector (`connector C { … }`): what its requests
+    /// load from an L2 at admission and save to it at their end.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connector: Option<Box<CConnector>>,
+}
+
+/// An engine's KV connector to an L2 queue (vLLM's `KVConnector`, LMCache's
+/// in `lmcache_mp_connector.py`): the tokens a request loads from the L2 at
+/// its admission, read after `request.hit` (`get_num_new_matched_tokens`),
+/// and the tokens the L2 holds of it after it ends (`request_finished`,
+/// which keeps its blocks until the save is done). Each is the kernel block
+/// it means, which the session runs while the request holds its pools: a
+/// load `run C (cost(C, E.loaded · r)); load P (cost(P, E.loaded));` into
+/// the request's hold on the engine's memory `P`, a save the hold on the
+/// L2's pool that copies what the L2's entry lacks. The interpreter sets
+/// the attributes `loaded` and `saved` (`E.loaded`, `E.saved`) before it
+/// runs them.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CConnector {
+    /// The tokens to load (`Moment::Request`), and the block that loads them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub load: Option<(CExpr, BlockId)>,
+    /// The tokens the L2 is to hold (`Moment::Release`, with
+    /// `request.finished` 1), and the block that saves them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub save: Option<(CExpr, BlockId)>,
+    /// Attribute slots: what the latest admission loaded, what the save
+    /// copies to.
+    pub loaded: usize,
+    pub saved: usize,
+    /// The observation the engine records for each admission, `E.loaded`.
+    pub record: usize,
+}
+
+impl CConnector {
+    /// Its blocks, a load's then a save's.
+    pub fn blocks(&self) -> impl Iterator<Item = BlockId> + '_ {
+        self.load.iter().chain(&self.save).map(|(_, b)| *b)
+    }
+}
+
+/// How an engine admits and releases a request: a hold's header, read for
+/// the request (`Moment::Request`, `Moment::Release`). The memory pool
+/// (`CStep::memory`), when taken, grows with the request's KV position and
+/// gives `request.hit`.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CRequest {
+    /// Each pool taken, its units and its `reserve`.
+    pub pools: Vec<(CRef, CExpr, Option<CExpr>)>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reuse: Option<CExpr>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache: Option<CExpr>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prefix: Option<Vec<(CExpr, CExpr)>>,
+    /// The observations the engine records of its requests.
+    pub records: RequestRecords,
+}
+
+/// What an engine records of its requests. Every record is an attribute of
+/// the session, which its caller reads after the call: `E.reused` and
+/// `E.prefill` (the cached tokens its latest admission read and the tokens
+/// its prefill computes), `E.admitted` (when it was last admitted) and
+/// `E.first` (when its first token was sampled). What each admission
+/// records is an observation of the report too (`reused`, `prefill`, slots
+/// of `Program::observes`, named alike).
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+pub struct RequestRecords {
+    pub reused: usize,
+    pub prefill: usize,
+    pub admitted: usize,
+    pub first: usize,
+    /// The attributes of `reused` and `prefill`.
+    pub last_reused: usize,
+    pub last_prefill: usize,
 }
 
 /// A statement of a step stage's iteration body. Each runs once where it is
@@ -1195,6 +1328,8 @@ impl Program {
     fn blocks_are_a_tree(&self) -> Result<(), String> {
         let mut seen = vec![false; self.blocks.len()];
         let mut todo = vec![self.init, self.turn, self.session];
+        // an engine's connector runs its blocks inside a request
+        todo.extend(self.connectors().flat_map(|(_, c)| c.blocks()));
         while let Some(b) = todo.pop() {
             let Some(was) = seen.get_mut(b) else {
                 return Err(format!("block {b} out of range"));
@@ -1655,6 +1790,31 @@ impl Program {
                 _ => None,
             })
             .collect();
+        // a connector's load computes into the request's hold on the
+        // engine's memory, and its save runs inside every pool it takes
+        for (st, c) in self.connectors() {
+            let pools: Vec<&CRef> = st
+                .request
+                .iter()
+                .flat_map(|r| r.pools.iter().map(|(q, _, _)| q))
+                .collect();
+            let fail = |e: Invalid| Invalid {
+                message: format!("a connector: {}", e.message),
+                ..e
+            };
+            if let Some((_, b)) = &c.load {
+                let mut held: Vec<_> = pools
+                    .iter()
+                    .filter(|q| Some(q.base) == st.memory)
+                    .map(|q| (*q, None))
+                    .collect();
+                self.enclosed(*b, &mut held, &leased).map_err(fail)?;
+            }
+            if let Some((_, b)) = &c.save {
+                let mut held: Vec<_> = pools.iter().map(|q| (*q, None)).collect();
+                self.enclosed(*b, &mut held, &leased).map_err(fail)?;
+            }
+        }
         self.enclosed(self.session, &mut vec![], &leased)
             .map_err(|e| Invalid {
                 message: format!("session: {}", e.message),
@@ -1745,6 +1905,33 @@ impl Program {
                     }
                     for e in exprs {
                         read(e, &ok, &place)?;
+                    }
+                    // the admission is a hold's header: the request waits in
+                    // its first pool, and the stage that admits that pool
+                    // reads it
+                    if let Some(r) = &st.request
+                        && let Some((queue, _, _)) = r.pools.first()
+                    {
+                        let ok = |reg: usize| {
+                            (queue.base..queue.base + queue.count)
+                                .all(|m| self.pools[m].admit_via == Some(self.registers[reg].stage))
+                        };
+                        let place = format!("{place}'s admission");
+                        // its connector's load is read at the same instant
+                        let load = st
+                            .connector
+                            .iter()
+                            .filter_map(|c| c.load.as_ref().map(|(e, _)| e));
+                        let admission = r
+                            .pools
+                            .iter()
+                            .flat_map(|(_, u, f)| std::iter::once(u).chain(f))
+                            .chain(&r.reuse)
+                            .chain(r.prefix.iter().flatten().flat_map(|(k, n)| [k, n]))
+                            .chain(load);
+                        for e in admission {
+                            read(e, &ok, &place)?;
+                        }
                     }
                 }
                 CStageKind::Fifo(_) => {}
@@ -1950,6 +2137,12 @@ impl Program {
                     v.expr(&st.budget, Moment::Budget).map_err(at)?;
                     v.expr(&st.chunk, Moment::Budget).map_err(at)?;
                     v.expr(&st.cost, Moment::Step).map_err(at)?;
+                    if let Some(r) = &st.request {
+                        v.request(r).map_err(at)?;
+                    }
+                    if let Some(c) = &st.connector {
+                        v.connector(st, c).map_err(at)?;
+                    }
                     if let Some(g) = &st.granule {
                         let g = match g {
                             CExpr::Num(g) if *g > 0.0 => *g,
@@ -2239,6 +2432,8 @@ pub(crate) fn moves(e: &CExpr) -> bool {
     e.any(&|x| match x {
         // a register moves at its stage's iterations (#377: read at the join,
         // a reserve on one was judged on a value an iteration then lowered)
+        // a request's input, output and tokens stand still while it waits
+        CExpr::Ctx(CtxVar::Input | CtxVar::Output | CtxVar::Known) => false,
         CExpr::Ctx(_) | CExpr::Reg(_) | CExpr::Sample(..) => true,
         // a function of its arguments alone does not move
         CExpr::Call(f, _) => !f.is_arithmetic(),
@@ -2596,8 +2791,9 @@ impl Validator<'_> {
                     return Err(format!("register {r} out of range"));
                 }
                 // a register is the scheduler's: a session and a claim's
-                // `given` read the session's
-                if matches!(m, Moment::Session | Moment::Given) {
+                // `given` read the session's, and a request's release, as a
+                // hold's `cache`, is the session's
+                if matches!(m, Moment::Session | Moment::Given | Moment::Release) {
                     return Err(format!(
                         "`{}` is an engine's register (`state`), which its schedule reads; \
                          it is read in {m}",
@@ -2708,6 +2904,12 @@ impl Validator<'_> {
                         return true;
                     }
                 }
+                CStmt::Request { input, output, .. } => {
+                    let none = |e| constant(e).is_some_and(|w| w <= 0.0);
+                    if !(none(input) && none(output)) {
+                        return true;
+                    }
+                }
                 CStmt::Hold { pools, body, .. } => {
                     // a hold queued on a pool under `queue … every` is
                     // admitted at a tick, one queued during a tick at the
@@ -2730,6 +2932,134 @@ impl Validator<'_> {
             }
         }
         false
+    }
+
+    /// An engine's request: a hold's header, read for the request at its
+    /// admission and its release.
+    fn request(&self, r: &CRequest) -> Result<(), String> {
+        let np = self.p.pools.len();
+        let no_draw = |e: &CExpr, what: &str| {
+            if draws(e) {
+                Err(format!("a request's {what} may not draw"))
+            } else {
+                Ok(())
+            }
+        };
+        for (k, (q, u, reserve)) in r.pools.iter().enumerate() {
+            self.cref(q, np, "pool", Moment::Request)?;
+            if r.pools[..k].iter().any(|(o, _, _)| o == q) {
+                return Err(format!(
+                    "a request takes `{}` twice; take it once",
+                    self.p.show_pool_ref(q)
+                ));
+            }
+            self.expr(u, Moment::Request)?;
+            no_draw(u, "units")?;
+            if let Some(f) = reserve {
+                self.expr(f, Moment::Request)?;
+                no_draw(f, "`reserve`")?;
+            }
+        }
+        if let Some(e) = &r.reuse {
+            self.expr(e, Moment::Request)?;
+            no_draw(e, "`reuse`")?;
+        }
+        // `request.hit` is `min(cachedin(P), reuse)`, and the connector's
+        // load is read after it: neither is there for `reuse` to read (a
+        // `prefix` segment reads no state at all, below)
+        if let Some(CExpr::Ctx(v)) = r
+            .reuse
+            .as_ref()
+            .and_then(|e| e.find(&|x| matches!(x, CExpr::Ctx(CtxVar::Hit | CtxVar::Loaded))))
+        {
+            return Err(format!(
+                "a request's `reuse` reads `{}`, which the admission computes from it",
+                v.name()
+            ));
+        }
+        if let Some(e) = &r.cache {
+            self.expr(e, Moment::Release)?;
+        }
+        for (k, n) in r.prefix.iter().flatten() {
+            for e in [k, n] {
+                self.expr(e, Moment::Request)?;
+                if moves(e) {
+                    return Err(
+                        "a request's `prefix` segment reads the state, the clock or a draw; a \
+                         key names content, an attribute or a number"
+                            .into(),
+                    );
+                }
+            }
+        }
+        let rec = r.records;
+        for k in [rec.reused, rec.prefill] {
+            if k >= self.p.observes.len() {
+                return Err(format!("a request's record {k} is not an observation"));
+            }
+        }
+        for a in [rec.admitted, rec.first, rec.last_reused, rec.last_prefill] {
+            self.attr(a)?;
+        }
+        Ok(())
+    }
+
+    /// An engine's connector: its load read at the request's admission, its
+    /// save at its release; it loads into the engine's memory, which the
+    /// request takes. Its blocks are checked with the session's.
+    fn connector(&self, st: &CStep, c: &CConnector) -> Result<(), String> {
+        let takes_memory = st.memory.is_some_and(|m| {
+            st.request
+                .iter()
+                .flat_map(|r| &r.pools)
+                .any(|(q, _, _)| q.base == m)
+        });
+        if let Some((e, b)) = &c.load {
+            if !takes_memory {
+                return Err(
+                    "a connector loads into the engine's memory, which its requests do not take"
+                        .into(),
+                );
+            }
+            self.expr(e, Moment::Request)?;
+            if e.any(&|x| matches!(x, CExpr::Ctx(CtxVar::Loaded))) {
+                return Err(
+                    "a connector's `load` says what `request.loaded` is: it reads `request.hit`, \
+                     not itself"
+                        .into(),
+                );
+            }
+            if draws(e) {
+                return Err("a connector's load may not draw".into());
+            }
+            self.block_id(*b)?;
+        }
+        if let Some((e, b)) = &c.save {
+            if st.request.as_ref().is_none_or(|r| r.pools.is_empty()) {
+                return Err(
+                    "a connector saves before a request gives its pools back, and its \
+                            requests take none"
+                        .into(),
+                );
+            }
+            self.expr(e, Moment::Release)?;
+            self.block_id(*b)?;
+        }
+        if c.record >= self.p.observes.len() {
+            return Err(format!(
+                "a connector's record {} is not an observation",
+                c.record
+            ));
+        }
+        self.attr(c.loaded)?;
+        self.attr(c.saved)
+    }
+
+    fn block_id(&self, b: BlockId) -> Result<(), String> {
+        if b >= self.p.blocks.len() {
+            return Err(format!("block {b} out of range"));
+        }
+        Ok(())
     }
 
     fn stmt(&self, s: &CStmt) -> Result<(), String> {
@@ -2950,6 +3280,39 @@ impl Validator<'_> {
                 self.cref(r, np, "pool", m)?;
                 self.expr(e, m)?;
                 amount(e, &format!("load {}", self.p.pools[r.base].name))
+            }
+            CStmt::Request {
+                stage,
+                input,
+                output,
+            } => {
+                self.cref(stage, ns, "stage", m)?;
+                let members = stage.base..stage.base + stage.count;
+                if let Some(i) = members
+                    .clone()
+                    .find(|&i| !matches!(self.p.stages[i].kind, CStageKind::Step(_)))
+                {
+                    return Err(format!(
+                        "a request is to an engine, and `{}` is a {}",
+                        self.p.stages[i].name,
+                        self.p.stages[i].kind.noun()
+                    ));
+                }
+                let name = &self.p.stages[stage.base].name;
+                for (e, what) in [(input, "input"), (output, "output")] {
+                    self.expr(e, m)?;
+                    amount(e, &format!("{name} {what}"))?;
+                }
+                // a request generates at least one token, as vLLM's
+                // `max_tokens` is at least 1 (sampling_params.py:612-614)
+                if constant(output).is_some_and(|o| o < 1.0) {
+                    return Err(format!(
+                        "a request to `{name}` generates {}: a request generates at least one \
+                         token",
+                        self.p.show_expr(output)
+                    ));
+                }
+                Ok(())
             }
             CStmt::Run {
                 stage,
@@ -3412,6 +3775,14 @@ impl Program {
             }
             _ => self.show_expr(e),
         }
+    }
+
+    /// The engines that have a connector, with it.
+    pub fn connectors(&self) -> impl Iterator<Item = (&CStep, &CConnector)> {
+        self.stages.iter().filter_map(|s| match &s.kind {
+            CStageKind::Step(st) => st.connector.as_deref().map(|c| (st, c)),
+            _ => None,
+        })
     }
 
     /// A pool reference: `kv`, `rep[j]`.

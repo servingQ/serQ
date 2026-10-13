@@ -32,24 +32,31 @@ namespace Oracle
 
 open Exec
 
-/-- The vLLM request program (serQ `examples/oracle/vllm_request.sq`), translated from its IR. Attributes: 2 = turn_no, 3 = new, 4 = out, 5 = think, 6 = more, 7 = forced, 8 = computed, 9 = prompt, 10 = o, 11 = arrive, 12 = kept, 13 = known. Observations: 0 = first, 1 = done. Pools: 0 = reqs, 1 = kv. Stages: 0 = vllm, 1 = gate. -/
+/-- The vLLM request program (serQ `examples/oracle/vllm_request.sq`), translated from its IR. Attributes: 2 = turn_no, 3 = new, 4 = out, 5 = think, 6 = more, 7 = forced, 8 = computed, 9 = prompt, 10 = o, 11 = arrive, 12 = vllm.admitted, 13 = vllm.first, 14 = vllm.reused, 15 = vllm.prefill, 16 = vllm.input, 17 = vllm.output, 18 = vllm.kept, 19 = vllm.known, 20 = vllm.again. Observations: 0 = first, 1 = done, 2 = vllm.reused, 3 = vllm.prefill. Pools: 0 = reqs, 1 = kv. Stages: 0 = vllm, 1 = gate. -/
 def vllmRequest : Prog := [route|
   run 1 (x.attr 11);
   turn;
-  set 12 = x.attr 9;
-  hold 0 (1), 1 (min (max (x.attr 12) ((x.attr 8) + 1)) x.budgetLeft) fits (max (x.attr 12) ((x.attr 8) + 1)) {
-    set 13 = max (x.attr 12) ((x.attr 8) + 1);
-    set 12 = x.attr 13;
-    run 0 prefill (x.attr 13) growing 1;
-    branch (if ((x.attr 13) = (x.attr 9)) then 1 else 0) {
-      observe 0 = x.now;
+  set 16 = x.attr 9;
+  set 17 = x.attr 10;
+  set 18 = x.attr 16;
+  set 20 = 0;
+  hold 0 (1), 1 (min (if ((x.attr 20) ≠ 0) then (max (x.attr 18) ((x.attr 8) + 1)) else (x.attr 18)) x.budgetLeft) fits (if ((x.attr 20) ≠ 0) then (max (x.attr 18) ((x.attr 8) + 1)) else (x.attr 18)) {
+    set 19 = if ((x.attr 20) ≠ 0) then (max (x.attr 18) ((x.attr 8) + 1)) else (x.attr 18);
+    set 18 = x.attr 19;
+    set 20 = 1;
+    observe 2 = x.cached;
+    observe 3 = (x.attr 19) - x.cached;
+    run 0 prefill ((x.attr 19) - x.cached) growing 1;
+    branch (if ((x.attr 19) = (x.attr 16)) then 1 else 0) {
+      set 13 = x.now;
       done
     } else {
       done
     };
-    run 0 decode (((x.attr 10) - 1) - ((x.attr 13) - (x.attr 9))) growing 1;
+    run 0 decode (((x.attr 17) - 1) - ((x.attr 19) - (x.attr 16))) growing 1;
     done
   };
+  observe 0 = x.attr 13;
   observe 1 = x.now;
   stop]
 
@@ -112,7 +119,7 @@ theorem vllm_seqcap :
 
 /-! ### A multi-turn scenario with a prefix cache -/
 
-/-- The vLLM replay program (serQ `examples/replay/vllm_replay.sq`) on a unit step clock, translated from its IR. Attributes: 2 = turn_no, 3 = new, 4 = out, 5 = think, 6 = more, 7 = forced, 8 = computed, 9 = prev, 10 = prevout, 11 = t0, 12 = prompt, 13 = hitmax, 14 = kept, 15 = known, 16 = c. Observations: 0 = cached_tokens, 1 = prefix, 2 = sent, 3 = ttft, 4 = response. Pools: 0 = kv, 1 = reqs. Stages: 0 = vllm, 1 = front, 2 = gate, 3 = tool. -/
+/-- The vLLM replay program (serQ `examples/replay/vllm_replay.sq`) on a unit step clock, translated from its IR. Attributes: 2 = turn_no, 3 = new, 4 = out, 5 = think, 6 = more, 7 = forced, 8 = computed, 9 = prev, 10 = prevout, 11 = t0, 12 = prompt, 13 = hitmax, 14 = vllm.admitted, 15 = vllm.first, 16 = vllm.reused, 17 = vllm.prefill, 18 = vllm.input, 19 = vllm.output, 20 = vllm.kept, 21 = vllm.known, 22 = vllm.again. Observations: 0 = prefix, 1 = sent, 2 = ttft, 3 = response, 4 = vllm.reused, 5 = vllm.prefill. Pools: 0 = kv, 1 = reqs. Stages: 0 = vllm, 1 = front, 2 = gate, 3 = tool. -/
 def vllmTurn : Prog := [route|
   run 2 (x.serial * 3);
   set 9 = 0;
@@ -122,25 +129,30 @@ def vllmTurn : Prog := [route|
   set 12 = x.attr 3;
   run 1 (0);
   set 13 = if ((x.attr 7) ≠ 0) then 0 else (((min (x.attr 9) ((x.attr 12) - 1)) / 16) * 16);
-  set 14 = x.attr 12;
-  hold 1 (1), 0 ((min (x.cachedIn 0) (max (x.attr 13) (((max (if ((x.attr 14) > (x.attr 12)) then ((x.attr 14) - 1) else 0) (x.attr 8)) / 16) * 16))) + (min ((max (x.attr 14) ((x.attr 8) + 1)) - (min (x.cachedIn 0) (max (x.attr 13) (((max (if ((x.attr 14) > (x.attr 12)) then ((x.attr 14) - 1) else 0) (x.attr 8)) / 16) * 16)))) x.budgetLeft)) fits (max (x.attr 14) ((x.attr 8) + 1)) reuse (max (x.attr 13) (((max (if ((x.attr 14) > (x.attr 12)) then ((x.attr 14) - 1) else 0) (x.attr 8)) / 16) * 16)) {
-    set 15 = max (x.attr 14) ((x.attr 8) + 1);
-    set 14 = x.attr 15;
-    set 16 = x.cached;
-    observe 0 = x.attr 16;
-    observe 1 = (x.attr 9) + (x.attr 10);
-    observe 2 = x.attr 11;
-    run 0 prefill ((x.attr 15) - (x.attr 16)) growing 0;
-    branch (if ((x.attr 15) = (x.attr 12)) then 1 else 0) {
-      observe 3 = x.now - (x.attr 11);
+  observe 0 = (x.attr 9) + (x.attr 10);
+  observe 1 = x.attr 11;
+  set 18 = x.attr 12;
+  set 19 = x.attr 4;
+  set 20 = x.attr 18;
+  set 22 = 0;
+  hold 1 (1), 0 ((min (x.cachedIn 0) (max (x.attr 13) (((max (if ((if ((x.attr 22) ≠ 0) then (max (x.attr 20) ((x.attr 8) + 1)) else (x.attr 20)) > (x.attr 18)) then ((if ((x.attr 22) ≠ 0) then (max (x.attr 20) ((x.attr 8) + 1)) else (x.attr 20)) - 1) else 0) (x.attr 8)) / 16) * 16))) + (min ((if ((x.attr 22) ≠ 0) then (max (x.attr 20) ((x.attr 8) + 1)) else (x.attr 20)) - (min (x.cachedIn 0) (max (x.attr 13) (((max (if ((if ((x.attr 22) ≠ 0) then (max (x.attr 20) ((x.attr 8) + 1)) else (x.attr 20)) > (x.attr 18)) then ((if ((x.attr 22) ≠ 0) then (max (x.attr 20) ((x.attr 8) + 1)) else (x.attr 20)) - 1) else 0) (x.attr 8)) / 16) * 16)))) x.budgetLeft)) fits (if ((x.attr 22) ≠ 0) then (max (x.attr 20) ((x.attr 8) + 1)) else (x.attr 20)) reuse (max (x.attr 13) (((max (if ((if ((x.attr 22) ≠ 0) then (max (x.attr 20) ((x.attr 8) + 1)) else (x.attr 20)) > (x.attr 18)) then ((if ((x.attr 22) ≠ 0) then (max (x.attr 20) ((x.attr 8) + 1)) else (x.attr 20)) - 1) else 0) (x.attr 8)) / 16) * 16)) {
+    set 21 = if ((x.attr 22) ≠ 0) then (max (x.attr 20) ((x.attr 8) + 1)) else (x.attr 20);
+    set 20 = x.attr 21;
+    set 22 = 1;
+    observe 4 = x.cached;
+    observe 5 = (x.attr 21) - x.cached;
+    run 0 prefill ((x.attr 21) - x.cached) growing 0;
+    branch (if ((x.attr 21) = (x.attr 18)) then 1 else 0) {
+      set 15 = x.now;
       done
     } else {
       done
     };
-    run 0 decode (((x.attr 4) - 1) - ((x.attr 15) - (x.attr 12))) growing 0;
+    run 0 decode (((x.attr 19) - 1) - ((x.attr 21) - (x.attr 18))) growing 0;
     done
-  } cache (((x.attr 12) + (x.attr 4)) - 1);
-  observe 4 = x.now - (x.attr 11);
+  } cache (((x.attr 18) + (x.attr 19)) - 1);
+  observe 2 = (x.attr 15) - (x.attr 11);
+  observe 3 = x.now - (x.attr 11);
   while (x.attr 6) {
     set 9 = x.attr 3;
     set 10 = x.attr 4;
@@ -150,25 +162,30 @@ def vllmTurn : Prog := [route|
     set 12 = x.attr 3;
     run 1 (0);
     set 13 = if ((x.attr 7) ≠ 0) then 0 else (((min (x.attr 9) ((x.attr 12) - 1)) / 16) * 16);
-    set 14 = x.attr 12;
-    hold 1 (1), 0 ((min (x.cachedIn 0) (max (x.attr 13) (((max (if ((x.attr 14) > (x.attr 12)) then ((x.attr 14) - 1) else 0) (x.attr 8)) / 16) * 16))) + (min ((max (x.attr 14) ((x.attr 8) + 1)) - (min (x.cachedIn 0) (max (x.attr 13) (((max (if ((x.attr 14) > (x.attr 12)) then ((x.attr 14) - 1) else 0) (x.attr 8)) / 16) * 16)))) x.budgetLeft)) fits (max (x.attr 14) ((x.attr 8) + 1)) reuse (max (x.attr 13) (((max (if ((x.attr 14) > (x.attr 12)) then ((x.attr 14) - 1) else 0) (x.attr 8)) / 16) * 16)) {
-      set 15 = max (x.attr 14) ((x.attr 8) + 1);
-      set 14 = x.attr 15;
-      set 16 = x.cached;
-      observe 0 = x.attr 16;
-      observe 1 = (x.attr 9) + (x.attr 10);
-      observe 2 = x.attr 11;
-      run 0 prefill ((x.attr 15) - (x.attr 16)) growing 0;
-      branch (if ((x.attr 15) = (x.attr 12)) then 1 else 0) {
-        observe 3 = x.now - (x.attr 11);
+    observe 0 = (x.attr 9) + (x.attr 10);
+    observe 1 = x.attr 11;
+    set 18 = x.attr 12;
+    set 19 = x.attr 4;
+    set 20 = x.attr 18;
+    set 22 = 0;
+    hold 1 (1), 0 ((min (x.cachedIn 0) (max (x.attr 13) (((max (if ((if ((x.attr 22) ≠ 0) then (max (x.attr 20) ((x.attr 8) + 1)) else (x.attr 20)) > (x.attr 18)) then ((if ((x.attr 22) ≠ 0) then (max (x.attr 20) ((x.attr 8) + 1)) else (x.attr 20)) - 1) else 0) (x.attr 8)) / 16) * 16))) + (min ((if ((x.attr 22) ≠ 0) then (max (x.attr 20) ((x.attr 8) + 1)) else (x.attr 20)) - (min (x.cachedIn 0) (max (x.attr 13) (((max (if ((if ((x.attr 22) ≠ 0) then (max (x.attr 20) ((x.attr 8) + 1)) else (x.attr 20)) > (x.attr 18)) then ((if ((x.attr 22) ≠ 0) then (max (x.attr 20) ((x.attr 8) + 1)) else (x.attr 20)) - 1) else 0) (x.attr 8)) / 16) * 16)))) x.budgetLeft)) fits (if ((x.attr 22) ≠ 0) then (max (x.attr 20) ((x.attr 8) + 1)) else (x.attr 20)) reuse (max (x.attr 13) (((max (if ((if ((x.attr 22) ≠ 0) then (max (x.attr 20) ((x.attr 8) + 1)) else (x.attr 20)) > (x.attr 18)) then ((if ((x.attr 22) ≠ 0) then (max (x.attr 20) ((x.attr 8) + 1)) else (x.attr 20)) - 1) else 0) (x.attr 8)) / 16) * 16)) {
+      set 21 = if ((x.attr 22) ≠ 0) then (max (x.attr 20) ((x.attr 8) + 1)) else (x.attr 20);
+      set 20 = x.attr 21;
+      set 22 = 1;
+      observe 4 = x.cached;
+      observe 5 = (x.attr 21) - x.cached;
+      run 0 prefill ((x.attr 21) - x.cached) growing 0;
+      branch (if ((x.attr 21) = (x.attr 18)) then 1 else 0) {
+        set 15 = x.now;
         done
       } else {
         done
       };
-      run 0 decode (((x.attr 4) - 1) - ((x.attr 15) - (x.attr 12))) growing 0;
+      run 0 decode (((x.attr 19) - 1) - ((x.attr 21) - (x.attr 18))) growing 0;
       done
-    } cache (((x.attr 12) + (x.attr 4)) - 1);
-    observe 4 = x.now - (x.attr 11);
+    } cache (((x.attr 18) + (x.attr 19)) - 1);
+    observe 2 = (x.attr 15) - (x.attr 11);
+    observe 3 = x.now - (x.attr 11);
     done
   };
   stop]
@@ -181,7 +198,7 @@ send step, time to first token, latency, cached tokens at admission. -/
 theorem vllm_cache_trace :
     let m := Exec.runW ⟨[⟨320, 16, false, none⟩, ⟨4, 1, true, none⟩], 64, 0, some 0, fun _ => 1, none, none⟩ 43
       ⟨[[], [], []], [[[(3, 100), (4, 3), (5, 2), (7, 0)], [(3, 150), (4, 3), (5, 2), (7, 0)], [(3, 210), (4, 3), (5, 0), (7, 0)]], [[(3, 120), (4, 3), (5, 2), (7, 0)], [(3, 180), (4, 3), (5, 2), (7, 0)], [(3, 230), (4, 3), (5, 0), (7, 0)]], [[(3, 90), (4, 3), (5, 2), (7, 0)], [(3, 140), (4, 3), (5, 2), (7, 0)], [(3, 200), (4, 3), (5, 0), (7, 0)]]], some 2, 6, some 8, none⟩ vllmTurn
-    (observed m 2, observed m 3, observed m 4, observed m 0) =
+    (observed m 1, observed m 2, observed m 3, observed m 4) =
       ([(0, 0), (0, 6), (0, 13), (1, 3), (1, 9), (1, 17), (2, 6), (2, 12), (2, 22)],
        [(0, 2), (0, 3), (0, 11), (1, 2), (1, 4), (1, 13), (2, 2), (2, 6), (2, 14)],
        [(0, 4), (0, 5), (0, 13), (1, 4), (1, 6), (1, 15), (2, 4), (2, 8), (2, 16)],

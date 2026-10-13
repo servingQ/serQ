@@ -225,7 +225,7 @@
    "block": 16.0,
    "cap": 48.0,
    "evict": "Lru",
-   "name": "kv",
+   "name": "llm.kv",
    "preempt": {
     "By": {
      "keys": [
@@ -248,7 +248,7 @@
    "block": null,
    "cap": 4.0,
    "evict": "Lru",
-   "name": "slots",
+   "name": "llm.slots",
    "preempt": "None",
    "queue": null,
    "spill": null

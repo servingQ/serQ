@@ -97,13 +97,12 @@ fn a_queue_tick_is_positive_and_no_engines() {
         device gpu { kv cap 64; }
         engine llm on gpu {
           tokens cap 8;
-          request () { prefill (8) growing kv; }
           scheduler { advance running; admit waiting taking kv (8); }
           worker { forward (1); }
         }
         pool kv on llm.gpu { queue fifo every (5); }
         workload { arrive batch(1); session { turn; } }
-        server { llm (); }
+        server { llm (8, 1); }
 "#,
         "`queue … every` on a pool an engine admits",
     );
@@ -119,7 +118,6 @@ fn the_waiters_of_one_tick_reach_the_same_iteration() {
         device gpu { kv cap 64; }
         engine llm on gpu {
           tokens cap 64;
-          request () { prefill (8) growing kv; }
           scheduler { advance running; admit waiting taking kv (8); }
           worker { forward (1); }
         }
@@ -128,7 +126,7 @@ fn the_waiters_of_one_tick_reach_the_same_iteration() {
         workload { arrive batch(2); session { turn; } }
         server {
           hold gate (cost(gate, 1)) { }
-          llm ();
+          llm (8, 1);
           observe done = now;
         }
 "#);

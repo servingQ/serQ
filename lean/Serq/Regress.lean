@@ -19,48 +19,78 @@ namespace Regress
 
 open Exec
 
-/-- `tests/lean-regress/chunk_expr.sq`, translated from its IR. Attributes: 2 = turn_no, 3 = new, 4 = out, 5 = think, 6 = more, 7 = forced, 8 = computed, 9 = p, 10 = o. Observations: 0 = first, 1 = done. Pools: 0 = kv, 1 = slots. Stages: 0 = llm. -/
+/-- `tests/lean-regress/chunk_expr.sq`, translated from its IR. Attributes: 2 = turn_no, 3 = new, 4 = out, 5 = think, 6 = more, 7 = forced, 8 = computed, 9 = p, 10 = o, 11 = llm.admitted, 12 = llm.first, 13 = llm.reused, 14 = llm.prefill, 15 = llm.input, 16 = llm.output, 17 = llm.kept, 18 = llm.known, 19 = llm.again. Observations: 0 = first, 1 = done, 2 = llm.reused, 3 = llm.prefill. Pools: 0 = kv, 1 = slots. Stages: 0 = llm. -/
 def chunkExpr : Prog := [route|
   turn;
-  hold 1 (1), 0 (x.attr 9) {
-    run 0 prefill (x.attr 9) growing 0;
-    observe 0 = x.now;
-    run 0 decode (x.attr 10) growing 0;
-    observe 1 = x.now;
+  set 15 = x.attr 9;
+  set 16 = (x.attr 10) + 1;
+  set 17 = x.attr 15;
+  set 19 = 0;
+  hold 1 (1), 0 (x.attr 15) {
+    set 18 = if ((x.attr 19) ≠ 0) then (max (x.attr 17) ((x.attr 8) + 1)) else (x.attr 17);
+    set 17 = x.attr 18;
+    set 19 = 1;
+    observe 2 = x.cached;
+    observe 3 = (x.attr 18) - x.cached;
+    run 0 prefill ((x.attr 18) - x.cached) growing 0;
+    branch (if ((x.attr 18) = (x.attr 15)) then 1 else 0) {
+      set 12 = x.now;
+      done
+    } else {
+      done
+    };
+    run 0 decode (((x.attr 16) - 1) - ((x.attr 18) - (x.attr 15))) growing 0;
     done
   };
+  observe 0 = x.attr 12;
+  observe 1 = x.now;
   stop]
 
-/-- `serq run`: first, done per session, and 0 preemptions. -/
+/-- `serq run`: first, done, llm.reused, llm.prefill per session, and 0 preemptions. -/
 theorem regress_chunk_expr :
     let m := Exec.runW ⟨[⟨160, 16, false, none⟩, ⟨2, 1, true, none⟩], 32, 0, some 0, fun _ => 1, none, some fun c => if (((c.queued 1) + c.residents) > 2) then 8 else 0⟩ 1000
       ⟨[[(9, 40), (10, 4)], [(9, 40), (10, 6)], [(9, 40), (10, 2)]], [], none, 0, some 8, none⟩ chunkExpr
-    ([observed m 0, observed m 1], m.preempts) =
-    ([[(0, 5), (1, 5), (2, 11)], [(0, 9), (1, 11), (2, 13)]], 0) := by
+    ([observed m 0, observed m 1, observed m 2, observed m 3], m.preempts) =
+    ([[(0, 5), (1, 5), (2, 11)], [(0, 9), (1, 11), (2, 13)], [(0, 0), (1, 0), (2, 0)], [(0, 40), (1, 40), (2, 40)]], 0) := by
   decide +kernel
 
-/-- `tests/lean-regress/cost_ctx.sq`, translated from its IR. Attributes: 2 = turn_no, 3 = new, 4 = out, 5 = think, 6 = more, 7 = forced, 8 = computed, 9 = n, 10 = o, 11 = t0. Observations: 0 = ttft, 1 = done. Pools: 0 = kv, 1 = slots. Stages: 0 = llm, 1 = gate. -/
+/-- `tests/lean-regress/cost_ctx.sq`, translated from its IR. Attributes: 2 = turn_no, 3 = new, 4 = out, 5 = think, 6 = more, 7 = forced, 8 = computed, 9 = n, 10 = o, 11 = t0, 12 = llm.admitted, 13 = llm.first, 14 = llm.reused, 15 = llm.prefill, 16 = llm.input, 17 = llm.output, 18 = llm.kept, 19 = llm.known, 20 = llm.again. Observations: 0 = ttft, 1 = done, 2 = llm.reused, 3 = llm.prefill. Pools: 0 = kv, 1 = slots. Stages: 0 = llm, 1 = gate. -/
 def costCtx : Prog := [route|
   turn;
   run 1 (x.attr 11);
-  hold 1 (1), 0 (min (x.attr 9) x.budgetLeft) fits (x.attr 9) {
-    run 0 prefill (x.attr 9) growing 0;
-    observe 0 = x.now - (x.attr 11);
-    run 0 decode (x.attr 10) growing 0;
-    observe 1 = x.now;
+  set 16 = x.attr 9;
+  set 17 = (x.attr 10) + 1;
+  set 18 = x.attr 16;
+  set 20 = 0;
+  hold 1 (1), 0 (min (x.attr 16) x.budgetLeft) fits (x.attr 16) {
+    set 19 = if ((x.attr 20) ≠ 0) then (max (x.attr 18) ((x.attr 8) + 1)) else (x.attr 18);
+    set 18 = x.attr 19;
+    set 20 = 1;
+    observe 2 = x.cached;
+    observe 3 = (x.attr 19) - x.cached;
+    run 0 prefill ((x.attr 19) - x.cached) growing 0;
+    branch (if ((x.attr 19) = (x.attr 16)) then 1 else 0) {
+      set 13 = x.now;
+      done
+    } else {
+      done
+    };
+    run 0 decode (((x.attr 17) - 1) - ((x.attr 19) - (x.attr 16))) growing 0;
     done
   };
+  observe 0 = (x.attr 13) - (x.attr 11);
+  observe 1 = x.now;
   stop]
 
-/-- `serq run`: ttft, done per session, and 0 preemptions. -/
+/-- `serq run`: ttft, done, llm.reused, llm.prefill per session, and 0 preemptions. -/
 theorem regress_cost_ctx :
     let m := Exec.runW ⟨[⟨2048, 16, false, none⟩, ⟨4, 1, true, none⟩], 48, 0, some 0, fun st => 3 + 1 * st.tokens + 2 * st.prefilled + 1 * st.decoders + 1 * st.kvDecode + 1 * st.attention2, none, none⟩ 100000
       ⟨[[(9, 40), (10, 3), (11, 0)], [(9, 70), (10, 2), (11, 5)]], [], none, 0, some 8, none⟩ costCtx
-    ([observed m 0, observed m 1], m.preempts) =
-    ([[(0, 1723), (1, 6934)], [(0, 7074), (1, 7159)]], 0) := by
+    ([observed m 0, observed m 1, observed m 2, observed m 3], m.preempts) =
+    ([[(0, 1723), (1, 6934)], [(0, 7074), (1, 7159)], [(0, 0), (1, 0)], [(0, 40), (1, 70)]], 0) := by
   decide +kernel
 
-/-- `tests/lean-regress/preempt_delay.sq`, translated from its IR. Attributes: 2 = turn_no, 3 = new, 4 = out, 5 = think, 6 = more, 7 = forced, 8 = computed, 9 = d. Observations: 0 = resumed, 1 = done. Pools: 0 = kv, 1 = slots. Stages: 0 = llm, 1 = tool. -/
+/-- `tests/lean-regress/preempt_delay.sq`, translated from its IR. Attributes: 2 = turn_no, 3 = new, 4 = out, 5 = think, 6 = more, 7 = forced, 8 = computed, 9 = d. Observations: 0 = resumed, 1 = done. Pools: 0 = llm.kv, 1 = llm.slots. Stages: 0 = llm, 1 = tool. -/
 def preemptDelay : Prog := [route|
   turn;
   hold 1 (1), 0 (16) {

@@ -16,10 +16,6 @@ fn main() {
   device gpu { compute (t) = a * ceil(t / b0); }
   engine sarathi on gpu {
     tokens cap bmax;
-    request (prompt, output) {
-      prefill (prompt);
-      decode (output);
-    }
     scheduler {
       advance running admission;
       admit waiting while (running.preempted == 0);
@@ -37,7 +33,7 @@ fn main() {
   }
 
   server {
-    sarathi (vp, vd);
+    sarathi (vp, vd + 1);   // the model's decode steps after the prefill's sampled token
     observe response = now - t0;
   }
   // --8<-- [end:workload]

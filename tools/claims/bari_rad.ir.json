@@ -12,7 +12,11 @@
     "computed",
     "t0",
     "vp",
-    "vd"
+    "vd",
+    "E.admitted",
+    "E.first",
+    "E.reused",
+    "E.prefill"
   ],
   "attr_types": [
     "Value",
@@ -26,7 +30,11 @@
     "Value",
     "Size",
     "Size",
-    "Size"
+    "Size",
+    "Value",
+    "Value",
+    "Value",
+    "Value"
   ],
   "sides": [
     [
@@ -39,12 +47,13 @@
       "Workload",
       "Server",
       "Server",
-      "Server",
       "Workload"
     ]
   ],
   "observes": [
-    "response"
+    "response",
+    "E.reused",
+    "E.prefill"
   ],
   "pools": [],
   "stages": [
@@ -207,7 +216,18 @@
                 }
               }
             }
-          ]
+          ],
+          "request": {
+            "pools": [],
+            "records": {
+              "reused": 1,
+              "prefill": 2,
+              "admitted": 12,
+              "first": 13,
+              "last_reused": 14,
+              "last_prefill": 15
+            }
+          }
         }
       }
     }
@@ -324,51 +344,26 @@
     [
       "Turn",
       {
-        "Run": {
+        "Request": {
           "stage": {
             "base": 0,
             "count": 1,
             "index": null
           },
-          "mode": "Prefill",
-          "work": {
-            "Cost": [
-              {
-                "Stage": {
-                  "base": 0,
-                  "count": 1
-                }
-              },
-              {
-                "Attr": 10
-              }
-            ]
+          "input": {
+            "Attr": 10
           },
-          "growing": null
-        }
-      },
-      {
-        "Run": {
-          "stage": {
-            "base": 0,
-            "count": 1,
-            "index": null
-          },
-          "mode": "Decode",
-          "work": {
-            "Cost": [
-              {
-                "Stage": {
-                  "base": 0,
-                  "count": 1
-                }
-              },
+          "output": {
+            "Binary": [
+              "Add",
               {
                 "Attr": 11
+              },
+              {
+                "Num": 1.0
               }
             ]
-          },
-          "growing": null
+          }
         }
       },
       {

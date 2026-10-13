@@ -66,20 +66,14 @@ The RBLN scheduler treats one request as vLLM does: prefill what the cache
 does not hold, then decode. `RBLNScheduler` hands a preemption to upstream
 vLLM ([`_preempt_request`][resume]), which keeps the generated tokens and
 drops their KV, so a resumed request prefills from what it had computed.
-The program needs the same two values as `examples/multi-turn/vllm.sq`:
-`known`, every token the request has (`kept` remembers the most an earlier
-attempt had), and `reused`, the cached full blocks of `known − 1`. Both are
-read when the scheduler admits the request, and so is the live token
-budget, `left`, rather than captured before queuing:
-
-```serq
---8<-- "examples/vendors/rbln.sq:request"
-```
-
+The engine keeps both values the program needs, as in
+`examples/multi-turn/vllm.sq`: `request.known`, every token the request
+has, and `request.hit`, the cached full blocks of `known − 1`. The
+scheduler reads them when it admits the request, and so the live token
+budget, `budget_left(llm)`, rather than a value captured before queuing.
 A waiting request looks up its prefix hit ([`get_computed_blocks`][hit]),
-which is `cachedin(kv)` read at admission. The step's blocks are cached
-once scheduling is final ([`cache_blocks`][cached]), which is `cache
-(prompt + output)`.
+which the admission's `reuse` names. The step's blocks are cached once
+scheduling is final ([`cache_blocks`][cached]), which is its `cache`.
 
 ### One prefill or a decode-only batch
 

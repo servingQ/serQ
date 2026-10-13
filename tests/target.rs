@@ -91,7 +91,6 @@ fn another_policy_is_refused_with_its_construct() {
         engine llm on gpu {
           reqs cap 4;
           tokens cap 64;
-          request (n) { prefill (n) growing kv; }
           scheduler {
             advance running by (remaining);
             admit waiting while (running.preempted == 0) taking reqs (1), kv (n);
@@ -103,7 +102,7 @@ fn another_policy_is_refused_with_its_construct() {
           session { turn; end;
           }
         }
-        server { llm (n);
+        server { llm (n, 1);
         } ";
     let p = serq::compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap();
     let e = serq::target::vllm(&p).unwrap_err();
@@ -122,7 +121,6 @@ fn observable_serve_keys_name_the_programmable_scheduler() {
         engine llm on gpu {
           reqs cap 4;
           tokens cap 64;
-          request (n) { prefill (n) growing kv; }
           scheduler {
             advance running by (decoding ? 0 : 1, -admission);
             admit waiting while (running.preempted == 0) taking reqs (1), kv (n);
@@ -134,7 +132,7 @@ fn observable_serve_keys_name_the_programmable_scheduler() {
           session { turn; end;
           }
         }
-        server { llm (n);
+        server { llm (n, 1);
         } ";
     let p = serq::compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap();
     let t = serq::target::vllm(&p).unwrap();
@@ -261,7 +259,6 @@ fn the_newer_constructs_are_refused_and_vllms_schedule_taken() {
         engine llm on gpu {
           reqs cap 4;
           tokens cap 64;
-          request (n) { prefill (n) growing kv; }
           STATE
           scheduler { SCHEDULE }
           worker { forward (1); }
@@ -274,7 +271,7 @@ fn the_newer_constructs_are_refused_and_vllms_schedule_taken() {
         }
         server { HOLD
         } ";
-    let hold = "llm (n);";
+    let hold = "llm (n, 1);";
     let vllm =
         "advance running; admit waiting while (running.preempted == 0) taking reqs (1), kv (n);";
     let compile = |reserve: &str, state: &str, schedule: &str, h: &str| {
@@ -286,7 +283,7 @@ fn the_newer_constructs_are_refused_and_vllms_schedule_taken() {
         serq::compile_source(&common::main_source(&src), &common::horizon(10.0)).unwrap()
     };
     serq::target::vllm(&compile("", "", vllm, hold)).unwrap();
-    let legs = "fork { llm (n); } join;";
+    let legs = "fork { llm (n, 1); } join;";
     for (reserve, state, schedule, h, why) in [
         (
             "",

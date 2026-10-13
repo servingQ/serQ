@@ -23,30 +23,16 @@ fn main() {
   engine vllm on gpu {
     reqs cap max_seqs;
     tokens cap B;
-    // `vllm_replay.sq`'s request, its prompt's segments named: the system
-    // prompt of `product`, `system` tokens long, then the session's own context
-    request (prompt, output, hitmax, product, system, t0) {
-      prefix (product: floor(system, bs), serial: inf);   // vLLM shares full blocks
-      set kept = prompt;
-      at admission {
-        known = max(kept, computed + 1);
-        own = floor(max(kept > prompt ? kept - 1 : 0, computed), bs);
-        hit = min(cachedin(kv), max(hitmax, own));
-      }
-      set kept = known;
-      set c = cached;
-      observe cached_tokens = c;
-      observe sent = t0;
-      prefill (known - c) growing kv;
-      if (known == prompt) { observe ttft = now - t0; }   // not a resumed request's re-prefill
-      decode (output - 1 - (known - prompt)) growing kv;
-      cache (prompt + output - 1);   // every computed token, full blocks (kv_cache_manager.py:602)
-    }
+    // `vllm_replay.sq`'s admission, its prompt's segments named: the system
+    // prompt `system`, `S` tokens long, then the session's own context
     scheduler {
       advance running;
       admit waiting while (running.preempted == 0)
-        taking reqs (1), kv (hit + min(known - hit, budget_left(vllm))) reserve (known)
-        reuse (max(hitmax, own));
+        taking reqs (1), kv (request.hit + min(request.known - request.hit, budget_left(vllm)))
+          reserve (request.known)
+        reuse (max(hitmax, floor(max(request.known > request.input ? request.known - 1 : 0, computed), bs)))
+        prefix (system: floor(S, bs), serial: inf)    // vLLM shares full blocks
+        cache (request.input + request.output - 1);  // every computed token, full blocks (kv_cache_manager.py:602)
     }
     worker {
       forward (c_it);
@@ -82,7 +68,9 @@ fn main() {
     // reusable: the previous prompt, or at least the system prompt (the
     // generated tokens are not in this prompt), never the whole prompt
     set hitmax = floor(min(max(prev, S), prompt - 1), bs);
-    vllm (prompt, out, hitmax, system, S, t0);
+    observe sent = t0;
+    vllm (prompt, out);
+    observe ttft = vllm.first - t0;
     observe response = now - t0;
   }
 }

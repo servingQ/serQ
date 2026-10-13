@@ -19,7 +19,7 @@ Its deployment, drawn by [`serq draw`](../visualization/index.md):
 
 The `stage engine` of chapters 3 and 4 is now an `engine`, and `engine` is
 the word that declares one, so the engine is named `llm`. Leaving its
-request aside for now:
+admission aside for now:
 
 ```serq
 device gpu {
@@ -31,11 +31,10 @@ pool kv on gpu { block bs; evict lru; preempt lifo; }
 engine llm on gpu {
   reqs cap max_seqs;
   tokens cap B;
-  request (prompt, output) { … }
   scheduler {
     advance running;
     admit waiting while (running.preempted == 0)
-      taking reqs (1), kv (min(prompt, reused + budget_left(llm))) reserve (prompt);
+      taking …;
   }
   worker {
     forward (max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
@@ -74,81 +73,69 @@ prefill in an iteration, and `advance running` takes an order and an
 
 ## What the engine does with one request
 
-`prompt` and `output` are the request's parameters: its prompt and output
-lengths in tokens, which the server passes when it calls the engine
-(below).
-
-```serq
-request (prompt, output) {
-  set hitmax = floor(prompt - 1, bs);
-  at admission { reused = min(cachedin(kv), hitmax); }
-  set c = min(cached, floor(prompt - 1, bs));
-  if (computed == 0) { observe hit = c > 0; }
-  prefill (prompt - c) growing kv;
-  decode (output - 1) growing kv;
-  cache (prompt + output);
-}
-```
-
-The `request` block reads top to bottom in the order things happen to one
-request. Before it is admitted, it computes how much of its prompt the
-cache could supply, in whole blocks (`hitmax`; the last token is always
-recomputed). It waits in `reqs`'s queue until an iteration's `admit
-waiting` takes it. Then it prefills what the cache does not hold, decodes
-its output, and when it ends, `cache (prompt + output)` leaves its
-sequence cached for the session's next turn, as in chapter 4.
-
-**`at admission { reused = …; }`** names a value read when the request is
-admitted, not when it arrives. A prefix may be evicted while the request
-waits, so reading the cache earlier in a `set` would use an outdated
-value. `taking` reads `reused`.
-
-**`prefill (e)` and `decode (e)`** are the engine's work on the request,
-in tokens. The engine splits them over iterations: a prefill takes the
-chunks the budget allows, a decode one token per iteration.
-
-**`growing kv`** allocates additional blocks as the request advances instead
-of reserving its full memory at admission. With `preempt lifo`, a failed
-growth can preempt the most recently admitted running request. The
-preempted request goes back to the queue and runs from its admission
-again; see [preemption semantics](../language.md) for the state preserved
-across retries. That is why the program observes `hit` only on the first
-attempt, where `computed` is 0.
-
-The time to the first token needs no `observe`: the report's `client`
-section gives it for every turn, from the `turn;` to the token the
-prefill samples, once however many times the request is preempted, and
-the time per output token after it
-([what the client sees](../language.md#what-the-client-sees)).
+The engine keeps each request's state, as vLLM's scheduler does: the
+tokens it has, `request.known` (its prompt, `request.input`, and what it
+has generated), and how many of them have KV. Each iteration it computes
+what has no KV yet, a chunk of the prompt as the budget allows, and when
+they all have it samples a token; after that it decodes one token per
+iteration until it has generated `request.output`. Prefill and decode are
+that one rule with many tokens left or one.
 
 ## What an admission takes
 
 ```serq
 admit waiting while (running.preempted == 0)
-  taking reqs (1), kv (min(prompt, reused + budget_left(llm))) reserve (prompt);
+  taking reqs (1), kv (min(request.known, request.hit + budget_left(llm)))
+    reserve (request.known)
+  reuse (floor(request.known - 1, bs))
+  cache (request.input + request.output);
 ```
 
 `taking` sits on `admit waiting` because that is when the scheduler sizes
-the request: it reads the request's parameters and its `at admission`
-names, at the moment the iteration admits it.
+the request: it reads the request at the moment the iteration admits it,
+not when it arrived. A prefix may be evicted while the request waits.
+
+**`reuse (floor(request.known - 1, bs))`** is how much of its tokens the
+cache may supply: whole blocks, never the last token, which is computed
+again for its logits. `request.hit` is what the cache does supply,
+`min(cachedin(kv), reuse)`, read when the request is admitted; the engine
+computes the rest.
 
 **`reqs (1)`** is one running slot.
 
-**`kv (min(prompt, reused + budget_left(llm)))`** is the blocks of the
-reused prefix plus the prefill chunk the iteration's budget still allows,
-capped by `prompt`. `budget_left(llm)` is the token budget left after
-serving the running requests.
+**`kv (min(request.known, request.hit + budget_left(llm)))`** is the blocks
+of the reused prefix plus the prefill chunk the iteration's budget still
+allows, capped by the tokens the request has. `budget_left(llm)` is the
+token budget left after serving the running requests. The KV pool grows
+with the request as it computes, block by block.
 
-**`reserve (prompt)`** admits the request only if the whole prompt fits
-beside the memory the running requests hold, although only the first
-chunk is allocated. This is vLLM's default (`scheduler_reserve_full_isl`).
-Without it, a long prompt is admitted on its first chunk and its later
-chunks preempt other requests; at the loads of the next chapter, that
-raises the preemption count about tenfold.
+**`reserve (request.known)`** admits the request only if every token it
+has fits beside the memory the running requests hold, although only the
+first chunk is allocated. This is vLLM's default
+(`scheduler_reserve_full_isl`). Without it, a long prompt is admitted on
+its first chunk and its later chunks preempt other requests; at the loads
+of the next chapter, that raises the preemption count about tenfold.
+
+**`cache (request.input + request.output)`** leaves the request's
+sequence cached when it ends, for the session's next turn, as in chapter
+4.
+
+With `preempt lifo`, a growth that does not fit preempts the most recently
+admitted running request. It goes back to the head of the queue keeping
+the tokens it has, and when it is admitted again computes their KV again
+and generates only the rest (vLLM's `_preempt_request`).
 
 Waiting requests are admitted only by `admit waiting`, in an iteration,
 with the budget left, and never in an iteration that preempted: `pool reqs
 on llm` hands the pool's queue to the engine's scheduler.
+
+The engine records what it did with each admission: `llm.reused`, the
+tokens it read from the cache, and `llm.prefill`, the tokens it computed.
+The time to the first token needs no `observe`: the report's `client`
+section gives it for every turn, from the `turn;` to the token the
+prefill samples, once however many times the request is preempted, and
+the time per output token after it
+([what the client sees](../language.md#what-the-client-sees)).
 
 ## The workload and the server
 
@@ -164,9 +151,8 @@ server {
 ```
 
 one request to the engine, with the session's context and new tokens as
-its prompt and `o` as its output. `llm (prompt, o)` runs the engine's
-`request` with its parameters `prompt` and `output` bound to these. The
-deployment figure shows the server side.
+its prompt and `o` as its output: `request.input` and `request.output` in
+`taking`. The deployment figure shows the server side.
 
 ## Running it
 
@@ -177,9 +163,10 @@ serq run docs/tutorial/programs/05-engine.sq --horizon 20000 --warmup 2000 --see
 ```text
 run: horizon 20000 end 20000 warmup 2000 seed 1 events 9160272 arrivals 9905 ended 8905 turns 43948 mean live 6.012
 
-observe  count    mean   95% CI    cv2     p99
--------  -----  ------  -------  -----  ------
-hit      43948  0.7932  ±0.0030  0.261  1.0000
+observe      count       mean    95% CI    cv2         p99
+-----------  -----  ---------  --------  -----  ----------
+llm.reused   43948  3922.3508  ±87.4343  0.845  16336.0000
+llm.prefill  43948   843.9338  ±14.8493  1.195   2976.1210
 
 client    count       mean      95% CI    cv2        p99
 --------  -----  ---------  ----------  -----  ---------

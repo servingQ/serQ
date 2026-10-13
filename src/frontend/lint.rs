@@ -7,7 +7,7 @@
 //! legitimate instance in `examples/`, so they are errors rather than
 //! warnings: a warning nobody acts on is worse than no check.
 
-use crate::ir::{CExpr, CStmt, Program};
+use crate::ir::{CExpr, CRequest, CStageKind, CStmt, CtxVar, Program};
 
 type Result = std::result::Result<(), String>;
 
@@ -27,8 +27,39 @@ fn mentions_attr(e: &CExpr, slot: usize) -> bool {
     e.any(&|x| matches!(x, CExpr::Attr(s) if *s == slot))
 }
 
+/// An engine's admission (`taking`, `reuse`, `prefix`), if `stage` is an
+/// engine that has one.
+fn admission(p: &Program, stage: usize) -> Option<&CRequest> {
+    match &p.stages.get(stage)?.kind {
+        CStageKind::Step(st) => st.request.as_deref(),
+        _ => None,
+    }
+}
+
+/// Does engine `stage`'s admission read `slot`, itself or as the call's
+/// `input` or `output`?
+fn admission_reads(p: &Program, stage: usize, input: &CExpr, output: &CExpr, slot: usize) -> bool {
+    let Some(r) = admission(p, stage) else {
+        return false;
+    };
+    let read: Vec<&CExpr> = r
+        .pools
+        .iter()
+        .flat_map(|(_, u, f)| std::iter::once(u).chain(f))
+        .chain(&r.reuse)
+        .chain(r.prefix.iter().flatten().flat_map(|(k, n)| [k, n]))
+        .collect();
+    let reads = |v: CtxVar| {
+        read.iter()
+            .any(|e| e.any(&|x| matches!(x, CExpr::Ctx(c) if *c == v)))
+    };
+    read.iter().any(|e| mentions_attr(e, slot))
+        || ((reads(CtxVar::Input) || reads(CtxVar::Known)) && mentions_attr(input, slot))
+        || ((reads(CtxVar::Output) || reads(CtxVar::Known)) && mentions_attr(output, slot))
+}
+
 /// The first hold after `from` in `block` whose *header* reads `slot`, giving
-/// the pool it holds. The body does not count: a `set` inside the body runs
+/// the pool it holds, or the engine whose admission reads it. The body does not count: a `set` inside the body runs
 /// after admission, which is the timing the author would have got anyway.
 fn header_using(p: &Program, block: usize, from: usize, slot: usize) -> Option<String> {
     let stmts = p.blocks.get(block)?;
@@ -55,6 +86,13 @@ fn header_using(p: &Program, block: usize, from: usize, slot: usize) -> Option<S
                 if rest.into_iter().any(|e| mentions_attr(e, slot)) {
                     return Some(p.show_pool_ref(&pools[0].0));
                 }
+            }
+            CStmt::Request {
+                stage,
+                input,
+                output,
+            } if admission_reads(p, stage.base, input, output, slot) => {
+                return Some(format!("engine `{}`", p.stages[stage.base].name));
             }
             CStmt::Branch(_, t, e) => {
                 if let Some(x) = header_using(p, *t, 0, slot).or(header_using(p, *e, 0, slot)) {
@@ -91,6 +129,16 @@ fn stale_header_read(p: &Program, block: usize, out: &mut Vec<String>) {
                     && let Some(pool) = header_using(p, block, i + 1, *slot)
                 {
                     let name = p.attrs.get(*slot).map_or("?", String::as_str);
+                    if let Some(engine) = pool.strip_prefix("engine ") {
+                        out.push(format!(
+                            "`{name}` reads {} when the session reaches the `set`, and is read \
+                             by the admission of {engine}, which happens when its scheduler \
+                             admits the request. Read `request.hit` in `taking` if the \
+                             admission's cached prefix is what you meant.",
+                            what.unwrap_or_else(|| "live state".into())
+                        ));
+                        continue;
+                    }
                     out.push(format!(
                         "`{name}` reads {} when the session reaches the `set`, and is used \
                          in the header of a hold on `{pool}`, which is read when the session \
@@ -171,6 +219,7 @@ fn exprs_of(s: &CStmt) -> Vec<&CExpr> {
             .chain(lease.iter().map(|(_, t)| t))
             .collect(),
         CStmt::Run { work, .. } => vec![work],
+        CStmt::Request { input, output, .. } => vec![input, output],
         CStmt::Branch(g, _, _) | CStmt::While(g, _) => vec![g],
         CStmt::Choose { count, key, .. } => std::iter::once(count).chain(key.iter()).collect(),
         CStmt::Turn
@@ -299,9 +348,31 @@ fn first_hold_in(p: &Program, b: usize) -> Option<String> {
         .and_then(|stmts| stmts.iter().find_map(|s| first_hold(p, s)))
 }
 
+/// `reuse` or `prefix` on an engine's admission that has no `cache`, as on
+/// a hold: the admission reads nothing of the cache.
+fn admission_without_cache(p: &Program, out: &mut Vec<String>) {
+    for (k, st) in p.stages.iter().enumerate() {
+        let Some(r) = admission(p, k).filter(|r| r.cache.is_none()) else {
+            continue;
+        };
+        for (clause, written) in [("reuse", r.reuse.is_some()), ("prefix", r.prefix.is_some())] {
+            if written {
+                out.push(format!(
+                    "`{clause}` on engine `{}`'s admission, which has no `cache` clause: it \
+                     reads and keeps nothing of the cache, so `{clause}` has nothing to bound. \
+                     Write `cache (0)` to read the cached prefix and keep nothing, or \
+                     `cache (ℓ)` to keep ℓ.",
+                    st.name
+                ));
+            }
+        }
+    }
+}
+
 /// Every lint, over a linked program.
 pub fn lint(p: &Program) -> Result {
     let mut out = vec![];
+    admission_without_cache(p, &mut out);
     for block in [p.session, p.init, p.turn] {
         stale_header_read(p, block, &mut out);
         constant_probability_guard(p, block, &mut out);

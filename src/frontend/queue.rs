@@ -121,15 +121,6 @@ pub struct QueueDecl {
     pub nic: bool,
     /// `kvt.nixl_pull (S, Q, …);` or `kvt.nixl_push (S, Q, …);`: where its entries take the KV from.
     pub takes: Option<Takes>,
-    /// An engine's request (`docs/design/engine-request.md`), its one
-    /// entry `request`: it keeps its names and its pools are the program's.
-    pub engine: bool,
-    /// An engine's request: the engine's `state` registers, which it reads
-    /// (SGLang's admission reads its new-token ratio); empty for a queue.
-    pub registers: Vec<String>,
-    /// An engine's request: where its admission is written (`taking`),
-    /// for the errors its header earns.
-    pub header_at: Option<usize>,
     pub at: usize,
 }
 
@@ -241,9 +232,6 @@ impl Ctx<'_> {
                 );
             }
             return Ok(src.clone());
-        }
-        if self.q.engine && self.q.pools.contains(&r.name) {
-            return Ok(r.clone());
         }
         if self.q.pools.contains(&r.name) {
             if r.index.is_some() {
@@ -514,6 +502,15 @@ impl Ctx<'_> {
                 Stmt::Unread(args.iter().map(|a| self.arg(a)).collect::<Result<_, _>>()?)
             }
             Stmt::Mark(n) => Stmt::Set(format!("{}.{n}", self.q.name), Expr::Var("now".into())),
+            Stmt::EngineRequest {
+                stage,
+                input,
+                output,
+            } => Stmt::EngineRequest {
+                stage: stage.clone(),
+                input: self.expr(input)?,
+                output: self.expr(output)?,
+            },
             Stmt::Hold {
                 pools,
                 reuse,

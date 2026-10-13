@@ -242,19 +242,17 @@ fn grow_and_growing_need_an_enclosing_hold() {
         }
         ";
     check_source(&common::main_source(src), &common::horizon(10.0)).unwrap();
-    // inside one, both link: the request's admission is its hold
-    let src = "device gpu { kv cap 64; } pool kv on gpu { }
-        engine llm on gpu {
-          tokens cap 8;
-          request () { grow kv (cost(kv, 8)); prefill (8) growing kv; }
-          scheduler { advance running; admit waiting while (running.preempted == 0) taking kv (8); }
-          worker { forward (1); }
+    // inside one, both link: a queue entry's hold
+    let src = "queue llm : prefill {
+          device gpu { kv cap 64; } pool kv on gpu { }
+          engine on gpu { tokens cap 8; scheduler { advance running; admit waiting while (running.preempted == 0); } worker { forward (1); } }
+          prefill (n) { hold kv (cost(kv, 8)) { grow kv (cost(kv, 8)); run llm prefill (cost(llm, n)) growing kv; } }
         }
         workload { arrive batch(1);
           session { turn; end;
           }
         }
-        server { llm ();
+        server { llm.prefill (8);
         }
         ";
     check_source(&common::main_source(src), &common::horizon(10.0)).unwrap();

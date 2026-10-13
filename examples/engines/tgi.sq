@@ -29,21 +29,17 @@ fn main() {
   engine tgi on gpu {
     tokens cap B;
     state just = 0;                // the last forward admitted
-    // What TGI does with one request: it prefills what the prefix cache
-    // does not hold and decodes, in the blocks it was admitted with. The
-    // hit never covers the whole input; only the input is cached.
-    request (prompt, output) {
-      set c = cached;
-      prefill (prompt - c);
-      decode (output - 1);
-      cache (prompt);
-    }
     // with no running batch there is no decode forward, and the queue is read
     scheduler {
       advance running;
-      // blocks for the whole input plus max_new_tokens, at once
+      // blocks for the whole input plus max_new_tokens, at once, so its
+      // decode needs no more. The hit never covers the whole input; only
+      // the input is cached.
       if (just == 0 || running.count == 0) {
-        admit waiting taking kv (prompt + mnt - 1) reuse (prompt - 1);
+        admit waiting
+          taking kv (request.input + mnt - 1)
+          reuse (request.input - 1)
+          cache (request.input);
       }
       set just = waiting.admitted > 0;
     }

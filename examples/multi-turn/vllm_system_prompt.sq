@@ -38,37 +38,23 @@ fn main() {
   engine vllm on gpu {
     reqs cap max_seqs;
     tokens cap B;
-    // `vllm.sq`'s request. Its prompt is the system prompt of `product`,
-    // `system` tokens long, then the session's own context: the cache reads
-    // the first across sessions, the second within one. `known` is every
-    // token it has (after a preemption, the position it had reached plus
-    // the token sampled there, scheduler.py:1560-1561); `reused` is what
-    // the prefix cache holds of it in full blocks, never the last token
-    // (kv_cache_manager.py:289-300).
-    request (prompt, output, product, system) {
-      prefix (product: floor(system, bs), serial: inf);   // vLLM shares full blocks
-      set kept = prompt;
-      at admission {
-        known = max(kept, computed + 1);
-        reused = min(cachedin(kv), floor(known - 1, blocksize(kv)));
-      }
-      set kept = known;
-      set c = min(cached, floor(known - 1, blocksize(kv)));
-      observe reused_tokens = c;
-      observe prefill_tokens = known - c;
-      prefill (known - c) growing kv;
-      decode (output - 1 - (known - prompt)) growing kv;
-      cache (prompt + output);                // a finished request's blocks stay cached
-    }
     scheduler {
       // long_prefill_token_threshold binds only while another request is
       // running or waiting; a request alone takes the whole budget (scheduler.py:606-616)
       let threshold = running.count + waiting.count > 1 ? chunk_cap : inf;
       advance running each at most (threshold);
       // vllm.sq's admission: the reused tokens plus the chunk the budget
-      // allows, admitted only if every token fits (the `reserve`)
+      // allows, admitted only if every token fits (the `reserve`). Its
+      // prompt is the system prompt of `product`, `S` tokens long, then the
+      // session's own context: the cache reads the first across sessions,
+      // the second within one; vLLM shares full blocks
+      // (kv_cache_manager.py:289-300).
       admit waiting while (running.preempted == 0) each at most (threshold)
-        taking reqs (1), kv (min(known, reused + budget_left(vllm))) reserve (known);
+        taking reqs (1), kv (min(request.known, request.hit + budget_left(vllm)))
+          reserve (request.known)
+        reuse (floor(request.known - 1, blocksize(kv)))
+        prefix (product: floor(S, bs), serial: inf)
+        cache (request.input + request.output);
     }
     worker {
       forward (c0 + max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
@@ -103,7 +89,6 @@ fn main() {
 
   // A turn is one request to the engine.
   server {
-    set prompt = S + K + n;
-    vllm (prompt, o, product, S);
+    vllm (S + K + n, o);
   }
 }

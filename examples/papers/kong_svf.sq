@@ -26,7 +26,6 @@ fn main() {
   device gpu { }
   engine llm on gpu {
     tokens cap 1000000;
-    request (output) { decode (output); }
     scheduler { advance running; admit waiting while (running.preempted == 0); }
     worker {
       forward (1);
@@ -38,7 +37,7 @@ fn main() {
   server {
     observe output_tokens = o;
     observe vol = s * o + floor((o * o + o) / 2);
-    hold kv (cost(kv, s + o)) { llm (o); }
+    hold kv (cost(kv, s + o)) { llm (0, o); }   // no prefill: o decode steps
     observe response = now;
   }
   // --8<-- [end:server]

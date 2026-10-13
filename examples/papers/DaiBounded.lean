@@ -27,7 +27,7 @@ def P3 : Prog := .run 0 .decode (fun _ => 990) none P4
 def P2 : Prog := .run 0 .prefill (fun _ => 290) none P3
 def P1 : Prog := .set 9 (fun x => x.now) P2
 
-theorem prog_eq : Pd = .run 1 .plain (fun x => x.attr 10) none P1 := rfl
+theorem prog_eq : Pd = .run 1 .plain (fun x => x.attr 14) none P1 := rfl
 
 theorem deployment_eq : Dd = ⟨[], 128, 0, none, fun st => 1128 + 3547 * ((st.tokens + 127) / 128), none, none⟩ := rfl
 
@@ -71,7 +71,7 @@ def Shape (s : Sess) : Cat → Prop
   | .r4 => s.prog = P4 ∧ s.status = .ready
   | .e => s.status = .ended
 
-def arr (w : Workload) (i : ℕ) : ℕ := w.attr i 10
+def arr (w : Workload) (i : ℕ) : ℕ := w.attr i 14
 
 section
 variable (w : Workload) (g : Ghost)
@@ -87,7 +87,7 @@ end
 
 /-- What one session carries. -/
 def SessI (w : Workload) (s : Sess) (i : ℕ) (k : Cat) : Prop :=
-  Shape s k ∧ s.stack = [] ∧ s.attr.base = w.attr i ∧ s.attr.get 10 = arr w i
+  Shape s k ∧ s.stack = [] ∧ s.attr.base = w.attr i ∧ s.attr.get 14 = arr w i
 
 /-- The invariant of an instant. -/
 structure DInv (w : Workload) (g : Ghost) (m : Machine) : Prop where
@@ -643,10 +643,10 @@ theorem exec_s0 {w : Workload} {g : Ghost} {m : Machine} (hI : DInv w g m)
   have hnow := hI.s0now i hin hc
   set m0 : Machine := { m with ready := rest } with hm0
   have hg0 : ∀ j, getS m0 j = getS m j := fun _ => rfl
-  have hev : evalE m0 i (fun x => x.attr 10) = arr w i := by
+  have hev : evalE m0 i (fun x => x.attr 14) = arr w i := by
     simp only [evalE, env, hg0]; exact h10
   rw [show (10000 : ℕ) = 9999 + 1 from rfl,
-    exec_runDelay Dd _ m0 i 1 .plain (fun x => x.attr 10) P1 (by rw [hg0]; exact hst)
+    exec_runDelay Dd _ m0 i 1 .plain (fun x => x.attr 14) P1 (by rw [hg0]; exact hst)
       (by rw [hg0, hp]; rfl) (by rw [hev]; exact (harr i hin).ne') (by norm_num), hev]
   have hn0 : m0.now = 0 := hnow
   rw [hn0, Nat.zero_add]
@@ -797,7 +797,7 @@ theorem demand_eq {w : Workload} {g : Ghost} {m : Machine} (hI : DInv w g m) :
 /-- The workloads of the claim: requests one gap apart. -/
 structure Fam (w : Workload) : Prop where
   len : w.init.length ≤ 500
-  slot : w.arriveSlot = some 10
+  slot : w.arriveSlot = some 14
   gap : ∀ i < w.init.length, arr w i = (i + 1) * 46750
 
 theorem fam_of_family {w : Workload} (hw : Claims.DaiSarathi.family_bounded w) : Fam w :=
@@ -847,7 +847,7 @@ theorem fr_zero {w : Workload} {g : Ghost} {s : ℕ}
 
 /-- The claim's `arrived`: the requests whose arrival time has come. -/
 theorem arrived_eq {w : Workload} {g : Ghost} {m : Machine} (hI : DInv w g m) (t : ℕ) :
-    (m.sess.toList.filter fun s => decide (s.attr.base 10 ≤ t)).length =
+    (m.sess.toList.filter fun s => decide (s.attr.base 14 ≤ t)).length =
       ((Finset.range w.init.length).filter fun i => arr w i ≤ t).card := by
   rw [sess_toList, List.filter_map, List.length_map, hI.size, ← card_range_filter]
   congr 1
@@ -1026,7 +1026,7 @@ theorem start_bnd {w : Workload} (hF : Fam w) {g : Ghost} {m : Machine} (hI : DI
           rcases h2 with ⟨hc, -⟩ | ⟨hc, -⟩ <;> rw [hc] at hj <;> simp [isJob] at hj
         rw [this] at h1; simpa using h1
     -- the claim
-    have hgood : (m.sess.toList.filter fun s => decide (s.attr.base 10 ≤ m.now)).length * 1280 ≤
+    have hgood : (m.sess.toList.filter fun s => decide (s.attr.base 14 ≤ m.now)).length * 1280 ≤
         m.served + 165120 := by
       rw [arrived_eq hI]
       have hc : ((Finset.range w.init.length).filter fun i => arr w i ≤ m.now).card = St w g := by

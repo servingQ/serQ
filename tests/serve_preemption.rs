@@ -61,7 +61,9 @@ fn a_served_resident_preempted_in_its_iteration_leaves_it() {
         .unwrap();
     let rep = run_ir(&ir, None).unwrap();
     let mut got = vec![(0.0, 0.0); requests.len()];
-    for &(t, s, _) in &rep.observe("first").unwrap().records {
+    // the first token's time, which the server observes after the call
+    let first = rep.observe("first").unwrap();
+    for (&t, &(_, s, _)) in first.samples.iter().zip(&first.records) {
         got[s as usize].0 = t;
     }
     for &(t, s, _) in &rep.observe("done").unwrap().records {

@@ -10,7 +10,11 @@
     "more",
     "forced",
     "computed",
-    "t0"
+    "t0",
+    "sarathi.admitted",
+    "sarathi.first",
+    "sarathi.reused",
+    "sarathi.prefill"
   ],
   "attr_types": [
     "Value",
@@ -22,7 +26,11 @@
     "Size",
     "Size",
     "Value",
-    "Size"
+    "Size",
+    "Value",
+    "Value",
+    "Value",
+    "Value"
   ],
   "sides": [
     [
@@ -33,12 +41,13 @@
       "Workload",
       "Server",
       "Server",
-      "Server",
       "Workload"
     ]
   ],
   "observes": [
-    "response"
+    "response",
+    "sarathi.reused",
+    "sarathi.prefill"
   ],
   "pools": [],
   "stages": [
@@ -91,7 +100,18 @@
           "serve": {
             "By": []
           },
-          "memory": null
+          "memory": null,
+          "request": {
+            "pools": [],
+            "records": {
+              "reused": 1,
+              "prefill": 2,
+              "admitted": 10,
+              "first": 11,
+              "last_reused": 12,
+              "last_prefill": 13
+            }
+          }
         }
       }
     }
@@ -121,51 +141,26 @@
     [
       "Turn",
       {
-        "Run": {
+        "Request": {
           "stage": {
             "base": 0,
             "count": 1,
             "index": null
           },
-          "mode": "Prefill",
-          "work": {
-            "Cost": [
-              {
-                "Stage": {
-                  "base": 0,
-                  "count": 1
-                }
-              },
-              {
-                "Num": 290.0
-              }
-            ]
+          "input": {
+            "Num": 290.0
           },
-          "growing": null
-        }
-      },
-      {
-        "Run": {
-          "stage": {
-            "base": 0,
-            "count": 1,
-            "index": null
-          },
-          "mode": "Decode",
-          "work": {
-            "Cost": [
-              {
-                "Stage": {
-                  "base": 0,
-                  "count": 1
-                }
-              },
+          "output": {
+            "Binary": [
+              "Add",
               {
                 "Num": 990.0
+              },
+              {
+                "Num": 1.0
               }
             ]
-          },
-          "growing": null
+          }
         }
       },
       {

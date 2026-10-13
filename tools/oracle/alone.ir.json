@@ -13,8 +13,10 @@
     "prompt",
     "o",
     "arrive",
-    "kept",
-    "known"
+    "vllm.admitted",
+    "vllm.first",
+    "vllm.reused",
+    "vllm.prefill"
   ],
   "attr_types": [
     "Value",
@@ -29,6 +31,8 @@
     "Size",
     "Size",
     "Size",
+    "Value",
+    "Value",
     "Value",
     "Value"
   ],
@@ -46,22 +50,13 @@
       "Server",
       "Server",
       "Workload"
-    ],
-    [
-      "Server",
-      "Server",
-      "Server",
-      "Server",
-      "Server"
-    ],
-    [
-      "Server"
-    ],
-    []
+    ]
   ],
   "observes": [
     "first",
-    "done"
+    "done",
+    "vllm.reused",
+    "vllm.prefill"
   ],
   "pools": [
     {
@@ -152,7 +147,68 @@
           "serve": {
             "By": []
           },
-          "memory": 1
+          "memory": 1,
+          "request": {
+            "pools": [
+              [
+                {
+                  "base": 0,
+                  "count": 1,
+                  "index": null
+                },
+                {
+                  "Num": 1.0
+                },
+                null
+              ],
+              [
+                {
+                  "base": 1,
+                  "count": 1,
+                  "index": null
+                },
+                {
+                  "Call": [
+                    "Min",
+                    [
+                      {
+                        "Expr": {
+                          "Ctx": "Known"
+                        }
+                      },
+                      {
+                        "Expr": {
+                          "Call": [
+                            "BudgetLeft",
+                            [
+                              {
+                                "Stage": {
+                                  "base": 0,
+                                  "count": 1,
+                                  "index": null
+                                }
+                              }
+                            ]
+                          ]
+                        }
+                      }
+                    ]
+                  ]
+                },
+                {
+                  "Ctx": "Known"
+                }
+              ]
+            ],
+            "records": {
+              "reused": 2,
+              "prefill": 3,
+              "admitted": 12,
+              "first": 13,
+              "last_reused": 14,
+              "last_prefill": 15
+            }
+          }
         }
       }
     },
@@ -293,145 +349,27 @@
       },
       "Turn",
       {
-        "Set": [
-          12,
-          {
+        "Request": {
+          "stage": {
+            "base": 0,
+            "count": 1,
+            "index": null
+          },
+          "input": {
             "Attr": 9
+          },
+          "output": {
+            "Attr": 10
           }
-        ]
+        }
       },
       {
-        "Hold": {
-          "pools": [
-            [
-              {
-                "base": 0,
-                "count": 1,
-                "index": null
-              },
-              {
-                "Cost": [
-                  {
-                    "Pool": {
-                      "base": 0,
-                      "count": 1
-                    }
-                  },
-                  {
-                    "Num": 1.0
-                  }
-                ]
-              },
-              null
-            ],
-            [
-              {
-                "base": 1,
-                "count": 1,
-                "index": null
-              },
-              {
-                "Cost": [
-                  {
-                    "Pool": {
-                      "base": 1,
-                      "count": 1
-                    }
-                  },
-                  {
-                    "Call": [
-                      "Min",
-                      [
-                        {
-                          "Expr": {
-                            "Call": [
-                              "Max",
-                              [
-                                {
-                                  "Expr": {
-                                    "Attr": 12
-                                  }
-                                },
-                                {
-                                  "Expr": {
-                                    "Binary": [
-                                      "Add",
-                                      {
-                                        "Attr": 8
-                                      },
-                                      {
-                                        "Num": 1.0
-                                      }
-                                    ]
-                                  }
-                                }
-                              ]
-                            ]
-                          }
-                        },
-                        {
-                          "Expr": {
-                            "Call": [
-                              "BudgetLeft",
-                              [
-                                {
-                                  "Stage": {
-                                    "base": 0,
-                                    "count": 1,
-                                    "index": null
-                                  }
-                                }
-                              ]
-                            ]
-                          }
-                        }
-                      ]
-                    ]
-                  }
-                ]
-              },
-              {
-                "Cost": [
-                  {
-                    "Pool": {
-                      "base": 1,
-                      "count": 1
-                    }
-                  },
-                  {
-                    "Call": [
-                      "Max",
-                      [
-                        {
-                          "Expr": {
-                            "Attr": 12
-                          }
-                        },
-                        {
-                          "Expr": {
-                            "Binary": [
-                              "Add",
-                              {
-                                "Attr": 8
-                              },
-                              {
-                                "Num": 1.0
-                              }
-                            ]
-                          }
-                        }
-                      ]
-                    ]
-                  }
-                ]
-              }
-            ]
-          ],
-          "reuse": null,
-          "body": 3,
-          "cache": null,
-          "lease": null
-        }
+        "Observe": [
+          0,
+          {
+            "Attr": 13
+          }
+        ]
       },
       {
         "Observe": [
@@ -442,155 +380,7 @@
         ]
       },
       "End"
-    ],
-    [
-      {
-        "Set": [
-          13,
-          {
-            "Call": [
-              "Max",
-              [
-                {
-                  "Expr": {
-                    "Attr": 12
-                  }
-                },
-                {
-                  "Expr": {
-                    "Binary": [
-                      "Add",
-                      {
-                        "Attr": 8
-                      },
-                      {
-                        "Num": 1.0
-                      }
-                    ]
-                  }
-                }
-              ]
-            ]
-          }
-        ]
-      },
-      {
-        "Set": [
-          12,
-          {
-            "Attr": 13
-          }
-        ]
-      },
-      {
-        "Run": {
-          "stage": {
-            "base": 0,
-            "count": 1,
-            "index": null
-          },
-          "mode": "Prefill",
-          "work": {
-            "Cost": [
-              {
-                "Stage": {
-                  "base": 0,
-                  "count": 1
-                }
-              },
-              {
-                "Attr": 13
-              }
-            ]
-          },
-          "growing": {
-            "base": 1,
-            "count": 1,
-            "index": null
-          }
-        }
-      },
-      {
-        "Branch": [
-          {
-            "Binary": [
-              "Eq",
-              {
-                "Attr": 13
-              },
-              {
-                "Attr": 9
-              }
-            ]
-          },
-          4,
-          5
-        ]
-      },
-      {
-        "Run": {
-          "stage": {
-            "base": 0,
-            "count": 1,
-            "index": null
-          },
-          "mode": "Decode",
-          "work": {
-            "Cost": [
-              {
-                "Stage": {
-                  "base": 0,
-                  "count": 1
-                }
-              },
-              {
-                "Binary": [
-                  "Sub",
-                  {
-                    "Binary": [
-                      "Sub",
-                      {
-                        "Attr": 10
-                      },
-                      {
-                        "Num": 1.0
-                      }
-                    ]
-                  },
-                  {
-                    "Binary": [
-                      "Sub",
-                      {
-                        "Attr": 13
-                      },
-                      {
-                        "Attr": 9
-                      }
-                    ]
-                  }
-                ]
-              }
-            ]
-          },
-          "growing": {
-            "base": 1,
-            "count": 1,
-            "index": null
-          }
-        }
-      }
-    ],
-    [
-      {
-        "Observe": [
-          0,
-          {
-            "Ctx": "Now"
-          }
-        ]
-      }
-    ],
-    []
+    ]
   ],
   "horizon": 100000.0,
   "warmup": 0.0,

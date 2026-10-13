@@ -7,6 +7,7 @@ engine NAME on DEVICE {
   tokens cap expr;           // required: the tokens one iteration computes (inf: no cap)
   granule c;                 // a prefill gets all it has left or a multiple of c
   state NAME = c;            // a register the schedule sets
+  connector QUEUE { … }      // its KV connector to an L2 queue (below)
   scheduler { stmt … }        // required: what each iteration does (below)
   worker {
     forward (expr);            // required: how long the iteration takes
@@ -23,9 +24,10 @@ and a chunk to a prefilling one, then admits waiting requests while the
 budget lasts, and lasts what `worker` says. A `growing` run first grows
 its hold to the position it will reach. An attempt that schedules no token
 and preempts nobody waits for the next event without running a timed
-iteration. Its [`request`](../language.md#an-engines-request) puts work on
-it, `prefill (e);` and `decode (e);` in tokens, and the server calls it;
-a queue's entry runs its queue's engine as `run Q prefill (cost(Q, e))`.
+iteration. The server calls it with a
+[request](../language.md#an-engines-request), `ENGINE (input, output);`,
+whose state it keeps; a queue's entry runs its queue's engine as `run Q
+prefill (cost(Q, e))`.
 
 An engine cannot be named `engine`: it is named for what it models (`vllm`,
 `sglang`, `tgi`) or `llm`. Inside a [`queue`](../language.md#queues), `device
@@ -53,7 +55,7 @@ the [IR](../ir.md) and the Lean model see only that.
 | `state NAME = c` | `const` | | A register; see below. |
 | `scheduler` | statements | as the iteration is planned | Whom the iteration serves, in what order, and when it admits. |
 | `worker { forward (T); }` | `expr` | after the batch is formed | What the worker does with the batch the scheduler formed (vLLM's `SchedulerOutput`): its forward's clock time. Reads `batch.…` and the device's time resources, not `running.…` or `waiting.…`. |
-| `request (…) { … }` | parameters, statements | when the server calls it | What the engine does with one request; see below. |
+| `connector QUEUE { … }` | clauses | at a request's admission and its end | Its KV connector to an L2 queue; see below. |
 
 The values an engine reads, and in which clause, are in
 [Engines on devices](../language.md#engines-on-devices): `running.…` is
@@ -73,7 +75,7 @@ for it is said where the pool is:
 | `pool kv on gpu` | as soon as it fits |
 
 A pool on an engine is a family only in a queue family, one per member;
-a top-level engine's is one pool, which its request's `taking` names.
+a top-level engine's is one pool, which its admission's `taking` names.
 
 The pool option `admit via ENGINE;` is refused: who admits a pool is said
 where the pool is, in its `on`.
@@ -245,20 +247,56 @@ Without the `running.count == 0` condition, an empty engine with `just ==
 1` could never admit again: its unsuccessful attempt would undo the reset.
 The report flags an engine left in this state as `idle: engine …`.
 
-## `request`
+## A request and its admission
 
-`request (PARAM, …) { … }` says what the engine does with one request, and
-the server runs it with `ENGINE (arg, …);`. Its items come in the order
-they happen: `prefix (k: n, …);`, what its sequence is made of (the
-admission's hold's [`prefix`](statements.md#hold), first if written), the
-statements when the call is reached, `at admission {
-NAME = e; … }` with the bindings read when the request is admitted, the
-statements while it is admitted (`prefill (e)` and `decode (e)` are the
-engine's runs in that mode), and `cache (e);`, what it leaves cached. What
-the admission takes is written on the schedule's `admit waiting`, `taking
-POOL (units) [reserve (units)], … [reuse (units)]`, the same on each. A request's `mark m;` is read by the
-caller as `ENGINE.m`. It is sugar for the server's hold:
-[An engine's request](../language.md#an-engines-request).
+The server calls the engine, `ENGINE (input, output);`: a request of
+`input` tokens of prompt that generates `output`. The engine keeps its
+state, the tokens it has and what of them has KV, prefills what the cache
+did not supply and decodes the rest, and the session goes on when it has
+generated `output`; a preempted request keeps its tokens. What the
+admission takes is written on the schedule's `admit waiting`, the same on
+each:
+
+```serq
+admit waiting … taking POOL (units) [reserve (units)], …
+  [reuse (e)] [prefix (k: n, …)] [cache (e)];
+```
+
+`taking` names the engine's capacities and its device's, and reads the
+request as `request.input`, `request.output`, `request.known`,
+`request.hit`, `request.loaded` and `request.preempted`; `cache`, read when
+the request gives its pools back, reads `request.finished`. The engine's
+records are attributes the caller reads after the call: `ENGINE.reused`,
+`ENGINE.prefill`, `ENGINE.admitted` and `ENGINE.first`; `ENGINE.reused` and
+`ENGINE.prefill` are observations of the report too, one per admission.
+[An engine's request](../language.md#an-engines-request) has the rules.
+
+## `connector`
+
+```serq
+connector QUEUE {
+  per_token (r);      // required: the time a token's copy takes
+  load (n);           // read at the admission, after request.hit
+  save (n);           // read when the request has generated its output
+}
+```
+
+The engine's KV connector to `QUEUE`, a queue that plays `l2` (vLLM's
+`KVConnector`; LMCache's, `lmcache_mp_connector.py`). A request that loads
+`n > 0` tokens copies them at the queue's bandwidth into its hold on the
+engine's memory before its prefill; `taking` reads `n` as
+`request.loaded`. A finished request copies to its entry in the queue the
+part of `n` tokens it lacks before it gives its pools back. At least one of
+`load` and `save`. The engine records `ENGINE.loaded` and sets
+`ENGINE.loaded` and `ENGINE.saved`. `examples/multi-turn/vllm_lmcache.sq`:
+
+```serq
+connector lmc {
+  per_token (r);
+  load (request.preempted ? 0 : beyond(request.known, request.hit));
+  save (floor(request.input + request.output, chunk));
+}
+```
 
 ## Examples
 
@@ -274,25 +312,14 @@ pool kv on gpu { block bs; evict lru; preempt lifo; }
 engine vllm on gpu {
   reqs cap max_seqs;
   tokens cap B;
-  request (prompt, output) {
-    set kept = prompt;
-    at admission {
-      known = max(kept, computed + 1);
-      reused = min(cachedin(kv), floor(known - 1, blocksize(kv)));
-    }
-    set kept = known;
-    set c = min(cached, floor(known - 1, blocksize(kv)));
-    observe hit = c > 0;
-    observe prefill_tokens = known - c;
-    prefill (known - c) growing kv;
-    decode (output - 1 - (known - prompt)) growing kv;
-    cache (prompt + output);
-  }
   scheduler {
     let threshold = running.count + waiting.count > 1 ? chunk_cap : inf;
     advance running each at most (threshold);
     admit waiting while (running.preempted == 0) each at most (threshold)
-      taking reqs (1), kv (min(known, reused + budget_left(vllm))) reserve (known);
+      taking reqs (1), kv (min(request.known, request.hit + budget_left(vllm)))
+        reserve (request.known)
+      reuse (floor(request.known - 1, blocksize(kv)))
+      cache (request.input + request.output);
   }
   worker {
     forward (c0 + max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
@@ -308,10 +335,6 @@ fn main() {
   device gpu { }
   engine llm on gpu {
     tokens cap 8;
-    request () {
-      prefill (8);
-      decode (2);
-    }
     scheduler { advance running; admit waiting while (running.preempted == 0); }
     worker {
       forward (1);
@@ -321,7 +344,7 @@ fn main() {
     arrive batch(2);
   }
   server {
-    llm ();
+    llm (8, 3);
     observe finished = now;
   }
 }

@@ -73,8 +73,8 @@ immediate, and request 0 decodes four tokens. The workload comes first in
 
 One request at a time, with a 128-token budget and chunk. Each request is
 admitted with blocks for its whole sequence, so nothing grows and no
-recovery is needed in this example; `mark admitted` records the moment it
-is admitted:
+recovery is needed in this example; the engine records the moment it is
+admitted, `llm.admitted`:
 
 ```serq
 --8<-- "examples/vendors/ascend.sq:engine"
