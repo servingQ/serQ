@@ -7,9 +7,9 @@ as in a rollout or a benchmark run. The router schedules *programs*, each
 an agent's whole trajectory, rather than requests. A program is placed on a
 replica at its first request and stays there until it is paused. Its tokens count against the
 replica's KV capacity while it reasons and while it calls a tool. When a
-running program outgrows the replica, the router pauses idle programs, the
-smallest first, and a paused program's next request waits to be let in
-again.
+running program outgrows the replica, the router pauses idle programs at
+its next tick, the smallest first. A later tick lets a paused program in
+again if it fits, and else its next request waits to be let in.
 
 The source correspondence uses ThunderAgent
 [`7ddc861`](https://github.com/ThunderAgent-org/ThunderAgent/tree/7ddc8610270e56d3b109eed8796b3a4360fc67c9)
@@ -119,20 +119,20 @@ At the example's configuration:
 | N | TR steps/min | default steps/min | ratio | TR token hit | default token hit |
 |---|---|---|---|---|---|
 | 4 | 21.4 | 21.1 | 1.01 | 0.90 | 0.88 |
-| 8 | 28.9 | 24.1 | 1.20 | 0.83 | 0.53 |
-| 16 | 27.5 | 18.7 | 1.47 | 0.70 | 0.02 |
-| 32 | 26.6 | 18.6 | 1.43 | 0.65 | 0.01 |
-| 48 | 26.6 | 18.6 | 1.43 | 0.65 | 0.02 |
+| 8 | 28.9 | 24.1 | 1.20 | 0.84 | 0.53 |
+| 16 | 28.7 | 18.7 | 1.53 | 0.78 | 0.02 |
+| 32 | 27.6 | 18.6 | 1.48 | 0.71 | 0.01 |
+| 48 | 26.8 | 18.6 | 1.44 | 0.65 | 0.02 |
 
 A step is a reasoning and an acting period, the paper's unit. While the
 agents' contexts fit, the two modes serve the same. Past that, default
 mode lets every agent in, the caches thrash, and almost every turn
 recomputes its whole context. TR mode keeps the prefixes of the programs
-it runs and serves about 1.4 times the steps. The gain is paid in
-waiting: TR mode's mean time to first token is lower (56 s against 81 s
-at 32 agents), but its 99th percentile is 376-540 s against 140 s, since a
+it runs and serves about 1.5 times the steps. The gain is paid in
+waiting: TR mode's mean time to first token is lower (55 s against 81 s
+at 32 agents), but its 99th percentile is 1 817 s against 140 s, since a
 program held back waits for the router's ticks until a replica has room
-for it. Under open arrivals of programs the two
+for it, or until the force-resume lets it in at 30 minutes. Under open arrivals of programs the two
 modes serve alike at rates default mode keeps up with; a little above
 them (0.04 programs a second) only TR mode keeps up, and above that
 neither does.
@@ -147,10 +147,10 @@ not a fit:
 | N | TR steps/min | default steps/min | ratio | TR token hit | default token hit |
 |---|---|---|---|---|---|
 | 24 | 170.8 | 170.9 | 1.00 | 0.94 | 0.94 |
-| 48 | 293.9 | 284.7 | 1.03 | 0.94 | 0.93 |
-| 96 | 308.4 | 100.6 | 3.06 | 0.91 | 0.24 |
-| 144 | 307.6 | 99.5 | 3.09 | 0.91 | 0.23 |
-| 192 | 307.8 | 99.4 | 3.10 | 0.91 | 0.23 |
+| 48 | 294.6 | 284.7 | 1.03 | 0.94 | 0.93 |
+| 96 | 319.6 | 100.6 | 3.18 | 0.93 | 0.24 |
+| 144 | 319.3 | 99.5 | 3.21 | 0.93 | 0.23 |
+| 192 | 318.8 | 99.4 | 3.21 | 0.93 | 0.23 |
 
 The paper's SWE-agent runs on GLM-4.6 (Fig. 4a and Fig. 5a, read from the
 figures) serve 218, 275, 162 and 140 steps/min under vLLM and 220, 350,
@@ -163,14 +163,14 @@ depends on one argument:
 
 | Arguments (from the preset) | Ratio at N = 96-192 | TR token hit | default token hit |
 |---|---|---|---|
-| preset | 3.1 | 0.91 | 0.23-0.24 |
-| `S` 0 | 2.4 | 0.72-0.73 | 0.01 |
-| `count_shared` 0 | 2.3 | 0.76-0.77 | 0.23-0.24 |
-| `g` 0 | 1.2 | 0.91 | 0.23-0.28 |
-| `g` 1.1e-9 | 1.9 | 0.91 | 0.23-0.26 |
-| `Z` 1 s / 10 s | 3.3 / 2.0-2.1 | 0.90 | 0.23-0.29 |
-| `dt` 2 s / 10 s | 3.0 / 3.1 | 0.88-0.89 / 0.92 | 0.23-0.24 |
-| `est` 0.2 | 3.0 | 0.90 | 0.23-0.24 |
+| preset | 3.2 | 0.93 | 0.23-0.24 |
+| `S` 0 | 2.3-2.4 | 0.73-0.74 | 0.01 |
+| `count_shared` 0 | 2.2-2.3 | 0.74-0.77 | 0.23-0.24 |
+| `g` 0 | 1.2 | 0.93 | 0.23-0.28 |
+| `g` 1.1e-9 | 1.9 | 0.93 | 0.23-0.26 |
+| `Z` 1 s / 10 s | 3.6 / 2.0-2.1 | 0.91-0.93 | 0.23-0.29 |
+| `dt` 2 s / 10 s | 3.2 / 3.2 | 0.92 / 0.93 | 0.23-0.24 |
+| `est` 0.2 | 3.2 | 0.93 | 0.23-0.24 |
 
 - **The cost of a recompute sets how much the knee costs.** With prefill
   linear in its tokens (`g` 0), default mode loses little by recomputing.
@@ -178,11 +178,12 @@ depends on one argument:
   the paper's argument (Eq. 8), and default mode loses two thirds of its
   throughput past the knee, as the paper's vLLM loses half to two thirds.
 - **The router's overcount of the shared prompt keeps paused prefixes.**
-  About 11 % of TR mode's turns come from a paused program. The router
+  About 5 % of TR mode's turns come from a program still paused at its
+  request. The router
   counts the shared prompt in every program's tokens, but vLLM stores it
   once, so the KV the router never lets in keeps the paused prefixes
   cached. Counted once, the paused programs recompute: TR mode's hit rate
-  falls to 0.76 and the ratio to 2.3.
+  falls to 0.74-0.77 and the ratio to 2.2-2.3.
 - **Default mode's hits are the shared prompt.** Its own prefixes survive
   in 1.5-4.5 % of turns; the rest is the prompt, 3 968 of a mean 18 000
   tokens. `S` was chosen to bring it near the paper's 30-38 %; the paper
@@ -191,12 +192,12 @@ depends on one argument:
   while the GPU does not run it. The paper's smallest gains are on its
   workloads with the longest tools (ScienceAgent 1.24, ToolOrchestra
   1.48); ToolOrchestra also runs Qwen3-8B on an RTX 5090.
-- **The tick's interval agrees with the paper's ablation in one step of
-  three.** At `dt` 2, 5 and 10 s TR mode serves 297, 308 and 309
-  steps/min, against the paper's 363, 378 and 343 (Fig. 6b): both rise
-  3-4 % from 2 to 5, then the paper's falls and the program's does not.
+- **The tick's interval does not agree with the paper's ablation.** At
+  `dt` 2, 5 and 10 s TR mode serves 318, 319 and 318 steps/min, against
+  the paper's 363, 378 and 343 (Fig. 6b): the paper's rises 4 % from 2 to
+  5 and then falls, and the program's is flat.
   The paper's runs have the decay, which the program does not write.
-- **The headline ratio rests on two estimates.** 3.1 is with `g` at the
+- **The headline ratio rests on two estimates.** 3.2 is with `g` at the
   pessimistic end of its range and `S` chosen; with `g` 1.1e-9 it is 1.9.
   The tables show which mechanisms produce a gain of the paper's size,
   not that the program reproduces a panel.
@@ -206,32 +207,23 @@ depends on one argument:
 - **One shared prompt.** `S` is one system prompt every program starts
   with, shared in each replica's cache as vLLM shares it. Programs that
   share more, such as part of a task, are not written.
-- **Pauses are immediate.** ThunderAgent lets programs in at its ticks,
-  as the program does, but it also pauses only at its ticks and lets a
-  replica overflow in between. The program pauses at the growth that does
-  not fit.
-- **No early resume, and no order at a tick.** ThunderAgent may let a
-  paused program in again while it still calls its tool, and lets the
-  programs back at one tick in by priority, smallest first. Here a paused
-  program comes back at its next request, and programs back at one tick
-  go in the order they reach it.
-- **The force-resume is within the capacity.** ThunderAgent lets a program
-  in after 30 minutes of waiting whatever the capacity. The program stops
-  waiting for ticks then and waits for room.
+- **The order at a tick is ThunderAgent's, not its placement.** The
+  programs back at one tick go in by priority, smallest first, each to the
+  replica with the most room; ThunderAgent places them largest first.
 - **A pause ends the count at once.** ThunderAgent counts a reasoning
   program it has marked for a pause until its response arrives; at the
-  paper's scale a reasoning program is paused in 0.04 % of turns.
+  paper's scale a reasoning program is paused in 0.02 % of turns.
 - **The decay is not written.** `w` is ThunderAgent's
   acting weight, which the router reads wherever it reads a replica's
   room. Counting idle programs for less costs throughput here: at the
-  paper's scale the ratio is 3.1 at `w` 1, 2.2 at 0.5 and 1.4-1.5 at 0,
+  paper's scale the ratio is 3.2 at `w` 1, 2.6 at 0.5 and 1.3 at 0,
   because their next requests grow back and pause others. The `2^-t`
   decay the paper's experiments use weighs idle programs by the time they
   have waited, and only when programs are let in; it is off in the code
-  by default, and the program does not write it. What it changes is how
-  soon a paused program is let in again, while it still calls its tool,
-  which the program does not write either (the design record, item 6;
-  #587).
+  by default, and the program does not write it. Under it ThunderAgent
+  resumes every paused program and its pause trims the excess, where the
+  program gives a paused one back only while it fits (the design record,
+  item 4; #587).
 - **The paper is not fitted.** It does not state its KV capacity, context
   lengths, output lengths, coding tools' times, system prompts or vLLM
   version, so `g` and `S` are estimates and no panel is reproduced.

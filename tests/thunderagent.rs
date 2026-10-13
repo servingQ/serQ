@@ -113,7 +113,7 @@ fn a_shared_system_prompt_keeps_paused_prefixes_and_gives_default_mode_its_hits(
 /// (1 - w) of its tokens and grows them back at its next request, which
 /// pauses others. The claim is the mechanism: at `w` 0.5 more of the turns
 /// come from paused programs, and fewer turns are served than at the
-/// code's default, 1 (docs/design/thunderagent.md, item 6).
+/// code's default, 1 (docs/design/thunderagent.md, item 4).
 #[test]
 fn counting_idle_programs_for_less_pauses_more_and_serves_less() {
     let run = |w: &str| paper("tr=1", &["g=3.3e-9", "S=3968", w]);

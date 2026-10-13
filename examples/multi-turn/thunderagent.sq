@@ -129,7 +129,7 @@ fn main() {
   }
   // The router's scheduler loop: a wait for its next tick. A program
   // waiting for one is in its global_waiting_queue, of which these are
-  // the ones with a request pending (docs/design/thunderagent.md, item 3).
+  // the ones with a request pending (docs/design/thunderagent.md, item 1).
   // They are let in at the tick before the paused ones that have none,
   // and before the pause: their instants are a millisecond ahead of it.
   stage tick : delay;

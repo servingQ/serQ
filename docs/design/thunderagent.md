@@ -284,7 +284,8 @@ seeds each by default, with a horizon of 25 000 s and a warm-up of 5 000 s.
 Steps/min are turns per minute after warm-up, the paper's unit (a
 reasoning and an acting period, p. 9). The hit rate is reused tokens over
 prompt tokens, vLLM's `prefix_cache_hits / prefix_cache_queries`.
-"Resumed" is the share of TR mode's turns that a paused program sends.
+"Resumed" is the share of TR mode's turns that a program still paused at
+its request sends; one a tick gave back before it is not counted.
 
 At the example's own scale (`tools/thunderagent/sweep.py`), each replica
 holds 64 000 tokens. A task's first prompt is 4 000-8 000 tokens, and each
@@ -293,10 +294,10 @@ step adds about 1 000 tokens of observation and 300 of answer:
 | N | TR steps/min | default steps/min | ratio | TR hit | default hit | TR resumed/turn |
 |---|---|---|---|---|---|---|
 | 4 | 21.4 | 21.1 | 1.01 | 0.90 | 0.88 | 0.007 |
-| 8 | 28.9 | 24.1 | 1.20 | 0.83 | 0.53 | 0.078 |
-| 16 | 27.5 | 18.7 | 1.47 | 0.70 | 0.02 | 0.195 |
-| 32 | 26.6 | 18.6 | 1.43 | 0.65 | 0.01 | 0.235 |
-| 48 | 26.6 | 18.6 | 1.43 | 0.65 | 0.02 | 0.232 |
+| 8 | 28.9 | 24.1 | 1.20 | 0.84 | 0.53 | 0.059 |
+| 16 | 28.7 | 18.7 | 1.53 | 0.78 | 0.02 | 0.111 |
+| 32 | 27.6 | 18.6 | 1.48 | 0.71 | 0.01 | 0.161 |
+| 48 | 26.8 | 18.6 | 1.44 | 0.65 | 0.02 | 0.202 |
 
 The paper's Fig. 4 and Fig. 5 (p. 9-10), with values read from the
 figures except the printed ratios:
@@ -311,19 +312,19 @@ figures except the printed ratios:
 | (f) ScienceAgent, GLM-4.6 | 48-120 | 39.5 → 40 | 39.5 → 49.5 | 1.24 | 51 % | 52 → 60 % |
 
 The gain is a closed workload's, and it is paid in waiting. At 32 agents
-(seed 1), TR mode's mean time to first token is 56 s against default
-mode's 81 s, but its 99th percentile is 376 s against 140 s (376-540 s
-over seeds 1-4): a program the router holds back waits for room. Under open Poisson arrivals of
+(seed 1), TR mode's mean time to first token is 55 s against default
+mode's 81 s, but its 99th percentile is 1 817 s against 140 s (1 817-1 818 s
+over seeds 1-4): a program the router holds back waits for room, and the
+last of them until the force-resume lets it in at 30 minutes. Under open Poisson arrivals of
 programs (the same program with `arrive poisson`), at rates default mode
 keeps up with, 0.01-0.02 a second, the two serve the same turns and TR
-mode's TTFT is a little lower (0.47 s against 1.05 s at 0.02). At 0.04 a
+mode's TTFT is a little lower (0.46 s against 1.05 s at 0.02). At 0.04 a
 second default mode falls behind and its queue grows with the run (TTFT
 126-216 s at 25 000 s, 243-449 s at 50 000 s, seeds 1-2), while TR mode
-keeps up (3-10 s, a little higher in the longer run: it is near its
-limit). At 0.05 neither does: the turns offered, 30 a minute, are more
+keeps up (2-5 s, 4-7 s in the longer run: it is near its limit). At 0.05 neither does: the turns offered, 30 a minute, are more
 than TR mode serves at its knee.
 
-The example's ratio, 1.4, is below the paper's, and its hit rates are
+The example's ratio, 1.4-1.5, is below the paper's, and its hit rates are
 well below the paper's on both sides. The sections below find
 the reasons, one at a time.
 
@@ -331,15 +332,15 @@ the reasons, one at a time.
 
 Write the throughput by Little's law: steps/min = agents × 60 / (time a
 step takes, its wait included). At 32 agents on the example's scale (seed
-1), TR mode's step is 70 s: 68 s from request to answer, of which 51 s
-is the wait for the router's ticks (23 of the 32 agents wait for one at
-any moment, Little's law at 0.45 turns a second), 17 s at the replica
-and its queues, and 3 s at the tool. A quarter of the turns come from a paused program.
+1), TR mode's step is 68 s: 65 s from request to answer, of which 51 s
+is the wait for the router's ticks (24 of the 32 agents wait for one at
+any moment, Little's law at 0.47 turns a second), 14 s at the replica
+and its queues, and 3 s at the tool. A sixth of the turns come from a paused program.
 Default mode's is 99 s: 96 s
 at the replica, most of it waiting for blocks behind the requests that
 recompute, and 3 s at the tool. The replicas run about as many requests
 at once either way (a decode batch of 2.7 against 3.0); what differs is
-what each request recomputes, 6 000 prompt tokens in TR mode against
+what each request recomputes, 5 000 prompt tokens in TR mode against
 16 000 in default mode. Four things decide how much
 that is worth, and the program has an argument for each:
 
@@ -385,38 +386,38 @@ that is worth, and the program has an argument for each:
 Runs are 25 000 s long with 5 000 s of warm-up, four seeds a row. A
 shorter run measures the agents before the longest of them have grown,
 and reads default mode about a sixth too fast at the paper's scale. The
-seeds' ratios at one point spread over up to 0.5 (2.93-3.40 at N = 96),
+seeds' ratios at one point spread over up to 0.5 (3.01-3.52 at N = 96),
 about 0.2 of standard deviation, so differences below that are noise. At the paper's scale (`tools/thunderagent/sweep.py --preset
 paper`), one factor at a time:
 
 | Setting | ratio at N = 96, 144, 192 | TR hit | default hit |
 |---|---|---|---|
-| preset: `g` 3.3e-9, `S` 3 968 | 3.06, 3.09, 3.10 | 0.91 | 0.23-0.24 |
-| `S` 0 | 2.37, 2.36, 2.36 | 0.72-0.73 | 0.01 |
-| `S` 2 048 | 3.07, 3.05, 3.06 | 0.87 | 0.12-0.13 |
-| `count_shared` 0 | 2.32, 2.33, 2.33 | 0.76-0.77 | 0.23-0.24 |
-| `g` 0 | 1.16, 1.19, 1.19 | 0.91 | 0.23-0.28 |
-| `g` 1.1e-9 | 1.85, 1.89, 1.89 | 0.91 | 0.23-0.26 |
-| `Z` 1 s | 3.26, 3.27, 3.27 | 0.90 | 0.23-0.24 |
-| `Z` 10 s | 1.99, 2.10, 2.10 | 0.90 | 0.23-0.29 |
-| `w` 0.9 | 3.02, 3.05, 3.06 | 0.90 | 0.23-0.24 |
-| `w` 0.75 | 2.76, 2.79, 2.79 | 0.85 | 0.23-0.24 |
-| `w` 0.5 | 2.17, 2.18, 2.20 | 0.75 | 0.23-0.24 |
-| `w` 0 | 1.45, 1.45, 1.44 | 0.53-0.54 | 0.23-0.24 |
-| `dt` 0.05 s | 2.60, 2.56, 2.50 | 0.80-0.82 | 0.23-0.24 |
-| `dt` 2 s | 2.96, 2.99, 2.98 | 0.88-0.89 | 0.23-0.24 |
-| `dt` 10 s | 3.07, 3.11, 3.11 | 0.92 | 0.23-0.24 |
-| `est` 0.2 | 2.99, 3.02, 3.02 | 0.90 | 0.23-0.24 |
+| preset: `g` 3.3e-9, `S` 3 968 | 3.18, 3.21, 3.21 | 0.93 | 0.23-0.24 |
+| `S` 0 | 2.40, 2.38, 2.34 | 0.73-0.74 | 0.01 |
+| `S` 2 048 | 3.21, 3.19, 3.18 | 0.90 | 0.12-0.13 |
+| `count_shared` 0 | 2.29, 2.26, 2.23 | 0.74-0.77 | 0.23-0.24 |
+| `g` 0 | 1.18, 1.20, 1.20 | 0.93 | 0.23-0.28 |
+| `g` 1.1e-9 | 1.89, 1.93, 1.93 | 0.93 | 0.23-0.26 |
+| `Z` 1 s | 3.56, 3.56, 3.55 | 0.93 | 0.23-0.24 |
+| `Z` 10 s | 2.01, 2.12, 2.12 | 0.91-0.92 | 0.23-0.29 |
+| `w` 0.9 | 3.21, 3.24, 3.24 | 0.93 | 0.23-0.24 |
+| `w` 0.75 | 3.19, 3.22, 3.21 | 0.91-0.92 | 0.23-0.24 |
+| `w` 0.5 | 2.64, 2.63, 2.64 | 0.84 | 0.23-0.24 |
+| `w` 0 | 1.29, 1.29, 1.29 | 0.43-0.45 | 0.23-0.24 |
+| `dt` 0.05 s | 3.03, 3.01, 2.96 | 0.88-0.90 | 0.23-0.24 |
+| `dt` 2 s | 3.17, 3.19, 3.19 | 0.92 | 0.23-0.24 |
+| `dt` 10 s | 3.17, 3.20, 3.19 | 0.93 | 0.23-0.24 |
+| `est` 0.2 | 3.17, 3.19, 3.19 | 0.93 | 0.23-0.24 |
 
 The preset in full:
 
 | N | TR steps/min | default steps/min | ratio | TR hit | default hit | TR resumed/turn |
 |---|---|---|---|---|---|---|
 | 24 | 170.8 | 170.9 | 1.00 | 0.94 | 0.94 | 0.000 |
-| 48 | 293.9 | 284.7 | 1.03 | 0.94 | 0.93 | 0.010 |
-| 96 | 308.4 | 100.6 | 3.06 | 0.91 | 0.24 | 0.107 |
-| 144 | 307.6 | 99.5 | 3.09 | 0.91 | 0.23 | 0.108 |
-| 192 | 307.8 | 99.4 | 3.10 | 0.91 | 0.23 | 0.108 |
+| 48 | 294.6 | 284.7 | 1.03 | 0.94 | 0.93 | 0.006 |
+| 96 | 319.6 | 100.6 | 3.18 | 0.93 | 0.24 | 0.053 |
+| 144 | 319.3 | 99.5 | 3.21 | 0.93 | 0.23 | 0.057 |
+| 192 | 318.8 | 99.4 | 3.21 | 0.93 | 0.23 | 0.062 |
 
 Beside Fig. 4a and Fig. 5a (SWE-agent on GLM-4.6), whose vLLM serves 218,
 275, 162 and 140 steps/min and ThunderAgent 220, 350, 382 and 370 at 24-96
@@ -432,45 +433,47 @@ programs, with hit rates falling to 30 % and 93 %:
 - **The router's overcount of the shared prompt keeps paused prefixes,
   and it raises the ratio too.** With the prompt counted once
   (`count_shared` 0) a paused program comes back to a cache that has
-  evicted it: TR mode's hit rate is 0.76-0.77 and the ratio 2.3. Counted
+  evicted it: TR mode's hit rate is 0.74-0.77 and the ratio 2.2-2.3. Counted
   per program, the (k − 1) × S tokens the router never lets in are KV that
-  holds paused prefixes: the hit rate is 0.91, the paper's 93-96 %, and the
-  ratio 3.1, all of what the shared prompt adds: with S = 0 the ratio is
+  holds paused prefixes: the hit rate is 0.93, the paper's 93-96 %, and the
+  ratio 3.2, all of what the shared prompt adds: with S = 0 the ratio is
   about the same, 2.4. Counted once, the share of turns from paused
-  programs is 1.8 times as large (0.20 against 0.11), and each recomputes:
-  prefill is 2.6 times as many tokens a turn.
+  programs is twice as large (0.11 against 0.05), and each recomputes:
+  prefill is 3.3 times as many tokens a turn.
 - **Default mode's hits are the shared prompt.** Its own prefix survives
   in 1.5-4.5 % of turns. The rest is S over the mean prompt, 3 968 / 18 000
   = 0.22, which S was chosen to bring near the paper's 30-38 %; the paper
   does not state its prompts' length.
 - **The tool time bounds the gain.** With 10 s tools the ratio is 2.0-2.1;
-  with 1 s tools it is 3.3, within the seeds' spread of the preset's 3.1,
-  so the 10 s case is the evidence. With 10 s tools TR mode's decode batch
-  falls from 20 to 12 while default mode is unchanged. The paper's smallest gains are on its workloads with
+  with 1 s tools it is 3.6, above the preset's 3.2 by less than twice the
+  seeds' standard deviation, so the 10 s case is the stronger evidence.
+  With 10 s tools TR mode's decode batch falls from 20 to 11 while default
+  mode's stays at 31-33. The paper's smallest gains are on its workloads with
   the longest and most variable tools, ScienceAgent (1.24) and
   ToolOrchestra (1.48); ScienceAgent runs OpenHands on GLM-4.6 as the
   coding agents do, and ToolOrchestra runs Qwen3-8B on an RTX 5090.
-- **The headline ratio rests on two estimates.** 3.1 is with `g` at the
+- **The headline ratio rests on two estimates.** 3.2 is with `g` at the
   pessimistic end of its range and `S` chosen; with `g` 1.1 ns it is 1.9.
   The paper's ratios are 2.43-3.58 on the coding agents. The program
   shows which mechanisms produce a gain of that size, not that it
   reproduces a panel.
-- **The tick's interval, against the paper's ablation, agrees in one
-  step of three.** With `dt` 2, 5 and 10 s TR mode serves 297-298, 308
-  and 309 steps/min, rising throughout: a longer tick fills room later,
-  and the slack pauses fewer programs (a paused program sends 0.17, 0.11
-  and 0.07 of the turns). Fig. 6b (p. 11, read from the figure) gives
-  363, 378, 370 and 343 for Δt = 2, 5, 7 and 10: the rise from 2 to 5 is
-  the same 3-4 %, the fall after it is not. The paper's ablation runs
-  with its decay, which the program does not write (item 6). At 50 ms, a
-  waiting program is let in as soon as room appears,
-  wherever it appears: three tenths of the turns come from paused
-  programs, against a tenth at 5 s, and the ratio is 2.5-2.6.
-- **The router's estimate costs little.** With the estimate off by up to
-  20 % either way per request (`est` 0.2) the ratio is 3.0, against 3.1
-  counted exactly.
-- **The absolute steps/min** are within a fifth of Fig. 4a's for TR mode
-  (308 against 370-382) and about a third below for default mode
+- **The tick's interval, against the paper's ablation, does not agree.**
+  With `dt` 2, 5 and 10 s TR mode serves 317-318, 319-320 and 318-319
+  steps/min: flat within the seeds' spread, though a paused program sends
+  fewer of the turns the longer the tick (0.10, 0.06 and 0.03), since a
+  longer tick lets the pool's overflow and its early resume stand longer.
+  Fig. 6b (p. 11, read from the figure) gives 363, 378, 370 and 343 for
+  Δt = 2, 5, 7 and 10: a rise of 4 % and a fall of 9 %, neither of which
+  the program shows. The paper's ablation runs with its decay, which the
+  program does not write (item 4). At 50 ms, a waiting program is let in
+  as soon as room appears, wherever it appears: a fifth of the turns come
+  from paused programs, against a twentieth at 5 s, and the ratio is
+  3.0, within the seeds' spread of the preset's.
+- **The router's estimate costs nothing measurable.** With the estimate
+  off by up to 20 % either way per request (`est` 0.2) the ratio is 3.2,
+  as counted exactly.
+- **The absolute steps/min** are within a sixth of Fig. 4a's for TR mode
+  (319 against 370-382) and about a third below for default mode
   (99-101 against 140-162), with `g` at 3.3 ns; at 1.1 ns default mode is
   above the paper's (183-186). The preset's constants are estimates, so
   this agreement is not a check.
@@ -491,33 +494,21 @@ What the program does not reproduce:
 
 ## What the program still does not write
 
-1. **Overflow between ticks.** ThunderAgent lets a replica go over capacity
-   and pauses at its next tick, after it has let waiting programs in
-   against the count still over capacity
-   ([`scheduler/router.py#L759-L771`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L759-L771));
-   serQ pauses at the growth, so the tick after an overflow lets in what
-   ThunderAgent's would let in one tick later. Waiting a tick is what the
-   `dt` rows above move.
-2. **Paused programs resumed early.** ThunderAgent may resume a paused
-   program at a tick before its next request, while it calls its tool, at
-   the lowest priority. The program lets it in at its next request, the
-   first tick after it, since a session in its tool cannot wait in a
-   second queue (above, *Rejected on the way*).
-3. **The order at a tick.** ThunderAgent lets the programs back at one
-   tick in with a pending request first, then new ones, each smallest
-   first, placed largest first on the replica with the most room; here
-   they go in the order they reach the tick. A new program in ThunderAgent
-   waits while any program is in the global queue, a paused one calling
-   its tool included
+1. **The order at a tick.** ThunderAgent places the programs it lets in
+   at one tick largest first on the replica with the most room; here each
+   goes, in the router's order, to the replica with the most room when it
+   reaches the tick. A new program in ThunderAgent waits while any program
+   is in the global queue, a paused one calling its tool included
    ([`scheduler/router.py#L344-L346`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L344-L346));
-   here, while one waits for a tick.
-4. **A marked program counted until its response.** ThunderAgent keeps a
+   here, while one with a request pending waits for a tick: a lease the
+   pool set aside holds no place in `waiting_queue`.
+2. **A marked program counted until its response.** ThunderAgent keeps a
    marked REASONING program's tokens counted until its response arrives,
    and so marks every REASONING program on the replica once the ACTING
-   ones are paused (above); the program's lease ends at once. A reasoning
-   program's lease ends in 0.04 % of the preset's turns, 1.6 % with
-   `count_shared` 0 and 6 % at `w` 0.5.
-5. **The estimate's error.** ThunderAgent estimates a request's tokens from
+   ones are paused (above); the program's lease is set aside at once. A reasoning
+   program's lease is taken in 0.02 % of the preset's turns, 1.4 % with
+   `count_shared` 0 and 10 % at `w` 0.5.
+3. **The estimate's error.** ThunderAgent estimates a request's tokens from
    the payload's characters by a ratio it learns
    ([`scheduler/router.py#L479-L491`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L479-L491))
    and counts the answer as it streams. The program writes the estimate
@@ -525,20 +516,20 @@ What the program does not reproduce:
    answer when the response has arrived, since its length is `hidden`
    until then. How far a payload's characters per token stray from the
    learnt ratio, the paper does not state.
-6. **Decay.** `--acting-token-weight` is written: `w` below 1 gives back
+4. **Decay.** `--acting-token-weight` is written: `w` below 1 gives back
    (1 − w) of a program's tokens, not its buffer, when its response
    arrives (`shrink`), and its next request grows it back. ThunderAgent
    counts the weight wherever it reads a replica's room: in placing a new
    program, in pausing, in resuming
    ([`backend/state.py#L104-L107`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/backend/state.py#L104-L107)).
-   Counting idle programs for less costs throughput here, monotonically:
-   at the paper preset the ratio is 3.1 at `w` 1, 3.0-3.1 at 0.9, 2.8 at
-   0.75, 2.2 at 0.5 and 1.4-1.5 at 0. The programs the router lets in do
-   not increase; the churn does. Their next requests grow back what they
-   gave and pause others: at 0.5 paused programs send a third of the
-   turns (0.34 against 0.11), half of them resume on the other replica, as
-   at 1, and recompute, and prefill is 2.8 times the tokens a turn.
-   The code's default, 1, is the best of these. The `2^-t` decay the
+   Counting idle programs for less costs throughput here, from 0.5 down:
+   at the paper preset the ratio is 3.2 at `w` 1, 0.9 and 0.75, 2.6 at
+   0.5 and 1.3 at 0. The programs the router lets in do not increase; the
+   churn does. Their next requests grow back what they gave and pause
+   others: at 0.5 paused programs send a sixth of the turns (0.18 against
+   0.05), about half of them resume on the other replica, as at 1, and
+   recompute, and prefill is 2.2 times the tokens a turn.
+   The code's default, 1, is as good as any of these. The `2^-t` decay the
    paper's experiments use is not this: it weighs an acting program by the
    time it has called its tool, and only in the resume check
    ([`backend/state.py#L196-L214`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/backend/state.py#L196-L214),
@@ -548,22 +539,14 @@ What the program does not reproduce:
    x = 4, 6, 8: 373, 382, 360, 333 steps/min). The example does not
    write it. The tick's check could read it (a replica's reasoning
    tokens, its acting ones whole for 1 / ln x seconds after a response,
-   its buffers), but what decay changes is item 2: a decayed program
-   counts for almost nothing, so ThunderAgent lets a paused one in again
-   at the next tick while it still calls its tool, where here it comes
-   back only at its next request and waits for a tick. A variant without
-   that lowers TR mode instead of keeping it near 373 (#587): it lets in
-   more than the replica holds and pauses others at once, and a third of
-   the turns come from paused programs. Whether the early resume is what
-   the paper's runs have and the variant lacks, no run here tells, so
-   decay's effect cannot be read off the program.
-7. **The force-resume.** ThunderAgent lets a program in after 30 minutes
-   of waiting whatever the capacity, onto its replica or the least loaded
-   ([`scheduler/router.py#L934-L956`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L934-L956)).
-   The program stops waiting for ticks then and waits for room on the
-   replica it chooses, within the capacity. It ends a trajectory whose prompt
-   the replica's KV cannot hold, as vLLM refuses a prompt of
-   `max_model_len` tokens, which is at most the KV.
-8. **Weight sync**, the RL trainer's pause of every request while it
+   its buffers), but the pool gives a set-aside lease back only while it
+   fits (`suspend`), and a decayed program counts for almost nothing, so
+   ThunderAgent resumes every paused program and its pause trims the
+   excess at the same tick. A variant that lowers TR mode instead of keeping it
+   near 373 (#587) lets in more than the replica holds and pauses others
+   at once. Whether resuming all and pausing the excess is what the
+   paper's runs have and the variant lacks, no run here tells, so decay's
+   effect cannot be read off the program.
+5. **Weight sync**, the RL trainer's pause of every request while it
    broadcasts weights, and the tool lifecycle (sandbox garbage collection,
    p. 8), are not part of the serving deployment the program writes.
