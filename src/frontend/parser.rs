@@ -2264,6 +2264,21 @@ impl Parser {
                                     .iter()
                                     .any(|e| e.locals.iter().any(|l| l == field)))
                     });
+                // with the import, `share` is std/share and no queue (the
+                // import refuses a declaration by its name)
+                if !ok && qn == "share" && self.share_imported {
+                    let msg = if crate::ir::Share::ALL.iter().any(|(n, _)| *n == field) {
+                        format!(
+                            "`{name}` is a sharing policy of std/share, read only in `share = …`"
+                        )
+                    } else {
+                        format!(
+                            "`{name}`: std/share has no policy `{field}`, and its policies are \
+                             read only in `share = …`"
+                        )
+                    };
+                    return self.err_at(at, msg);
+                }
                 if !ok {
                     return self.err_at(
                         at,
@@ -2616,6 +2631,31 @@ impl Parser {
                 format!("std/share has no policy `{name}`; it has {}", names()),
             ),
         }
+    }
+
+    /// At `(`: whether a `,` comes before its `)`, at its own depth. A
+    /// one-stage `transfer on` or `tool on` reads its work as an expression,
+    /// which would stop at the comma of a `share` it may not have.
+    fn paren_holds_comma(&self) -> bool {
+        if *self.peek() != Tok::LParen {
+            return false;
+        }
+        let mut depth = 0usize;
+        for t in &self.toks[self.pos..] {
+            match t.tok {
+                Tok::LParen | Tok::LBracket | Tok::LBrace => depth += 1,
+                Tok::RParen | Tok::RBracket | Tok::RBrace => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return false;
+                    }
+                }
+                Tok::Comma if depth == 1 => return true,
+                Tok::Semi | Tok::Eof => return false,
+                _ => {}
+            }
+        }
+        false
     }
 
     /// `(w)`, or `(w, share = share.maxmin)` for a job that holds several
@@ -5530,6 +5570,7 @@ impl Parser {
         self.advance();
         let kw = role.keyword();
         let mut also = vec![];
+        let mut on = false;
         // a read the queue's relation says: over the source's NIC and its own
         let pulled = role == Role::Transfer
             && *self.peek() == Tok::LParen
@@ -5542,6 +5583,7 @@ impl Parser {
                 index: None,
             }
         } else if self.eat_kw("on") {
+            on = true;
             // `on a, b`: the stages the job holds at once, each declared
             let first = self.declared_stage(kw)?;
             while *self.peek() == Tok::Comma {
@@ -5573,11 +5615,15 @@ impl Parser {
             };
             Ref { span, name, index }
         };
-        let (raw_work, share) = if also.is_empty() {
+        let (raw_work, share) = if also.is_empty() && !self.paren_holds_comma() {
             (self.expr()?, None)
         } else {
-            let what = format!("{kw} on {}", stage_list(&stage, &also));
-            self.work_and_share(true, &what)?
+            let what = if on {
+                format!("{kw} on {}", stage_list(&stage, &also))
+            } else {
+                kw.to_string()
+            };
+            self.work_and_share(!also.is_empty(), &what)?
         };
         let resources: Vec<_> = std::iter::once(&stage)
             .chain(also.iter())
