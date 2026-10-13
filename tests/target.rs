@@ -92,7 +92,7 @@ fn another_policy_is_refused_with_its_construct() {
           reqs cap 4;
           tokens cap 64;
           request (n) { prefill (n) growing kv; }
-          schedule {
+          scheduler {
             advance running by (remaining);
             admit waiting while (running.preempted == 0) taking reqs (1), kv (n);
           }
@@ -123,7 +123,7 @@ fn observable_serve_keys_name_the_programmable_scheduler() {
           reqs cap 4;
           tokens cap 64;
           request (n) { prefill (n) growing kv; }
-          schedule {
+          scheduler {
             advance running by (decoding ? 0 : 1, -admission);
             admit waiting while (running.preempted == 0) taking reqs (1), kv (n);
           }
@@ -263,7 +263,7 @@ fn the_newer_constructs_are_refused_and_vllms_schedule_taken() {
           tokens cap 64;
           request (n) { prefill (n) growing kv; }
           STATE
-          schedule { SCHEDULE }
+          scheduler { SCHEDULE }
           execute (1);
         }
         pool kv on gpu { block 16; evict lru; preempt lifo; }

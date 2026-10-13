@@ -60,7 +60,7 @@ fn main() {
       decode (output - 1 - (known - prompt)) growing kv;
       cache (prompt + output);                // a finished request's blocks stay cached
     }
-    schedule {
+    scheduler {
       // long_prefill_token_threshold binds only while another request is
       // running or waiting; a request alone takes the whole budget (scheduler.py:606-616)
       let threshold = running.count + waiting.count > 1 ? chunk_cap : inf;

@@ -49,7 +49,7 @@ fn main() {
     }
     // --8<-- [end:request]
     // --8<-- [start:running]
-    schedule {
+    scheduler {
       let threshold = running.count + waiting.count > 1 ? chunk_cap : inf;
       advance running each at most (threshold);
       // --8<-- [end:running]

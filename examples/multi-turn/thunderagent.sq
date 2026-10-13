@@ -36,7 +36,7 @@ fn main() {
     engine on gpu {
       reqs cap max_seqs;
       tokens cap B;
-      schedule { advance running; admit waiting while (running.preempted == 0); }
+      scheduler { advance running; admit waiting while (running.preempted == 0); }
       execute (c0 + max(hbm(batch.kv_decode + batch.kv_prefill),
                         compute(batch.tokens) + g * batch.attention));
     }

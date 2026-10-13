@@ -16,7 +16,7 @@ fn main() {
       decode (output) growing kv;
       observe done = now;
     }
-    schedule {
+    scheduler {
       let c = waiting.count + running.count > 2 ? 8 : inf;
       advance running each at most (c);
       admit waiting while (running.preempted == 0) each at most (c)

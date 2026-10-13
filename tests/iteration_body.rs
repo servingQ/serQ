@@ -10,7 +10,7 @@ fn run(src: &str, options: &Overrides) -> serq::Report {
     run_source(&common::main_source(src), options, None).unwrap()
 }
 
-/// `schedule` with `taking {pools}` on each `admit waiting`: what the
+/// `scheduler` with `taking {pools}` on each `admit waiting`: what the
 /// engine's request is admitted with.
 fn taking(schedule: &str, pools: &str) -> String {
     let mut out = String::new();
@@ -101,7 +101,7 @@ fn several_prefills_run_alone_in_one_iteration() {
             observe ttft = now - t0;
             decode (2) growing kv;
           }}
-          schedule {{ {schedule} }}
+          scheduler {{ {schedule} }}
           execute (1);
         }}
         pool reqs on llm {{ }}
@@ -166,7 +166,7 @@ fn a_gate_on_the_residents_admits_only_into_an_empty_engine() {
             prefill (1);
             decode (4);
           }
-          schedule { advance running; if (running.count == 0) { admit waiting taking reqs (1); } }
+          scheduler { advance running; if (running.count == 0) { admit waiting taking reqs (1); } }
           execute (1);
         }
         pool reqs on llm { }
@@ -212,7 +212,7 @@ fn a_body_that_may_schedule_nothing_does_not_link() {
           reqs cap 8;
           tokens cap 8;
           request () {{ prefill (2); }}
-          schedule {{ {schedule} }}
+          scheduler {{ {schedule} }}
           execute (1);
         }}
         pool reqs on llm {{ }}
@@ -294,7 +294,7 @@ fn the_vllm_body_is_the_procedure_under_keys_and_preemption() {
             prefill (n) growing kv;
             decode (6 + s - 3 * floor(s / 3)) growing kv;
           }}
-          schedule {{
+          scheduler {{
             advance running{order}{cap};
             admit waiting while (running.preempted == 0){cap} taking reqs (1), kv (1);
           }}
@@ -390,7 +390,7 @@ fn an_engine_idle_with_work_is_named() {
           reqs cap 8;
           tokens cap 8;
           request () { prefill (2); }
-          schedule { advance running; admit waiting while (batch.tokens > 0) taking reqs (1); }
+          scheduler { advance running; admit waiting while (batch.tokens > 0) taking reqs (1); }
           execute (1);
         }
         pool reqs on llm { }
@@ -423,7 +423,7 @@ fn a_guard_that_is_not_a_test_fails_the_run() {
           reqs cap 8;
           tokens cap 8;
           request () { prefill (2); }
-          schedule { advance running; admit waiting while (running.count + 2) taking reqs (1); }
+          scheduler { advance running; admit waiting while (running.count + 2) taking reqs (1); }
           execute (1);
         }
         pool reqs on llm { }
@@ -497,11 +497,12 @@ fn a_register_remembers_the_last_iteration() {
         );
         r.observe("wait").unwrap().samples.clone()
     };
-    let every = wait("schedule { advance running; admit waiting while (running.preempted == 0); }");
+    let every =
+        wait("scheduler { advance running; admit waiting while (running.preempted == 0); }");
     assert!(every.iter().all(|&w| w == 0.0), "{every:?}");
     let alternate = wait(
         "state just = 0; \
-         schedule { \
+         scheduler { \
            advance running; if (just == 0) { admit waiting; } \
            set just = waiting.admitted > 0; \
          }",
@@ -528,7 +529,7 @@ fn a_set_in_an_iteration_that_is_none_is_undone() {
           tokens cap 4;
           state n = 0;
           request () { prefill (100); }
-          schedule {
+          scheduler {
             set n = n + 1;
             advance running only (decoding);
             admit waiting while (running.count == 0) taking reqs (1);
@@ -572,7 +573,7 @@ fn a_register_is_the_stage_s_own() {
         engine other on tpu {{
           tokens cap 8;
           state r = 0;
-          schedule {{ advance running; admit waiting; }}
+          scheduler {{ advance running; admit waiting; }}
           execute (1);
         }}
         workload {{ arrive batch(1);
@@ -593,7 +594,7 @@ fn a_register_is_the_stage_s_own() {
         .err()
         .unwrap_or_else(|| panic!("`{items}` `{session}` linked"))
     };
-    let body = "state k = 0; schedule { advance running; admit waiting; set k = k + 1; }";
+    let body = "state k = 0; scheduler { advance running; admit waiting; set k = k + 1; }";
     assert!(
         compile_source(
             &common::main_source(&prog(body, "")),
@@ -601,11 +602,11 @@ fn a_register_is_the_stage_s_own() {
         )
         .is_ok()
     );
-    assert!(err("state k = 0; schedule { advance running; admit waiting while (running.preempted == 0); }", "").contains("is set by nothing"));
+    assert!(err("state k = 0; scheduler { advance running; admit waiting while (running.preempted == 0); }", "").contains("is set by nothing"));
     // an `only` is a body, but none that sets the register
     assert!(
         err(
-            "state k = 0; schedule { advance running only (decoding); \
+            "state k = 0; scheduler { advance running only (decoding); \
              admit waiting only (decoding) while (running.preempted == 0); }",
             ""
         )
@@ -613,7 +614,7 @@ fn a_register_is_the_stage_s_own() {
     );
     assert!(
         err(
-            "schedule { advance running; admit waiting; set r = 1; }",
+            "scheduler { advance running; admit waiting; set r = 1; }",
             ""
         )
         .contains("another engine")
@@ -621,14 +622,14 @@ fn a_register_is_the_stage_s_own() {
     assert!(err(body, "set x = k;").contains("register"));
     assert!(
         err(
-            "state cached = 0; schedule { advance running; admit waiting; }",
+            "state cached = 0; scheduler { advance running; admit waiting; }",
             ""
         )
         .contains("taken")
     );
     assert!(
         err(
-            "state k = 0; schedule { advance running; admit waiting; set k = now; }",
+            "state k = 0; scheduler { advance running; admit waiting; set k = now; }",
             ""
         )
         .contains("now")
@@ -660,7 +661,7 @@ fn a_register_is_read_where_its_stage_orders_the_read() {
           tokens cap 8;
           state go = 0;
           request () {{ prefill (2); }}
-          schedule {{ advance running; admit waiting{taking}; set go = 1; }}
+          scheduler {{ advance running; admit waiting{taking}; set go = 1; }}
           execute (1);
         }}
         pool reqs on b {{ }}
@@ -698,7 +699,7 @@ fn a_register_is_read_where_its_stage_orders_the_read() {
             "device tpu { }
         engine a on tpu {
           tokens cap 8;
-          schedule {
+          scheduler {
             advance running only (go == 1);
             admit waiting only (go == 1) while (running.preempted == 0);
           }
@@ -718,7 +719,7 @@ fn a_register_is_read_where_its_stage_orders_the_read() {
         engine c[2] on tpu {
           tokens cap 8;
           state q = 0;
-          schedule { advance running; admit waiting; }
+          scheduler { advance running; admit waiting; }
           execute (1);
         }";
     assert!(ok(arr, base, call).unwrap_err().contains("engine family"));
@@ -738,7 +739,7 @@ fn a_try_that_admitted_keeps_its_sets() {
           tokens cap 8;
           state k = 0;
           request () { prefill (2); }
-          schedule {
+          scheduler {
             advance running only (decoding);
             set k = k + 1;
             admit waiting only (decoding) taking reqs (1);
@@ -783,7 +784,7 @@ fn a_reserve_on_a_register_waits_for_the_iteration() {
             prefill (100);
             decode (9) growing kv;
           }
-          schedule {
+          scheduler {
             set r = 10;
             advance running;
             admit waiting taking reqs (1), kv (100) reserve (100 + r);
@@ -827,7 +828,7 @@ fn a_schedule_else_if_is_the_nested_if() {
           reqs cap 8;
           tokens cap 8;
           request () {{ prefill (2); }}
-          schedule {{ {schedule} }}
+          scheduler {{ {schedule} }}
           execute (1);
         }}
         pool reqs on llm {{ }}

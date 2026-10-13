@@ -4753,7 +4753,7 @@ impl<'p> Interp<'p> {
                     }
                 }
                 CIter::Branch(g, a, b) => {
-                    let taken = if self.guard(g, plan, "an `if` in a `schedule`") {
+                    let taken = if self.guard(g, plan, "an `if` in a `scheduler`") {
                         a
                     } else {
                         b

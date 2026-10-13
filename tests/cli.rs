@@ -23,7 +23,7 @@ const STUCK: &str = r#"
             prefill (100) growing kv;
             decode (100) growing kv;
           }
-          schedule {
+          scheduler {
             advance running;
             admit waiting while (running.preempted == 0) taking reqs (1), kv (100) reserve (100);
           }

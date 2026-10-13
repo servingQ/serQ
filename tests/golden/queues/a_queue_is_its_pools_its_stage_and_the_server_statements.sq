@@ -1,6 +1,6 @@
 use "std/args"; let N = args.number("N", 2);
              device gpu[2] { kv cap 100; } pool kv on gpu { block 16; }
-             engine E[2] on gpu { tokens cap inf; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); }
+             engine E[2] on gpu { tokens cap inf; scheduler { advance running; admit waiting while (running.preempted == 0); } execute (1); }
              server {
                hold kv[j] (cost(kv, min(prompt, budget_left(E[j])))) reserve (cost(kv, prompt)) {
                  run E[j] prefill (cost(E, prompt)) growing kv[j]; run E[j] decode (cost(E, o - 1)) growing kv[j];

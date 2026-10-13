@@ -56,7 +56,7 @@ engine llm on gpu {
     decode (output - 1 - (known - prompt)) growing kv;
     cache (prompt + output);
   }
-  schedule {
+  scheduler {
     advance running;
     admit waiting while (running.preempted == 0)
       taking reqs (1), kv (min(known, budget_left(llm))) reserve (known);
@@ -86,7 +86,7 @@ queue llm : prefill {
   engine on gpu {
     reqs cap 2;
     tokens cap 8;
-    schedule { advance running; admit waiting while (running.preempted == 0); }
+    scheduler { advance running; admit waiting while (running.preempted == 0); }
     execute (1);
   }
   pool kv on gpu { block bs; evict lru; preempt lifo; }
@@ -163,7 +163,7 @@ fn a_request_without_taking_holds_nothing() {
 engine llm on gpu {{
   tokens cap 8;
   request (prompt) {{ prefill (prompt); }}
-  schedule {{ advance running; admit waiting while (running.preempted == 0); }}
+  scheduler {{ advance running; admit waiting while (running.preempted == 0); }}
   execute (1);
 }}
 pool kv on gpu {{ block bs; }}
@@ -177,7 +177,7 @@ queue llm : prefill {
   device gpu { kv cap 64; }
   engine on gpu {
     tokens cap 8;
-    schedule { advance running; admit waiting while (running.preempted == 0); }
+    scheduler { advance running; admit waiting while (running.preempted == 0); }
     execute (1);
   }
   pool kv on gpu { block bs; }
@@ -392,8 +392,8 @@ fn the_admission_reads_the_engine_s_registers() {
         &[
             state[0],
             (
-                "schedule { advance running;",
-                "schedule { set ratio = ratio + 1; advance running;",
+                "scheduler { advance running;",
+                "scheduler { set ratio = ratio + 1; advance running;",
             ),
         ],
     )))
@@ -499,7 +499,7 @@ engine llm2 on gpu2 {
     at admission { }
     prefill (prompt) growing kv2;
   }
-  schedule { advance running; admit waiting while (running.preempted == 0) taking kv2 (prompt); }
+  scheduler { advance running; admit waiting while (running.preempted == 0) taking kv2 (prompt); }
   execute (1);
 }
 ";
@@ -645,7 +645,7 @@ fn a_session_does_not_call_an_engine() {
                 &format!(
                     "pool reqs on llm {{ queue fifo; }}\ndevice npu {{ }}\n\
                      engine small on npu {{ tokens cap 8; request () {{ {body} }} \
-                     schedule {{ advance running; admit waiting; }} execute (1); }}\n"
+                     scheduler {{ advance running; admit waiting; }} execute (1); }}\n"
                 ),
             )],
         )
@@ -680,7 +680,7 @@ queue P : prefill {
   engine on gpu {
     tokens cap 8;
     request (prompt) { prefill (prompt); }
-    schedule { advance running; admit waiting while (running.preempted == 0); }
+    scheduler { advance running; admit waiting while (running.preempted == 0); }
     execute (1);
   }
   prefill (prompt) { run P prefill (cost(P, prompt)); }
@@ -700,7 +700,7 @@ device gpu[2] { kv cap 64; }
 engine llm[2] on gpu {
   tokens cap 8;
   request (prompt) { prefill (prompt); }
-  schedule { advance running; admit waiting while (running.preempted == 0); }
+  scheduler { advance running; admit waiting while (running.preempted == 0); }
   execute (1);
 }
 workload { arrive batch(1); turn { set n = 6; } }

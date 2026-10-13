@@ -21,7 +21,7 @@ fn engine(request: &str, taking: &str) -> String {
     format!(
         "let bs = 16;
     device gpu {{ kv cap 1e5; }} pool kv on gpu {{ block bs; evict lru; }}
-    engine llm on gpu {{ reqs cap 8; tokens cap 512; {request} schedule {{ advance running; admit waiting while (running.preempted == 0) taking {taking}; }} execute (1e-3); }}
+    engine llm on gpu {{ reqs cap 8; tokens cap 512; {request} scheduler {{ advance running; admit waiting while (running.preempted == 0) taking {taking}; }} execute (1e-3); }}
     pool reqs on llm {{ }}
 
     "
@@ -192,7 +192,7 @@ fn a_context_variable_outside_its_moment_is_rejected() {
     assert!(e.contains("exists only in an engine's `execute`"), "{e}");
     // every other moment refuses what it does not supply, and says where it
     // was read and where it exists
-    const LLM: &str = "reqs cap 8; tokens cap 512; request (m) { prefill (m) growing kv; } schedule { advance running; admit waiting while (running.preempted == 0) taking reqs (1), kv (m); } execute (1e-3);";
+    const LLM: &str = "reqs cap 8; tokens cap 512; request (m) { prefill (m) growing kv; } scheduler { advance running; admit waiting while (running.preempted == 0) taking reqs (1), kv (m); } execute (1e-3);";
     let engine = |pool: &str, llm: &str, session: &str| {
         format!(
             "let bs = 16;
@@ -311,7 +311,7 @@ fn a_context_variable_outside_its_moment_is_rejected() {
         device chip { }
         engine llm on chip {
           tokens cap 512 + running.count + running.decoding + running.kv_decode * 0 + running.kv_prefill * 0 + now * 0;
-          schedule {
+          scheduler {
             let c = running.decoding > 0 ? 64 : 128;
             advance running each at most (c);
             admit waiting while (running.preempted == 0) each at most (c);
@@ -336,7 +336,7 @@ fn advancing(advance: &str) -> String {
         engine llm on gpu {{
           tokens cap 512;
           request () {{ prefill (1) growing kv; }}
-          schedule {{ {advance} admit waiting while (running.preempted == 0) taking kv (1); }}
+          scheduler {{ {advance} admit waiting while (running.preempted == 0) taking kv (1); }}
           execute (1);
         }}
         pool kv on gpu {{ }}
@@ -404,7 +404,7 @@ fn a_hidden_attribute_is_not_read_by_the_scheduler() {
           reqs cap 8;
           tokens cap 512;
           {request}
-          schedule {{ advance running; admit waiting while (running.preempted == 0) taking {taking}; }}
+          scheduler {{ advance running; admit waiting while (running.preempted == 0) taking {taking}; }}
           execute (1e-3);
         }}
         pool kv on gpu {{ block bs; evict lru; }}
@@ -454,7 +454,7 @@ fn a_hidden_attribute_is_not_read_by_the_scheduler() {
         engine llm on gpu {
           tokens cap 512;
           request (n) { prefill (n) growing kv; }
-          schedule { advance running; admit waiting while (running.preempted == 0) taking kv (n); }
+          scheduler { advance running; admit waiting while (running.preempted == 0) taking kv (n); }
           execute (1e-3);
         }
         pool kv on gpu { block bs; evict lru; queue by (o); }
@@ -474,7 +474,7 @@ fn a_hidden_attribute_is_not_read_by_the_scheduler() {
         engine llm on gpu {
           tokens cap 512;
           request (n) { prefill (n) growing kv; }
-          schedule { advance running by (o); admit waiting while (running.preempted == 0) taking kv (n); }
+          scheduler { advance running by (o); admit waiting while (running.preempted == 0) taking kv (n); }
           execute (1e-3);
         }
         pool kv on gpu { block bs; evict lru; }
@@ -533,7 +533,7 @@ fn a_stage_reads_no_session_attribute() {
             engine llm on gpu {{
               tokens cap {tokens};
               request (prompt) {{ prefill (prompt) growing kv; }}
-              schedule {{ {schedule} }}
+              scheduler {{ {schedule} }}
               execute ({execute});
             }}
             pool kv on gpu {{ }}
@@ -553,7 +553,7 @@ fn a_stage_reads_no_session_attribute() {
                  admit waiting while (running.preempted == 0) taking kv (prompt);",
                 "1",
             ),
-            "an engine's `schedule`",
+            "an engine's `scheduler`",
         ),
     ] {
         let e = check(&src).expect_err("rejected");
@@ -600,7 +600,7 @@ fn an_old_context_variable_name_says_the_new_one() {
             ("size", old)
         };
         let src = format!(
-            "device gpu {{ kv cap 10; }}\nengine e on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute ({cost}); }}\npool kv on gpu {{ evict by ({key}); }}\nworkload {{ session {{ turn; end; \n}} }}\nserver {{\n}}\n"
+            "device gpu {{ kv cap 10; }}\nengine e on gpu {{ tokens cap inf; scheduler {{ advance running; admit waiting while (running.preempted == 0); }} execute ({cost}); }}\npool kv on gpu {{ evict by ({key}); }}\nworkload {{ session {{ turn; end; \n}} }}\nserver {{\n}}\n"
         );
         let e = compile_source(&common::main_source(&src), &common::horizon(500.0)).unwrap_err();
         assert!(e.contains(says), "{e}");
@@ -622,7 +622,7 @@ fn cache_server(request: &str, taking: &str, pool: &str, server: &str) -> String
     engine llm on gpu {{
       tokens cap 512;
       {request}
-      schedule {{ advance running; admit waiting while (running.preempted == 0){taking}; }}
+      scheduler {{ advance running; admit waiting while (running.preempted == 0){taking}; }}
       execute (1e-3);
     }}
     pool kv on gpu {{ block 16; evict lru; }}
@@ -823,7 +823,7 @@ fn a_declaration_cannot_take_a_name_the_language_supplies() {
     );
     let e = check(&observe).expect_err("rejected");
     assert!(
-        e.contains("`admitted` is a name the language supplies, read in an engine's `schedule`"),
+        e.contains("`admitted` is a name the language supplies, read in an engine's `scheduler`"),
         "{e}"
     );
     // renamed, it links
@@ -838,7 +838,7 @@ fn a_schedules_let_cannot_take_a_name_the_language_supplies() {
         "{} workload {{ {ENGINE_WORKLOAD} session {{ turn; }} }}
         server {{ llm (n); }}",
         engine("request (n) { prefill (n); }", "reqs (1)")
-            .replace("schedule { ", "schedule { let inf = 1; ")
+            .replace("scheduler { ", "scheduler { let inf = 1; ")
     );
     let e = check(&src).expect_err("rejected");
     assert!(
@@ -984,7 +984,7 @@ fn a_declaration_cannot_share_its_name_with_a_binding() {
     // a queue's own pool is a declaration of the program too
     let e = check(
         "queue gw : gateway { route { E.decode (prompt); } }
-         queue E : decode { device gpu { kv cap 100; } pool kv on gpu { } engine on gpu { tokens cap inf; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); }
+         queue E : decode { device gpu { kv cap 100; } pool kv on gpu { } engine on gpu { tokens cap inf; scheduler { advance running; admit waiting while (running.preempted == 0); } execute (1); }
            decode (prompt) { hold kv (cost(kv, prompt)) at admission (kv = prompt) { run E prefill (cost(E, 1)) growing kv; } } }
          workload { arrive batch(1); init { set prompt = 3; } session { turn; end; } } server { gw.route(); }
          ",
@@ -1010,10 +1010,10 @@ fn a_declaration_cannot_share_its_name_with_another() {
         workload { arrive closed(2); session { turn; } }
         server { run svc (cost(svc, 1)); OBSERVE observe response = now; }
         ";
-    const ENGINE: &str = "device gpu { } engine Q on gpu { tokens cap 8; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); }";
+    const ENGINE: &str = "device gpu { } engine Q on gpu { tokens cap 8; scheduler { advance running; admit waiting while (running.preempted == 0); } execute (1); }";
     const QUEUE: &str = "queue Q { pool kv { cap 1; } serve fifo; }";
     let schedule_let =
-        |l: &str| ENGINE.replace("schedule { ", &format!("schedule {{ let {l} = 1; "));
+        |l: &str| ENGINE.replace("scheduler { ", &format!("scheduler {{ let {l} = 1; "));
     let two_things = "would make the one word mean two things";
     let rename = "help: rename one of the two declarations";
     let refused = |decl: &str, observe: &str| {

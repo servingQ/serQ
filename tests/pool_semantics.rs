@@ -510,7 +510,7 @@ fn admit_via_names_a_step_stage() {
         let error = p.validate().unwrap_err();
         assert!(
             error.contains(&format!(
-                "`F` is {kind}: only an engine's `schedule` admits"
+                "`F` is {kind}: only an engine's `scheduler` admits"
             )),
             "{error}"
         );
@@ -543,7 +543,7 @@ fn a_hold_that_can_never_fit_is_reported_stuck() {
             prefill (100) growing kv;
             decode (100) growing kv;
           }
-          schedule {
+          scheduler {
             advance running;
             admit waiting while (running.preempted == 0) taking reqs (1), kv (100) reserve (100);
           }
@@ -588,7 +588,7 @@ fn a_zero_cost_preempting_step_does_not_hang() {
             prefill (100) growing kv;
             decode (100) growing kv;
           }
-          schedule {
+          scheduler {
             advance running;
             admit waiting while (running.preempted == 0) taking reqs (1), kv (100) reserve (100);
           }
@@ -704,7 +704,7 @@ fn a_hold_without_cache_leaves_the_prefix_to_the_hold_that_caches() {
             prefill (1000 - cached) growing kv;
             cache (1000);
           }}
-          schedule {{
+          scheduler {{
             advance running;
             admit waiting while (running.preempted == 0) taking kv (min(cachedin(kv), 992) + 8);
           }}
@@ -864,7 +864,7 @@ fn bad_amounts_and_indices_fail_the_run() {
         engine eng on gpu {
           tokens cap 8;
           request (output) { decode (output); }
-          schedule { advance running; admit waiting while (running.preempted == 0); }
+          scheduler { advance running; admit waiting while (running.preempted == 0); }
           execute (1);
         }
         pool kv on gpu { }
@@ -912,7 +912,7 @@ fn a_hold_takes_a_pool_once() {
         engine llm on gpu {{
           tokens cap 128;
           {request}
-          schedule {{
+          scheduler {{
             advance running each at most (128);
             admit waiting while (running.preempted == 0) each at most (128){taking};
           }}
@@ -1076,7 +1076,7 @@ fn a_held_reservation_counts_against_later_admissions() {
             decode (6) growing kv;
             cache (0);
           }}
-          schedule {{
+          scheduler {{
             advance running;
             admit waiting while (running.preempted == 0) taking reqs (1), kv (4) reserve (10);
           }}
@@ -1187,7 +1187,7 @@ fn a_run_ends_at_its_start_plus_its_work() {
           reqs cap 2;
           tokens cap 4;
           {request}
-          schedule {{
+          scheduler {{
             advance running each at most (1);
             admit waiting each at most (1) taking reqs (1), kv (0);
           }}
@@ -1266,7 +1266,7 @@ fn a_resumed_growth_moves_the_position_once() {
             }
             cache (100);
           }
-          schedule {
+          scheduler {
             advance running;
             admit waiting taking reqs (1), kv (0);
           }

@@ -1,5 +1,5 @@
 //! Engines on devices (`docs/design/engine-device.md`): `device`, `engine …
-//! on`, `pool … on`, `schedule` and `execute` are parse-time sugar for the
+//! on`, `pool … on`, `scheduler` and `execute` are parse-time sugar for the
 //! kernel's step stage (`CStageKind::Step`), which no program writes any
 //! more, so each test reads the step an engine lowers to from the compiled
 //! `Program`; and every rule the design refuses does not link.
@@ -362,7 +362,7 @@ workload { arrive batch(3); init { set prompt = 2; } }
 server { vllm (prompt); }
 ";
 
-/// `schedule` with the request's admission on each `admit waiting`: a slot
+/// `scheduler` with the request's admission on each `admit waiting`: a slot
 /// of `reqs` and the prompt's blocks of `kv`, which its runs grow.
 fn taking(schedule: &str) -> String {
     let mut out = String::new();
@@ -395,7 +395,7 @@ engine vllm on gpu {{
     prefill (prompt){growing};
     decode (2){growing};
   }}
-  schedule {{ {schedule} }}
+  scheduler {{ {schedule} }}
   execute (step_time(batch.tokens));
 }}
 pool reqs on vllm {{ }}
@@ -408,6 +408,15 @@ pool kv on gpu {{ preempt lifo; }}
 fn lowered(schedule: &str) -> Schedule {
     let p = compiled(&engine(schedule), &common::horizon(20.0));
     Schedule::of(step(&p, "vllm"))
+}
+
+/// The block is named for the component it is, the engine's scheduler
+/// (#555): the old word is refused with the new one.
+#[test]
+fn schedule_is_written_scheduler() {
+    let src = engine("advance running; admit waiting while (running.preempted == 0);")
+        .replace("scheduler {", "schedule {");
+    refused(&src, "an engine writes this as `scheduler { … }`");
 }
 
 /// Each form of the kernel's step is a schedule: the procedure is no body,
@@ -512,7 +521,7 @@ fn the_stage_forms_are_schedules() {
 /// reads the kernel's name for it (#411). The kernel's `decoders` and
 /// `kv_decode` are the residents' before the batch is formed and the
 /// batch's in `cost`, which a budget or an `only` may leave short, so an
-/// engine reads `running.decoding` in `tokens cap` and `schedule` and
+/// engine reads `running.decoding` in `tokens cap` and `scheduler` and
 /// `batch.decoding` in `execute` (#416).
 #[test]
 fn an_engine_reads_its_lists_in_every_clause() {
@@ -999,8 +1008,8 @@ fn the_design_refuses_what_it_says() {
     refused(
         &format!(
             "device gpu {{ t (x) = 1; }}
-engine e1 on gpu {{ tokens cap 4; schedule {{ advance running; }} execute (t(batch.tokens)); }}
-engine e2 on gpu {{ tokens cap 4; schedule {{ advance running; }} execute (t(batch.tokens)); }}
+engine e1 on gpu {{ tokens cap 4; scheduler {{ advance running; }} execute (t(batch.tokens)); }}
+engine e2 on gpu {{ tokens cap 4; scheduler {{ advance running; }} execute (t(batch.tokens)); }}
 {WORKLOAD}"
         ),
         "one device runs one engine",
@@ -1102,7 +1111,7 @@ fn an_engine_reads_the_programs_own_names() {
 fn a_family_of_engines_is_a_queue_family() {
     refused(
         "device gpu[2] { kv cap 100; } pool kv on gpu { }
-engine vllm[2] on gpu { tokens cap 8; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); }
+engine vllm[2] on gpu { tokens cap 8; scheduler { advance running; admit waiting while (running.preempted == 0); } execute (1); }
 workload { arrive batch(4); init { set prompt = 2; } }",
         "engine family `vllm[2]`: a family of engines is a queue family, `queue vllm[2] : ROLE",
     );
@@ -1111,7 +1120,7 @@ workload { arrive batch(4); init { set prompt = 2; } }",
         format!(
             "queue vllm[2] : decode {{
   device gpu {{ kv cap 100; }}
-  engine on gpu {{ tokens cap 8; schedule {{ {schedule} }} execute (1); }}
+  engine on gpu {{ tokens cap 8; scheduler {{ {schedule} }} execute (1); }}
   pool kv on {on} {{ }}
   decode (prompt) {{ hold kv (cost(kv, prompt)) {{ run vllm prefill (cost(vllm, prompt)) growing kv; }} }}
 }}
@@ -1184,7 +1193,7 @@ const QUEUES: &str = "device gpu { kv cap 1000; }
 engine llm on gpu {
   reqs[2] cap 4;
   tokens cap 64 + waiting.count;
-  schedule { advance running; admit waiting while (running.preempted == 0); }
+  scheduler { advance running; admit waiting while (running.preempted == 0); }
   execute (1);
 }
 pool kv on gpu { }
@@ -1212,7 +1221,7 @@ fn a_queues_engine_holds_no_family_capacity() {
   engine on gpu {
     reqs[2] cap 4;
     tokens cap 64;
-    schedule { advance running; admit waiting; }
+    scheduler { advance running; admit waiting; }
     execute (1);
   }
   pool kv on gpu { }
@@ -1292,7 +1301,7 @@ server {{ E.prefill (prompt); }}
         )
     };
     let device = "device gpu { t1 (x) = 1; kv cap 10; }";
-    let engine = "engine on gpu { tokens cap 4; schedule { advance running; admit waiting while (running.preempted == 0); } execute (t1(batch.tokens)); }";
+    let engine = "engine on gpu { tokens cap 4; scheduler { advance running; admit waiting while (running.preempted == 0); } execute (t1(batch.tokens)); }";
     let ov = common::horizon(10.0);
     compiled(
         &pod(&format!("{device} {engine} pool kv on gpu {{ }}")),
@@ -1591,7 +1600,7 @@ fn a_name_is_a_number_only_where_its_function_takes_one() {
         format!(
             "{pre}
 device gpu {{ kv cap 100; }} pool kv on gpu {{ }}
-engine E on gpu {{ tokens cap inf; request () {{ prefill (1); }} schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
+engine E on gpu {{ tokens cap inf; request () {{ prefill (1); }} scheduler {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
 workload {{ arrive batch(1); init {{ set prompt = 32; }} }}
 server {{ hold kv (cost(kv, {size})) {{ E (); }} }}"
         )

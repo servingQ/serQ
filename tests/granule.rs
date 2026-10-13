@@ -20,7 +20,7 @@ fn prog(granule: &str) -> String {
     )
 }
 
-/// An engine with `granule` among its items and `schedule` as its schedule.
+/// An engine with `granule` among its items and `scheduler` as its schedule.
 fn program(granule: &str, schedule: &str) -> String {
     format!(
         r#"
@@ -33,7 +33,7 @@ fn program(granule: &str, schedule: &str) -> String {
             prefill (6);
             observe ttft = now - t0;
           }}
-          schedule {{ {schedule} }}
+          scheduler {{ {schedule} }}
           execute (1 + max(0, batch.tokens - 6));
         }}
         pool reqs on llm {{ }}
@@ -136,7 +136,7 @@ fn a_granule_above_a_computed_caps_floor_does_not_link() {
             prefill (1024);
             observe ttft = now - t0;
           }}
-          schedule {{
+          scheduler {{
             let n = running.count + waiting.count;
             advance running each at most (max(256, floor(4096 / n)));
             admit waiting while (running.preempted == 0) each at most (max(256, floor(4096 / n)))
@@ -180,7 +180,7 @@ fn the_chunk_caps_and_the_granule_rounds() {
           tokens cap 8;
           granule 4;
           request (t0) { prefill (10); observe ttft = now - t0; }
-          schedule {
+          scheduler {
             advance running each at most (6);
             admit waiting while (running.preempted == 0) each at most (6) taking reqs (1);
           }
@@ -233,7 +233,7 @@ fn a_refused_prefill_ends_the_admissions() {
             observe admitted_at = now;
             prefill (6) growing kv;
           }
-          schedule {
+          scheduler {
             advance running;
             admit waiting while (running.preempted == 0) taking reqs (1), kv (min(6, left));
           }

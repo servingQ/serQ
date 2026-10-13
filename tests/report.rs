@@ -181,7 +181,7 @@ fn the_gaps_between_tokens_count_a_prefill_that_cuts_in() {
             prefill (prompt) growing kv;
             if (s == 0) {{ decode (3) growing kv; }}
           }}
-          schedule {{ {schedule} }}
+          scheduler {{ {schedule} }}
           execute (1);
         }}
         pool reqs on llm {{ }}
@@ -237,7 +237,7 @@ fn a_gap_holds_the_transfer_between_two_engines() {
         engine p on gpu_p {{
           tokens cap inf;
           request () {{ prefill (2); }}
-          schedule {{ advance running; admit waiting while (running.preempted == 0); }}
+          scheduler {{ advance running; admit waiting while (running.preempted == 0); }}
           execute (1);
         }}
         engine d on gpu_d {{
@@ -246,7 +246,7 @@ fn a_gap_holds_the_transfer_between_two_engines() {
             {recompute}
             decode (2);
           }}
-          schedule {{ advance running; admit waiting while (running.preempted == 0); }}
+          scheduler {{ advance running; admit waiting while (running.preempted == 0); }}
           execute (1);
         }}
         stage link : delay;
@@ -297,7 +297,7 @@ fn the_gaps_add_up_to_the_decode_time_through_preemptions() {
             if (known == prompt) { mark first; }
             decode (output - 1 - (known - prompt)) growing kv;
           }
-          schedule {
+          scheduler {
             advance running;
             admit waiting while (running.preempted == 0)
               taking kv (min(known, budget_left(llm))) reserve (known), reqs (1);
@@ -378,7 +378,7 @@ fn a_queue_family_of_one_is_reported_by_index() {
         queue gw : gateway { route { choose j in ND by (0); D[j].decode (prompt); } }
         queue D[ND] : decode {
           device gpu { kv cap 100; }
-          engine on gpu { tokens cap inf; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); }
+          engine on gpu { tokens cap inf; scheduler { advance running; admit waiting while (running.preempted == 0); } execute (1); }
           pool kv on gpu { }
           decode (p) { hold kv (cost(kv, p)) { run D prefill (cost(D, p)) growing kv; } }
         }
@@ -407,7 +407,7 @@ fn a_step_stage_reports_what_its_iterations_carried() {
             prefill (prompt) growing kv;
             if (s == 0) {{ decode (2) growing kv; }}
           }}
-          schedule {{ {schedule} }}
+          scheduler {{ {schedule} }}
           execute (1);
         }}
         pool reqs on llm {{ }}
@@ -589,7 +589,7 @@ fn a_growth_left_waiting_is_noted() {
             prefill (1000 - cached) growing kv;
             cache (1000);
           }
-          schedule { advance running; admit waiting while (running.preempted == 0) taking kv (hit + 8); }
+          scheduler { advance running; admit waiting while (running.preempted == 0) taking kv (hit + 8); }
           execute (1e-4 + 1e-5 * batch.tokens);
         }
         pool kv on gpu { block 16; evict lru; }

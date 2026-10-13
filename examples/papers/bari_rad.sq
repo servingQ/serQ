@@ -22,7 +22,7 @@ fn main() {
       prefill (prompt);
       decode (output);
     }
-    schedule {
+    scheduler {
       advance running only (in_mode()) each at most (bcol);
       admit waiting only (in_mode()) while (running.preempted == 0) each at most (bcol);
     }

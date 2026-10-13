@@ -32,7 +32,7 @@ fn main() {
       if (known == prompt) { observe first = now; }
       decode (output - 1 - (known - prompt)) growing kv;
     }
-    schedule {
+    scheduler {
       // long_prefill_token_threshold binds only while another request is
       // running or waiting; a request alone takes the whole budget (scheduler.py:606-616)
       let threshold = running.count + waiting.count > 1 ? chunk : inf;

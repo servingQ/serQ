@@ -7,7 +7,7 @@ engine NAME on DEVICE {
   tokens cap expr;           // required: the tokens one iteration computes (inf: no cap)
   granule c;                 // a prefill gets all it has left or a multiple of c
   state NAME = c;            // a register the schedule sets
-  schedule { stmt … }        // required: what each iteration does (below)
+  scheduler { stmt … }        // required: what each iteration does (below)
   execute (expr);            // required: how long the iteration takes
 }
 pool NAME on DEVICE { … }          // the device's capacity: the engine's memory
@@ -49,7 +49,7 @@ the [IR](../ir.md) and the Lean model see only that.
 | `tokens cap` | `expr` | as the iteration starts | Tokens per iteration (vLLM's `max_num_batched_tokens`). Reads `running.count`, `running.decoding`, `running.kv_decode`, `running.kv_prefill` and `waiting.count`, not `batch.…`. |
 | `granule` | `const`, positive | | Prefill chunk alignment; see below. |
 | `state NAME = c` | `const` | | A register; see below. |
-| `schedule` | statements | as the iteration is planned | Whom the iteration serves, in what order, and when it admits. |
+| `scheduler` | statements | as the iteration is planned | Whom the iteration serves, in what order, and when it admits. |
 | `execute` | `expr` | after the batch is formed | Clock time of the iteration. Reads `batch.…`, `running.count`, `waiting.count` and the device's time resources. |
 | `request (…) { … }` | parameters, statements | when the server calls it | What the engine does with one request; see below. |
 
@@ -80,10 +80,10 @@ The pool on the engine's device is the engine's memory either way: its
 holds give `running.kv_…` and `batch.kv_…`, and a growth that does not fit
 preempts among the engine's running requests.
 
-## `schedule`
+## `scheduler`
 
 ```serq
-schedule {
+scheduler {
   let NAME = expr;                                        // read once, as the iteration starts
   advance running [only (p)] [admission | by (k, …) | decode first] [each at most (c)];
   admit waiting [only (p)] [while (e)] [each at most (c)];
@@ -108,7 +108,7 @@ vLLM's schedule serves the running requests, then admits the waiting
 while nothing was preempted (`scheduler.py:624`, `scheduler.py:869`):
 
 ```serq
-schedule { advance running; admit waiting while (running.preempted == 0); }
+scheduler { advance running; admit waiting while (running.preempted == 0); }
 ```
 
 Guards and `while` conditions read the running requests as they stand, the
@@ -147,7 +147,7 @@ is named with a `def`, read where it stands
 ```serq
 def in_phase() { running.decoding > 0 ? decoding : !decoding }
 …
-schedule {
+scheduler {
   advance running only (in_phase());
   admit waiting only (in_phase()) while (running.preempted == 0);
 }
@@ -180,7 +180,7 @@ or a bare `e` does not link; a cap that shrinks writes its floor,
 ### `exclusive prefill`
 
 ```serq
-schedule {
+scheduler {
   exclusive prefill [each at most (c)];
   admit waiting while (running.preempted == 0) [each at most (c)];
 }
@@ -232,7 +232,7 @@ request is running (`examples/engines/tgi.sq`):
 
 ```serq
 state just = 0;
-schedule {
+scheduler {
   advance running;
   if (just == 0 || running.count == 0) { admit waiting; }
   set just = waiting.admitted > 0;
@@ -286,7 +286,7 @@ engine vllm on gpu {
     decode (output - 1 - (known - prompt)) growing kv;
     cache (prompt + output);
   }
-  schedule {
+  scheduler {
     let threshold = running.count + waiting.count > 1 ? chunk_cap : inf;
     advance running each at most (threshold);
     admit waiting while (running.preempted == 0) each at most (threshold)
@@ -308,7 +308,7 @@ fn main() {
       prefill (8);
       decode (2);
     }
-    schedule { advance running; admit waiting while (running.preempted == 0); }
+    scheduler { advance running; admit waiting while (running.preempted == 0); }
     execute (1);
   }
   workload {

@@ -16,7 +16,7 @@ fn main() {
       decode (output) growing kv;
       observe done = now;
     }
-    schedule {
+    scheduler {
       advance running;
       admit waiting while (running.preempted == 0)
         taking slots (1), kv (min(prompt, budget_left(llm))) reserve (prompt);

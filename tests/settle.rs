@@ -135,7 +135,7 @@ fn an_iteration_with_tokens_and_zero_cost_is_an_error() {
         engine llm on gpu {
           tokens cap 512;
           request () { prefill (100) growing kv; }
-          schedule { advance running; admit waiting while (running.preempted == 0) taking kv (100); }
+          scheduler { advance running; admit waiting while (running.preempted == 0) taking kv (100); }
           execute (0);
         }
         pool kv on gpu { block 16; evict lru; }
@@ -165,7 +165,7 @@ fn a_preempt_only_step_may_cost_zero() {
             prefill (100) growing kv;
             decode (100) growing kv;
           }
-          schedule {
+          scheduler {
             advance running;
             admit waiting while (running.preempted == 0) taking reqs (1), kv (100) reserve (100);
           }
@@ -205,7 +205,7 @@ fn the_marks_of_a_session_turn_do_not_depend_on_the_machine() {
             decode (output - 1) growing kv;
             cache (prompt + output);
           }}
-          schedule {{
+          scheduler {{
             advance running;
             admit waiting while (running.preempted == 0) taking reqs (1), kv (prompt);
           }}
@@ -292,7 +292,7 @@ fn the_machine_still_matters() {
         engine llm on gpu {{
           tokens cap B;
           request (n) {{ prefill (n) growing kv; }}
-          schedule {{ advance running; admit waiting while (running.preempted == 0) taking kv (n); }}
+          scheduler {{ advance running; admit waiting while (running.preempted == 0) taking kv (n); }}
           execute (1e-4 + 1e-5 * batch.tokens);
         }}
         pool kv on gpu {{ block 16; evict lru; }}

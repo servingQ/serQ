@@ -19,7 +19,7 @@ blocks to say so (the server's thirteen lines of comment elided):
   engine vllm on gpu {
     reqs cap max_seqs;
     tokens cap B;
-    schedule {
+    scheduler {
       // long_prefill_token_threshold binds only while another request is
       // running or waiting; a request alone takes the whole budget (scheduler.py:606-616)
       let threshold = running.count + waiting.count > 1 ? chunk_cap : inf;
@@ -96,7 +96,7 @@ The server calls the engine.
       decode (output - 1 - (known - prompt)) growing kv;
       cache (prompt + output);
     }
-    schedule {
+    scheduler {
       let threshold = running.count + waiting.count > 1 ? chunk_cap : inf;
       advance running each at most (threshold);
       admit waiting while (running.preempted == 0) each at most (threshold)
@@ -117,7 +117,7 @@ the report gives for every turn with no program text
 ([What the client sees](client-metrics.md)).
 
 Each clause reads one moment: `request` what one request is and computes,
-`schedule` what an iteration admits and advances (its `taking` read per
+`scheduler` what an iteration admits and advances (its `taking` read per
 request at admission), `execute` how long an iteration lasts.
 
 **Step 2. Observations move to the client, and routing to gateway

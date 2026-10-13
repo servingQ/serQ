@@ -12,7 +12,7 @@
 //!     decode (output - 1) growing kv;
 //!     cache (prompt + output);                // what it leaves cached
 //!   }
-//!   schedule { …; admit waiting … taking reqs (1), kv (known) reserve (known); }
+//!   scheduler { …; admit waiting … taking reqs (1), kv (known) reserve (known); }
 //! }
 //! ```
 //!

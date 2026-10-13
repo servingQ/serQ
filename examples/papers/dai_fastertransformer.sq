@@ -19,7 +19,7 @@ fn main() {
       prefill (prompt);
       decode (output);
     }
-    schedule {
+    scheduler {
       advance running only (in_phase());
       admit waiting only (in_phase()) while (running.preempted == 0);
     }

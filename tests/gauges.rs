@@ -381,7 +381,7 @@ fn a_gauge_does_not_plan_an_iteration() {
         engine e on gpu {
           tokens cap ~uniform(1, 2);
           request () { prefill (1); }
-          schedule { advance running; admit waiting while (running.preempted == 0); }
+          scheduler { advance running; admit waiting while (running.preempted == 0); }
           execute (1);
         }
         workload { session { turn; end;
@@ -404,12 +404,12 @@ fn a_budget_does_not_read_budget_left() {
         engine e on gpu {{
           tokens cap {budget};
           request () {{ prefill (1); }}
-          schedule {{ advance running; admit waiting while (running.preempted == 0); }}
+          scheduler {{ advance running; admit waiting while (running.preempted == 0); }}
           execute (1);
         }}
         engine f on tpu {{
           tokens cap 64;
-          schedule {{ advance running; admit waiting while (running.preempted == 0); }}
+          scheduler {{ advance running; admit waiting while (running.preempted == 0); }}
           execute (1);
         }}
         workload {{ session {{ turn; end;
@@ -429,7 +429,7 @@ fn a_budget_does_not_read_budget_left() {
         engine e on gpu {
           tokens cap 128;
           request () { prefill (1); }
-          schedule {
+          scheduler {
             let c = budget_left(e) > 1 ? 4 : 8;
             advance running each at most (c);
             admit waiting while (running.preempted == 0) each at most (c);
@@ -451,7 +451,7 @@ fn a_budget_does_not_read_budget_left() {
         engine e on gpu {
           tokens cap 8;
           request () { prefill (4); }
-          schedule { advance running by (budget_left(e)); admit waiting while (running.preempted == 0); }
+          scheduler { advance running by (budget_left(e)); admit waiting while (running.preempted == 0); }
           execute (1 + 0 * budget_left(e));
         }
         pool kv on gpu { }

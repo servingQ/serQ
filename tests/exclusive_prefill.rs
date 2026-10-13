@@ -33,7 +33,7 @@ fn source(schedule: &str, slot_cap: usize, kv_cap: usize) -> String {
             if (id == 0) {{ decode (2) growing kv; }}
             cache (100);
           }}
-          schedule {{ {schedule} }}
+          scheduler {{ {schedule} }}
           execute (1);
         }}
         pool reqs on llm {{ }}
@@ -162,7 +162,7 @@ fn resident_prefill_chunks_do_not_admit_another_waiting_request() {
             prefill (6) growing kv;
             decode (1) growing kv;
           }
-          schedule {
+          scheduler {
             exclusive prefill each at most (4);
             admit waiting while (running.preempted == 0) each at most (4)
               taking reqs (1), kv (4) reserve (6);
@@ -205,7 +205,7 @@ fn an_exhausted_decode_budget_defers_waiting_prefill() {
               prefill (4);
             }
           }
-          schedule { exclusive prefill; admit waiting while (running.preempted == 0) taking reqs (1); }
+          scheduler { exclusive prefill; admit waiting while (running.preempted == 0) taking reqs (1); }
           execute (1);
         }
         pool reqs on llm { }
@@ -255,7 +255,7 @@ fn preemption_keeps_only_committed_progress_and_defers_readmission() {
             decode (3 - (known - 2)) growing kv;
             cache (100);
           }
-          schedule {
+          scheduler {
             exclusive prefill each at most (2);
             admit waiting while (running.preempted == 0) each at most (2)
               taking reqs (1), kv (min(known, left)) reserve (known) reuse (0);

@@ -47,7 +47,7 @@ fn main() {
       decode (output) growing kv;
       cache (prompt + output - 1);
     }
-    schedule {
+    scheduler {
       advance running;
       // it allocates its prompt and reserves up to max_tokens
       admit waiting while (running.preempted == 0)

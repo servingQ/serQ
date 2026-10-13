@@ -40,7 +40,7 @@ fn main() {
       decode (output - 1 - (known - prompt)) growing kv;
       cache (prompt + output);
     }
-    schedule {
+    scheduler {
       let threshold = running.count + waiting.count > 1 ? chunk_cap : inf;
       advance running each at most (threshold);
       admit waiting while (running.preempted == 0) each at most (threshold)

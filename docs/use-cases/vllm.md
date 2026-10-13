@@ -193,7 +193,7 @@ A turn is one request to the engine, on the whole context:
 
 | Requirement | Current expression | Limit of the model |
 |---|---|---|
-| Token budget and chunked prefill | `engine … { tokens cap …; schedule { … each at most (…); } }` | Resident selection then waiting admission is a specific policy |
+| Token budget and chunked prefill | `engine … { tokens cap …; scheduler { … each at most (…); } }` | Resident selection then waiting admission is a specific policy |
 | Request slots and KV space | `hold`, admission bindings, `reserve`, `growing` | Tagged fit/lookahead conditions are not fully validated |
 | FCFS/priority | Queue order and `preempt lifo`; PRIORITY is `preempt by (-priority, -t0) requeue tail` beside `queue by (priority, t0)` | No oracle scenario checks the PRIORITY victim |
 | Shared prefix | `cachedin`, `reuse`, `cache` | Cache identity is session-based, not content-key shared objects |

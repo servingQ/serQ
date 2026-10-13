@@ -60,7 +60,7 @@ fn main() {
     // cached then, plus the chunk the step's remaining budget allows; the
     // admission needs room for the whole sequence (scheduler_reserve_full_isl,
     // kv_cache_manager.py:515-531) but allocates only the first chunk
-    schedule {
+    scheduler {
       advance running;
       admit waiting while (running.preempted == 0)
         taking reqs (1), kv (hit + min(known - hit, budget_left(vllm))) reserve (known)

@@ -18,7 +18,7 @@ fn aging_source(bound: bool, key: &str) -> String {
             observe admitted_at = now;
             decode (s == 0 ? 4 : 1);
           }
-          schedule { advance running; admit waiting while (running.preempted == 0) taking reqs (1); }
+          scheduler { advance running; admit waiting while (running.preempted == 0) taking reqs (1); }
           execute (1);
         }",
             "pool reqs on llm",
@@ -120,7 +120,7 @@ fn each_selection_reads_the_current_remaining_iteration_budget() {
             if (s == 0) { decode (1); }
             else { prefill (s == 2 ? 1 : s == 1 ? 2 : 3); }
           }
-          schedule { advance running; admit waiting while (running.preempted == 0) taking reqs (1); }
+          scheduler { advance running; admit waiting while (running.preempted == 0) taking reqs (1); }
           execute (1);
         }
         pool reqs on llm { queue by (budget_left(llm) >= 4 ? serial : -serial); }
@@ -280,7 +280,7 @@ fn resumed_holds_keep_prepend_priority_over_recomputed_keys() {
               decode (3 - (known - 2)) growing kv;
             }
           }
-          schedule {
+          scheduler {
             exclusive prefill each at most (2);
             admit waiting while (running.preempted == 0) each at most (2)
               taking reqs (1), kv (min(known, left)) reserve (known);

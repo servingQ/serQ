@@ -31,7 +31,7 @@ fn main() {
       prefill (prefill_work);
       decode (output);
     }
-    schedule {
+    scheduler {
       advance running decode first;                // prefill in what decode leaves
       admit waiting while (running.preempted == 0);
     }

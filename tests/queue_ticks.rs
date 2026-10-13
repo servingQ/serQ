@@ -98,7 +98,7 @@ fn a_queue_tick_is_positive_and_no_engines() {
         engine llm on gpu {
           tokens cap 8;
           request () { prefill (8) growing kv; }
-          schedule { advance running; admit waiting taking kv (8); }
+          scheduler { advance running; admit waiting taking kv (8); }
           execute (1);
         }
         pool kv on llm.gpu { queue fifo every (5); }
@@ -120,7 +120,7 @@ fn the_waiters_of_one_tick_reach_the_same_iteration() {
         engine llm on gpu {
           tokens cap 64;
           request () { prefill (8) growing kv; }
-          schedule { advance running; admit waiting taking kv (8); }
+          scheduler { advance running; admit waiting taking kv (8); }
           execute (1);
         }
         pool kv on llm.gpu { }

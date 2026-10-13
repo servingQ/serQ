@@ -31,7 +31,7 @@ device gpu {
 engine vllm on gpu {
   reqs cap max_seqs;                 // max_num_seqs: a capacity the engine holds
   tokens cap B;                      // max_num_batched_tokens: the tokens one iteration computes
-  schedule {
+  scheduler {
     let threshold = running.count + waiting.count > 1 ? max_per_run : inf;
     advance running each at most (threshold);
     admit waiting while (running.preempted == 0) each at most (threshold);
@@ -52,7 +52,7 @@ pool reqs on vllm { queue fifo; }
   `engine E[N] on gpu` pairs `E[i]` with `kv[i]`.
 - **`tokens cap B`** caps `tokens`, which starts at 0 each iteration and is
   what `execute` reads; a language name, so never a pool.
-- **`schedule`** is required: vLLM's running loop (`advance running`,
+- **`scheduler`** is required: vLLM's running loop (`advance running`,
   `scheduler.py:626-856`), then its waiting loop (`admit waiting`,
   `scheduler.py:872-1344`), which does not run in a step that preempted
   (`scheduler.py:869`). `while` is read before each admission, as the kernel
@@ -67,14 +67,14 @@ pool reqs on vllm { queue fifo; }
   iteration), `waiting.count` (every queue the engine admits, as vLLM counts
   `skipped_waiting`, `scheduler.py:609-611`), `waiting.admitted`, and the
   residents' KV `running.kv_decode`, `running.kv_prefill`. The batch's are
-  `batch.tokens`, `batch.prefilled` (in `schedule`, what it has formed so
+  `batch.tokens`, `batch.prefilled` (in `scheduler`, what it has formed so
   far) and `batch.decoding`, `batch.kv_decode`, `batch.kv_prefill`,
   `batch.attention` (in `execute`). The kernel reads `decoders` and
   `kv_decode` as the residents' before the batch is formed and as the
   batch's in `cost`, and a budget or an `only` can leave a resident out of
   the batch, so the engine names them twice (#416). An engine reads no bare
-  name in its `tokens cap`, `execute` and `schedule`; `running.preempted`
-  and `waiting.admitted` say what the schedule did, so only `schedule`
+  name in its `tokens cap`, `execute` and `scheduler`; `running.preempted`
+  and `waiting.admitted` say what the schedule did, so only `scheduler`
   reads them.
 - **`execute (T)`**: the batch's time over the device's resources; a serial
   engine writes `+` for `max`. `cost` is only a request's work.

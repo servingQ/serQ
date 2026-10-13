@@ -396,13 +396,13 @@ pub struct StepSpec {
     pub serve: Serve,
     /// Pool whose holdings of the scheduled residents give `kv_decode`.
     pub memory: Option<Ref>,
-    /// The engine's `schedule`, as the kernel runs it.
+    /// The engine's `scheduler`, as the kernel runs it.
     pub schedule: Schedule,
     /// `state NAME = c;`: the stage's registers and their first values.
     pub state: Vec<(String, Expr)>,
 }
 
-/// An engine's `schedule` as the kernel runs it.
+/// An engine's `scheduler` as the kernel runs it.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Schedule {
     /// vLLM's procedure, no body: advance running in `serve`'s order, then
@@ -413,7 +413,7 @@ pub enum Schedule {
     Body(Vec<IterStmt>),
 }
 
-/// A statement of an engine's `schedule` body, as the kernel runs it.
+/// A statement of an engine's `scheduler` body, as the kernel runs it.
 #[derive(Clone, Debug, PartialEq)]
 pub enum IterStmt {
     /// `serve [only (p)] [admission | decode first | by (k, …)];`

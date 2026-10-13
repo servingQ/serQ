@@ -28,7 +28,7 @@ fn three(preempt: &str) -> String {
             decode (12) growing kv;
             cache (0);
           }}
-          schedule {{
+          scheduler {{
             advance running;
             admit waiting while (running.preempted == 0) taking reqs (1), kv (prompt);
           }}
@@ -106,7 +106,7 @@ fn a_victim_requeues_at_the_head_or_the_tail() {
             decode (10) growing kv;
             cache (0);
           }}
-          schedule {{
+          scheduler {{
             advance running;
             admit waiting while (running.preempted == 0) taking reqs (1), kv (4);
           }}
@@ -156,7 +156,7 @@ fn a_preempt_key_reads_the_candidate_and_nothing_it_cannot_see() {
             decode (output) growing kv;
             cache (0);
           }}
-          schedule {{
+          scheduler {{
             advance running;
             admit waiting while (running.preempted == 0) taking reqs (1), kv (prompt);
           }}
@@ -285,7 +285,7 @@ fn a_tail_victim_is_ordered_by_the_queue_keys() {
             decode (10) growing kv;
             cache (0);
           }
-          schedule {
+          scheduler {
             advance running;
             admit waiting while (running.preempted == 0) taking reqs (1), kv (4);
           }

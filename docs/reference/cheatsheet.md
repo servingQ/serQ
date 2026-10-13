@@ -54,7 +54,7 @@ engine llm on gpu {
   reqs cap S;                     // running slots (max_num_seqs)
   tokens cap B;                   // tokens per iteration (max_num_batched_tokens)
   granule G;                      // a prefill gets all it has left or a multiple of G (inf: whole or nothing)
-  schedule {
+  scheduler {
     advance running by (remaining) each at most (C);   // admission (default) | by (keys…) | decode first; only (p)
     admit waiting while (running.preempted == 0) each at most (C);
   }                               // or: exclusive prefill; admit waiting …

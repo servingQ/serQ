@@ -17,7 +17,7 @@ fn main() {
       decode (20) growing kv;
       observe done = now;
     }
-    schedule {
+    scheduler {
       advance running;
       admit waiting while (running.preempted == 0) taking slots (1), kv (16);
     }
