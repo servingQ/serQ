@@ -244,10 +244,11 @@ its lease back (`allocated(prog[home]) > 0`) and goes on as a running
 one; a lease still set aside at its next request it releases, and waits.
 
 **The order at a tick.** At an instant the pools' ticks come after its
-other events, the queue ticks before the preemption ticks, each in the
-order the pools are declared. So the router's order is the language's:
+other events, in the order the pools are declared. The program declares
+`waiting_queue` before `prog`, so the router's order is the program's:
 the waiting queue lets its programs in, then each replica gives back
-what fits, then pauses while it is over.
+what fits, then pauses while it is over. Declared the other way round,
+the replicas would pause first.
 
 ### The price
 
@@ -282,6 +283,10 @@ a queue's tick as a station of its own inside the queue's pool.
   settles after each event, so the first waiter to wake took its replica
   before the second woke, and its `queue by` never saw them together.
   `queue … every` hands them to the queue at once, at its tick.
+- **Queue ticks before preemption ticks.** The first `queue … every` put
+  every queue tick of an instant before every preemption tick, so a
+  program could not state the opposite (criterion 2, #591's review). The
+  pools' declaration order says it in the program, with one rule fewer.
 - **The resume in the victim's order.** The first `suspend` gave leases
   back in the order it took them, which a program could not state
   otherwise (criterion 2). ThunderAgent's two orders agree, those calling

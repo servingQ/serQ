@@ -851,8 +851,9 @@ sets no timer. See [Pool](api/pool.md).
 when it began are tried in the queue's order: each one admitted runs
 until it blocks (its body, and what follows it, up to its next wait)
 before the next is tried, and one that does not fit is passed over, not
-waited behind. A hold queued during a tick waits for the next, so a hold
-on such a pool lets time pass, and a `while` around it links. It does not
+waited behind. A hold queued during a tick waits for the next, so a
+session is admitted to such a pool at most once an instant, and a `while`
+around a hold on it links. It does not
 link on a pool an engine admits. ThunderAgent's router lets its global
 waiting queue in at its tick, those with a request pending first, the
 smallest first in each, each placed before the next is tried
@@ -876,10 +877,10 @@ index. A pool's growers: the order they stalled, the head blocking the
 rest. Events at one instant: the order they were scheduled; sessions run
 in the order they became ready; jobs of a `ps` stage with equal finish
 tags finish in the order they started. The pools' ticks at an instant
-come after its other events: every `queue … every` tick, then every
-`preempt leases by … every` tick, each in the order the pools are
-declared, so that a waiting queue lets its programs in before the pools
-they enter give back and pause. Each pool has one queue, and a hold
+come after its other events, in the order the pools are declared (a
+pool's queue tick before its own preemption tick): a waiting queue
+declared before the pools its programs enter lets them in before those
+give back and pause. Each pool has one queue, and a hold
 on several pools waits in its first pool's; where the heads of two queues
 both wait for room in one pool, or one stage serves several queues, the
 pool declared first is served first.

@@ -74,13 +74,14 @@ impl PartialEq for Entry {
 }
 impl Eq for Entry {}
 impl Entry {
-    /// Within an instant, the pools' ticks come after its other events:
-    /// the queue ticks, then the preemption ticks, each in the pools' order.
-    fn rank(&self) -> (u8, usize) {
+    /// Within an instant, the pools' ticks come after its other events, in
+    /// the order the pools are declared; a pool's queue tick before its
+    /// preemption tick.
+    fn rank(&self) -> (u8, usize, u8) {
         match self.ev {
-            Ev::QueueTick { pool } => (1, pool),
-            Ev::PoolTick { pool } => (2, pool),
-            _ => (0, 0),
+            Ev::QueueTick { pool } => (1, pool, 0),
+            Ev::PoolTick { pool } => (1, pool, 1),
+            _ => (0, 0, 0),
         }
     }
 }
@@ -1219,6 +1220,18 @@ impl<'p> Interp<'p> {
         if self.error.is_some() {
             return;
         }
+        self.run_ready();
+        if self.error.is_some() {
+            return;
+        }
+        self.end_of_settle();
+    }
+
+    /// Run the ready sessions, and admit what then fits, until none is
+    /// ready: what an event leads to within its instant. A queue's tick
+    /// runs each admission this far, not to the instant's end, where an
+    /// iteration may start (`end_of_settle`).
+    fn run_ready(&mut self) {
         loop {
             while let Some(sid) = self.ready.pop_front() {
                 let now = self.now;
@@ -1254,6 +1267,11 @@ impl<'p> Interp<'p> {
                 break;
             }
         }
+    }
+
+    /// The checks, the iterations and the rescheduling once an event's
+    /// sessions have settled.
+    fn end_of_settle(&mut self) {
         // The memory invariant, `allocated + cached <= cap` in every
         // reachable configuration (`SerqLang.Step.invariant` proves it for
         // the pool relation; this checks the interpreter on every debug run:
@@ -3674,7 +3692,7 @@ impl<'p> Interp<'p> {
             }
             self.pools[pl].queue.remove(index);
             self.admit(sid, pending);
-            self.settle();
+            self.run_ready();
             if self.error.is_some() {
                 return;
             }

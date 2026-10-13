@@ -751,9 +751,9 @@ pub struct CPool {
     /// multiple of `dt` seconds, in the queue's order, each admitted one
     /// running until it blocks before the next is tried, and one that does
     /// not fit passed over; a hold queued during a tick waits for the next.
-    /// The pools' queue ticks at one instant act after its other events, in
-    /// the pools' order, and before their preemption ticks (ThunderAgent's
-    /// global waiting queue, drained at the router's tick).
+    /// The pools' ticks at one instant act after its other events, in the
+    /// pools' order, a pool's queue tick before its preemption tick
+    /// (ThunderAgent's global waiting queue, drained at the router's tick).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub queue_every: Option<f64>,
     pub spill: Option<CSpill>,
@@ -2711,7 +2711,8 @@ impl Validator<'_> {
                 CStmt::Hold { pools, body, .. } => {
                     // a hold queued on a pool under `queue … every` is
                     // admitted at a tick, one queued during a tick at the
-                    // next: at most once an instant
+                    // next: a session at most once an instant per pool, so
+                    // a loop through it passes so many times at most
                     let ticks = pools.first().is_some_and(|(r, _, _)| {
                         (r.base..r.base + r.count).all(|i| self.p.pools[i].queue_every.is_some())
                     });

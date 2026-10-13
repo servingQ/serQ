@@ -115,6 +115,14 @@ fn main() {
     }
   }
 
+  // The router's global_waiting_queue, of which these are the programs
+  // with a request pending (docs/design/thunderagent.md, item 1), drained
+  // at its scheduler's tick: those with a step first, then new ones, the
+  // smaller first in each (_greedy_resume). Each one let in takes its
+  // replica before the next is tried. Pools tick in the order they are
+  // declared: this one first, so the paused ones with no request pending
+  // come back after these, and the pause comes last.
+  pool waiting_queue { queue by (K > 0 ? 0 : 1, charged) every (dt); }
   // The router's picture of a replica: the tokens of the programs placed on
   // it, against vLLM's KV capacity (cache_config.total_tokens_capacity).
   // A running program's tokens may grow past the capacity; at the
@@ -127,14 +135,6 @@ fn main() {
     cap tr ? room : inf;
     preempt leases by (reasoning, prompt) every (dt) suspend by (prompt);
   }
-  // The router's global_waiting_queue, of which these are the programs
-  // with a request pending (docs/design/thunderagent.md, item 1), drained
-  // at its scheduler's tick: those with a step first, then new ones, the
-  // smaller first in each (_greedy_resume). Each one let in takes its
-  // replica before the next is tried; the queue's tick comes before the
-  // pools', so the paused ones with no request pending come back after
-  // them, and the pause comes last.
-  pool waiting_queue { queue by (K > 0 ? 0 : 1, charged) every (dt); }
   def no_room(x) { max r in J (free(prog[r])) < x }
   // the router's count of the program becomes x (state.total_tokens = x)
   def count_as(x) {

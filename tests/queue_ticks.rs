@@ -108,3 +108,62 @@ fn a_queue_tick_is_positive_and_no_engines() {
         "`queue … every` on a pool an engine admits",
     );
 }
+
+/// Found in review (#591): a queue's tick ran each admission to the
+/// instant's end, where an engine's iteration starts, so the first waiter
+/// let in started one alone and the second waited for the next. Both are
+/// let in at t = 5 and finish in the same iteration, at t = 6.
+#[test]
+fn the_waiters_of_one_tick_reach_the_same_iteration() {
+    let r = run(r#"
+        device gpu { kv cap 64; }
+        engine llm on gpu {
+          tokens cap 64;
+          request () { prefill (8) growing kv; }
+          schedule { advance running; admit waiting taking kv (8); }
+          execute (1);
+        }
+        pool kv on llm.gpu { }
+        pool gate { queue fifo every (5); }
+        workload { arrive batch(2); session { turn; } }
+        server {
+          hold gate (cost(gate, 1)) { }
+          llm ();
+          observe done = now;
+        }
+"#);
+    assert_eq!(r.observe("done").unwrap().samples, vec![6.0, 6.0]);
+}
+
+/// The pools' ticks at an instant go in the order the pools are declared.
+/// Serials 0 and 1 lease 8 and 4 of 10 by t = 0; serial 2 waits for the
+/// queue's tick at t = 5, where `prog` also pauses serial 0. Declared
+/// first, the queue lets serial 2 in before the pause (it reads `free`
+/// -2); declared after, after it (6).
+#[test]
+fn the_pools_ticks_go_in_declaration_order() {
+    let seen = |pools: &str| {
+        let src = format!(
+            r#"
+            stage svc : fifo(3);
+            {pools}
+            workload {{ arrive batch(3); session {{ turn; }} }}
+            server {{
+              if (serial < 2) {{
+                hold prog (cost(prog, serial == 0 ? 4 : 2)) {{ }} lease prog (inf);
+                grow prog (cost(prog, serial == 0 ? 4 : 2));
+                run svc (cost(svc, 20));
+              }} else {{
+                hold gate (cost(gate, 1)) {{ observe seen = free(prog); }}
+                run svc (cost(svc, 1));
+              }}
+            }}
+"#
+        );
+        run(&src).observe("seen").unwrap().samples[0]
+    };
+    let gate = "pool gate { queue fifo every (5); }";
+    let prog = "pool prog { cap 10; preempt leases by (serial) every (5) suspend by (serial); }";
+    assert_eq!(seen(&format!("{gate} {prog}")), -2.0);
+    assert_eq!(seen(&format!("{prog} {gate}")), 6.0);
+}

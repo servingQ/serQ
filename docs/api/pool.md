@@ -164,8 +164,8 @@ holds that waited when it began are tried in the queue's order; each one
 admitted runs until it blocks before the next is tried, and one that does
 not fit is passed over rather than blocking the rest. A hold queued during
 the tick waits for the next one. The pools' ticks at an instant come after
-its other events, these before any `preempt leases by … every` tick, each
-in declaration order. Not on a pool an engine admits. ThunderAgent's global
+its other events, in the order the pools are declared (a pool's queue tick
+before its own preemption tick). Not on a pool an engine admits. ThunderAgent's global
 waiting queue, let in at the router's tick:
 
 ```serq
