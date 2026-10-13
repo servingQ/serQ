@@ -11,15 +11,15 @@ use serq::run_program;
 
 /// 32 agents' contexts are several times the two replicas' 64 000 tokens
 /// each: a context averages about 6 000 + 9 × 1 300 ≈ 18 000 tokens. The
-/// bounds sit below what the run gives at seed 1 (hit 0.52 against 0.015,
-/// turns 1.24 times): the claim is the direction, not the value.
+/// bounds sit below what the run gives at seed 1 (hit 0.63 against 0.05,
+/// turns 1.35 times): the claim is the direction, not the value.
 #[test]
 fn admitting_programs_by_capacity_keeps_their_prefixes_and_serves_more_turns() {
     let run = |tr: &str| run_program("thunderagent", &[tr, "N=32"], Some(1), Some(2000.0));
     let (on, off) = (run("tr=1"), run("tr=0"));
     let hit = |r: &serq::Report| r.observe("hit").unwrap().mean;
     assert!(
-        hit(&on) > 0.4 && hit(&off) < 0.05,
+        hit(&on) > 0.4 && hit(&off) < 0.1,
         "hit rate: tr {} default {}",
         hit(&on),
         hit(&off)
@@ -113,7 +113,7 @@ fn a_shared_system_prompt_keeps_paused_prefixes_and_gives_default_mode_its_hits(
 /// (1 - w) of its tokens and grows them back at its next request, which
 /// pauses others. The claim is the mechanism: at `w` 0.5 more of the turns
 /// come from paused programs, and fewer turns are served than at the
-/// code's default, 1 (docs/design/thunderagent.md, item 7).
+/// code's default, 1 (docs/design/thunderagent.md, item 6).
 #[test]
 fn counting_idle_programs_for_less_pauses_more_and_serves_less() {
     let run = |w: &str| paper("tr=1", &["g=3.3e-9", "S=3968", w]);
@@ -127,5 +127,49 @@ fn counting_idle_programs_for_less_pauses_more_and_serves_less() {
         resumed(&half),
         whole.turns,
         half.turns
+    );
+}
+
+/// The router lets a paused program in at its scheduler's tick, on the
+/// replica with the most room. With a tick of 50 ms a waiting program is
+/// let in as soon as room appears, wherever it appears: more of the turns
+/// come from paused programs, and fewer turns are served than at the
+/// code's 5 s (docs/design/thunderagent.md, item 1).
+#[test]
+fn a_paused_program_comes_back_at_the_routers_tick() {
+    let run = |dt: &str| paper("tr=1", &["g=3.3e-9", "S=3968", dt]);
+    let resumed =
+        |r: &serq::Report| r.observe("resume_wait").map_or(0, |o| o.count) as f64 / r.turns as f64;
+    let (tick, fast) = (run("dt=5"), run("dt=0.05"));
+    assert!(
+        resumed(&fast) > 1.5 * resumed(&tick) && tick.turns > fast.turns,
+        "resumed/turn: dt 5 {}, dt 0.05 {}; turns: {} against {}",
+        resumed(&tick),
+        resumed(&fast),
+        tick.turns,
+        fast.turns
+    );
+}
+
+/// The router's estimate may overshoot the prompt; it counts no more than
+/// a replica holds, so a program whose estimate is past the capacity is
+/// still let in (at the example's scale `est` 0.2 once ended the run on a
+/// lease grown past the cap). The error costs some turns, not most.
+#[test]
+fn an_estimate_past_the_capacity_counts_the_capacity() {
+    let run = |est: &str| {
+        run_program(
+            "thunderagent",
+            &["tr=1", "N=32", est],
+            Some(1),
+            Some(2000.0),
+        )
+    };
+    let (exact, off) = (run("est=0"), run("est=0.2"));
+    assert!(
+        off.turns as f64 > 0.8 * exact.turns as f64,
+        "turns: exact {}, est 0.2 {}",
+        exact.turns,
+        off.turns
     );
 }
