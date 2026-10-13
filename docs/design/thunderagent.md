@@ -214,8 +214,15 @@ global queue is a pool its waiters hold:
         }
       }
       choose j in J by (…);
-      …
+      set home = j;
+      hold prog[home] (cost(prog, tr ? buffer : charged)) { … } lease prog[home] (inf);
+      if (tr) { count_as(charged); }
 ```
+
+A program let in enters with its buffer and grows the rest: within the
+room it was let in for, or, once it has waited 30 minutes, past the
+capacity, as `_wait_for_resume` lets it in whatever the room; the next
+tick then pauses others.
 
 Every waiter wakes a millisecond before the tick, at an instant that
 puts it in the router's order: those with a step before new ones, the
