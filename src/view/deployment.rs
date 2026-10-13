@@ -2408,9 +2408,16 @@ fn pool_notes(p: &Program, i: usize, cached: bool) -> Vec<String> {
             show_keys(p, keys),
             if *tail { " requeue tail" } else { "" }
         )),
-        crate::ir::Preempt::Leases { keys } => {
-            parts.push(format!("preempt leases by ({})", show_keys(p, keys)))
-        }
+        crate::ir::Preempt::Leases {
+            keys,
+            every,
+            suspend,
+        } => parts.push(format!(
+            "preempt leases by ({}){}{}",
+            show_keys(p, keys),
+            every.map_or(String::new(), |dt| format!(" every ({dt})")),
+            if *suspend { " suspend" } else { "" }
+        )),
     }
     // the title says `on S` only for a pool that is no memory
     if let (Some(_), Some(s)) = (memory_of(p, i), pool.admit_via) {

@@ -117,20 +117,26 @@ fn main() {
 
   // The router's picture of a replica: the tokens of the programs placed on
   // it, against vLLM's KV capacity (cache_config.total_tokens_capacity).
-  // A program whose tokens grow past the capacity pauses others: those
-  // calling a tool first, then those reasoning, the smaller first in each
-  // (_pause_until_safe). A paused program's tokens are no longer counted,
-  // and its next request waits to be let in again.
+  // A running program's tokens may grow past the capacity; at the
+  // router's next tick it pauses others while the replica is over:
+  // those calling a tool first, then those reasoning, the smaller first
+  // in each (_pause_until_safe). A paused program's tokens are no longer
+  // counted; at a later tick it is let in again, the smaller first, if it
+  // fits (_greedy_resume's last group), and else its next request waits.
   pool prog[J] {
     cap tr ? room : inf;
-    preempt leases by (reasoning, prompt);
+    preempt leases by (reasoning, prompt) every (dt) suspend;
   }
   // The router's scheduler loop: a wait for its next tick. A program
   // waiting for one is in its global_waiting_queue, of which these are
   // the ones with a request pending (docs/design/thunderagent.md, item 3).
+  // They are let in at the tick before the paused ones that have none,
+  // and before the pause: their instants are a millisecond ahead of it.
   stage tick : delay;
   pool waiting_queue { }
-  def next_tick(order) { run tick (cost(tick, floor(now, dt) + dt - now + order)); }
+  def next_tick(order) {
+    run tick (cost(tick, floor(now + 1e-3, dt) + dt - 1e-3 + order - now));
+  }
   def no_room(x) { max r in J (free(prog[r])) < x }
   // the router's count of the program becomes x (state.total_tokens = x)
   def count_as(x) {
@@ -171,6 +177,8 @@ fn main() {
     if (placed) {
       count_as(charged);
     } else {
+      // paused and not let in again since: what it had is the router's
+      if (K > 0) { release prog[home]; }
       set t_q = now;
       // a paused program, or a new one behind others or with no room
       set waits = tr && (K > 0 || used(waiting_queue) > 0 || no_room(charged));

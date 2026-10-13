@@ -589,8 +589,17 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
                 keys: keys.iter().map(|k| lk.expr(k)).collect::<LResult<_>>()?,
                 tail: *tail,
             },
-            PreemptOrder::Leases(keys) => crate::ir::Preempt::Leases {
+            PreemptOrder::Leases {
+                keys,
+                every,
+                suspend,
+            } => crate::ir::Preempt::Leases {
                 keys: keys.iter().map(|k| lk.expr(k)).collect::<LResult<_>>()?,
+                every: every
+                    .as_ref()
+                    .map(|e| lk.eval_const_named(e, &format!("pool `{}`: every", p.name)))
+                    .transpose()?,
+                suspend: *suspend,
             },
         };
         let queue = match &p.queue {

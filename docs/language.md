@@ -60,7 +60,9 @@ poolopt  := cap expr ;                       -- capacity in units (default inf)
           | evict lru ; | evict by ( expr , ... ) ;   -- eviction order (ascending keys)
           | preempt none ; | preempt lifo ;  -- what a failed growth does
           | preempt by ( expr , ... ) [requeue head | requeue tail] ;   -- the victim: least keys
-          | preempt leases by ( expr , ... ) ;   -- the victim: the lease with the least keys, which ends
+          | preempt leases by ( expr , ... ) [every ( expr ) [suspend]] ;
+                                             -- the victim: the lease with the least keys, which ends;
+                                             -- every: at the pool's ticks; suspend: set aside, given back
           | queue fifo ; | queue by ( expr (, expr)* ) ; -- waiting selection
           | reserve held ;                   -- a hold's unallocated reservation counts against later admissions
           | spill POOL via STAGE ( expr ) when ( expr ) ;  -- write evicted prefixes to a tier
@@ -811,6 +813,23 @@ to read, nor on a pool no hold leases. The pool report's `preempt` counts
 the leases it ended. `examples/multi-turn/thunderagent.sq` pauses an idle
 program this way: its lease ends, and its next request is let in anew
 ([the ThunderAgent use case](use-cases/thunderagent.md)).
+
+`preempt leases by (k₁, …) every (dt)` takes them at the pool's ticks
+instead, at every multiple of `dt` seconds of the run (a constant, and
+positive). A lease's growth is let through at once, past the cap if it
+must: `free` reads below 0 until the tick. A hold that is admitted still
+needs room. At each tick, while the pool is over its cap, the lease with
+the least keys ends, as at a growth. With `suspend` too, the lease the
+tick takes is set aside instead: its units are the pool's again,
+`allocated` reads 0 and it is no victim, and at each later tick, before
+the pool takes any, the leases set aside come back in the keys' order
+while they fit, to a session that neither holds nor leases the pool
+again. A `release` of the pool, or the session's end, drops one; a hold
+of it anew does not. `suspend` needs `every`, and does not link on a pool
+with `block`, where a lease set aside would keep cached KV no allocation
+holds. ThunderAgent's router acts at a 5 s tick: it pauses then, and lets
+a paused program in again at a tick before its next request when it
+fits.
 
 ### Waiting selection
 

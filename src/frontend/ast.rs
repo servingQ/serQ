@@ -319,8 +319,13 @@ pub enum PreemptOrder {
     /// with the least keys is the victim; `tail` re-queues it as a
     /// newcomer. `preempt lifo` is `By { keys: [-admission], tail: false }`.
     By { keys: Vec<Expr>, tail: bool },
-    /// `preempt leases by (k, …)`: the lease with the least keys ends.
-    Leases(Vec<Expr>),
+    /// `preempt leases by (k, …) [every (dt) [suspend]]`: the lease with
+    /// the least keys ends, or at the ticks only, or is set aside there.
+    Leases {
+        keys: Vec<Expr>,
+        every: Option<Expr>,
+        suspend: bool,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]

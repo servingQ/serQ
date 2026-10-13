@@ -26,8 +26,9 @@ use serde::{Deserialize, Serialize};
 /// IR 12 also adds resource cost conversions and mandatory attribute types
 /// and workload/server statement authority. 13 removes `CStageKind::Delay`,
 /// which meant `Ps(present)` (`CStageKind::delay`); 13 also adds
-/// `Preempt::Leases`, `Fun::Allocated`, `Shrink`, and `Grow` of a lease outside
-/// every hold of its pool (`docs/design/thunderagent.md`), and moves
+/// `Preempt::Leases` (with its `every` and `suspend`), `Fun::Allocated`,
+/// `Shrink`, and `Grow` of a lease outside every hold of its pool
+/// (`docs/design/thunderagent.md`), and moves
 /// `share` from the program to each `Run` over several stages, one policy
 /// per fabric.
 pub const IR_VERSION: u32 = 13;
@@ -106,7 +107,23 @@ pub enum Preempt {
     /// `cache` applies, and the session goes on wherever it is. No hold is
     /// preempted. ThunderAgent's pause of an idle program
     /// (`docs/design/thunderagent.md`).
-    Leases { keys: Vec<CExpr> },
+    ///
+    /// With `every`, the pool acts at its ticks instead, at every multiple
+    /// of `every` seconds: a lease's growth allocates at once, past the cap
+    /// if it must, and at a tick the pool ends leases in the same order
+    /// while it is over its cap (ThunderAgent's periodic `_pause_until_safe`).
+    /// With `suspend` too, a lease the tick takes is set aside, not ended:
+    /// its units go back and `allocated` reads 0, and at each later tick,
+    /// before it pauses, the pool gives set-aside leases back in the same
+    /// order while they fit; a `release` or the session's end drops one
+    /// (ThunderAgent's resume of a paused program before its next request).
+    Leases {
+        keys: Vec<CExpr>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        every: Option<f64>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        suspend: bool,
+    },
 }
 
 impl Preempt {
@@ -114,7 +131,7 @@ impl Preempt {
     pub fn keys(&self) -> Option<&[CExpr]> {
         match self {
             Preempt::None => None,
-            Preempt::By { keys, .. } | Preempt::Leases { keys } => Some(keys),
+            Preempt::By { keys, .. } | Preempt::Leases { keys, .. } => Some(keys),
         }
     }
 
@@ -1750,13 +1767,34 @@ impl Program {
     /// `preempt leases by` names a pool whose leases it may take: one that
     /// some hold leases, and no engine's memory, where a lease is KV another
     /// instance has still to read (a prefiller's blocks before the
-    /// decoder's transfer) and the engine's own rule is `preempt by`.
+    /// decoder's transfer) and the engine's own rule is `preempt by`. Its
+    /// `every` is a positive number of seconds; `suspend` needs `every`,
+    /// since a set-aside lease comes back at a tick, and a pool without
+    /// `block`, since a lease set aside there would keep cached KV no
+    /// allocation holds.
     fn validate_lease_preemption(&self) -> Result<(), String> {
         for (pi, p) in self.pools.iter().enumerate() {
-            if !matches!(p.preempt, Preempt::Leases { .. }) {
+            let Preempt::Leases { every, suspend, .. } = &p.preempt else {
                 continue;
-            }
+            };
             let at = |e: &str| format!("pool `{}`: `preempt leases by` {e}", p.name);
+            if let Some(dt) = every
+                && !(dt.is_finite() && *dt > 0.0)
+            {
+                return Err(at(&format!(
+                    "`every ({dt})`: a tick is a positive, finite number of seconds"
+                )));
+            }
+            if *suspend && every.is_none() {
+                return Err(at(
+                    "`suspend` without `every`: a lease set aside comes back at a tick, and                      without ticks it would never come back",
+                ));
+            }
+            if *suspend && p.block.is_some() {
+                return Err(at(
+                    "`suspend` on a pool with `block`: a lease set aside there would keep                      cached KV that no allocation holds",
+                ));
+            }
             let memory = self
                 .stages
                 .iter()
