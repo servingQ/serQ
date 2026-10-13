@@ -580,6 +580,27 @@ fn else_if_is_the_nested_if() {
     );
 }
 
+/// The retired `branch` says what it is now, in a session and as a name.
+#[test]
+fn branch_is_retired_for_if() {
+    let src = |body: &str| {
+        common::main_source(&format!(
+            "stage svc : delay;
+            workload {{ arrive poisson(0.5); session {{ loop {{ turn; {body} }} }} }}
+            server {{ run svc (cost(svc, 1)); }}"
+        ))
+    };
+    let ov = common::horizon(100.0);
+    for body in [
+        "branch (1) { end; }",
+        "branch with (0.5) { end; }",
+        "set branch = 1; end;",
+    ] {
+        let e = compile_source(&src(body), &ov).expect_err(body);
+        assert!(e.contains("is now `if (e)`"), "{body}: {e}");
+    }
+}
+
 /// A figure has to say which edges are draws. The lecture's own
 /// `fig:deployment` writes "resume w.p. p" by hand.
 #[test]

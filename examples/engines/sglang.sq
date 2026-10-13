@@ -89,7 +89,7 @@ fn main() {
         taking reqs (1), kv (min(known, hit + budget_left(sglang)))
           reserve (known - hit + min(M - (known - prompt), clip) + 1
                    + ratio * min(M, clip) * holders(reqs));
-      if (batch.tokens == 0) {                       // no prefill: a decode batch
+      if (batch.tokens == 0) {                           // no prefill: a decode batch
         advance running;
         if (running.preempted > 0) {
           set ratio = max(r_min, min(1, retract_steps / M));   // the bound, see above

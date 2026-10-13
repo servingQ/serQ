@@ -68,7 +68,7 @@ fn the_server_may_not_decide_on_a_hidden_attribute() {
     refused(
         "if (o > 2) { E (prompt); } else { observe skipped = 1; }",
         &[
-            "`o` is hidden from the scheduler, but the server's branch reads it",
+            "`o` is hidden from the scheduler, but the server's `if` reads it",
             "`decode (o);`",
         ],
     );
@@ -91,7 +91,7 @@ fn the_server_is_checked_when_the_requests_differ() {
         ";
     let err = compile_source(&common::main_source(src), &common::horizon(100.0)).unwrap_err();
     assert!(
-        err.contains("`o` is hidden from the scheduler, but the server's branch reads it"),
+        err.contains("`o` is hidden from the scheduler, but the server's `if` reads it"),
         "{err}"
     );
 }
@@ -102,7 +102,7 @@ fn the_server_is_checked_when_the_requests_differ() {
 fn the_server_may_not_decide_on_a_hidden_attribute_passed_to_a_function() {
     refused(
         "if (min(o, 1) > 0) { E (prompt); } else { observe skipped = 1; }",
-        &["`o` is hidden from the scheduler, but the server's branch reads it"],
+        &["`o` is hidden from the scheduler, but the server's `if` reads it"],
     );
     refused(
         "choose j in 2 by (min(o, 1)); E (prompt);",
@@ -110,7 +110,7 @@ fn the_server_may_not_decide_on_a_hidden_attribute_passed_to_a_function() {
     );
     refused(
         "set y = min(o, 1); if (y > 0) { E (prompt); } else { observe skipped = 1; }",
-        &["`y` is set from the hidden `o`", "branch"],
+        &["`y` is set from the hidden `o`", "`if`"],
     );
 }
 
@@ -141,7 +141,7 @@ fn a_loop_carries_what_it_sets_round_to_its_start() {
          loop { if (n > 3) { observe long = 1; } else { }
                 E (prompt);
                 set n = o; }",
-        &["`n` is set from the hidden `o`", "branch"],
+        &["`n` is set from the hidden `o`", "`if`"],
     );
 }
 
@@ -186,7 +186,7 @@ fn a_run_reveals_what_its_work_reads() {
         "p",
         "E (prompt);",
         &[
-            "`o` is hidden from the scheduler, but the server's branch reads it before a run reveals it",
+            "`o` is hidden from the scheduler, but the server's `if` reads it before a run reveals it",
         ],
     );
 }
@@ -200,7 +200,7 @@ fn a_reveal_on_one_arm_only_does_not_reveal() {
         "p",
         "E (prompt, o - 1);
          if (o > 2) { observe long = 1; } else { }",
-        &["`o` is hidden from the scheduler", "branch"],
+        &["`o` is hidden from the scheduler", "`if`"],
     );
 }
 
@@ -243,10 +243,7 @@ fn hidden_values_propagate_through_every_loop_pass() {
             request,
             "p",
             &format!("{init} loop {{ if (x0 == 0) {{ observe flag = 1; }} {work} {chain} }}"),
-            &[
-                "`x0` is set from the hidden `o`",
-                "server's branch reads it",
-            ],
+            &["`x0` is set from the hidden `o`", "server's `if` reads it"],
         );
         // A run revealing o before the decision makes the same chain legal.
         let safe = format!(
@@ -276,7 +273,7 @@ fn loop_join_preserves_origins_of_reassigned_hidden_names() {
     // The else path leaves a's original hidden value. Running by b cannot
     // reveal it just because the other path assigned a from b.
     assert!(error.contains("hidden `a`"), "{error}");
-    assert!(error.contains("server's branch reads it"), "{error}");
+    assert!(error.contains("server's `if` reads it"), "{error}");
 }
 
 #[test]
@@ -355,7 +352,7 @@ fn a_stage_passed_bare_does_not_reveal_an_attribute_of_its_name() {
     );
     let e = compile_source(&source("L", "prompt + 0 * work(E)"), &horizon).unwrap_err();
     assert!(
-        e.contains("`L` is hidden from the scheduler, but the server's branch reads it"),
+        e.contains("`L` is hidden from the scheduler, but the server's `if` reads it"),
         "{e}"
     );
     // a run whose work reads the attribute reveals it
@@ -389,7 +386,7 @@ fn what_the_workload_sets_from_a_hidden_attribute_before_the_request_is_hidden()
     .unwrap_err();
     assert!(
         err.contains(
-            "`x` is set from the hidden `o` in the workload's turn, but the server's branch reads it"
+            "`x` is set from the hidden `o` in the workload's turn, but the server's `if` reads it"
         ),
         "{err}"
     );

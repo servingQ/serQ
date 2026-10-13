@@ -740,7 +740,7 @@ fn retired(word: &str) -> Option<&'static str> {
         .map(|(_, now)| *now)
 }
 
-const RETIRED: [(&str, &str); 5] = [
+const RETIRED: [(&str, &str); 6] = [
     (
         "enter",
         "`enter` is now `hold`: `hold P (u) … at admission (x = e) { … } cache (ℓ);`",
@@ -755,6 +755,10 @@ const RETIRED: [(&str, &str); 5] = [
     (
         "fit",
         "`fit` is gone: the pools of a `hold` are the condition",
+    ),
+    (
+        "branch",
+        "`branch (e)` is now `if (e)`, and `branch with (p)` is `if (~bernoulli(p))`",
     ),
 ];
 

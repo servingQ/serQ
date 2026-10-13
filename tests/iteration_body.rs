@@ -818,7 +818,7 @@ fn a_reserve_on_a_register_waits_for_the_iteration() {
 /// A schedule's `else if` is the `else` block holding one `if`.
 #[test]
 fn a_schedule_else_if_is_the_nested_if() {
-    let ir = |schedule: &str| {
+    let compile = |schedule: &str| {
         let schedule = taking(schedule, "reqs (1)");
         let src = format!(
             r#"
@@ -839,10 +839,20 @@ fn a_schedule_else_if_is_the_nested_if() {
         }}
 "#
         );
-        compile_source(&common::main_source(&src), &common::horizon(20.0))
-            .unwrap_or_else(|e| panic!("`{schedule}`: {e}"))
-            .to_json()
+        compile_source(&common::main_source(&src), &common::horizon(20.0)).map(|p| p.to_json())
     };
+    let ir = |schedule: &str| compile(schedule).unwrap_or_else(|e| panic!("`{schedule}`: {e}"));
+    // a `let` stands at the schedule's top, not in an `else if`'s block
+    let e = compile(
+        "advance running; if (running.count == 0) { admit waiting; } \
+         else if (running.count < 4) { let x = 1; admit waiting; }",
+    )
+    .expect_err("a `let` in an `else if` links");
+    assert!(e.contains("not in an `if`"), "{e}");
+    // and the retired `branch` says what it is now
+    let e = compile("advance running; branch (running.count == 0) { admit waiting; }")
+        .expect_err("`branch` links");
+    assert!(e.contains("is now `if (e)`"), "{e}");
     assert_eq!(
         ir("if (running.count == 0) { admit waiting; } \
             else if (running.count < 4) { advance running; admit waiting; } \

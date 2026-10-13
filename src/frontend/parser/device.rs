@@ -739,6 +739,10 @@ impl Parser {
             Ok(SStmt::Set(n, e))
         } else if self.is_kw("serve") {
             self.err("in a schedule, `serve` is `advance running`")
+        } else if let Tok::Ident(w) = self.peek()
+            && let Some(now) = super::retired(w)
+        {
+            self.err(now)
         } else {
             self.err(format!(
                 "a schedule takes `advance running`, `admit waiting`, `exclusive prefill`, \

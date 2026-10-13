@@ -322,7 +322,7 @@ fn sglang_and_tgi_as_engines_are_bodies() {
             },
             // admit waiting;
             admit(),
-            // if (batch.tokens == 0) { advance running; branch … }
+            // if (batch.tokens == 0) { advance running; if … }
             CIter::Branch(
                 bin(BinOp::Eq, ctx(CtxVar::Ntok), num(0.0)),
                 vec![

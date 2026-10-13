@@ -1295,7 +1295,7 @@ fn hidden_in_server(
                     check(e, "allocation", t)?;
                 }
                 Stmt::Branch(c, a, b) => {
-                    check(c, "branch", t)?;
+                    check(c, "`if`", t)?;
                     let mut other = t.clone();
                     walk(a, t)?;
                     walk(b, &mut other)?;

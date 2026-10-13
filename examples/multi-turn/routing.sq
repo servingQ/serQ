@@ -67,26 +67,24 @@ fn main() {
       set home = initial_home;
       set j = home;
       set S = S_miss;
-    } else {
-      if (policy == 0) {
-        set j = home;
-        set S = S_hit;
-      } else if (policy == 1) {
-        choose j in J by (work(rep[j]));
-        set S = j == home ? S_hit : S_miss;
-      } else if (policy == 2) {
-        choose j in J by (work(rep[j]));
-        set mv = j != home && mig < S_miss - S_hit;
-        set S = (j == home || mv) ? S_hit : S_miss;
-      } else if (policy == 3) {
-        choose j in J by (work(rep[j]) + (j == home ? S_hit : S_miss));
-        set S = j == home ? S_hit : S_miss;
-      } else if (policy == 4) {
-        choose j in J by (j == home ? work(rep[j]) + S_hit
-                                    : min(max(work(rep[j]), mig) + S_hit, work(rep[j]) + S_miss));
-        set mv = j != home && max(work(rep[j]), mig) + S_hit < work(rep[j]) + S_miss;
-        set S = (j == home || mv) ? S_hit : S_miss;
-      }
+    } else if (policy == 0) {
+      set j = home;
+      set S = S_hit;
+    } else if (policy == 1) {
+      choose j in J by (work(rep[j]));
+      set S = j == home ? S_hit : S_miss;
+    } else if (policy == 2) {
+      choose j in J by (work(rep[j]));
+      set mv = j != home && mig < S_miss - S_hit;
+      set S = (j == home || mv) ? S_hit : S_miss;
+    } else if (policy == 3) {
+      choose j in J by (work(rep[j]) + (j == home ? S_hit : S_miss));
+      set S = j == home ? S_hit : S_miss;
+    } else if (policy == 4) {
+      choose j in J by (j == home ? work(rep[j]) + S_hit
+                                  : min(max(work(rep[j]), mig) + S_hit, work(rep[j]) + S_miss));
+      set mv = j != home && max(work(rep[j]), mig) + S_hit < work(rep[j]) + S_miss;
+      set S = (j == home || mv) ? S_hit : S_miss;
     }
     if (mv) { run link (cost(link, K / bw)); observe migration = 1; }
     run rep[j] (cost(rep, S));
