@@ -125,18 +125,16 @@ fn main() {
   // fits (_greedy_resume's last group), and else its next request waits.
   pool prog[J] {
     cap tr ? room : inf;
-    preempt leases by (reasoning, prompt) every (dt) suspend;
+    preempt leases by (reasoning, prompt) every (dt) suspend by (prompt);
   }
-  // The router's scheduler loop: a wait for its next tick. A program
-  // waiting for one is in its global_waiting_queue, of which these are
-  // the ones with a request pending (docs/design/thunderagent.md, item 1).
-  // They are let in at the tick before the paused ones that have none,
-  // and before the pause: their instants are a millisecond ahead of it.
-  stage tick : delay;
-  pool waiting_queue { }
-  def next_tick(order) {
-    run tick (cost(tick, floor(now + 1e-3, dt) + dt - 1e-3 + order - now));
-  }
+  // The router's global_waiting_queue, of which these are the programs
+  // with a request pending (docs/design/thunderagent.md, item 1), drained
+  // at its scheduler's tick: those with a step first, then new ones, the
+  // smaller first in each (_greedy_resume). Each one let in takes its
+  // replica before the next is tried; the queue's tick comes before the
+  // pools', so the paused ones with no request pending come back after
+  // them, and the pause comes last.
+  pool waiting_queue { queue by (K > 0 ? 0 : 1, charged) every (dt); }
   def no_room(x) { max r in J (free(prog[r])) < x }
   // the router's count of the program becomes x (state.total_tokens = x)
   def count_as(x) {
@@ -180,18 +178,11 @@ fn main() {
       if (K > 0) { release prog[home]; }
       set t_q = now;
       // a paused program, or a new one behind others or with no room
-      set waits = tr && (K > 0 || used(waiting_queue) > 0 || no_room(charged));
-      if (waits) {
-        // the programs back at one tick go in the router's order: those
-        // with a step first, then new ones, the smaller first in each
-        // (_greedy_resume), as instants microseconds apart within it
-        set order = (K > 0 ? 0 : 1e-4) + 1e-10 * charged;
-        hold waiting_queue (cost(waiting_queue, 1)) {
-          next_tick(order);
-          // at its place in a tick now: the next is dt on, which
-          // floor(now, dt) may round to the one before
-          while (no_room(charged) && now - t_q < force_resume) { run tick (cost(tick, dt)); }
-        }
+      set waits = tr && (K > 0 || queued(waiting_queue) > 0 || no_room(charged));
+      while (waits) {
+        // the next tick, at its place in the router's order
+        hold waiting_queue (cost(waiting_queue, 1)) { }
+        set waits = no_room(charged) && now - t_q < force_resume;
       }
       choose j in J by (tr ? (free(prog[j]) >= charged ? 0 : 1) : 0,
                         tr ? used(prog[j]) : holders(prog[j]));

@@ -72,7 +72,7 @@ fn a_growth_goes_past_the_cap_until_the_tick() {
 
 #[test]
 fn a_lease_set_aside_comes_back_at_a_tick_before_its_lessee_asks() {
-    let r = run("every (5) suspend");
+    let r = run("every (5) suspend by (serial)");
     // set aside at t = 5, back at t = 10 once serial 1 has given its own
     // back: at t = 11 serial 0 still has its 4 and grows them
     assert!(
@@ -115,7 +115,7 @@ fn a_tick_is_positive_and_suspend_needs_one_and_reserve_held_none() {
         "a tick is a positive, finite number of seconds",
     );
     refused(
-        "pool prog { cap 10; preempt leases by (serial) suspend; }",
+        "pool prog { cap 10; preempt leases by (serial) suspend by (serial); }",
         "`suspend` without `every`",
     );
     refused(
@@ -132,7 +132,7 @@ fn a_tick_is_positive_and_suspend_needs_one_and_reserve_held_none() {
 fn a_lease_set_aside_lets_go_of_the_prefix_it_read() {
     let src = r#"
         stage svc : fifo(2);
-        pool prog { cap 10; preempt leases by (serial) every (5) suspend; }
+        pool prog { cap 10; preempt leases by (serial) every (5) suspend by (serial); }
         workload { arrive batch(2);
           session { turn; tool 1; turn; tool (serial == 0 ? 10 : 1); turn; tool 4; turn; }
         }
@@ -216,6 +216,43 @@ fn a_holds_growth_sets_a_lease_aside_as_a_tick_does() {
             .unwrap()
             .samples[0]
     };
-    assert_eq!(run("every (5) suspend"), 4.0);
+    assert_eq!(run("every (5) suspend by (serial)"), 4.0);
     assert_eq!(run("every (5)"), 0.0);
+}
+
+/// `suspend by` orders what comes back, apart from the victim's keys.
+/// Three programs lease 3 of 10; at t = 2 serial 2 grows to 10, and the
+/// tick at t = 5 sets aside serial 0's, then serial 1's (the least serial
+/// first). At t = 7 serial 2 shrinks to 6: the tick at t = 10 has room for
+/// one of the two, the first in the `suspend` keys' order. Serials 0 and 1
+/// read their leases at t = 11.
+#[test]
+fn suspend_by_orders_the_leases_given_back() {
+    let back = |keys: &str| {
+        let src = format!(
+            r#"
+            stage svc : fifo(3);
+            pool prog {{ cap 10; preempt leases by (serial) every (5) suspend by ({keys}); }}
+            workload {{ arrive batch(3);
+              session {{ turn; tool (serial == 2 ? 1 : 10); turn; tool (serial == 2 ? 4 : 1); turn; tool 20; turn; }}
+            }}
+            server {{
+              if (turn_no == 1) {{ hold prog (cost(prog, 3)) {{ }} lease prog (inf); }}
+              if (serial == 2 && turn_no == 2) {{ grow prog (cost(prog, 7)); }}
+              if (serial == 2 && turn_no == 3) {{ shrink prog (cost(prog, 4)); }}
+              if (serial < 2 && turn_no == 2) {{ observe back = allocated(prog); }}
+              run svc (cost(svc, 1));
+            }}
+"#
+        );
+        run_source(&common::main_source(&src), &common::horizon(100.0), None)
+            .unwrap()
+            .observe("back")
+            .unwrap()
+            .samples
+            .clone()
+    };
+    // (serial 0's, serial 1's)
+    assert_eq!(back("serial"), vec![3.0, 0.0]);
+    assert_eq!(back("-serial"), vec![0.0, 3.0]);
 }

@@ -599,13 +599,21 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
                     .as_ref()
                     .map(|e| lk.eval_const_named(e, &format!("pool `{}`: every", p.name)))
                     .transpose()?,
-                suspend: *suspend,
+                suspend: suspend
+                    .as_ref()
+                    .map(|ks| ks.iter().map(|k| lk.expr(k)).collect::<LResult<_>>())
+                    .transpose()?,
             },
         };
         let queue = match &p.queue {
             QueueOrder::Fifo => None,
             QueueOrder::By(keys) => Some(keys.iter().map(|k| lk.expr(k)).collect::<LResult<_>>()?),
         };
+        let queue_every = p
+            .queue_every
+            .as_ref()
+            .map(|e| lk.eval_const_named(e, &format!("pool `{}`: queue every", p.name)))
+            .transpose()?;
         let spill = match &p.spill {
             None => None,
             Some(s) => {
@@ -634,6 +642,7 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
                 evict: evict.clone(),
                 preempt: preempt.clone(),
                 queue: queue.clone(),
+                queue_every,
                 spill: spill.clone(),
                 reserve_held: p.reserve_held,
             });

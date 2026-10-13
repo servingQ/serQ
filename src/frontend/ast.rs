@@ -319,12 +319,13 @@ pub enum PreemptOrder {
     /// with the least keys is the victim; `tail` re-queues it as a
     /// newcomer. `preempt lifo` is `By { keys: [-admission], tail: false }`.
     By { keys: Vec<Expr>, tail: bool },
-    /// `preempt leases by (k, …) [every (dt) [suspend]]`: the lease with
-    /// the least keys ends, or at the ticks only, or is set aside there.
+    /// `preempt leases by (k, …) [every (dt) [suspend by (k, …)]]`: the
+    /// lease with the least keys ends, or at the ticks only, or is set
+    /// aside there and given back in the `suspend` keys' order.
     Leases {
         keys: Vec<Expr>,
         every: Option<Expr>,
-        suspend: bool,
+        suspend: Option<Vec<Expr>>,
     },
 }
 
@@ -355,6 +356,8 @@ pub struct PoolDecl {
     pub evict: EvictOrder,
     pub preempt: PreemptOrder,
     pub queue: QueueOrder,
+    /// `queue … every (dt)`: admissions at the pool's ticks only.
+    pub queue_every: Option<Expr>,
     pub spill: Option<Spill>,
     /// The engine whose scheduler serves the queue (`pool X on E`, `on E.DEVICE`), at
     /// the start of its iterations, while the iteration has budget left.

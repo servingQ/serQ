@@ -3701,6 +3701,7 @@ impl Parser {
             evict: EvictOrder::Lru,
             preempt: PreemptOrder::None,
             queue: QueueOrder::Fifo,
+            queue_every: None,
             spill: None,
             admit_via: None,
             reserve_held: false,
@@ -3767,7 +3768,19 @@ impl Parser {
                         } else {
                             None
                         };
-                        let suspend = self.eat_kw("suspend");
+                        let suspend = if self.eat_kw("suspend") {
+                            self.expect_kw("by")?;
+                            self.expect(&Tok::LParen)?;
+                            let mut keys = vec![self.expr()?];
+                            while *self.peek() == Tok::Comma {
+                                self.advance();
+                                keys.push(self.expr()?);
+                            }
+                            self.expect(&Tok::RParen)?;
+                            Some(keys)
+                        } else {
+                            None
+                        };
                         PreemptOrder::Leases {
                             keys,
                             every,
@@ -3810,6 +3823,11 @@ impl Parser {
                         }
                         self.expect(&Tok::RParen)?;
                         QueueOrder::By(keys)
+                    };
+                    if self.eat_kw("every") {
+                        self.expect(&Tok::LParen)?;
+                        d.queue_every = Some(self.expr()?);
+                        self.expect(&Tok::RParen)?;
                     }
                 }
                 "reserve" => {

@@ -54,6 +54,10 @@ enum Ev {
     PoolTick {
         pool: usize,
     },
+    /// A tick of a pool under `queue … every`.
+    QueueTick {
+        pool: usize,
+    },
     EndWarmup,
 }
 
@@ -69,10 +73,23 @@ impl PartialEq for Entry {
     }
 }
 impl Eq for Entry {}
+impl Entry {
+    /// Within an instant, the pools' ticks come after its other events:
+    /// the queue ticks, then the preemption ticks, each in the pools' order.
+    fn rank(&self) -> (u8, usize) {
+        match self.ev {
+            Ev::QueueTick { pool } => (1, pool),
+            Ev::PoolTick { pool } => (2, pool),
+            _ => (0, 0),
+        }
+    }
+}
+
 impl Ord for Entry {
     fn cmp(&self, o: &Self) -> Ordering {
         o.time
             .total_cmp(&self.time)
+            .then_with(|| o.rank().cmp(&self.rank()))
             .then_with(|| o.seq.cmp(&self.seq))
     }
 }
@@ -437,6 +454,8 @@ struct PoolState {
     /// The number of the next tick under `preempt leases by … every`, when
     /// one is due.
     next_tick: Option<u64>,
+    /// The number of the next tick under `queue … every`, when one is due.
+    next_queue_tick: Option<u64>,
     // statistics
     used_avg: TimeAverage,
     cached_avg: TimeAverage,
@@ -848,6 +867,7 @@ impl<'p> Interp<'p> {
                 queue: VecDeque::new(),
                 growers: VecDeque::new(),
                 next_tick: None,
+                next_queue_tick: None,
                 used_avg: TimeAverage::new(0.0, 0.0),
                 cached_avg: TimeAverage::new(0.0, 0.0),
                 queue_avg: TimeAverage::new(0.0, 0.0),
@@ -1185,6 +1205,7 @@ impl<'p> Interp<'p> {
                 }
             }
             Ev::PoolTick { pool } => self.pool_tick(pool),
+            Ev::QueueTick { pool } => self.queue_tick(pool),
         }
     }
 
@@ -2352,6 +2373,7 @@ impl<'p> Interp<'p> {
         } else {
             self.pools[pl].queue.push_back(entry);
         }
+        self.schedule_queue_tick(pl);
         true
     }
 
@@ -2366,16 +2388,26 @@ impl<'p> Interp<'p> {
     /// can change even while no new request enters the queue. Resumed holds
     /// keep vLLM's prepend priority; policy ties keep original queue order.
     fn next_waiter(&mut self, pl: usize) -> Option<(usize, usize)> {
+        self.next_waiter_among(pl, None)
+    }
+
+    /// `next_waiter` among the sessions of `among` only, when given.
+    fn next_waiter_among(&mut self, pl: usize, among: Option<&[usize]>) -> Option<(usize, usize)> {
         let queue = &self.pools[pl].queue;
-        if let Some(entry) = queue.front()
+        let ok = |sid: usize| among.is_none_or(|a| a.contains(&sid));
+        if let Some(entry) = queue.iter().find(|e| ok(e.sid))
             && (entry.resumed || self.p.pools[pl].queue.is_none())
         {
-            return Some((0, entry.sid));
+            let index = queue.iter().position(|e| e.sid == entry.sid).unwrap();
+            return Some((index, entry.sid));
         }
         let keys = self.p.pools[pl].queue.as_ref()?;
         let candidates: Vec<_> = queue.iter().map(|entry| entry.sid).collect();
         let mut best: Option<(KeyOrd, usize, usize)> = None;
         for (index, sid) in candidates.into_iter().enumerate() {
+            if !ok(sid) {
+                continue;
+            }
             let mut ctx = Ctx::session(sid);
             ctx.waited = self.now - self.sessions[sid].pending.as_ref().unwrap().queued_at;
             let key = KeyOrd(
@@ -2472,7 +2504,8 @@ impl<'p> Interp<'p> {
     /// has room; a selection that does not fit blocks the rest. A pool whose
     /// queue is served by a stage (`admit_via`) is admitted from there.
     fn try_admit(&mut self, pl: usize) {
-        if self.p.pools[pl].admit_via.is_some() {
+        // an engine admits its queue; a pool under `queue … every`, its ticks
+        if self.p.pools[pl].admit_via.is_some() || self.p.pools[pl].queue_every.is_some() {
             return;
         }
         while let Some((index, sid)) = self.next_waiter(pl) {
@@ -3494,7 +3527,10 @@ impl<'p> Interp<'p> {
         self.pools[pl].preemptions += 1;
         if !matches!(
             self.p.pools[pl].preempt,
-            Preempt::Leases { suspend: true, .. }
+            Preempt::Leases {
+                suspend: Some(_),
+                ..
+            }
         ) {
             self.end_lease(victim, i);
             return;
@@ -3537,8 +3573,8 @@ impl<'p> Interp<'p> {
         self.at(k as f64 * dt, Ev::PoolTick { pool: pl });
     }
 
-    /// A tick of `pl`: under `suspend`, the leases set aside come back in
-    /// the pool's order while they fit; then, while the pool is over its
+    /// A tick of `pl`: under `suspend by`, the leases set aside come back
+    /// in its keys' order, each that fits; then, while the pool is over its
     /// cap, the lease with the least keys ends, or is set aside. The next
     /// tick is due while the pool has a lease.
     fn pool_tick(&mut self, pl: usize) {
@@ -3552,7 +3588,7 @@ impl<'p> Interp<'p> {
             return;
         };
         let k = self.pools[pl].next_tick.take().expect("a tick was due");
-        if *suspend {
+        if let Some(back_keys) = suspend {
             let mut aside: Vec<usize> = vec![];
             for (s, ss) in self.sessions.iter().enumerate() {
                 // one that holds the pool anew has what it needs there
@@ -3567,7 +3603,7 @@ impl<'p> Interp<'p> {
             }
             // in admission order, as `lessees` is: `admission` reads it
             aside.sort_by_key(|&s| self.sessions[s].adm_seq);
-            for s in self.in_order(pl, keys, aside) {
+            for s in self.in_order(pl, back_keys, aside) {
                 let Some(i) = self.set_aside_of(s, pl) else {
                     continue;
                 };
@@ -3600,6 +3636,54 @@ impl<'p> Interp<'p> {
             self.at((k + 1) as f64 * dt, Ev::PoolTick { pool: pl });
         }
         self.try_admit_all();
+    }
+
+    /// The next tick of `pl` under `queue … every (dt)`, at the first
+    /// multiple of `dt` after now, unless one is due already.
+    fn schedule_queue_tick(&mut self, pl: usize) {
+        let Some(dt) = self.p.pools[pl].queue_every else {
+            return;
+        };
+        if self.pools[pl].next_queue_tick.is_some() {
+            return;
+        }
+        let mut k = (self.now / dt).floor() as u64 + 1;
+        if k as f64 * dt <= self.now {
+            k += 1;
+        }
+        self.pools[pl].next_queue_tick = Some(k);
+        self.at(k as f64 * dt, Ev::QueueTick { pool: pl });
+    }
+
+    /// A tick of `pl` under `queue … every`: the holds that waited when it
+    /// began are tried in the queue's order, each admitted one running
+    /// until it blocks before the next is tried, one that does not fit
+    /// passed over. A hold queued during the tick waits for the next.
+    fn queue_tick(&mut self, pl: usize) {
+        let dt = self.p.pools[pl].queue_every.expect("a queue tick");
+        let k = self.pools[pl]
+            .next_queue_tick
+            .take()
+            .expect("a tick was due");
+        let mut waiting: Vec<usize> = self.pools[pl].queue.iter().map(|e| e.sid).collect();
+        while let Some((index, sid)) = self.next_waiter_among(pl, Some(&waiting)) {
+            waiting.retain(|&s| s != sid);
+            let pending = self.pending_now(sid);
+            if !self.fits_all(&pending) {
+                continue;
+            }
+            self.pools[pl].queue.remove(index);
+            self.admit(sid, pending);
+            self.settle();
+            if self.error.is_some() {
+                return;
+            }
+        }
+        // (a hold queued in this tick may have scheduled the next)
+        if !self.pools[pl].queue.is_empty() && self.pools[pl].next_queue_tick.is_none() {
+            self.pools[pl].next_queue_tick = Some(k + 1);
+            self.at((k + 1) as f64 * dt, Ev::QueueTick { pool: pl });
+        }
     }
 
     /// `candidates` in the order of `keys`, the least first (`victim`'s

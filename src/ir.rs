@@ -26,7 +26,8 @@ use serde::{Deserialize, Serialize};
 /// IR 12 also adds resource cost conversions and mandatory attribute types
 /// and workload/server statement authority. 13 removes `CStageKind::Delay`,
 /// which meant `Ps(present)` (`CStageKind::delay`); 13 also adds
-/// `Preempt::Leases` (with its `every` and `suspend`), `Fun::Allocated`,
+/// `Preempt::Leases` (with its `every` and `suspend` keys), a pool's
+/// `queue_every`, `Fun::Allocated`,
 /// `Shrink`, and `Grow` of a lease outside every hold of its pool
 /// (`docs/design/thunderagent.md`), and moves
 /// `share` from the program to each `Run` over several stages, one policy
@@ -112,17 +113,18 @@ pub enum Preempt {
     /// of `every` seconds: a lease's growth allocates at once, past the cap
     /// if it must, and at a tick the pool ends leases in the same order
     /// while it is over its cap (ThunderAgent's periodic `_pause_until_safe`).
-    /// With `suspend` too, a lease the tick takes is set aside, not ended:
-    /// its units go back and `allocated` reads 0, and at each later tick,
-    /// before it pauses, the pool gives set-aside leases back in the same
-    /// order while they fit; a `release` or the session's end drops one
-    /// (ThunderAgent's resume of a paused program before its next request).
+    /// With `suspend` too, a lease taken is set aside, not ended: its units
+    /// go back and `allocated` reads 0, and at each later tick, before it
+    /// pauses, the pool gives set-aside leases back in the order of the
+    /// `suspend` keys (read at `Moment::Victim`), each that fits; a
+    /// `release` or the session's end drops one (ThunderAgent's resume of a
+    /// paused program before its next request).
     Leases {
         keys: Vec<CExpr>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         every: Option<f64>,
-        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-        suspend: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        suspend: Option<Vec<CExpr>>,
     },
 }
 
@@ -132,6 +134,17 @@ impl Preempt {
         match self {
             Preempt::None => None,
             Preempt::By { keys, .. } | Preempt::Leases { keys, .. } => Some(keys),
+        }
+    }
+
+    /// The keys a `suspend by` gives set-aside leases back in.
+    pub fn suspend_keys(&self) -> Option<&[CExpr]> {
+        match self {
+            Preempt::Leases {
+                suspend: Some(keys),
+                ..
+            } => Some(keys),
+            _ => None,
         }
     }
 
@@ -734,6 +747,15 @@ pub struct CPool {
     /// Ascending lexicographic keys, reevaluated before every selection;
     /// None is FIFO. Equal keys retain queue order; resumed holds go first.
     pub queue: Option<Vec<CExpr>>,
+    /// `queue … every (dt)`: the pool admits waiting holds only at every
+    /// multiple of `dt` seconds, in the queue's order, each admitted one
+    /// running until it blocks before the next is tried, and one that does
+    /// not fit passed over; a hold queued during a tick waits for the next.
+    /// The pools' queue ticks at one instant act after its other events, in
+    /// the pools' order, and before their preemption ticks (ThunderAgent's
+    /// global waiting queue, drained at the router's tick).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub queue_every: Option<f64>,
     pub spill: Option<CSpill>,
     pub admit_via: Option<usize>,
     /// `reserve held`: what a hold's `reserve` tested and it has not
@@ -1683,6 +1705,7 @@ impl Program {
             if let Some(keys) = p.preempt.keys() {
                 exprs.extend(keys);
             }
+            exprs.extend(p.preempt.suspend_keys().into_iter().flatten());
             if let Some(s) = &p.spill {
                 exprs.extend([&s.work, &s.when]);
             }
@@ -1791,7 +1814,7 @@ impl Program {
                      the tick would take what the live holds reserved",
                 ));
             }
-            if *suspend && every.is_none() {
+            if suspend.is_some() && every.is_none() {
                 return Err(at(
                     "`suspend` without `every`: a lease set aside comes back at a tick, and \
                      without ticks it would never come back",
@@ -1829,6 +1852,20 @@ impl Program {
         self.validate_lease_preemption()?;
         for p in &self.pools {
             let at = |e| format!("pool `{}`: {e}", p.name);
+            if let Some(dt) = p.queue_every {
+                if !(dt.is_finite() && dt > 0.0) {
+                    return Err(at(format!(
+                        "`queue … every ({dt})`: a tick is a positive, finite number of seconds"
+                    )));
+                }
+                if p.admit_via.is_some() {
+                    return Err(at(
+                        "`queue … every` on a pool an engine admits: the engine's schedule \
+                         admits its queue at each iteration"
+                            .to_string(),
+                    ));
+                }
+            }
             if let Some(keys) = &p.queue {
                 if keys.is_empty() {
                     return Err(at("queue by needs at least one key".to_string()));
@@ -1842,12 +1879,18 @@ impl Program {
                     }
                 }
             }
-            if let Some(keys) = p.preempt.keys() {
+            let form = match p.preempt {
+                Preempt::Leases { .. } => "preempt leases by",
+                _ => "preempt by",
+            };
+            // the victim's keys, and those a set-aside lease comes back in
+            let groups = [
+                (p.preempt.keys(), form),
+                (p.preempt.suspend_keys(), "suspend by"),
+            ];
+            for (keys, form) in groups {
+                let Some(keys) = keys else { continue };
                 if keys.is_empty() {
-                    let form = match p.preempt {
-                        Preempt::Leases { .. } => "preempt leases by",
-                        _ => "preempt by",
-                    };
                     return Err(at(format!("{form} needs at least one key")));
                 }
                 for key in keys {
@@ -2651,7 +2694,8 @@ impl Validator<'_> {
     }
     /// Whether every path through block `b` reaches a statement that lets
     /// time pass: a `run` (a constant zero work does not count; a computed
-    /// one is the run time's to catch), a `hold` whose body does, or `end`.
+    /// one is the run time's to catch), a `hold` whose body does or that
+    /// waits for a queue tick, or `end`.
     /// The condition under which a `loop` blocks on every pass
     /// (`docs/design/stochastic-model.md`, Lemma 1). An `if` counts when
     /// both arms do; an inner `loop` is never left, so it counts when it does.
@@ -2664,8 +2708,14 @@ impl Validator<'_> {
                         return true;
                     }
                 }
-                CStmt::Hold { body, .. } => {
-                    if self.lets_time_pass(*body) {
+                CStmt::Hold { pools, body, .. } => {
+                    // a hold queued on a pool under `queue … every` is
+                    // admitted at a tick, one queued during a tick at the
+                    // next: at most once an instant
+                    let ticks = pools.first().is_some_and(|(r, _, _)| {
+                        (r.base..r.base + r.count).all(|i| self.p.pools[i].queue_every.is_some())
+                    });
+                    if ticks || self.lets_time_pass(*body) {
                         return true;
                     }
                 }
