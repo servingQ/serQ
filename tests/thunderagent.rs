@@ -113,7 +113,7 @@ fn a_shared_system_prompt_keeps_paused_prefixes_and_gives_default_mode_its_hits(
 /// (1 - w) of its tokens and grows them back at its next request, which
 /// pauses others. The claim is the mechanism: at `w` 0.5 more of the turns
 /// come from paused programs, and fewer turns are served than at the
-/// code's default, 1 (docs/design/thunderagent.md, item 6).
+/// code's default, 1 (docs/design/thunderagent.md, item 4).
 #[test]
 fn counting_idle_programs_for_less_pauses_more_and_serves_less() {
     let run = |w: &str| paper("tr=1", &["g=3.3e-9", "S=3968", w]);
@@ -130,11 +130,13 @@ fn counting_idle_programs_for_less_pauses_more_and_serves_less() {
     );
 }
 
-/// The router lets a paused program in at its scheduler's tick, on the
-/// replica with the most room. With a tick of 50 ms a waiting program is
-/// let in as soon as room appears, wherever it appears: more of the turns
-/// come from paused programs, and fewer turns are served than at the
-/// code's 5 s (docs/design/thunderagent.md, item 1).
+/// The router acts at its scheduler's tick: it pauses then, and lets a
+/// paused program in again at a later tick, before its next request, if it
+/// fits. With a tick of 50 ms the pause comes at once and the room is
+/// taken as soon as it appears: four times as many turns come from a
+/// program let in anew (in the sweep, 25 000 s, fewer turns are served
+/// too: 306 against 320 steps/min; at this horizon the two are within a
+/// few per cent) (docs/design/thunderagent.md, *The router's tick*).
 #[test]
 fn a_paused_program_comes_back_at_the_routers_tick() {
     let run = |dt: &str| paper("tr=1", &["g=3.3e-9", "S=3968", dt]);
@@ -142,12 +144,10 @@ fn a_paused_program_comes_back_at_the_routers_tick() {
         |r: &serq::Report| r.observe("resume_wait").map_or(0, |o| o.count) as f64 / r.turns as f64;
     let (tick, fast) = (run("dt=5"), run("dt=0.05"));
     assert!(
-        resumed(&fast) > 1.5 * resumed(&tick) && tick.turns > fast.turns,
-        "resumed/turn: dt 5 {}, dt 0.05 {}; turns: {} against {}",
+        resumed(&fast) > 2.0 * resumed(&tick),
+        "resumed/turn: dt 5 {}, dt 0.05 {}",
         resumed(&tick),
-        resumed(&fast),
-        tick.turns,
-        fast.turns
+        resumed(&fast)
     );
 }
 

@@ -541,6 +541,8 @@ class Lean:
         for i, p in enumerate(ir["pools"]):
             if p.get("reserve_held"):
                 raise Fragment(f"pool {p['name']}: reserve held")
+            if p.get("queue_every") is not None:
+                raise Fragment(f"pool {p['name']}: queue every, admissions at ticks")
             if p["evict"] != "Lru" or p["queue"] is not None or p["spill"] is not None:
                 raise Fragment(f"pool {p['name']}: only LRU eviction, FIFO queue, no spill")
             via = p["admit_via"] is not None

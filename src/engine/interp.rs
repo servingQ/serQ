@@ -50,6 +50,14 @@ enum Ev {
         serial: u64,
         id: u64,
     },
+    /// A tick of a pool under `preempt leases by … every`.
+    PoolTick {
+        pool: usize,
+    },
+    /// A tick of a pool under `queue … every`.
+    QueueTick {
+        pool: usize,
+    },
     EndWarmup,
 }
 
@@ -65,10 +73,24 @@ impl PartialEq for Entry {
     }
 }
 impl Eq for Entry {}
+impl Entry {
+    /// Within an instant, the pools' ticks come after its other events, in
+    /// the order the pools are declared; a pool's queue tick before its
+    /// preemption tick.
+    fn rank(&self) -> (u8, usize, u8) {
+        match self.ev {
+            Ev::QueueTick { pool } => (1, pool, 0),
+            Ev::PoolTick { pool } => (1, pool, 1),
+            _ => (0, 0, 0),
+        }
+    }
+}
+
 impl Ord for Entry {
     fn cmp(&self, o: &Self) -> Ordering {
         o.time
             .total_cmp(&self.time)
+            .then_with(|| o.rank().cmp(&self.rank()))
             .then_with(|| o.seq.cmp(&self.seq))
     }
 }
@@ -173,6 +195,9 @@ struct Lease<'p> {
     /// the lease ends: a leg's attributes are its own, and its lease passes
     /// to the session when it ends.
     attrs: Option<Vec<f64>>,
+    /// Set aside by a tick under `suspend`: its units are the pool's again
+    /// and `alloc` is what a later tick gives back.
+    suspended: bool,
 }
 
 /// The allocation a `grow` enlarges: a hold's entry (the hold, the pool's
@@ -427,6 +452,11 @@ struct PoolState {
     /// Waiting holds in enqueue order; policy keys are never cached.
     queue: VecDeque<WaitingHold>,
     growers: VecDeque<usize>,
+    /// The number of the next tick under `preempt leases by … every`, when
+    /// one is due.
+    next_tick: Option<u64>,
+    /// The number of the next tick under `queue … every`, when one is due.
+    next_queue_tick: Option<u64>,
     // statistics
     used_avg: TimeAverage,
     cached_avg: TimeAverage,
@@ -837,6 +867,8 @@ impl<'p> Interp<'p> {
                 cache: Trie::new(p.slot_serial as u64),
                 queue: VecDeque::new(),
                 growers: VecDeque::new(),
+                next_tick: None,
+                next_queue_tick: None,
                 used_avg: TimeAverage::new(0.0, 0.0),
                 cached_avg: TimeAverage::new(0.0, 0.0),
                 queue_avg: TimeAverage::new(0.0, 0.0),
@@ -1173,6 +1205,8 @@ impl<'p> Interp<'p> {
                     self.try_admit_all();
                 }
             }
+            Ev::PoolTick { pool } => self.pool_tick(pool),
+            Ev::QueueTick { pool } => self.queue_tick(pool),
         }
     }
 
@@ -1186,6 +1220,18 @@ impl<'p> Interp<'p> {
         if self.error.is_some() {
             return;
         }
+        self.run_ready();
+        if self.error.is_some() {
+            return;
+        }
+        self.end_of_settle();
+    }
+
+    /// Run the ready sessions, and admit what then fits, until none is
+    /// ready: what an event leads to within its instant. A queue's tick
+    /// runs each admission this far, not to the instant's end, where an
+    /// iteration may start (`end_of_settle`).
+    fn run_ready(&mut self) {
         loop {
             while let Some(sid) = self.ready.pop_front() {
                 let now = self.now;
@@ -1221,14 +1267,22 @@ impl<'p> Interp<'p> {
                 break;
             }
         }
+    }
+
+    /// The checks, the iterations and the rescheduling once an event's
+    /// sessions have settled.
+    fn end_of_settle(&mut self) {
         // The memory invariant, `allocated + cached <= cap` in every
         // reachable configuration (`SerqLang.Step.invariant` proves it for
         // the pool relation; this checks the interpreter on every debug run:
-        // `make check` runs the tests once more in a debug build).
+        // `make check` runs the tests once more in a debug build). A pool
+        // that acts at its ticks is over its cap between them by design,
+        // outside the Lean fragment: then it has nothing cached.
         #[cfg(debug_assertions)]
         for (cp, pl) in self.p.pools.iter().zip(&self.pools) {
+            let ticks = matches!(cp.preempt, Preempt::Leases { every: Some(_), .. });
             debug_assert!(
-                pl.used + pl.cached <= pl.cap + 1e-6,
+                pl.used + pl.cached <= pl.cap + 1e-6 || ticks && pl.cached <= 1e-6,
                 "pool `{}`: used {} + cached {} > cap {} at t = {}",
                 cp.name,
                 pl.used,
@@ -1274,10 +1328,11 @@ impl<'p> Interp<'p> {
                         .flat_map(|h| &h.pools)
                         .filter(|e| e.pool == k)
                         .map(|e| (e.alloc - e.shared, &e.path));
+                    // a lease set aside holds nothing (`suspend`)
                     let leases = s
                         .leases
                         .iter()
-                        .filter(|l| l.pool == k)
+                        .filter(|l| l.pool == k && !l.suspended)
                         .map(|l| (l.alloc - l.shared, &l.path));
                     holds.chain(leases)
                 })
@@ -1319,7 +1374,10 @@ impl<'p> Interp<'p> {
                         .flat_map(|h| &h.pools)
                         .filter(|e| e.pool == k)
                         .count()
-                        + s.leases.iter().filter(|l| l.pool == k).count()
+                        + s.leases
+                            .iter()
+                            .filter(|l| l.pool == k && !l.suspended)
+                            .count()
                 })
                 .sum();
             debug_assert_eq!(
@@ -2333,6 +2391,7 @@ impl<'p> Interp<'p> {
         } else {
             self.pools[pl].queue.push_back(entry);
         }
+        self.schedule_queue_tick(pl);
         true
     }
 
@@ -2347,16 +2406,26 @@ impl<'p> Interp<'p> {
     /// can change even while no new request enters the queue. Resumed holds
     /// keep vLLM's prepend priority; policy ties keep original queue order.
     fn next_waiter(&mut self, pl: usize) -> Option<(usize, usize)> {
+        self.next_waiter_among(pl, None)
+    }
+
+    /// `next_waiter` among the sessions of `among` only, when given.
+    fn next_waiter_among(&mut self, pl: usize, among: Option<&[usize]>) -> Option<(usize, usize)> {
         let queue = &self.pools[pl].queue;
-        if let Some(entry) = queue.front()
+        let ok = |sid: usize| among.is_none_or(|a| a.contains(&sid));
+        if let Some(entry) = queue.iter().find(|e| ok(e.sid))
             && (entry.resumed || self.p.pools[pl].queue.is_none())
         {
-            return Some((0, entry.sid));
+            let index = queue.iter().position(|e| e.sid == entry.sid).unwrap();
+            return Some((index, entry.sid));
         }
         let keys = self.p.pools[pl].queue.as_ref()?;
         let candidates: Vec<_> = queue.iter().map(|entry| entry.sid).collect();
         let mut best: Option<(KeyOrd, usize, usize)> = None;
         for (index, sid) in candidates.into_iter().enumerate() {
+            if !ok(sid) {
+                continue;
+            }
             let mut ctx = Ctx::session(sid);
             ctx.waited = self.now - self.sessions[sid].pending.as_ref().unwrap().queued_at;
             let key = KeyOrd(
@@ -2453,7 +2522,8 @@ impl<'p> Interp<'p> {
     /// has room; a selection that does not fit blocks the rest. A pool whose
     /// queue is served by a stage (`admit_via`) is admitted from there.
     fn try_admit(&mut self, pl: usize) {
-        if self.p.pools[pl].admit_via.is_some() {
+        // an engine admits its queue; a pool under `queue … every`, its ticks
+        if self.p.pools[pl].admit_via.is_some() || self.p.pools[pl].queue_every.is_some() {
             return;
         }
         while let Some((index, sid)) = self.next_waiter(pl) {
@@ -2509,7 +2579,7 @@ impl<'p> Interp<'p> {
         let leases: f64 = self.sessions[sid]
             .leases
             .iter()
-            .filter(|l| l.pool == pl)
+            .filter(|l| l.pool == pl && !l.suspended)
             .map(|l| l.alloc)
             .sum();
         self.held_in(sid, pl) + leases
@@ -2645,8 +2715,19 @@ impl<'p> Interp<'p> {
         self.ready.push_back(sid);
     }
 
-    /// Evict cached prefixes until `need` more units fit.
+    /// Evict cached prefixes until `need` more units fit, after a guard
+    /// that passed.
     fn make_room(&mut self, pl: usize, need: f64) {
+        self.evict_for(pl, need);
+        debug_assert!(
+            self.pools[pl].used + need <= self.pools[pl].cap + EPS,
+            "make_room called without a passing guard"
+        );
+    }
+
+    /// Evict cached prefixes until `need` more units fit, or none is left:
+    /// a growth a pool's tick lets past the cap evicts all it can.
+    fn evict_for(&mut self, pl: usize, need: f64) {
         let over = |s: &Self| s.pools[pl].used + s.pools[pl].cached + need > s.pools[pl].cap + EPS;
         // one victim is a linear scan; the heap pays off only for several
         let short = self.pools[pl].used + self.pools[pl].cached + need - self.pools[pl].cap;
@@ -2680,10 +2761,6 @@ impl<'p> Interp<'p> {
                 }
             }
         }
-        debug_assert!(
-            self.pools[pl].used + need <= self.pools[pl].cap + EPS,
-            "make_room called without a passing guard"
-        );
     }
 
     /// The session a cache node's eviction key and spill read: its writer,
@@ -2858,7 +2935,9 @@ impl<'p> Interp<'p> {
                         path: e.path.clone(),
                         expires: self.now + t,
                         attrs: None,
+                        suspended: false,
                     });
+                    self.schedule_tick(q);
                     if t.is_finite() {
                         let serial = self.sessions[sid].serial;
                         self.at(self.now + t, Ev::LeaseEnd { sid, serial, id });
@@ -2875,6 +2954,10 @@ impl<'p> Interp<'p> {
     /// A lease ends: the units go back, `cache` applies.
     fn end_lease(&mut self, sid: usize, i: usize) {
         let l = self.sessions[sid].leases.remove(i);
+        // a lease set aside holds nothing any more
+        if l.suspended {
+            return;
+        }
         // a leg's lease caches by the leg's attributes, not the session's
         let saved = l
             .attrs
@@ -2928,6 +3011,13 @@ impl<'p> Interp<'p> {
         // one addition: on the session's own entry, `back + delta` is what
         // it keeps
         self.pools[q].cached += back + delta;
+        // a pool over its cap between its ticks caches only within the cap
+        if matches!(
+            self.p.pools[q].preempt,
+            Preempt::Leases { every: Some(_), .. }
+        ) {
+            self.evict_for(q, 0.0);
+        }
     }
 
     /// `release P`: the innermost hold on `pl` gives its allocation there
@@ -2937,7 +3027,11 @@ impl<'p> Interp<'p> {
     /// hold re-executed after a preemption reaches the statement again).
     fn release_early(&mut self, sid: usize, pl: usize) {
         let Some((hi, k)) = self.sessions[sid].innermost(pl) else {
-            if let Some(i) = self.lease_of(sid, pl) {
+            // the lease that holds units, else one a tick set aside
+            if let Some(i) = self
+                .lease_of(sid, pl)
+                .or_else(|| self.set_aside_of(sid, pl))
+            {
                 self.end_lease(sid, i);
             }
             return;
@@ -2986,7 +3080,18 @@ impl<'p> Interp<'p> {
     /// leases by` act on, when it has several (a leg's passed to it): the
     /// earliest.
     fn lease_of(&self, sid: usize, pl: usize) -> Option<usize> {
-        self.sessions[sid].leases.iter().position(|l| l.pool == pl)
+        self.sessions[sid]
+            .leases
+            .iter()
+            .position(|l| l.pool == pl && !l.suspended)
+    }
+
+    /// The lease of `pl` a tick set aside for `sid` (`suspend`), if any.
+    fn set_aside_of(&self, sid: usize, pl: usize) -> Option<usize> {
+        self.sessions[sid]
+            .leases
+            .iter()
+            .position(|l| l.pool == pl && l.suspended)
     }
 
     /// What a `grow` of `pl` enlarges for `sid`: the innermost hold of
@@ -3096,6 +3201,19 @@ impl<'p> Interp<'p> {
             ));
             return false;
         }
+        if let (Grown::Lease(_), Preempt::Leases { every: Some(_), .. }) =
+            (g, &self.p.pools[pl].preempt)
+        {
+            // the pool acts at its ticks: the growth is let through now,
+            // past the cap if it must, where no guard has passed
+            self.evict_for(pl, need);
+            self.pools[pl].used += need;
+            if let Grown::Lease(i) = g {
+                self.sessions[sid].leases[i].alloc += need;
+            }
+            self.schedule_tick(pl);
+            return true;
+        }
         loop {
             if self.fits_grown(pl, need, sid, g) {
                 self.add_alloc(sid, pl, g, need);
@@ -3105,7 +3223,7 @@ impl<'p> Interp<'p> {
             let victim = match &p.pools[pl].preempt {
                 Preempt::None => None,
                 Preempt::By { keys, .. } => self.victim(pl, keys, self.candidates(pl)),
-                Preempt::Leases { keys } => self.victim(pl, keys, self.lessees(pl)),
+                Preempt::Leases { keys, .. } => self.victim(pl, keys, self.lessees(pl)),
             };
             match victim {
                 Some(victim) if p.pools[pl].preempt.preempts_holds() => {
@@ -3187,7 +3305,7 @@ impl<'p> Interp<'p> {
         for &s in &self.pools[pl].holders {
             let ss = &self.sessions[s];
             if ss.innermost(pl).is_none()
-                && ss.leases.iter().any(|l| l.pool == pl)
+                && ss.leases.iter().any(|l| l.pool == pl && !l.suspended)
                 && !c.contains(&s)
             {
                 c.push(s);
@@ -3425,7 +3543,179 @@ impl<'p> Interp<'p> {
     fn revoke(&mut self, victim: usize, pl: usize) {
         let i = self.lease_of(victim, pl).expect("victim leases the pool");
         self.pools[pl].preemptions += 1;
-        self.end_lease(victim, i);
+        if !matches!(
+            self.p.pools[pl].preempt,
+            Preempt::Leases {
+                suspend: Some(_),
+                ..
+            }
+        ) {
+            self.end_lease(victim, i);
+            return;
+        }
+        // set aside (`suspend`): the prefix it read is let go, as at a
+        // release, what no other hold reads is cached again, and the lease
+        // keeps only its own units to come back with at a tick
+        let serial = self.sessions[victim].serial;
+        let l = &mut self.sessions[victim].leases[i];
+        let (alloc, shared, path) = (l.alloc, l.shared, std::mem::take(&mut l.path));
+        l.alloc -= shared;
+        l.shared = 0.0;
+        l.suspended = true;
+        let (back, gone) = self.pools[pl].cache.unlock(&path, serial);
+        self.pools[pl].used -= alloc - (shared - back - gone);
+        self.pools[pl].cached += back;
+        if let Some(h) = self.pools[pl].holders.iter().position(|&x| x == victim) {
+            self.pools[pl].holders.remove(h);
+        }
+        self.schedule_tick(pl);
+    }
+
+    /// The next tick of `pl` under `preempt leases by … every (dt)`, at the
+    /// first multiple of `dt` after now, unless one is due already.
+    fn schedule_tick(&mut self, pl: usize) {
+        let Preempt::Leases {
+            every: Some(dt), ..
+        } = self.p.pools[pl].preempt
+        else {
+            return;
+        };
+        if self.pools[pl].next_tick.is_some() {
+            return;
+        }
+        let mut k = (self.now / dt).floor() as u64 + 1;
+        if k as f64 * dt <= self.now {
+            k += 1;
+        }
+        self.pools[pl].next_tick = Some(k);
+        self.at(k as f64 * dt, Ev::PoolTick { pool: pl });
+    }
+
+    /// A tick of `pl`: under `suspend by`, the leases set aside come back
+    /// in its keys' order, each that fits; then, while the pool is over its
+    /// cap, the lease with the least keys ends, or is set aside. The next
+    /// tick is due while the pool has a lease.
+    fn pool_tick(&mut self, pl: usize) {
+        let p = self.p;
+        let Preempt::Leases {
+            keys,
+            every: Some(dt),
+            suspend,
+        } = &p.pools[pl].preempt
+        else {
+            return;
+        };
+        let k = self.pools[pl].next_tick.take().expect("a tick was due");
+        if let Some(back_keys) = suspend {
+            let mut aside: Vec<usize> = vec![];
+            for (s, ss) in self.sessions.iter().enumerate() {
+                // one that holds the pool anew has what it needs there
+                if ss.status != Status::Ended
+                    && ss.leases.iter().any(|l| l.pool == pl && l.suspended)
+                    && !ss.leases.iter().any(|l| l.pool == pl && !l.suspended)
+                    && ss.innermost(pl).is_none()
+                    && !aside.contains(&s)
+                {
+                    aside.push(s);
+                }
+            }
+            // in admission order, as `lessees` is: `admission` reads it
+            aside.sort_by_key(|&s| self.sessions[s].adm_seq);
+            for s in self.in_order(pl, back_keys, aside) {
+                let Some(i) = self.set_aside_of(s, pl) else {
+                    continue;
+                };
+                let alloc = self.sessions[s].leases[i].alloc;
+                if self.pools[pl].used + alloc > self.pools[pl].cap + EPS {
+                    continue;
+                }
+                // cached units give way, as to any admission
+                self.make_room(pl, alloc);
+                self.pools[pl].used += alloc;
+                self.pools[pl].holders.push(s);
+                self.sessions[s].leases[i].suspended = false;
+            }
+        }
+        while self.pools[pl].used > self.pools[pl].cap + EPS {
+            let Some(v) = self.victim(pl, keys, self.lessees(pl)) else {
+                break;
+            };
+            self.revoke(v, pl);
+        }
+        // what was let go is cached only within the cap
+        self.evict_for(pl, 0.0);
+        let leased = self
+            .sessions
+            .iter()
+            .any(|ss| ss.status != Status::Ended && ss.leases.iter().any(|l| l.pool == pl));
+        // (a lease set aside in this tick may have scheduled the next)
+        if leased && self.pools[pl].next_tick.is_none() {
+            self.pools[pl].next_tick = Some(k + 1);
+            self.at((k + 1) as f64 * dt, Ev::PoolTick { pool: pl });
+        }
+        self.try_admit_all();
+    }
+
+    /// The next tick of `pl` under `queue … every (dt)`, at the first
+    /// multiple of `dt` after now, unless one is due already.
+    fn schedule_queue_tick(&mut self, pl: usize) {
+        let Some(dt) = self.p.pools[pl].queue_every else {
+            return;
+        };
+        if self.pools[pl].next_queue_tick.is_some() {
+            return;
+        }
+        let mut k = (self.now / dt).floor() as u64 + 1;
+        if k as f64 * dt <= self.now {
+            k += 1;
+        }
+        self.pools[pl].next_queue_tick = Some(k);
+        self.at(k as f64 * dt, Ev::QueueTick { pool: pl });
+    }
+
+    /// A tick of `pl` under `queue … every`: the holds that waited when it
+    /// began are tried in the queue's order, each admitted one running
+    /// until it blocks before the next is tried, one that does not fit
+    /// passed over. A hold queued during the tick waits for the next.
+    fn queue_tick(&mut self, pl: usize) {
+        let dt = self.p.pools[pl].queue_every.expect("a queue tick");
+        let k = self.pools[pl]
+            .next_queue_tick
+            .take()
+            .expect("a tick was due");
+        let mut waiting: Vec<usize> = self.pools[pl].queue.iter().map(|e| e.sid).collect();
+        while let Some((index, sid)) = self.next_waiter_among(pl, Some(&waiting)) {
+            waiting.retain(|&s| s != sid);
+            let pending = self.pending_now(sid);
+            if !self.fits_all(&pending) {
+                continue;
+            }
+            self.pools[pl].queue.remove(index);
+            self.admit(sid, pending);
+            self.run_ready();
+            if self.error.is_some() {
+                return;
+            }
+        }
+        // (a hold queued in this tick may have scheduled the next)
+        if !self.pools[pl].queue.is_empty() && self.pools[pl].next_queue_tick.is_none() {
+            self.pools[pl].next_queue_tick = Some(k + 1);
+            self.at((k + 1) as f64 * dt, Ev::QueueTick { pool: pl });
+        }
+    }
+
+    /// `candidates` in the order of `keys`, the least first (`victim`'s
+    /// order, read at the same moment).
+    fn in_order(&mut self, pl: usize, keys: &[CExpr], mut candidates: Vec<usize>) -> Vec<usize> {
+        let mut out = vec![];
+        while !candidates.is_empty() {
+            let Some(v) = self.victim(pl, keys, candidates.clone()) else {
+                break;
+            };
+            candidates.retain(|&c| c != v);
+            out.push(v);
+        }
+        out
     }
 
     // -------------------------------------------------------- stages ----

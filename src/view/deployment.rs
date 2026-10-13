@@ -290,6 +290,8 @@ struct Walker<'a> {
     /// The decision node of each loop body that has one, by body block: a
     /// loop walked twice (inside another) has one decision, not two.
     decisions: Vec<(usize, usize)>,
+    /// The node of each pool's queue tick a hold waits for, by pool.
+    ticks: Vec<(usize, usize)>,
     /// Attributes this path has set to a constant, by slot. A guard that
     /// reads only these is decided, and only its arm is drawn.
     known: Vec<(usize, f64)>,
@@ -407,6 +409,44 @@ impl Walker<'_> {
     fn visit_stage(&mut self, stage: usize, label: String, note: Option<String>) {
         let idx = self.station(stage, label, note);
         self.attach(idx);
+    }
+
+    /// The node of the tick a hold on `pool`'s queue waits for (`queue …
+    /// every (dt)`), made on the first visit: no stage's, a wait the pool
+    /// encloses.
+    fn tick_station(&mut self, pool: usize, dt: f64) -> usize {
+        let idx = match self.ticks.iter().find(|&&(q, _)| q == pool) {
+            Some(&(_, i)) => i,
+            None => {
+                self.net.nodes.push(Node {
+                    stage: None,
+                    label: "tick".into(),
+                    kind: StationKind::Delay,
+                    inner: String::new(),
+                    note: Some(format!("every {dt}")),
+                    pools: vec![],
+                    work: String::new(),
+                    modes: vec![],
+                });
+                let i = self.net.nodes.len() - 1;
+                self.ticks.push((pool, i));
+                i
+            }
+        };
+        let mut pools = vec![];
+        for &(q, id, e) in &self.holds {
+            if e && !pools.contains(&q) {
+                pools.push(q);
+            }
+            let visits = &mut self.net.holds[id].visits;
+            if e && !visits.contains(&(q, idx)) {
+                visits.push((q, idx));
+            }
+        }
+        if self.net.nodes[idx].pools.is_empty() {
+            self.net.nodes[idx].pools = pools;
+        }
+        idx
     }
 
     /// The node of a stage the session reaches, made on the first visit.
@@ -549,6 +589,15 @@ impl Walker<'_> {
                             let k = self.instance(r.index.as_deref());
                             own(&mut self.pool_owners, r.base, k);
                         }
+                    }
+                    // a hold that only waits for its queue's tick is the
+                    // wait: a station of its own, inside the pool
+                    let base = pools[0].0.base;
+                    if let Some(dt) = self.p.pools[base].queue_every
+                        && !reaches_a_station(self.p, body)
+                    {
+                        let idx = self.tick_station(base, dt);
+                        self.attach(idx);
                     }
                     self.walk(body);
                     // by hold, not by depth: a `release` inside may have
@@ -822,6 +871,7 @@ impl Walker<'_> {
             self.known.clone(),
             self.next_hold,
             self.decisions.clone(),
+            self.ticks.clone(),
         );
         let k = self.probes.len();
         self.probes.push(vec![]);
@@ -842,6 +892,7 @@ impl Walker<'_> {
             self.known,
             self.next_hold,
             self.decisions,
+            self.ticks,
         ) = saved;
         let known = self
             .decisions
@@ -1204,6 +1255,7 @@ pub fn project(p: &Program) -> Net {
         last_flow: None,
         probes: vec![],
         decisions: vec![],
+        ticks: vec![],
         known: vec![],
     };
     w.enter(p.session, false);
@@ -2393,6 +2445,9 @@ fn pool_notes(p: &Program, i: usize, cached: bool) -> Vec<String> {
         };
         parts.push(format!("queue by ({shown})"));
     }
+    if let Some(dt) = pool.queue_every {
+        parts.push(format!("queue every ({dt})"));
+    }
     // An eviction order says nothing about a pool nothing is cached in.
     if cached {
         match &pool.evict {
@@ -2408,9 +2463,19 @@ fn pool_notes(p: &Program, i: usize, cached: bool) -> Vec<String> {
             show_keys(p, keys),
             if *tail { " requeue tail" } else { "" }
         )),
-        crate::ir::Preempt::Leases { keys } => {
-            parts.push(format!("preempt leases by ({})", show_keys(p, keys)))
-        }
+        crate::ir::Preempt::Leases {
+            keys,
+            every,
+            suspend,
+        } => parts.push(format!(
+            "preempt leases by ({}){}{}",
+            show_keys(p, keys),
+            every.map_or(String::new(), |dt| format!(" every ({dt})")),
+            suspend.as_ref().map_or(String::new(), |ks| format!(
+                " suspend by ({})",
+                show_keys(p, ks)
+            ))
+        )),
     }
     // the title says `on S` only for a pool that is no memory
     if let (Some(_), Some(s)) = (memory_of(p, i), pool.admit_via) {

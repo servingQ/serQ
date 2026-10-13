@@ -639,6 +639,9 @@ fn thunderagents_router_pool_is_drawn() {
         "{t:?}"
     );
     assert!(t.iter().any(|x| x == "pool waiting_queue"), "{t:?}");
+    // the wait for the queue's tick is a station inside it
+    assert!(t.iter().any(|x| x == "queue every (5)"), "{t:?}");
+    assert!(t.iter().any(|x| x == "tick"), "{t:?}");
 }
 
 /// A pool's queue order is a line of its own (#571).

@@ -39,7 +39,7 @@ STATEMENTS = (
 
 # Pool and stage options, workload forms, and the resource cost constructor.
 OPTIONS = (
-    "cap", "block", "evict", "lru", "preempt", "lifo", "leases", "held", "requeue", "head", "tail", "none", "queue", "fifo",
+    "cap", "block", "evict", "lru", "preempt", "lifo", "leases", "suspend", "held", "requeue", "head", "tail", "none", "queue", "fifo",
     "admit", "while", "state", "taking", "via", "spill", "when", "ps", "delay", "cost",
     "granule", "serve", "latency", "nic", "exclusive", "first", "only", "arrive", "arrivals", "poisson", "renewal", "closed", "hidden",
     "batch", "trace", "ordered", "init", "horizon", "warmup", "seed",
