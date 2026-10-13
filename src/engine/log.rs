@@ -11,6 +11,7 @@
 
 use std::fmt::Write as _;
 
+use crate::engine::report::{json_index, json_num, json_string};
 use crate::frontend::ast::RunMode;
 
 /// Version of `Log::json`'s shape, by the rules of `Report::json`'s
@@ -29,13 +30,15 @@ pub struct Who {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Event {
     pub t: f64,
-    pub kind: Kind,
+    pub kind: EventKind,
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub enum Kind {
-    /// A session arrives; a leg is forked (`who.leg`).
+pub enum EventKind {
+    /// A session arrives.
     Arrive { who: Who },
+    /// A leg of a session is forked (`who.leg` is its number).
+    Fork { who: Who },
     /// A turn of the session starts: its `turn` number.
     Turn { who: Who, turn: u32 },
     /// It waits in the queue of `pool` for a hold (of several pools: the
@@ -58,13 +61,13 @@ pub enum Kind {
     Preempt { who: Who, pool: usize },
     /// Its lease of `pool` is revoked (`preempt leases by`).
     Revoke { who: Who, pool: usize },
-    /// An iteration of engine `stage` starts, over the requests of `reqs`
-    /// (serials), scheduling `tokens`, lasting `dur`.
+    /// An iteration of engine `stage` starts, over the requests of `reqs`,
+    /// scheduling `tokens`, lasting `dur`.
     Iter {
         stage: usize,
         dur: f64,
         tokens: f64,
-        reqs: Vec<u64>,
+        reqs: Vec<Who>,
     },
     /// It ends.
     End { who: Who },
@@ -93,7 +96,7 @@ impl Log {
         }
     }
 
-    pub fn push(&mut self, t: f64, kind: Kind) {
+    pub fn push(&mut self, t: f64, kind: EventKind) {
         if self.events.len() >= self.cap {
             self.truncated = true;
             return;
@@ -103,7 +106,8 @@ impl Log {
 
     /// The log as JSON: `{"version", "stages", "pools", "truncated",
     /// "events"}`, each event `{"t", "ev", …}` with `s` (and `leg`) for who
-    /// it is about.
+    /// it is about. The keys are short because the events are many: an
+    /// hour of an engine is ~10⁶ iterations, each with its batch.
     pub fn json(&self) -> String {
         let mut s = String::new();
         let _ = write!(s, "{{\"version\":{LOG_VERSION},");
@@ -116,8 +120,8 @@ impl Log {
                 let _ = write!(
                     s,
                     "{{\"name\":{},\"index\":{}}}",
-                    serde_json::to_string(name).expect("a string serialises"),
-                    index.map_or("null".into(), |i| i.to_string())
+                    json_string(name),
+                    json_index(*index)
                 );
             }
             s.push_str("],");
@@ -127,7 +131,7 @@ impl Log {
             if i > 0 {
                 s.push(',');
             }
-            let _ = write!(s, "{{\"t\":{}", e.t);
+            let _ = write!(s, "{{\"t\":{}", json_num(e.t));
             let who = |s: &mut String, w: &Who| {
                 let _ = write!(s, ",\"s\":{}", w.serial);
                 if let Some(l) = w.leg {
@@ -135,30 +139,34 @@ impl Log {
                 }
             };
             match &e.kind {
-                Kind::Arrive { who: w } => {
+                EventKind::Arrive { who: w } => {
                     s.push_str(",\"ev\":\"arrive\"");
                     who(&mut s, w);
                 }
-                Kind::Turn { who: w, turn } => {
+                EventKind::Fork { who: w } => {
+                    s.push_str(",\"ev\":\"fork\"");
+                    who(&mut s, w);
+                }
+                EventKind::Turn { who: w, turn } => {
                     s.push_str(",\"ev\":\"turn\"");
                     who(&mut s, w);
                     let _ = write!(s, ",\"turn\":{turn}");
                 }
-                Kind::Wait { who: w, pool } => {
+                EventKind::Wait { who: w, pool } => {
                     s.push_str(",\"ev\":\"wait\"");
                     who(&mut s, w);
                     let _ = write!(s, ",\"pool\":{pool}");
                 }
-                Kind::Admit { who: w, pool } => {
+                EventKind::Admit { who: w, pool } => {
                     s.push_str(",\"ev\":\"admit\"");
                     who(&mut s, w);
                     let _ = write!(s, ",\"pool\":{pool}");
                 }
-                Kind::Refuse { who: w } => {
+                EventKind::Refuse { who: w } => {
                     s.push_str(",\"ev\":\"refuse\"");
                     who(&mut s, w);
                 }
-                Kind::Run {
+                EventKind::Run {
                     who: w,
                     stages,
                     mode,
@@ -173,35 +181,44 @@ impl Log {
                         RunMode::Decode => s.push_str(",\"mode\":\"decode\""),
                     }
                 }
-                Kind::Done { who: w, stage } => {
+                EventKind::Done { who: w, stage } => {
                     s.push_str(",\"ev\":\"done\"");
                     who(&mut s, w);
                     let _ = write!(s, ",\"stage\":{stage}");
                 }
-                Kind::Preempt { who: w, pool } => {
+                EventKind::Preempt { who: w, pool } => {
                     s.push_str(",\"ev\":\"preempt\"");
                     who(&mut s, w);
                     let _ = write!(s, ",\"pool\":{pool}");
                 }
-                Kind::Revoke { who: w, pool } => {
+                EventKind::Revoke { who: w, pool } => {
                     s.push_str(",\"ev\":\"revoke\"");
                     who(&mut s, w);
                     let _ = write!(s, ",\"pool\":{pool}");
                 }
-                Kind::Iter {
+                EventKind::Iter {
                     stage,
                     dur,
                     tokens,
                     reqs,
                 } => {
-                    let list: Vec<String> = reqs.iter().map(|k| k.to_string()).collect();
+                    // each request as `[serial]`, or `[serial, leg]` for a leg
+                    let list: Vec<String> = reqs
+                        .iter()
+                        .map(|w| match w.leg {
+                            Some(l) => format!("[{},{l}]", w.serial),
+                            None => format!("[{}]", w.serial),
+                        })
+                        .collect();
                     let _ = write!(
                         s,
-                        ",\"ev\":\"iter\",\"stage\":{stage},\"dur\":{dur},\"tokens\":{tokens},\"reqs\":[{}]",
+                        ",\"ev\":\"iter\",\"stage\":{stage},\"dur\":{},\"tokens\":{},\"reqs\":[{}]",
+                        json_num(*dur),
+                        json_num(*tokens),
                         list.join(",")
                     );
                 }
-                Kind::End { who: w } => {
+                EventKind::End { who: w } => {
                     s.push_str(",\"ev\":\"end\"");
                     who(&mut s, w);
                 }
@@ -230,8 +247,8 @@ mod tests {
             serial: 3,
             leg: None,
         };
-        l.push(0.0, Kind::Arrive { who: w });
-        l.push(0.5, Kind::End { who: w });
+        l.push(0.0, EventKind::Arrive { who: w });
+        l.push(0.5, EventKind::End { who: w });
         assert_eq!(l.events.len(), 1);
         assert!(l.truncated);
         assert_eq!(
@@ -255,7 +272,7 @@ mod tests {
         };
         l.push(
             1.25,
-            Kind::Run {
+            EventKind::Run {
                 who: w,
                 stages: vec![0, 1],
                 mode: RunMode::Plain,
@@ -263,16 +280,22 @@ mod tests {
         );
         l.push(
             1.5,
-            Kind::Iter {
+            EventKind::Iter {
                 stage: 1,
                 dur: 0.01,
                 tokens: 16.0,
-                reqs: vec![7, 8],
+                reqs: vec![
+                    w,
+                    Who {
+                        serial: 8,
+                        leg: None,
+                    },
+                ],
             },
         );
         assert_eq!(
             l.json(),
-            r#"{"version":0,"stages":[{"name":"P.nic","index":0},{"name":"D.nic","index":1}],"pools":[{"name":"kv","index":null}],"truncated":false,"events":[{"t":1.25,"ev":"run","s":7,"leg":0,"stages":[0,1]},{"t":1.5,"ev":"iter","stage":1,"dur":0.01,"tokens":16,"reqs":[7,8]}]}"#
+            r#"{"version":0,"stages":[{"name":"P.nic","index":0},{"name":"D.nic","index":1}],"pools":[{"name":"kv","index":null}],"truncated":false,"events":[{"t":1.25,"ev":"run","s":7,"leg":0,"stages":[0,1]},{"t":1.5,"ev":"iter","stage":1,"dur":0.01,"tokens":16,"reqs":[[7,0],[8]]}]}"#
         );
     }
 }

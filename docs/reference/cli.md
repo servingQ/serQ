@@ -75,8 +75,8 @@ serq run examples/multi-turn/vllm.sq --horizon 2000 --warmup 200 --seed 1 --json
 | `gauges.<name>` | `mean` (time average over `[warmup, end]`), `ci`, `min`, `max` |
 | `claims[]` | present when the program has a `claim`: `name`, `kind` (`every_iteration`, `some_iteration`, `at_end`), `result` (`holds`, `fails`, `witnessed`, `not_witnessed`, `not_evaluated`, `out_of_scope`), `checked` (iterations read, or 1 for a claim read at the end), `failures` (of those, the ones that read 0), `first` (the first failure, or a `some` claim's first witness; `null` when none), `note` (the sessions live at the end, or the session that failed `given`; `null` otherwise). The whole run, warm-up included |
 | `stages[]` | stage statistics, below |
-| `log` | present with `--log`: the [run log](log.md) |
 | `pools[]` | pool statistics, below |
+| `log` | present with `--log`: the [run log](log.md), the same object the file holds (the API's `Report.log`; `--log` with `--json` prints it twice) |
 
 Non-finite numbers are written as `null`, and as `NaN` in the text report:
 a mean with no sample, such as the `mean_wait` of a pool no hold waited at

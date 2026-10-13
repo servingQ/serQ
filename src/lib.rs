@@ -148,17 +148,23 @@ pub fn load(path: &Path, ov: &Overrides) -> Result<ir::Program, String> {
 /// Run an IR program. A relative trace path is resolved against `base`
 /// (the program file's directory), unless it was overridden.
 pub fn run_ir(p: &ir::Program, base: Option<&Path>) -> Result<Report, String> {
-    p.validate()?;
-    let corpus = load_trace(p, base)?;
-    engine::interp::Interp::new(p, corpus).run()
+    run_with(p, base, None)
 }
 
 /// `run_ir`, keeping the log of the run (`engine::log`): what each session
 /// did, when, at most `cap` events, in `Report::log`. The run is the same.
 pub fn run_ir_logged(p: &ir::Program, base: Option<&Path>, cap: usize) -> Result<Report, String> {
+    run_with(p, base, Some(cap))
+}
+
+fn run_with(p: &ir::Program, base: Option<&Path>, log: Option<usize>) -> Result<Report, String> {
     p.validate()?;
     let corpus = load_trace(p, base)?;
-    engine::interp::Interp::new(p, corpus).logged(cap).run()
+    let interp = engine::interp::Interp::new(p, corpus);
+    match log {
+        Some(cap) => interp.logged(cap).run(),
+        None => interp.run(),
+    }
 }
 
 /// The program's trace corpus, if it names one; a relative path is resolved
