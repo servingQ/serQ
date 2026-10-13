@@ -778,3 +778,66 @@ fn an_entry_keys_its_prefix_by_the_requests_serial() {
         "{e}"
     );
 }
+
+/// Outside every hold of `kv`, `cachedin(kv)` reads `kv` by the chain the
+/// session last cached along there (#595; it read the own chain, and found
+/// 0 on every line below). A lease caches along its hold's chain when it is
+/// released (32). A leg shares the session's entries: it reads them by the
+/// session's chain, and the session reads what the leg cached by the leg's
+/// (64).
+#[test]
+fn cachedin_outside_a_hold_reads_the_chain_cached_along() {
+    let r = run(
+        r#"
+        stage svc : delay;
+        pool kv { cap 1000; block 16; }
+        workload { arrive batch(2); session { turn; } }
+        server {
+          hold kv (cost(kv, 32)) prefix (0: 16, serial: inf) { run svc (cost(svc, 1)); }
+            cache (cost(kv, 32)) lease kv (inf);
+          release kv;
+          observe released = cachedin(kv);
+          fork {
+            observe leg_reads = cachedin(kv);
+            hold kv (cost(kv, 64)) prefix (1: 16, serial: inf) { run svc (cost(svc, 1)); }
+              cache (cost(kv, 64));
+          }
+          join;
+          observe after_leg = cachedin(kv);
+        }
+"#,
+        &options(100.0),
+    );
+    let samples = |name: &str| r.observe(name).unwrap().samples.clone();
+    assert_eq!(samples("released"), [32.0, 32.0], "{}", r.text());
+    assert_eq!(samples("leg_reads"), [32.0, 32.0]);
+    assert_eq!(samples("after_leg"), [64.0, 64.0]);
+}
+
+/// A lease is an allocation, not a cached entry: it does not change the
+/// chain `cachedin` reads by. Here the own entry (50, 48 in whole blocks)
+/// is cached while a `prefix` hold's lease lasts, and is what is read. A
+/// first version of the #595 fix read the lease's chain and found 0.
+#[test]
+fn a_lease_does_not_hide_the_entry_cached_after_it() {
+    let r = run(
+        r#"
+        stage svc : delay;
+        pool kv { cap 1000; block 16; }
+        workload { arrive batch(1); session { turn; } }
+        server {
+          hold kv (cost(kv, 200)) prefix (0: 16, serial: inf) { run svc (cost(svc, 1)); }
+            cache (cost(kv, 200)) lease kv (inf);
+          hold kv (cost(kv, 50)) { run svc (cost(svc, 1)); } cache (cost(kv, 50));
+          observe after_own = cachedin(kv);
+        }
+"#,
+        &options(100.0),
+    );
+    assert_eq!(
+        r.observe("after_own").unwrap().samples,
+        [48.0],
+        "{}",
+        r.text()
+    );
+}

@@ -40,7 +40,7 @@ See [types](index.md#types) and [evaluation moments](context.md).
 |---|---|
 | [`used(p: pool)`](#used) | Units currently allocated in `p`. |
 | [`free(p: pool)`](#free) | `cap - used`. Cached units are reclaimable and are not subtracted. |
-| [`cachedin(p: pool)`](#cachedin) | The cached units in `p` of this session's chain there (its waiting hold's if that hold asks for `p`, else its innermost hold of `p`'s, else its latest lease of `p`'s, else the chain it last cached along in `p`, else its own), in whole blocks; 0 when evaluated without a session. |
+| [`cachedin(p: pool)`](#cachedin) | The cached units in `p` of this session's chain there (its waiting hold's if that hold asks for `p`, else its innermost hold of `p`'s, else the chain it or one of its legs last cached along in `p`, else its own), in whole blocks; 0 when evaluated without a session. |
 | [`allocated(p: pool)`](#allocated) | This session's own allocated units in `p`, in its holds and its leases; 0 when evaluated without a session. |
 | [`holders(p: pool)`](#holders) | Sessions holding units in `p`. |
 | [`queued(p: pool)`](#queued) | Sessions waiting in `p`'s admission queue. |
@@ -299,7 +299,7 @@ free(p: pool) -> number
 cachedin(p: pool) -> number
 ```
 
-**Returns:** The cached units in `p` of this session's chain there (its waiting hold's if that hold asks for `p`, else its innermost hold of `p`'s, else its latest lease of `p`'s, else the chain it last cached along in `p`, else its own), in whole blocks; 0 when evaluated without a session.
+**Returns:** The cached units in `p` of this session's chain there (its waiting hold's if that hold asks for `p`, else its innermost hold of `p`'s, else the chain it or one of its legs last cached along in `p`, else its own), in whole blocks; 0 when evaluated without a session.
 
 Read at admission for a prefix lookup that accounts for eviction while the session waited. See [`hold`](statements.md#hold).
 
