@@ -34,7 +34,7 @@ fn program(granule: &str, schedule: &str) -> String {
             observe ttft = now - t0;
           }}
           scheduler {{ {schedule} }}
-          execute (1 + max(0, batch.tokens - 6));
+          worker {{ forward (1 + max(0, batch.tokens - 6)); }}
         }}
         pool reqs on llm {{ }}
         workload {{ arrive batch(2);
@@ -142,7 +142,7 @@ fn a_granule_above_a_computed_caps_floor_does_not_link() {
             admit waiting while (running.preempted == 0) each at most (max(256, floor(4096 / n)))
               taking reqs (1);
           }}
-          execute (1);
+          worker {{ forward (1); }}
         }}
         pool reqs on llm {{ }}
         workload {{ arrive batch(20);
@@ -184,7 +184,7 @@ fn the_chunk_caps_and_the_granule_rounds() {
             advance running each at most (6);
             admit waiting while (running.preempted == 0) each at most (6) taking reqs (1);
           }
-          execute (1);
+          worker { forward (1); }
         }
         pool reqs on llm { }
         workload { arrive batch(1);
@@ -237,7 +237,7 @@ fn a_refused_prefill_ends_the_admissions() {
             advance running;
             admit waiting while (running.preempted == 0) taking reqs (1), kv (min(6, left));
           }
-          execute (1);
+          worker { forward (1); }
         }
         pool reqs on llm { }
         pool kv on gpu { }

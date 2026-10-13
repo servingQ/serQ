@@ -9,7 +9,9 @@ engine vllm on gpu {
   reqs cap max_seqs;
   tokens cap B;
   scheduler { advance running; admit waiting while (running.preempted == 0); }
-  execute (c0 + a * batch.tokens);
+  worker {
+    forward (c0 + a * batch.tokens);
+  }
 }
 pool kv on gpu { block bs; evict lru; preempt lifo; }
 pool reqs on vllm { queue fifo; }

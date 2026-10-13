@@ -27,7 +27,7 @@ engine llm on gpu {{
   tokens cap 8;
   {request}
   scheduler {{ advance running; admit waiting while (running.preempted == 0); }}
-  execute (1);
+  worker {{ forward (1); }}
 }}
 "
     )
@@ -148,13 +148,13 @@ engine p on g1 {
   tokens cap 8;
   request (prompt) { prefill (prompt); }
   scheduler { advance running; admit waiting while (running.preempted == 0); }
-  execute (1);
+  worker { forward (1); }
 }
 engine d on g2 {
   tokens cap 8;
   request (prompt, output) { prefill (prompt); decode (output); }
   scheduler { advance running; admit waiting while (running.preempted == 0); }
-  execute (1);
+  worker { forward (1); }
 }
 workload { arrive batch(1); }
 server {

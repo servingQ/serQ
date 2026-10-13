@@ -53,7 +53,9 @@ fn main() {
       admit waiting while (running.preempted == 0)
         taking reqs (1), kv (prompt) reserve (prompt + mt);
     }
-    execute (max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
+    worker {
+      forward (max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
+    }
   }
   pool kv on gpu { block bs; evict lru; preempt none; reserve held; }
   pool reqs on trtllm { queue fifo; }

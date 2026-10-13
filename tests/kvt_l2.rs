@@ -145,7 +145,7 @@ fn an_engine_reads_the_cache_it_copies_from() {
                  prefill (p) growing kv;
                }}
                scheduler {{ advance running; admit waiting while (running.preempted == 0) taking kv (got + 1); }}
-               execute (1);
+               worker {{ forward (1); }}
              }}
              {SESSION}
              server {{ e (5); }}"
@@ -242,7 +242,7 @@ fn an_engines_l2_load_takes_its_copy_time() {
                  kvt.l2_store (kv, lmc, p, per_token = 0.01);
                }}
                scheduler {{ advance running; admit waiting while (running.preempted == 0) taking kv (p); }}
-               execute (1);
+               worker {{ forward (1); }}
              }}
              workload {{ arrive batch(1); turn {{ }} session {{ turn; tool (50); turn; end; }} }}
              server {{ e (100); }}"

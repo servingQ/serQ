@@ -36,13 +36,15 @@ engine vllm on gpu {
     advance running each at most (threshold);
     admit waiting while (running.preempted == 0) each at most (threshold);
   }
-  execute (c0 + max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
+  worker {
+    forward (c0 + max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
+  }
 }
 pool kv on gpu { block bs; evict lru; preempt lifo; }
 pool reqs on vllm { queue fifo; }
 ```
 
-- **`device`**: time resources (demand to time, read in `execute`; functions
+- **`device`**: time resources (demand to time, read in `worker`; functions
   because the fitted constants are times) and capacities.
 - **`pool X on D`** takes its name and `cap` from D's capacity `X`; its body
   is the rules. The engine's KV is the pool on its device, so `memory` goes.
@@ -51,7 +53,7 @@ pool reqs on vllm { queue fifo; }
   iteration, `pool kv on D` as soon as it fits; so `admit via` goes. Under `device gpu[N]`, `pool kv on gpu` is `kv[N]` and
   `engine E[N] on gpu` pairs `E[i]` with `kv[i]`.
 - **`tokens cap B`** caps `tokens`, which starts at 0 each iteration and is
-  what `execute` reads; a language name, so never a pool.
+  what `worker` reads; a language name, so never a pool.
 - **`scheduler`** is required: vLLM's running loop (`advance running`,
   `scheduler.py:626-856`), then its waiting loop (`admit waiting`,
   `scheduler.py:872-1344`), which does not run in a step that preempted
@@ -69,14 +71,14 @@ pool reqs on vllm { queue fifo; }
   residents' KV `running.kv_decode`, `running.kv_prefill`. The batch's are
   `batch.tokens`, `batch.prefilled` (in `scheduler`, what it has formed so
   far) and `batch.decoding`, `batch.kv_decode`, `batch.kv_prefill`,
-  `batch.attention` (in `execute`). The kernel reads `decoders` and
+  `batch.attention` (in `worker`). The kernel reads `decoders` and
   `kv_decode` as the residents' before the batch is formed and as the
   batch's in `cost`, and a budget or an `only` can leave a resident out of
   the batch, so the engine names them twice (#416). An engine reads no bare
-  name in its `tokens cap`, `execute` and `scheduler`; `running.preempted`
+  name in its `tokens cap`, `worker` and `scheduler`; `running.preempted`
   and `waiting.admitted` say what the schedule did, so only `scheduler`
   reads them.
-- **`execute (T)`**: the batch's time over the device's resources; a serial
+- **`worker { forward (T); }`**: the batch's time over the device's resources; a serial
   engine writes `+` for `max`. `cost` is only a request's work.
 - **Names.** `engine` is a keyword, so an engine is named for what it
   models (`vllm`, `sglang`, `tgi`) or `llm`, as `docs/writing-programs.md`
@@ -90,7 +92,7 @@ pool reqs on vllm { queue fifo; }
 Link errors, each with its reason: a pool on no such capacity, or with
 `cap` or `admit via`; an undeclared capacity; a capacity declared as a pool
 twice; two engines, or two candidate KV pools, on one device; a time
-resource outside `execute`, or a `def` named like one; no `tokens cap`, or
+resource outside `worker`, or a `def` named like one; no `tokens cap`, or
 a constant one ≤ 0; an `each at most` that chooses anything but constants
 (its condition may read the iteration), or one ≤ 0 once the `let`s are
 known, or `inf` inside its arithmetic; `[N]` on a pool `on` a family; a
@@ -107,7 +109,7 @@ is checked as a pool's is.
 
 `tokens cap` is `budget`; `each at most (c)` is `chunk`; `advance
 running`/`admit waiting` are `serve`/`admit`; list values are the context
-variables; `execute` is `cost`; the engine is a step stage whose `memory` is
+variables; `execute` (now `worker { forward }`) is `cost`; the engine is a step stage whose `memory` is
 its device's pool. vLLM's body is the kernel's default procedure statement
 for statement and lowers to no `iteration`, as the oracle fragment requires
 (`deployment()` in `scripts/gen_lean_oracle.py`); `advance running only

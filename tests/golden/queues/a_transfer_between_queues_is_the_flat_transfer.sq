@@ -3,7 +3,7 @@
         pool kvP { cap 1000; }
         device gpu[2] { kvD cap 1000; } pool kvD on gpu { block 16; }
         stage P : fifo;
-        engine D[2] on gpu { tokens cap inf; scheduler { advance running; admit waiting while (running.preempted == 0); } execute (1); }
+        engine D[2] on gpu { tokens cap inf; scheduler { advance running; admit waiting while (running.preempted == 0); } worker { forward (1); } }
         stage nic[2] : ps(1);
         server {
           set t0 = now;

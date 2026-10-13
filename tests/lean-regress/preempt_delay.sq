@@ -21,7 +21,9 @@ fn main() {
       advance running;
       admit waiting while (running.preempted == 0) taking slots (1), kv (16);
     }
-    execute (1);
+    worker {
+      forward (1);
+    }
   }
   pool kv on gpu { block 16; evict lru; preempt lifo; }
   pool slots on llm { }

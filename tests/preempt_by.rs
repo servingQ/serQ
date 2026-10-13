@@ -32,7 +32,7 @@ fn three(preempt: &str) -> String {
             advance running;
             admit waiting while (running.preempted == 0) taking reqs (1), kv (prompt);
           }}
-          execute (1);
+          worker {{ forward (1); }}
         }}
         pool reqs on llm {{ }}
         pool kv on gpu {{ {preempt} }}
@@ -110,7 +110,7 @@ fn a_victim_requeues_at_the_head_or_the_tail() {
             advance running;
             admit waiting while (running.preempted == 0) taking reqs (1), kv (4);
           }}
-          execute (1);
+          worker {{ forward (1); }}
         }}
         pool reqs on llm {{ }}
         pool kv on gpu {{ preempt by (-admission) {requeue}; }}
@@ -160,7 +160,7 @@ fn a_preempt_key_reads_the_candidate_and_nothing_it_cannot_see() {
             advance running;
             admit waiting while (running.preempted == 0) taking reqs (1), kv (prompt);
           }}
-          execute (1);
+          worker {{ forward (1); }}
         }}
         pool reqs on llm {{ }}
         pool kv on gpu {{ {preempt} }}
@@ -289,7 +289,7 @@ fn a_tail_victim_is_ordered_by_the_queue_keys() {
             advance running;
             admit waiting while (running.preempted == 0) taking reqs (1), kv (4);
           }
-          execute (1);
+          worker { forward (1); }
         }
         pool reqs on llm { queue by (rank); }
         pool kv on gpu { preempt by (-admission) requeue tail; }

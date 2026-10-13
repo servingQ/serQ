@@ -8,7 +8,9 @@ engine NAME on DEVICE {
   granule c;                 // a prefill gets all it has left or a multiple of c
   state NAME = c;            // a register the schedule sets
   scheduler { stmt … }        // required: what each iteration does (below)
-  execute (expr);            // required: how long the iteration takes
+  worker {
+    forward (expr);            // required: how long the iteration takes
+  }
 }
 pool NAME on DEVICE { … }          // the device's capacity: the engine's memory
 pool NAME on ENGINE.DEVICE { … }   // the same, admitted by the engine
@@ -18,7 +20,7 @@ pool NAME on ENGINE { … }          // the engine's capacity, admitted by it
 An engine runs iterations (continuous batching) on a device. Each
 iteration gives the running requests their tokens, one to a decoding run
 and a chunk to a prefilling one, then admits waiting requests while the
-budget lasts, and lasts what `execute` says. A `growing` run first grows
+budget lasts, and lasts what `worker` says. A `growing` run first grows
 its hold to the position it will reach. An attempt that schedules no token
 and preempts nobody waits for the next event without running a timed
 iteration. Its [`request`](../language.md#an-engines-request) puts work on
@@ -38,7 +40,7 @@ the [IR](../ir.md) and the Lean model see only that.
 
 | Item | Description |
 |---|---|
-| `RESOURCE (PARAM, …) = expr;` | A time resource: a demand to time, read only in the engine's `execute`, as a `def` is. Its body reads every parameter. |
+| `RESOURCE (PARAM, …) = expr;` | A time resource: a demand to time, read only in the engine's `worker`, as a `def` is. Its body reads every parameter. |
 | `CAP cap expr;` | A capacity, which a `pool CAP on DEVICE { … }` declares with its rules. |
 
 ## Items of an engine
@@ -50,7 +52,7 @@ the [IR](../ir.md) and the Lean model see only that.
 | `granule` | `const`, positive | | Prefill chunk alignment; see below. |
 | `state NAME = c` | `const` | | A register; see below. |
 | `scheduler` | statements | as the iteration is planned | Whom the iteration serves, in what order, and when it admits. |
-| `execute` | `expr` | after the batch is formed | Clock time of the iteration. Reads `batch.…`, `running.count`, `waiting.count` and the device's time resources. |
+| `worker { forward (T); }` | `expr` | after the batch is formed | What the worker does with the batch the scheduler formed (vLLM's `SchedulerOutput`): its forward's clock time. Reads `batch.…` and the device's time resources, not `running.…` or `waiting.…`. |
 | `request (…) { … }` | parameters, statements | when the server calls it | What the engine does with one request; see below. |
 
 The values an engine reads, and in which clause, are in
@@ -217,7 +219,7 @@ attempt schedules no token, preempts nobody and admits nobody.
 
 A register may be read in:
 
-- its engine's `tokens cap`, `execute`, keys, schedule and iteration claims;
+- its engine's `tokens cap`, `worker`, keys, schedule and iteration claims;
 - queue keys of pools the engine admits;
 - hold headers whose first pool the engine admits, and its request's `taking`;
 - gauges and `at end` claims.
@@ -292,7 +294,9 @@ engine vllm on gpu {
     admit waiting while (running.preempted == 0) each at most (threshold)
       taking reqs (1), kv (min(known, reused + budget_left(vllm))) reserve (known);
   }
-  execute (c0 + max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
+  worker {
+    forward (c0 + max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
+  }
 }
 pool reqs on vllm { queue fifo; }
 ```
@@ -309,7 +313,9 @@ fn main() {
       decode (2);
     }
     scheduler { advance running; admit waiting while (running.preempted == 0); }
-    execute (1);
+    worker {
+      forward (1);
+    }
   }
   workload {
     arrive batch(2);

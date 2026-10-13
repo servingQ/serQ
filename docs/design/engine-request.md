@@ -26,7 +26,9 @@ blocks to say so (the server's thirteen lines of comment elided):
       advance running each at most (threshold);
       admit waiting while (running.preempted == 0) each at most (threshold);
     }
-    execute (c0 + max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
+    worker {
+      forward (c0 + max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
+    }
   }
   pool kv on gpu { block bs; evict lru; preempt lifo; }
   pool reqs on vllm { queue fifo; }   // the engine admits the waiting, FCFS
@@ -102,7 +104,9 @@ The server calls the engine.
       admit waiting while (running.preempted == 0) each at most (threshold)
         taking reqs (1), kv (min(known, reused + budget_left(vllm))) reserve (known);
     }
-    execute (c0 + max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
+    worker {
+      forward (c0 + max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
+    }
   }
   pool reqs on vllm { queue fifo; }
   …
@@ -118,7 +122,7 @@ the report gives for every turn with no program text
 
 Each clause reads one moment: `request` what one request is and computes,
 `scheduler` what an iteration admits and advances (its `taking` read per
-request at admission), `execute` how long an iteration lasts.
+request at admission), `worker` how long an iteration lasts.
 
 **Step 2. Observations move to the client, and routing to gateway
 entries.** What the client measures follows the turn in the workload's
@@ -335,7 +339,7 @@ the engine (#454's `admits`), the runs stay in the server. It is the
 smallest change and keeps the question "which block?" for everything but
 the sizing. Rejected as the end state; its content is step 1's `taking`.
 
-**The runs in `execute`.** `execute (T)` is read once per iteration, over
+**The runs in `execute`.** `execute (T)` (now `worker { forward (T); }`) is read once per iteration, over
 the batch, with no request (`Step`); `prefill (known - c)` is a token count
 of one request, read when the session reaches it (`Session`), which the
 schedule then splits over iterations. One clause reading two moments is

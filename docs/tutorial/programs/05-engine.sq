@@ -53,7 +53,9 @@ fn main() {
     }
     // an iteration costs whichever is larger: reading the weights and the
     // running requests' KV, or computing the tokens it scheduled
-    execute (max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
+    worker {
+      forward (max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
+    }
   }
   pool reqs on llm { queue fifo; }
 

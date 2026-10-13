@@ -96,7 +96,7 @@ fn another_policy_is_refused_with_its_construct() {
             advance running by (remaining);
             admit waiting while (running.preempted == 0) taking reqs (1), kv (n);
           }
-          execute (1);
+          worker { forward (1); }
         }
         pool reqs on llm { }
         workload { arrive batch(1); init { set n = 8; }
@@ -127,7 +127,7 @@ fn observable_serve_keys_name_the_programmable_scheduler() {
             advance running by (decoding ? 0 : 1, -admission);
             admit waiting while (running.preempted == 0) taking reqs (1), kv (n);
           }
-          execute (1);
+          worker { forward (1); }
         }
         pool reqs on llm { }
         workload { arrive batch(1); init { set n = 8; }
@@ -264,7 +264,7 @@ fn the_newer_constructs_are_refused_and_vllms_schedule_taken() {
           request (n) { prefill (n) growing kv; }
           STATE
           scheduler { SCHEDULE }
-          execute (1);
+          worker { forward (1); }
         }
         pool kv on gpu { block 16; evict lru; preempt lifo; }
         pool reqs on llm { RESERVE }

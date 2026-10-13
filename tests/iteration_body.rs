@@ -102,7 +102,7 @@ fn several_prefills_run_alone_in_one_iteration() {
             decode (2) growing kv;
           }}
           scheduler {{ {schedule} }}
-          execute (1);
+          worker {{ forward (1); }}
         }}
         pool reqs on llm {{ }}
         pool kv on gpu {{ }}
@@ -167,7 +167,7 @@ fn a_gate_on_the_residents_admits_only_into_an_empty_engine() {
             decode (4);
           }
           scheduler { advance running; if (running.count == 0) { admit waiting taking reqs (1); } }
-          execute (1);
+          worker { forward (1); }
         }
         pool reqs on llm { }
         stage gap : delay;
@@ -213,7 +213,7 @@ fn a_body_that_may_schedule_nothing_does_not_link() {
           tokens cap 8;
           request () {{ prefill (2); }}
           scheduler {{ {schedule} }}
-          execute (1);
+          worker {{ forward (1); }}
         }}
         pool reqs on llm {{ }}
         workload {{ arrive batch(1);
@@ -298,7 +298,7 @@ fn the_vllm_body_is_the_procedure_under_keys_and_preemption() {
             advance running{order}{cap};
             admit waiting while (running.preempted == 0){cap} taking reqs (1), kv (1);
           }}
-          execute (1);
+          worker {{ forward (1); }}
         }}
         pool reqs on llm {{ }}
         pool kv on gpu {{ preempt lifo; }}
@@ -391,7 +391,7 @@ fn an_engine_idle_with_work_is_named() {
           tokens cap 8;
           request () { prefill (2); }
           scheduler { advance running; admit waiting while (batch.tokens > 0) taking reqs (1); }
-          execute (1);
+          worker { forward (1); }
         }
         pool reqs on llm { }
         workload { arrive batch(3);
@@ -424,7 +424,7 @@ fn a_guard_that_is_not_a_test_fails_the_run() {
           tokens cap 8;
           request () { prefill (2); }
           scheduler { advance running; admit waiting while (running.count + 2) taking reqs (1); }
-          execute (1);
+          worker { forward (1); }
         }
         pool reqs on llm { }
         workload { arrive batch(1);
@@ -469,7 +469,7 @@ fn a_register_remembers_the_last_iteration() {
             decode (30);
           }}
           {items}
-          execute (1);
+          worker {{ forward (1); }}
         }}
         pool reqs on llm {{ }}
         workload {{ arrive renewal(1);
@@ -534,7 +534,7 @@ fn a_set_in_an_iteration_that_is_none_is_undone() {
             advance running only (decoding);
             admit waiting while (running.count == 0) taking reqs (1);
           }
-          execute (1);
+          worker { forward (1); }
         }
         pool reqs on llm { }
         workload { arrive renewal(1);
@@ -568,13 +568,13 @@ fn a_register_is_the_stage_s_own() {
             r#"
         device gpu {{ }}
         device tpu {{ }}
-        engine llm on gpu {{ reqs cap 8; tokens cap 8; request () {{ prefill (2); }} {items} execute (1); }}
+        engine llm on gpu {{ reqs cap 8; tokens cap 8; request () {{ prefill (2); }} {items} worker {{ forward (1); }} }}
         pool reqs on llm {{ }}
         engine other on tpu {{
           tokens cap 8;
           state r = 0;
           scheduler {{ advance running; admit waiting; }}
-          execute (1);
+          worker {{ forward (1); }}
         }}
         workload {{ arrive batch(1);
           session {{ turn; end;
@@ -662,7 +662,7 @@ fn a_register_is_read_where_its_stage_orders_the_read() {
           state go = 0;
           request () {{ prefill (2); }}
           scheduler {{ advance running; admit waiting{taking}; set go = 1; }}
-          execute (1);
+          worker {{ forward (1); }}
         }}
         pool reqs on b {{ }}
         pool other on gpu {{ }}
@@ -703,7 +703,7 @@ fn a_register_is_read_where_its_stage_orders_the_read() {
             advance running only (go == 1);
             admit waiting only (go == 1) while (running.preempted == 0);
           }
-          execute (1);
+          worker { forward (1); }
         }",
             base,
             call,
@@ -720,7 +720,7 @@ fn a_register_is_read_where_its_stage_orders_the_read() {
           tokens cap 8;
           state q = 0;
           scheduler { advance running; admit waiting; }
-          execute (1);
+          worker { forward (1); }
         }";
     assert!(ok(arr, base, call).unwrap_err().contains("engine family"));
     let given = "claim c given (go == 0): at end (1);";
@@ -744,7 +744,7 @@ fn a_try_that_admitted_keeps_its_sets() {
             set k = k + 1;
             admit waiting only (decoding) taking reqs (1);
           }
-          execute (1);
+          worker { forward (1); }
         }
         pool reqs on llm { }
         workload { arrive batch(2);
@@ -789,7 +789,7 @@ fn a_reserve_on_a_register_waits_for_the_iteration() {
             advance running;
             admit waiting taking reqs (1), kv (100) reserve (100 + r);
           }
-          execute (0.001 + batch.tokens * 1e-5);
+          worker { forward (0.001 + batch.tokens * 1e-5); }
         }
         pool reqs on llm { }
         pool kv on gpu { evict lru; }
@@ -829,7 +829,7 @@ fn a_schedule_else_if_is_the_nested_if() {
           tokens cap 8;
           request () {{ prefill (2); }}
           scheduler {{ {schedule} }}
-          execute (1);
+          worker {{ forward (1); }}
         }}
         pool reqs on llm {{ }}
         workload {{ arrive batch(1);

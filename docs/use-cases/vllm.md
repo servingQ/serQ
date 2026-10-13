@@ -153,7 +153,7 @@ A step's time is the larger of its compute and its memory traffic, plus a
 fixed overhead. It is the engine block's last line:
 
 ```serq
---8<-- "examples/multi-turn/vllm.sq:execute"
+--8<-- "examples/multi-turn/vllm.sq:worker"
 ```
 
 The waiting queue the engine admits from is a pool on the engine, served in

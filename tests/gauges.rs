@@ -382,7 +382,7 @@ fn a_gauge_does_not_plan_an_iteration() {
           tokens cap ~uniform(1, 2);
           request () { prefill (1); }
           scheduler { advance running; admit waiting while (running.preempted == 0); }
-          execute (1);
+          worker { forward (1); }
         }
         workload { session { turn; end;
         } }
@@ -405,12 +405,12 @@ fn a_budget_does_not_read_budget_left() {
           tokens cap {budget};
           request () {{ prefill (1); }}
           scheduler {{ advance running; admit waiting while (running.preempted == 0); }}
-          execute (1);
+          worker {{ forward (1); }}
         }}
         engine f on tpu {{
           tokens cap 64;
           scheduler {{ advance running; admit waiting while (running.preempted == 0); }}
-          execute (1);
+          worker {{ forward (1); }}
         }}
         workload {{ session {{ turn; end;
         }} }}
@@ -434,7 +434,7 @@ fn a_budget_does_not_read_budget_left() {
             advance running each at most (c);
             admit waiting while (running.preempted == 0) each at most (c);
           }
-          execute (1);
+          worker { forward (1); }
         }
         workload { session { turn; end;
         } }
@@ -452,7 +452,7 @@ fn a_budget_does_not_read_budget_left() {
           tokens cap 8;
           request () { prefill (4); }
           scheduler { advance running by (budget_left(e)); admit waiting while (running.preempted == 0); }
-          execute (1 + 0 * budget_left(e));
+          worker { forward (1 + 0 * budget_left(e)); }
         }
         pool kv on gpu { }
         workload { arrive batch(2);

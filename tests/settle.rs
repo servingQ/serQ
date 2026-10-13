@@ -136,7 +136,7 @@ fn an_iteration_with_tokens_and_zero_cost_is_an_error() {
           tokens cap 512;
           request () { prefill (100) growing kv; }
           scheduler { advance running; admit waiting while (running.preempted == 0) taking kv (100); }
-          execute (0);
+          worker { forward (0); }
         }
         pool kv on gpu { block 16; evict lru; }
         workload { arrive batch(1);
@@ -169,7 +169,7 @@ fn a_preempt_only_step_may_cost_zero() {
             advance running;
             admit waiting while (running.preempted == 0) taking reqs (1), kv (100) reserve (100);
           }
-          execute (batch.tokens);
+          worker { forward (batch.tokens); }
         }
         pool reqs on llm { }
         pool kv on gpu { block 16; evict lru; preempt lifo; }
@@ -209,7 +209,7 @@ fn the_marks_of_a_session_turn_do_not_depend_on_the_machine() {
             advance running;
             admit waiting while (running.preempted == 0) taking reqs (1), kv (prompt);
           }}
-          execute (1e-4 + 1e-5 * batch.tokens);
+          worker {{ forward (1e-4 + 1e-5 * batch.tokens); }}
         }}
         pool kv on gpu {{ block 16; evict lru; preempt lifo; }}
         pool reqs on llm {{ }}
@@ -293,7 +293,7 @@ fn the_machine_still_matters() {
           tokens cap B;
           request (n) {{ prefill (n) growing kv; }}
           scheduler {{ advance running; admit waiting while (running.preempted == 0) taking kv (n); }}
-          execute (1e-4 + 1e-5 * batch.tokens);
+          worker {{ forward (1e-4 + 1e-5 * batch.tokens); }}
         }}
         pool kv on gpu {{ block 16; evict lru; }}
         workload {{ arrive poisson(0.5); turn {{ set n = ~uniform(1000, 3000); }}

@@ -66,7 +66,9 @@ fn main() {
         taking reqs (1), kv (hit + min(known - hit, budget_left(vllm))) reserve (known)
         reuse (max(hitmax, own));
     }
-    execute (c_it + d * batch.decoding + e * batch.kv_decode + a * batch.prefilled + b * batch.attention);
+    worker {
+      forward (c_it + d * batch.decoding + e * batch.kv_decode + a * batch.prefilled + b * batch.attention);
+    }
   }
   pool kv on gpu { block bs; evict lru; preempt lifo; }
   pool reqs on vllm { queue fifo; }  // the scheduler admits (scheduler.py:868)

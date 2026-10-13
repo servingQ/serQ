@@ -58,7 +58,9 @@ engine llm on gpu {
     advance running by (remaining) each at most (C);   // admission (default) | by (keys…) | decode first; only (p)
     admit waiting while (running.preempted == 0) each at most (C);
   }                               // or: exclusive prefill; admit waiting …
-  execute (<expr>);               // clock time per iteration, in batch.tokens, … (1: the step clock)
+  worker {
+    forward (<expr>);               // clock time per iteration, in batch.tokens, … (1: the step clock)
+  }
 }
 pool kv on gpu { … }              // the engine's memory, admitted as soon as it fits
 pool reqs on llm { … }            // its slots, admitted by the engine (`on llm.gpu` for memory it admits)

@@ -24,7 +24,7 @@ fn program_with(request: &str, take: &str, server: &str) -> String {
         "device gpu {{ kv cap 1000; }}
         engine E on gpu {{ tokens cap inf; {request}
           scheduler {{ advance running; admit waiting while (running.preempted == 0) taking kv ({take}); }}
-          execute (1); }}
+          worker {{ forward (1); }} }}
         pool kv on gpu {{ block 16; }}
         workload {{ arrive batch(1); hidden o;
           init {{ set prompt = 32; set o = 4; }}
@@ -151,7 +151,7 @@ fn a_top_level_session_cannot_bypass_the_server_check() {
     let src = "device gpu { kv cap 1000; }
                engine E on gpu { tokens cap inf; request (p) { prefill (p) growing kv; }
                  scheduler { advance running; admit waiting while (running.preempted == 0) taking kv (p); }
-                 execute (1); }
+                 worker { forward (1); } }
                pool kv on gpu { block 16; }
                workload { arrive batch(1); hidden o; init { set prompt = 32; set o = 4; } }
                session { if (o > 2) { E (prompt); } else { } end; }
@@ -334,7 +334,7 @@ fn a_stage_passed_bare_does_not_reveal_an_attribute_of_its_name() {
         device gpu {{ kv cap 1000; }}
         engine E on gpu {{ tokens cap inf; request (p, w) {{ prefill (w) growing kv; }}
           scheduler {{ advance running; admit waiting while (running.preempted == 0) taking kv (p); }}
-          execute (1); }}
+          worker {{ forward (1); }} }}
         pool kv on gpu {{ block 16; }}
         workload {{ arrive batch(1); hidden {attribute};
           init {{ set prompt = 32; set {attribute} = 4; }}

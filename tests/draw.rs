@@ -192,7 +192,7 @@ fn growing_is_found_through_nested_holds() {
         queue llm : prefill {
           device gpu { kv cap 100000; }
           pool kv on gpu { } pool reqs { cap 8; } pool gate { cap 4; }
-          engine on gpu { tokens cap 512; scheduler { advance running; admit waiting while (running.preempted == 0); } execute (1e-3); }
+          engine on gpu { tokens cap 512; scheduler { advance running; admit waiting while (running.preempted == 0); } worker { forward (1e-3); } }
           prefill (n) {
             hold kv (cost(kv, 32)), reqs (cost(reqs, 1)) {
               hold gate (cost(gate, 1)) { run llm prefill (cost(llm, n)) growing kv; }

@@ -67,7 +67,7 @@ predicate read by `only` in both halves of the schedule:
 --8<-- "examples/single-turn/fastertransformer.sq:engine"
 ```
 
-`only` says which residents an iteration serves. Its predicate is read for every resident, from the current resident totals (`running.decoding`) and the resident's own `decoding`. While any request decodes, only decodes are served. A request that is still prefilling stays resident and keeps its slot of `reqs`, but gets no token. With nothing decoding, only prefills are served. The device's `compute` and the engine's `execute` together are $t_b$.
+`only` says which residents an iteration serves. Its predicate is read for every resident, from the current resident totals (`running.decoding`) and the resident's own `decoding`. While any request decodes, only decodes are served. A request that is still prefilling stays resident and keeps its slot of `reqs`, but gets no token. With nothing decoding, only prefills are served. The device's `compute` and the engine's `worker` together are $t_b$.
 
 ### The workload
 

@@ -1,5 +1,5 @@
 //! Engines on devices (`docs/design/engine-device.md`): `device`, `engine …
-//! on`, `pool … on`, an engine's `scheduler` and `execute`. All of it is
+//! on`, `pool … on`, an engine's `scheduler` and `worker`. All of it is
 //! parse-time sugar: an engine is a step stage, a pool on a device or an
 //! engine is a pool, and the links between them (`memory`, `admit_via`,
 //! `waiting.count`) are written once every declaration is read.
@@ -12,7 +12,7 @@ pub(super) struct DeviceDecl {
     pub count: usize,
     pub array: bool,
     /// Time resources: a demand to time, expanded as a `def` is, and only
-    /// inside an engine's `execute`.
+    /// inside an engine's `worker`.
     pub times: Vec<Def>,
     /// Capacities, each declared as a pool with `pool NAME on DEVICE`.
     pub caps: Vec<Capacity>,
@@ -82,42 +82,32 @@ type Lets = Vec<(String, Expr)>;
 /// resident's turn (`only`, `by`) and in the schedule's statements.
 const AS_THEY_STAND: &[&str] = &["tokens cap", "each at most", "only", "by", "scheduler"];
 
-/// Those, and `execute`, which reads the count of the residents too.
-const RESIDENTS: &[&str] = &[
-    "tokens cap",
-    "each at most",
-    "only",
-    "by",
-    "scheduler",
-    "execute",
-];
-
 /// An engine's values: the name it reads one by, the kernel's context
 /// variable, and the clauses that read it. `running` is the residents as
 /// they stand, `waiting` the queues, `batch` the iteration's batch: in a
 /// schedule's statements (`scheduler`), what it has formed so far; in
-/// `execute`, what it formed. The kernel reads `decoders` and `kv_decode` as
+/// `worker`, what it formed. The kernel reads `decoders` and `kv_decode` as
 /// the residents' before the batch is formed and as the batch's in `cost`
 /// (#416), so the engine names them twice. Within a schedule, `only`, `by`
 /// and `each at most` are read at their own moments, not the statements'.
 pub const ENGINE_VALUES: [(&str, &str, &[&str]); 13] = [
-    ("running.count", "residents", RESIDENTS),
+    ("running.count", "residents", AS_THEY_STAND),
     ("running.decoding", "decoders", AS_THEY_STAND),
     ("running.kv_decode", "kv_decode", AS_THEY_STAND),
     ("running.kv_prefill", "kv_prefill", AS_THEY_STAND),
     ("running.preempted", "preempted", &["scheduler"]),
-    ("waiting.count", WAITING_COUNT, RESIDENTS),
+    ("waiting.count", WAITING_COUNT, AS_THEY_STAND),
     ("waiting.admitted", "admitted", &["scheduler"]),
-    ("batch.tokens", "tokens", &["scheduler", "execute"]),
-    ("batch.prefilled", "prefilled", &["scheduler", "execute"]),
-    ("batch.decoding", "decoders", &["execute"]),
-    ("batch.kv_decode", "kv_decode", &["execute"]),
-    ("batch.kv_prefill", "kv_prefill", &["execute"]),
-    ("batch.attention", "attention", &["execute"]),
+    ("batch.tokens", "tokens", &["scheduler", "worker"]),
+    ("batch.prefilled", "prefilled", &["scheduler", "worker"]),
+    ("batch.decoding", "decoders", &["worker"]),
+    ("batch.kv_decode", "kv_decode", &["worker"]),
+    ("batch.kv_prefill", "kv_prefill", &["worker"]),
+    ("batch.attention", "attention", &["worker"]),
 ];
 
 /// The name an engine reads the kernel's context variable `var` by in
-/// `clause` (`tokens cap`, `scheduler`, `execute`), if it reads it there: a
+/// `clause` (`tokens cap`, `scheduler`, `worker`), if it reads it there: a
 /// view that draws a step stage in an engine's words names it so.
 pub fn engine_name(var: &str, clause: &str) -> Option<&'static str> {
     ENGINE_VALUES
@@ -134,14 +124,24 @@ fn not_read_in(value: &str, clause: &str) -> String {
             "`{value}` is what the iteration's schedule did, read in its `if`, `while` and \
              `set`, not in `{clause}`"
         )
-    } else if list == "running" {
+    } else if clause == "worker" {
+        let batch = if list == "running" && field != "count" {
+            format!(", and the batch's is `batch.{field}`")
+        } else {
+            String::new()
+        };
         format!(
-            "`execute` times the batch: `{value}` counts the residents, in the batch or not, \
-             and the batch's is `batch.{field}`"
+            "the worker reads what the scheduler scheduled, `batch.…`: `{value}` counts the \
+             {}, in the batch or not{batch}",
+            if list == "running" {
+                "residents"
+            } else {
+                "queues"
+            }
         )
     } else if clause == "scheduler" {
         format!(
-            "`{value}` is the formed batch's, read in `execute`; a schedule's statements read \
+            "`{value}` is the formed batch's, read in `worker`; a schedule's statements read \
              the batch so far as `batch.tokens` and `batch.prefilled`, and the residents' as \
              `running.…`"
         )
@@ -153,7 +153,7 @@ fn not_read_in(value: &str, clause: &str) -> String {
         };
         format!(
             "`{clause}` is read before the batch is formed, so it reads no `batch.…`: `{value}` \
-             is read in `execute`{so_far}"
+             is read in `worker`{so_far}"
         )
     }
 }
@@ -228,7 +228,7 @@ impl Parser {
     }
 
     /// `(PARAM, …) = expr ;` of a time resource named `name`: a definition
-    /// an engine's `execute` expands.
+    /// an engine's `worker` expands.
     fn time_resource(&mut self, at: usize, name: String) -> PResult<Def> {
         self.expect(&Tok::LParen)?;
         let mut params: Vec<String> = vec![];
@@ -289,7 +289,7 @@ impl Parser {
     }
 
     /// Whether `name` is a time resource of some device: read outside an
-    /// engine's `execute`, where it is not defined, it is an error.
+    /// engine's `worker`, where it is not defined, it is an error.
     pub(super) fn is_time_resource(&self, name: &str) -> bool {
         self.devices
             .iter()
@@ -437,25 +437,17 @@ impl Parser {
                 }
                 schedule = true;
                 self.schedule(&name, &mut s)?;
-            } else if self.eat_kw("execute") {
+            } else if self.eat_kw("worker") {
                 if execute {
-                    return self.err_at(k_at, "`execute` twice: a batch takes one time");
+                    return self.err_at(k_at, "`worker` twice: an engine has one worker");
                 }
                 execute = true;
-                self.expect(&Tok::LParen)?;
-                // the device's time resources are definitions here, and only here
-                let mark = self.defs.len();
-                let times: Vec<Def> = self.devices[dev].times.clone();
-                self.defs.extend(times);
-                let e = self.engine_expr("execute", |p| p.expr());
-                self.defs.truncate(mark);
-                s.cost = e?;
-                self.expect(&Tok::RParen)?;
-                self.expect(&Tok::Semi)?;
+                s.cost = self.worker(dev)?;
             } else if let Some(now) = [
                 ("budget", "`tokens cap B;`"),
                 ("chunk", "`each at most (e)` on the schedule's statements"),
-                ("cost", "`execute (T);`"),
+                ("cost", "`worker { forward (T); }`"),
+                ("execute", "`worker { forward (T); }`"),
                 (
                     "memory",
                     "nothing: the engine's KV is the pool on its device",
@@ -497,7 +489,7 @@ impl Parser {
                 if !self.eat_kw("cap") {
                     return self.err(format!(
                         "an engine holds capacities (`{r} cap expr;`), `tokens cap`, `granule`, \
-                         `state`, `scheduler` and `execute`; found {}",
+                         `state`, `scheduler` and `worker`; found {}",
                         self.peek()
                     ));
                 }
@@ -520,7 +512,7 @@ impl Parser {
                 "`tokens cap B;`: the tokens one iteration computes (`tokens cap inf;` for none)",
             ),
             (schedule, "`scheduler { … }`: what each iteration does"),
-            (execute, "`execute (T);`: how long a batch takes"),
+            (execute, "`worker { forward (T); }`: how long a batch takes"),
         ] {
             if !has {
                 return self.err_at(at, format!("engine `{name}` needs {what}"));
@@ -549,6 +541,41 @@ impl Parser {
             kind: StageKind::Step(Box::new(s)),
         });
         self.engine_request(&name, request, &takeable, registers)
+    }
+
+    /// `{ forward (T); }` of an engine on `devices[dev]`: what the worker does
+    /// with the batch the scheduler formed, here its forward's time `T`.
+    fn worker(&mut self, dev: usize) -> PResult<Expr> {
+        let at = self.pos;
+        self.expect(&Tok::LBrace)?;
+        let mut forward = None;
+        while *self.peek() != Tok::RBrace {
+            let k_at = self.pos;
+            if !self.eat_kw("forward") {
+                return self.err(format!(
+                    "a worker takes `forward (T);`, the batch's time; found {}",
+                    self.peek()
+                ));
+            }
+            if forward.is_some() {
+                return self.err_at(k_at, "`forward` twice: a batch takes one forward");
+            }
+            self.expect(&Tok::LParen)?;
+            // the device's time resources are definitions here, and only here
+            let mark = self.defs.len();
+            let times: Vec<Def> = self.devices[dev].times.clone();
+            self.defs.extend(times);
+            let e = self.engine_expr("worker", |p| p.expr());
+            self.defs.truncate(mark);
+            forward = Some(e?);
+            self.expect(&Tok::RParen)?;
+            self.expect(&Tok::Semi)?;
+        }
+        self.expect(&Tok::RBrace)?;
+        match forward {
+            Some(e) => Ok(e),
+            None => self.err_at(at, "a worker needs `forward (T);`: how long a batch takes"),
+        }
     }
 
     /// `{ let …; stmt* }` of engine `engine`'s `scheduler`, written into `s`.
@@ -871,7 +898,7 @@ impl Parser {
             return self.err_at(
                 at,
                 format!(
-                    "`{list}.…` is a value of an engine, read in its `tokens cap`, `execute` and \
+                    "`{list}.…` is a value of an engine, read in its `tokens cap`, `worker` and \
                      `scheduler`"
                 ),
             );

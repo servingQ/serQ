@@ -37,7 +37,9 @@ engine llm on gpu {
     admit waiting while (running.preempted == 0)
       taking reqs (1), kv (min(prompt, reused + budget_left(llm))) reserve (prompt);
   }
-  execute (max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
+  worker {
+    forward (max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
+  }
 }
 pool reqs on llm { queue fifo; }
 ```
@@ -53,7 +55,7 @@ requests waiting for one, served `fifo`.
 
 `scheduler` is what each iteration does: give the running requests their
 tokens, then admit waiting ones while nothing was preempted. `taking` says
-what an admission takes of a request, below. `execute` is how long the
+what an admission takes of a request, below. `worker` is how long the
 iteration takes, as an expression in what it scheduled:
 
 | Value | Meaning |

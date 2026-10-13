@@ -27,10 +27,12 @@ fn main() {
       admit waiting only (in_mode()) while (running.preempted == 0) each at most (bcol);
     }
     // --8<-- [end:engine]
-    // --8<-- [start:execute]
-    execute (tlin * ceil(batch.tokens / bcol) + tnl * batch.tokens);
+    // --8<-- [start:worker]
+    worker {
+      forward (tlin * ceil(batch.tokens / bcol) + tnl * batch.tokens);
+    }
   }
-  // --8<-- [end:execute]
+  // --8<-- [end:worker]
 
   // --8<-- [start:workload]
   workload {

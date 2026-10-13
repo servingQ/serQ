@@ -27,7 +27,7 @@ const STUCK: &str = r#"
             advance running;
             admit waiting while (running.preempted == 0) taking reqs (1), kv (100) reserve (100);
           }
-          execute (1);
+          worker { forward (1); }
         }
         pool reqs on llm { }
         pool kv on gpu { block 16; evict lru; preempt lifo; }

@@ -59,7 +59,7 @@ cost, the next section:
 --8<-- "examples/papers/bari_rad.sq:engine"
 ```
 
-The device is empty: the paper's cost is written whole in `execute`, and
+The device is empty: the paper's cost is written whole in `worker`, and
 no memory binds. A prefill completes only in Prefill Mode, which runs only
 while fewer than $b_{col}$ requests decode, so $\lvert D\rvert$ never
 exceeds $b_{col}$. That is Assumption 4's $b_{col}$ active requests, without
@@ -71,7 +71,7 @@ Equation (7) without its attention terms is a pass over each output tile
 plus the non-linear operations per token. It closes the engine block:
 
 ```serq
---8<-- "examples/papers/bari_rad.sq:execute"
+--8<-- "examples/papers/bari_rad.sq:worker"
 ```
 
 ### The workload

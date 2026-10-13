@@ -20,7 +20,7 @@ an `observe`, a `stage`, a `pool`, a `device`, an `engine`, a `queue`, a
 | `Evict` | an eviction key; a `spill` clause | for one cache entry |
 | `Ps` | a `ps` stage's capacity | for the stage's jobs |
 | `Budget` | an engine's `tokens cap` and `each at most` | before the iteration, from the running requests |
-| `Step` | an engine's `execute` | after the iteration is scheduled |
+| `Step` | an engine's `worker` | after the iteration is scheduled |
 | `Serve` | an engine's `by` keys and `only` predicates | for one running request |
 | `Victim` | a pool's `preempt by` keys | for one candidate victim, when a growth does not fit |
 | `Plan` | an engine's `scheduler`: an `if` guard, an `admit waiting`'s `while`, a register assignment | as the iteration is planned, from the running requests and what it has done so far |
@@ -82,7 +82,9 @@ fn main() {
     tokens cap 8;
     request () { prefill (8); }
     scheduler { advance running by (remaining); admit waiting while (running.preempted == 0); }
-    execute (1 + 0.1 * batch.tokens);
+    worker {
+      forward (1 + 0.1 * batch.tokens);
+    }
   }
   workload {
     arrive batch(2);
