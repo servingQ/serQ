@@ -16,20 +16,79 @@ The paper models a GPU's batch time from how matrix multiplications are tiled. A
 
 ## The system in serQ
 
+`examples/papers/bari_rad.sq` is one inference node running RAD with the
+cycle parameter $N$ taken infinite. The sections below build it a part at a
+time: what the paper assumes, what the program needs for it, and how serQ
+writes it.
+
+### Settings
+
+The paper's tiles are $b_{col} = b_{row} = b_{red} = 128$, so
+$b_{lcm} = 128$, and one constant stands for all four. Time is in µs:
+
 ```serq title="examples/papers/bari_rad.sq"
---8<-- "examples/papers/bari_rad.sq"
+--8<-- "examples/papers/bari_rad.sq:settings"
 ```
 
-| Paper | serQ |
-|---|---|
-| tiles $b_{col} = b_{row} = b_{red} = b_{lcm} = 128$ | `let bcol = 128;` |
-| batch time (7) without attention | `execute (tlin * ceil(batch.tokens / bcol) + tnl * batch.tokens);` (µs) |
-| Prefill Mode: one chunk of $b_{lcm}$ of the oldest prefill | `tokens cap bcol;` and `each at most (bcol)`, with prefills served in admission order |
-| Decode Mode iff $\lvert D\rvert = b_{col}$ or $P = \emptyset$ | `def in_mode() { running.decoding >= bcol \|\| running.decoding == running.count ? decoding : !decoding }`, read by `advance running only (in_mode())` and `admit waiting only (in_mode())` |
-| Assumption 3 | `set vp = bcol * floor(~uniform(1, vpmax + 1));` |
-| $N = \infty$ | no cycle counter |
+| serQ | Paper | Meaning |
+|---|---|---|
+| `bcol` | $b_{col} = b_{row} = b_{red} = b_{lcm}$ | the tile, 128 tokens |
+| `tlin` | $1/c_{Lin}$ | µs per pass over an output tile |
+| `tnl` | $1/c_{nLin}$ | µs per token of non-linear operations |
+| `vpmax` | Assumption 3 | prompts are 1 to `vpmax` tiles |
+| `vdmax` | — | the largest output |
+| `rate` | — | requests per µs (0.00002 is 20 per second) |
 
-A prefill completes only in Prefill Mode, which runs only while fewer than $b_{col}$ requests decode, so $\lvert D\rvert$ never exceeds $b_{col}$. That is Assumption 4's bound on the active requests, without a pool.
+### RAD's two modes
+
+RAD is in Decode Mode when $b_{col}$ requests decode ($\lvert D\rvert =
+b_{col}$) or none is left to prefill ($P$ empty), and then decodes every one
+of them. Otherwise it is in Prefill Mode and runs a chunk of $b_{lcm}$
+tokens of the oldest prefill.
+
+The program needs a rule that picks, each iteration, which residents are
+served. In serQ that rule is a predicate, `in_mode()`, read by both halves
+of the schedule through `only`: in Decode Mode it selects the decoding
+residents, otherwise the prefilling ones. `tokens cap bcol` and `each at
+most (bcol)` make a Prefill Mode batch one chunk of $b_{lcm}$, and prefills
+are served in admission order, so the chunk is the oldest prefill's:
+
+```serq
+--8<-- "examples/papers/bari_rad.sq:engine"
+```
+
+The device is empty: the paper's cost is written whole in `execute`, and
+no memory binds. A prefill completes only in Prefill Mode, which runs only
+while fewer than $b_{col}$ requests decode, so $\lvert D\rvert$ never
+exceeds $b_{col}$. That is Assumption 4's $b_{col}$ active requests, without
+a pool.
+
+### The batch time
+
+Equation (7) without its attention terms is a pass over each output tile
+plus the non-linear operations per token:
+
+```serq
+--8<-- "examples/papers/bari_rad.sq:execute"
+```
+
+### The workload
+
+Requests arrive as a Poisson process. Assumption 3 makes every prompt a
+whole number of tiles, from 1 to `vpmax`; outputs are exponential, capped
+at `vdmax`. `response` is measured from arrival to the last token:
+
+```serq
+--8<-- "examples/papers/bari_rad.sq:workload"
+```
+
+$N = \infty$ needs nothing: the program has no cycle counter.
+
+??? example "The whole program"
+
+    ```serq title="examples/papers/bari_rad.sq"
+    --8<-- "examples/papers/bari_rad.sq"
+    ```
 
 ## The key propositions
 
@@ -58,13 +117,16 @@ $t_{nl}=5$ µs per token, omitting attention costs.
 
 ## The propositions in serQ
 
-```serq
-// Theorem 1
-claim token_rate: every iteration of E (served * (tlin + tnl * bcol) <= bcol * now);
+A claim reads an iteration in the kernel's words (#437): `tokens` is
+`batch.tokens`, `decoders` is `running.decoding`, and `residents` is
+`running.count`. Theorem 1 says that under any scheduler a node completes
+at most one token per `tlin / bcol + tnl` µs, so a load above it diverges.
+Optimal GeMM tiling (§4.2) says that with prompts a multiple of $b_{lcm}$
+(Assumption 3), every batch fills its tile unless every request decodes and
+fewer than $b_{col}$ of them do:
 
-// Optimal GeMM tiling, under Assumption 3
-claim optimal_tiling given (vp == bcol * floor(vp / bcol)):
-  every iteration of E (tokens == bcol || decoders == residents);
+```serq
+--8<-- "examples/papers/bari_rad.sq:claims"
 ```
 
 `given` restricts the claim to workloads whose every request satisfies Assumption 3. The drawn prompt lengths are otherwise any natural numbers in the Lean statement. `decoders == residents` says no resident was left to prefill.

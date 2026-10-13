@@ -1,17 +1,13 @@
-// Executable approximation: one prefill or a decode-only batch.
-// PP caps, remote-KV admission and sub-block copying are not modeled.
-// The native RBLNScheduler keeps vLLM's prefix cache: a waiting request
-// looks up its hit and the step's blocks are cached once it is final, and a
-// failed allocation preempts the last running request under FCFS
-// (docs/use-cases/rbln.md links the lines at tag v0.11.3a21).
+// vllm-rbln's RBLNScheduler (v0.11.3a21) on one NPU, approximated.
+// docs/use-cases/rbln.md explains it a part at a time.
 fn main() {
+  // --8<-- [start:engine]
   device npu { kv cap 8192; }
   engine llm on npu {
     reqs cap 4;
     tokens cap 256;
-    // What the RBLN scheduler does with one request, as vLLM does: prefill
-    // what the cache does not hold and decode. A preempted request keeps
-    // the tokens it generated (`kept`) and prefills them again.
+    // --8<-- [end:engine]
+    // --8<-- [start:request]
     request (prompt, output) {
       set kept = prompt;
       at admission {
@@ -25,17 +21,21 @@ fn main() {
       decode (output - (known - prompt)) growing kv;
       cache (prompt + output);
     }
+    // --8<-- [end:request]
+    // --8<-- [start:schedule]
     schedule {
       exclusive prefill each at most (128);
-      // the reused prefix plus a chunk of at most 128, if the whole
-      // sequence fits
       admit waiting while (running.preempted == 0) each at most (128)
         taking reqs (1), kv (min(known, reused + min(128, left))) reserve (known);
     }
     execute (0.002 + 0.00001 * batch.tokens);
   }
+  // --8<-- [end:schedule]
+  // --8<-- [start:pools]
   pool kv on npu { block 16; evict lru; preempt lifo; }
   pool reqs on llm { queue fifo; }
+  // --8<-- [end:pools]
+  // --8<-- [start:workload]
   workload {
     arrive batch(6);
     init { set prompt = 256; set out = 16; }
@@ -43,4 +43,5 @@ fn main() {
   server {
     llm (prompt, out);
   }
+  // --8<-- [end:workload]
 }

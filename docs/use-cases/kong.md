@@ -17,8 +17,62 @@ The model of §3:
 
 ## The system in serQ
 
+`examples/papers/kong_svf.sq` is the burst case of Theorem 3.2. The sections
+below build it a part at a time: what the paper's model says, what the
+program needs for it, and how serQ writes it. Time is in steps.
+
+### Settings
+
+The paper's instance is $N$ requests, memory $M$ in tokens, and a bound $P$
+on the largest peak $s_i + o_i$, so that $\alpha = P/M$:
+
 ```serq title="examples/papers/kong_svf.sq"
---8<-- "examples/papers/kong_svf.sq"
+--8<-- "examples/papers/kong_svf.sq:settings"
+```
+
+### Burst arrivals
+
+For Theorem 3.2 all $N$ requests arrive at once, each with its own prompt
+length $s_i$ and output length $o_i$:
+
+```serq
+--8<-- "examples/papers/kong_svf.sq:workload"
+```
+
+### Memory and Smallest Volume First
+
+The GPU has memory $M$, and SVF admits the waiting request of least volume
+$\mathrm{vol}_i = s_i o_i + (o_i^2 + o_i)/2$, ties in arrival order. In serQ
+the memory is a pool with a capacity, and the policy is that pool's queue
+key:
+
+```serq
+--8<-- "examples/papers/kong_svf.sq:memory"
+```
+
+The pool is not on the device: the paper's memory is held, not read by a
+step, whose cost is 1.
+
+### One decode token per step
+
+Every active request decodes one token per step, so a step costs one time
+unit and its token budget never binds. Admission waits for nothing but
+memory, and nothing is preempted:
+
+```serq
+--8<-- "examples/papers/kong_svf.sq:engine"
+```
+
+### A request holds its peak
+
+A request is admitted only when its peak $s_i + o_i$ fits next to the active
+peaks, so nothing is ever preempted. The server holds that peak around the
+decode and records the quantities the theorem is about: $o_i$, the volume,
+and the latency, which is the time of completion since every request
+arrived at 0:
+
+```serq
+--8<-- "examples/papers/kong_svf.sq:server"
 ```
 
 | Paper | serQ |
@@ -32,6 +86,12 @@ The model of §3:
 | $\alpha = P/M$ | `let P = 2500;` and `given (s + o <= P ...)` |
 
 The program admits a request when its peak fits next to the active requests' *peaks*. The paper's forward-looking check admits it when the active requests' future memory leaves room for its peak, which never refuses more. The proof of Theorem 3.2 uses one fact about admission: while request $j$ waits, the active peaks exceed $(1-\alpha)M$. Both rules give it. With the peak held from admission, the memory the program reports is the peaks' sum, not the trapezoid's.
+
+??? example "The whole program"
+
+    ```serq title="examples/papers/kong_svf.sq"
+    --8<-- "examples/papers/kong_svf.sq"
+    ```
 
 ## The key propositions
 
@@ -74,11 +134,15 @@ explains how they compose.
 
 ## The propositions in serQ
 
-The first is a claim of the program, about its own runs:
+The first is a claim of the program, about its own runs. It is Lemma A.2
+summed over the requests: every step a request waits, the active peaks
+exceed $(1-\alpha)M$, and the requests ahead of it in volume order hold their
+peak $o_i$ steps, with $p_i o_i \le 2\,\mathrm{vol}_i$. With Proposition 3.1
+($\mathrm{OPT} \ge$ `prefix_total(vol) / M`, `examples/papers/Kong.lean`) it
+gives Theorem 3.2.
 
 ```serq
-claim queueing_bound given (s + o <= P && o >= 1):
-  at end ((M - P) * (total(response) - total(output_tokens)) <= 2 * (prefix_total(vol) - total(vol)));
+--8<-- "examples/papers/kong_svf.sq:claim"
 ```
 
 `total(response) - total(output_tokens)` is $\sum_j W_j$. Every request arrives at 0, so its latency is its waiting time plus its $o_j$ steps. `prefix_total(vol)` is $\sum_k \sum_{i \le k} \mathrm{vol}_{(i)}$, the volumes sorted ascending, and `prefix_total(vol) - total(vol)` is $\sum_j \sum_{i \prec j} \mathrm{vol}_i$. `given` is the paper's hypothesis $p_i \le \alpha M$, with $o \ge 1$. The second and third propositions are about OPT, a schedule no program runs, so they are Lean theorems that take the claim as their premise.

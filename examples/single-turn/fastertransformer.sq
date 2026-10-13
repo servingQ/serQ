@@ -1,27 +1,26 @@
-// FasterTransformer's scheduler as Dai, Deng, Li, Peng model it (arXiv
-// 2504.07347 §4): decode first, no mixed batching. While a request decodes,
-// an iteration batches only decodes and the prefills wait; with none
-// decoding, it batches only prefills. The deployment is the paper's basic
-// LLM queueing model (§3.1) at the operating point C of §6.2: CodeLlama-34B
-// TP1, t_b = 11.28 + 35.47 ceil(b/128) ms, k_max = 100, one request every
-// 467.5 ms with 290 prefill and 990 decode tokens.
+// FasterTransformer's scheduler as Dai et al. model it (arXiv 2504.07347 §4).
+// docs/use-cases/fastertransformer.md explains it a part at a time.
 use "std/args";
 
-let kmax = 100;          // batch size limit k_max (§6)
-let c = 11.28e-3;        // s
-let a = 35.47e-3;        // s per step of b0 tokens
+// --8<-- [start:settings]
+let kmax = 100;
+let c = 11.28e-3;
+let a = 35.47e-3;
 let b0 = 128;
-let gap = 0.4675;        // fixed inter-arrival time (s)
+let gap = 0.4675;
 let vp = 290;
 let vd = 990;
 
 fn main() {
-  let bmax = args.number("bmax", 128);          // token budget b_max
+  let bmax = args.number("bmax", 128);
+  // --8<-- [end:settings]
 
+  // --8<-- [start:slots]
   pool reqs { cap kmax; }
+  // --8<-- [end:slots]
 
+  // --8<-- [start:engine]
   device gpu { compute (t) = a * ceil(t / b0); }
-  // decodes while any request decodes, else prefills: never both
   def in_phase() { running.decoding > 0 ? decoding : !decoding }
   engine fastertransformer on gpu {
     tokens cap bmax;
@@ -35,7 +34,9 @@ fn main() {
     }
     execute (c + compute(batch.tokens));
   }
+  // --8<-- [end:engine]
 
+  // --8<-- [start:workload]
   workload {
     arrive renewal(gap);
   }
@@ -45,4 +46,5 @@ fn main() {
   }
 
   gauge pending = holders(reqs) + queued(reqs);
+  // --8<-- [end:workload]
 }

@@ -1,51 +1,38 @@
-// vLLM v1 on one device (ref/vllm at 0c87a197, `vllm/v1/core/sched/
-// scheduler.py`, `kv_cache_manager.py`, `block_pool.py`), as a serQ
-// program. Continuous batching with chunked prefill: every iteration hands
-// a token budget to the running requests in admission order (one token per
-// decoding request, up to the per-run cap (`each at most`) per prefilling one), then admits waiting
-// requests FCFS while the request cap and the KV blocks allow, the first
-// that does not fit blocking the rest. KV memory is a block pool with a
-// block-level LRU prefix cache: a finished (or preempted) request's full
-// blocks stay cached and are evicted tail first when the free queue is
-// drained; the next turn of a session reuses its cached prefix (full blocks,
-// never the whole prompt). A request grows one block at a time as it
-// decodes; when no block is free the most recently admitted request is
-// preempted (its blocks freed to the cache, it re-enters the waiting queue
-// at the head and recomputes what was lost). See docs/language.md §7 for
-// the line-by-line correspondence and how this engine differs from it.
+// vLLM v1 on one device (ref/vllm at 0c87a197), as a serQ program.
+// docs/use-cases/vllm.md explains it a part at a time.
 use "std/args";
 
-let B = 8192;          // max_num_batched_tokens
-let bs = 16;           // block_size
-let a = 2e-5;          // compute per scheduled token (s)
-let omega = 2e-4;      // weights read per iteration (s)
-let beta = 2e-9;       // KV read per iteration per resident context token (s)
-let c0 = 0;            // fixed cost per iteration (s)
-let p = 0.9;           // continue after a turn
+// --8<-- [start:settings]
+let B = 8192;
+let bs = 16;
+let a = 2e-5;
+let omega = 2e-4;
+let beta = 2e-9;
+let c0 = 0;
+let p = 0.9;
 
 fn main() {
-  let max_seqs = args.number("max_seqs", 16);     // max_num_seqs
-  let blocks = args.number("blocks", 10000);    // num_gpu_blocks (less the null block)
-  let chunk_cap = args.number("chunk_cap", inf);   // long_prefill_token_threshold (inf: none)
-  let Lambda = args.number("Lambda", 0.3);      // sessions per second
-  let Z = args.number("Z", 3.0);           // tool time (s)
+  let max_seqs = args.number("max_seqs", 16);
+  let blocks = args.number("blocks", 10000);
+  let chunk_cap = args.number("chunk_cap", inf);
+  let Lambda = args.number("Lambda", 0.3);
+  let Z = args.number("Z", 3.0);
+  // --8<-- [end:settings]
 
+  // --8<-- [start:memory]
   device gpu {
     compute (t) = t * a;
     hbm (k) = omega + beta * k;
     kv cap blocks * bs;
   }
   pool kv on gpu { block bs; evict lru; preempt lifo; }
+  // --8<-- [end:memory]
+  // --8<-- [start:caps]
   engine vllm on gpu {
     reqs cap max_seqs;
     tokens cap B;
-    // What vLLM does with one request. `known` is every token it has: the
-    // prompt, or after a preemption the position it had reached plus the
-    // token sampled there, and never fewer than it had before (`kept`: vLLM
-    // keeps the generated tokens and drops only their KV,
-    // scheduler.py:1560-1561). `reused` is how many of them the prefix cache
-    // holds in full blocks, never the last token, which is computed for its
-    // logits (kv_cache_manager.py:289-300); `observe hit` says whether any.
+    // --8<-- [end:caps]
+    // --8<-- [start:request]
     request (prompt, output) {
       set kept = prompt;
       at admission {
@@ -54,39 +41,35 @@ fn main() {
       }
       set kept = known;
       set c = min(cached, floor(known - 1, blocksize(kv)));
-      observe hit = c > 0;                    // any reused block, again after a preemption
+      observe hit = c > 0;
       observe prefill_tokens = known - c;
       prefill (known - c) growing kv;
       decode (output - 1 - (known - prompt)) growing kv;
-      cache (prompt + output);                // a finished request's blocks stay cached
+      cache (prompt + output);
     }
+    // --8<-- [end:request]
+    // --8<-- [start:running]
     schedule {
-      // long_prefill_token_threshold binds only while another request is
-      // running or waiting; a request alone takes the whole budget (scheduler.py:606-616)
       let threshold = running.count + waiting.count > 1 ? chunk_cap : inf;
       advance running each at most (threshold);
-      // A slot of `reqs` and the blocks of `kv`. The scheduler looks up the
-      // prefix hit when it admits (scheduler.py:932-939) and allocates the
-      // tokens it reuses plus the chunk the budget allows
-      // (scheduler.py:1078-1128, 1214-1226), but admits only if every token
-      // fits, the reused ones counted
-      // (scheduler_reserve_full_isl, on by default: config/scheduler.py:191,
-      // kv_cache_manager.py:515-531): the `reserve`.
-      // docs/language.md §7 "Admission" has the argument.
+      // --8<-- [end:running]
+      // --8<-- [start:waiting]
       admit waiting while (running.preempted == 0) each at most (threshold)
         taking reqs (1), kv (min(known, reused + budget_left(vllm))) reserve (known);
     }
+    // --8<-- [end:waiting]
+    // --8<-- [start:execute]
     execute (c0 + max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
   }
-  pool reqs on vllm { queue fifo; }   // the engine admits the waiting, FCFS
+  // --8<-- [end:execute]
+  // --8<-- [start:queue]
+  pool reqs on vllm { queue fifo; }
+  // --8<-- [end:queue]
 
   // --8<-- [start:workload]
-  // The client: sessions arrive, each turn brings a prompt of n new tokens
-  // on a context of K and wants o tokens back, and after a turn the session
-  // calls a tool and comes back with probability p. Nothing here is vLLM.
   workload {
     arrive poisson(Lambda);
-    hidden o;              // the scheduler knows max_tokens, not the length (sched/utils.py:98-119)
+    hidden o;
     init { set K = 0; }
     turn {
       set n = ceil(K == 0 ? ~uniform(1000, 3000) : ~exp(500));
@@ -104,9 +87,10 @@ fn main() {
   }
   // --8<-- [end:workload]
 
-  // A turn is one request to the engine.
+  // --8<-- [start:server]
   server {
     set prompt = K + n;
     vllm (prompt, o);
   }
+  // --8<-- [end:server]
 }

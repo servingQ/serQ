@@ -1,12 +1,15 @@
-// FCFS lanes from vllm-ascend v0.27.1rc1: immediate, aged long, short, long.
-// This full-attention example models local admission, not job prediction or remote KV.
+// vllm-ascend v0.27.1rc1's short-request-first FCFS lanes, approximated.
+// docs/use-cases/ascend.md explains it a part at a time.
+// --8<-- [start:lanes]
 let short_tokens = 128;
 let max_wait = 0.003;
 def waiting_class(urgent, prompt, elapsed) {
   urgent ? 0 : prompt > short_tokens && max_wait > 0 && elapsed >= max_wait ? 1 : prompt <= short_tokens ? 2 : 3
 }
+// --8<-- [end:lanes]
 
 fn main() {
+  // --8<-- [start:workload]
   workload {
     arrive batch(6);
     turn {
@@ -15,12 +18,12 @@ fn main() {
       set out = serial == 0 ? 4 : 1;
     }
   }
+  // --8<-- [end:workload]
+  // --8<-- [start:engine]
   device npu { kv cap 4096; }
   engine llm on npu {
     reqs cap 1;
     tokens cap 128;
-    // One request: admitted with blocks for its whole sequence, so nothing
-    // grows; `admitted` is the moment it is admitted.
     request (prompt, output) {
       mark admitted;
       prefill (prompt);
@@ -33,14 +36,18 @@ fn main() {
     }
     execute (0.001);
   }
+  // --8<-- [end:engine]
+  // --8<-- [start:queue]
   pool reqs on llm { queue by (waiting_class(immediate, prompt, waited)); }
   pool kv on npu { block 16; }
+  // --8<-- [end:queue]
+  // --8<-- [start:server]
   stage delay : delay;
   server {
     run delay (cost(delay, serial == 2 ? 0.001 : serial == 3 ? 0.002 : serial >= 4 ? 0.003 : 0));
     llm (prompt, out);
-    // which client was served, and when it was admitted
     observe selected = serial;
     observe admitted_at = llm.admitted;
   }
+  // --8<-- [end:server]
 }

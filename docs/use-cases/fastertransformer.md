@@ -22,14 +22,67 @@ latter; it does not emulate the library's caller or serving backend.
 
 ## The program
 
-The example uses 290 prefill tokens and 990 decode tokens per request, one
-arrival every 0.4675 seconds, and at most 100 residents:
+`examples/single-turn/fastertransformer.sq` is FasterTransformer's
+scheduler as Dai, Deng, Li and Peng model it (§4): decode first, no mixed
+batching. The deployment is the paper's basic LLM queueing model (§3.1) at
+the operating point C of §6.2. The sections below build it a part at a
+time.
+
+### Settings
+
+Point C is CodeLlama-34B on TP1, with batch time
+$t_b = 11.28 + 35.47\lceil b/128\rceil$ ms, $k_{max} = 100$, and one request
+every 467.5 ms with 290 prefill and 990 decode tokens:
 
 ```serq title="examples/single-turn/fastertransformer.sq"
---8<-- "examples/single-turn/fastertransformer.sq"
+--8<-- "examples/single-turn/fastertransformer.sq:settings"
 ```
 
-`only` says which residents an iteration serves. Its predicate is read for every resident, from the current resident totals (`running.decoding`) and the resident's own `decoding`. While any request decodes, only decodes are served. A request that is still prefilling stays resident and keeps its slot of `reqs`, but gets no token. With nothing decoding, only prefills are served.
+| serQ | Paper | Meaning |
+|---|---|---|
+| `kmax` | $k_{max}$ (§6) | the batch size limit |
+| `c`, `a`, `b0` | $t_b$ | seconds per iteration, seconds per step of `b0` tokens |
+| `gap` | — | the fixed inter-arrival time (s) |
+| `vp`, `vd` | — | prefill and decode tokens per request |
+| `bmax` | $b_{max}$ | the token budget, set with `--bmax` |
+
+### At most `k_max` residents
+
+The paper's model has no KV cache, so the only cap is the batch size limit.
+In serQ that is a pool of slots, one per request:
+
+```serq
+--8<-- "examples/single-turn/fastertransformer.sq:slots"
+```
+
+### Decode first, never both
+
+While a request decodes, an iteration batches only decodes and the prefills
+wait; with none decoding, it batches only prefills. The program needs a
+rule that picks which residents an iteration serves, and in serQ that is a
+predicate read by `only` in both halves of the schedule:
+
+```serq
+--8<-- "examples/single-turn/fastertransformer.sq:engine"
+```
+
+`only` says which residents an iteration serves. Its predicate is read for every resident, from the current resident totals (`running.decoding`) and the resident's own `decoding`. While any request decodes, only decodes are served. A request that is still prefilling stays resident and keeps its slot of `reqs`, but gets no token. With nothing decoding, only prefills are served. The device's `compute` and the engine's `execute` together are $t_b$.
+
+### The workload
+
+Arrivals are deterministic, one every `gap` seconds. Each request holds a
+slot of `reqs` while the engine serves it, and `pending` counts the
+requests in the system, holding a slot or waiting for one:
+
+```serq
+--8<-- "examples/single-turn/fastertransformer.sq:workload"
+```
+
+??? example "The whole program"
+
+    ```serq title="examples/single-turn/fastertransformer.sq"
+    --8<-- "examples/single-turn/fastertransformer.sq"
+    ```
 
 ## Results at point C
 
