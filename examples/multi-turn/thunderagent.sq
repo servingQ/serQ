@@ -130,7 +130,7 @@ fn main() {
   // the ones with a request pending (docs/design/thunderagent.md, item 3).
   stage tick : delay;
   pool waiting_queue { }
-  def next_tick() { run tick (cost(tick, floor(now, dt) + dt - now)); }
+  def next_tick(order) { run tick (cost(tick, floor(now, dt) + dt - now + order)); }
   def no_room(x) { max r in J (free(prog[r])) < x }
   // the router's count of the program becomes x (state.total_tokens = x)
   def count_as(x) {
@@ -175,10 +175,14 @@ fn main() {
       // a paused program, or a new one behind others or with no room
       set waits = tr && (K > 0 || used(waiting_queue) > 0 || no_room(charged));
       if (waits) {
+        // the programs back at one tick go in the router's order: those
+        // with a step first, then new ones, the smaller first in each
+        // (_greedy_resume), as instants microseconds apart within it
+        set order = (K > 0 ? 0 : 1e-4) + 1e-10 * charged;
         hold waiting_queue (cost(waiting_queue, 1)) {
-          next_tick();
-          // on a tick now: the next is dt on, which floor(now, dt) may
-          // round to the one before
+          next_tick(order);
+          // at its place in a tick now: the next is dt on, which
+          // floor(now, dt) may round to the one before
           while (no_room(charged) && now - t_q < force_resume) { run tick (cost(tick, dt)); }
         }
       }
