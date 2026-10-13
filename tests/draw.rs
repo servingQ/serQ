@@ -2007,3 +2007,79 @@ fn a_while_body_does_not_determine_its_continuation() {
     let net = deployment::project(&p);
     assert!(net.node_of(stage(&p, "c")).is_some(), "zero passes reach c");
 }
+
+/// The figure is addressable as well as a picture: the SVG names each
+/// station's stage (`data-stage`, an array's members by their shared
+/// name), each queue glyph's and drum's pool (`data-pool`, with which of
+/// the two it is), the arrival and exit arrows (an exit with the stage it
+/// leaves) and an engine's budget bar (`data-role`), so that a page
+/// animating a run over the figure finds them by what the program calls
+/// them, not by where the layout put them. A decision diamond and a pool's
+/// tick are no stage and get no name. The TikZ writer ignores the ids.
+#[test]
+fn the_svg_names_stages_pools_and_roles() {
+    use serq::view::figure::Item;
+    for name in ["llmd_nixl_pull", "thunderagent"] {
+        let p = program(name);
+        let net = deployment::project(&p);
+        let f = deployment::layout(&p, &net);
+        // a station's stage is its node's: the stages the session reaches
+        let want: std::collections::BTreeSet<String> = net
+            .nodes
+            .iter()
+            .filter_map(|n| n.stage.map(|st| p.stages[st].name.clone()))
+            .collect();
+        let mut got = std::collections::BTreeSet::new();
+        for i in &f.items {
+            if let Item::Station { kind, stage, .. } = i {
+                match stage {
+                    Some(st) => {
+                        got.insert(st.clone());
+                    }
+                    None => assert!(
+                        *kind == StationKind::Decision || *kind == StationKind::Delay,
+                        "{name}: a station without a stage is a decision or a tick: {i:?}"
+                    ),
+                }
+            }
+        }
+        assert_eq!(got, want, "{name}");
+        let svg = serq::view::render(&f, "svg").unwrap();
+        for st in &want {
+            assert!(
+                svg.contains(&format!(r#"<g data-stage="{st}">"#)),
+                "{name}: {st}"
+            );
+        }
+        // one group per station, every group closed
+        assert_eq!(svg.matches("<g data-stage=").count(), want.len(), "{name}");
+        assert_eq!(svg.matches("<g data-").count(), svg.matches("</g>").count());
+        // a pool's groups are told apart by their role
+        for m in svg.match_indices("<g data-pool=") {
+            let line = &svg[m.0..svg[m.0..].find('>').unwrap() + m.0];
+            assert!(
+                line.contains(r#"data-role="queue""#) || line.contains(r#"data-role="drum""#),
+                "{name}: {line}"
+            );
+        }
+        assert!(svg.contains(r#"data-role="budget""#), "{name}");
+        assert!(svg.contains(r#"data-role="arrival""#), "{name}");
+        let tikz = serq::view::render(&f, "tikz").unwrap();
+        assert!(!tikz.contains("data-"), "{name}");
+    }
+    // llmd_nixl_pull: the last station is `D`, and the session leaves from
+    // it (`docs/use-cases/pd.md`: the decoder answers); the program also
+    // ends a session at the router when the context is full (`end` under
+    // `K + n >= max_model_len`), an exit from the decision, with no stage
+    let p = program("llmd_nixl_pull");
+    let svg = serq::view::render(&deployment::figure(&p), "svg").unwrap();
+    assert!(svg.contains(r#"data-role="exit" data-from="D""#));
+    assert_eq!(svg.matches(r#"data-role="exit""#).count(), 2);
+    assert_eq!(svg.matches("data-from=").count(), 1);
+    // thunderagent: its queue `waiting_queue` is drawn as a queue glyph and a
+    // drum, one pool under two roles, and its tick is a station of no stage
+    let p = program("thunderagent");
+    let svg = serq::view::render(&deployment::figure(&p), "svg").unwrap();
+    assert!(svg.contains(r#"<g data-pool="waiting_queue" data-role="queue">"#));
+    assert!(svg.contains(r#"<g data-pool="waiting_queue" data-role="drum">"#));
+}

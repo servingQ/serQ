@@ -94,6 +94,18 @@ pub enum EdgeStyle {
     Relation,
 }
 
+/// What an edge is, beyond its style: where sessions enter the figure and
+/// where they leave it. Written into the SVG (`data-role`) so that a page
+/// animating the figure knows where a request comes from and goes to.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum EdgeRole {
+    Arrival,
+    /// An exit, from the stage it leaves (`None` from a decision).
+    Exit {
+        from: Option<String>,
+    },
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Anchor {
     Start,
@@ -159,15 +171,27 @@ pub enum Item {
         kind: StationKind,
         /// `FIFO`, `PS`, the budget for a step engine.
         text: String,
+        /// The stage it draws, by name (an array's members share one);
+        /// `None` for a decision or a pool's tick, which are no stage. The
+        /// SVG writer puts it on the glyph as `data-stage`, so that the
+        /// figure is addressable as well as a picture.
+        stage: Option<String>,
     },
-    /// The queueing-theory queue glyph: `cells` boxes between two rails.
-    Queue { rect: Rect, cells: usize },
-    /// A pool: a drum, its capacity written beside it.
-    Drum { rect: Rect },
+    /// The queueing-theory queue glyph: `cells` boxes between two rails,
+    /// where holds of `pool` wait (`data-pool`).
+    Queue {
+        rect: Rect,
+        cells: usize,
+        pool: String,
+    },
+    /// A pool: a drum, its capacity written beside it (`data-pool`).
+    Drum { rect: Rect, pool: String },
     Edge {
         pts: Vec<Point>,
         style: EdgeStyle,
         arrow: bool,
+        /// An arrival or an exit, which the SVG writer marks (`data-role`).
+        role: Option<EdgeRole>,
     },
     Text {
         at: Point,
@@ -272,6 +296,27 @@ impl Figure {
             pts,
             style,
             arrow: true,
+            role: None,
+        });
+    }
+
+    /// The arrow sessions arrive by.
+    pub fn arrival(&mut self, pts: Vec<Point>) {
+        self.push(Item::Edge {
+            pts,
+            style: EdgeStyle::Flow,
+            arrow: true,
+            role: Some(EdgeRole::Arrival),
+        });
+    }
+
+    /// An arrow sessions leave by, from stage `from` (`None`: from a decision).
+    pub fn exit(&mut self, pts: Vec<Point>, from: Option<String>) {
+        self.push(Item::Edge {
+            pts,
+            style: EdgeStyle::Flow,
+            arrow: true,
+            role: Some(EdgeRole::Exit { from }),
         });
     }
 
@@ -309,7 +354,7 @@ impl Figure {
                 Item::Box { rect, .. }
                 | Item::Station { rect, .. }
                 | Item::Queue { rect, .. }
-                | Item::Drum { rect } => visit(pt(rect.right(), rect.bottom())),
+                | Item::Drum { rect, .. } => visit(pt(rect.right(), rect.bottom())),
                 Item::Edge { pts, .. } => pts.iter().for_each(|p| visit(*p)),
                 Item::Text {
                     at,
