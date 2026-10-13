@@ -17,6 +17,7 @@ use rand::rngs::StdRng;
 
 use crate::engine::cache::{Seg, Trie};
 use crate::engine::dist::Dist;
+use crate::engine::log::{EventKind, Log, Who};
 use crate::engine::report::*;
 use crate::engine::stats::*;
 
@@ -340,11 +341,23 @@ struct Pending<'p> {
 enum Leg {
     /// A session.
     No,
-    /// A leg of the session in this slot. The slot stays until the leg
-    /// ends: a session may not end before its legs.
-    Of(usize),
+    /// A leg of the session in this slot, the n-th it forked (the log
+    /// names a leg by its number: a leg shares its session's serial). The
+    /// slot stays until the leg ends: a session may not end before its
+    /// legs.
+    Of(usize, u32),
     /// A leg of a session that was refused and has ended.
-    Orphan,
+    Orphan(u32),
+}
+
+impl Leg {
+    /// The leg's number, `None` for a session.
+    fn number(self) -> Option<u32> {
+        match self {
+            Leg::No => None,
+            Leg::Of(_, n) | Leg::Orphan(n) => Some(n),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -886,6 +899,8 @@ pub struct Interp<'p> {
     ended: u64,
     turns: u64,
     events: u64,
+    /// The log of the run (`engine::log`), when asked for (`logged`).
+    log: Option<Log>,
 }
 
 /// Tags of dead cache nodes (units past a `reuse` bound) start here, above
@@ -1056,7 +1071,38 @@ impl<'p> Interp<'p> {
             ended: 0,
             turns: 0,
             events: 0,
+            log: None,
         }
+    }
+
+    /// Keep the log of the run (`engine::log`), at most `cap` events: what
+    /// each session did, when, for a replay. The run is the same with or
+    /// without it.
+    pub fn logged(mut self, cap: usize) -> Self {
+        self.log = Some(Log::new(self.p, cap));
+        self
+    }
+
+    /// Log an event, if the run keeps a log.
+    fn log(&mut self, kind: EventKind) {
+        let now = self.now;
+        if let Some(l) = &mut self.log {
+            l.push(now, kind);
+        }
+    }
+
+    /// Log an event about `sid`, if the run keeps a log: `kind` is built
+    /// only then.
+    fn log_who(&mut self, sid: usize, kind: impl FnOnce(Who) -> EventKind) {
+        if self.log.is_none() {
+            return;
+        }
+        let s = &self.sessions[sid];
+        let who = Who {
+            serial: s.serial,
+            leg: s.leg.number(),
+        };
+        self.log(kind(who));
     }
 
     fn at(&mut self, time: f64, ev: Ev) {
@@ -1595,6 +1641,7 @@ impl<'p> Interp<'p> {
         }
         self.check_given(sid);
         self.ready.push_back(sid);
+        self.log_who(sid, |who| EventKind::Arrive { who });
     }
 
     /// Read every claim's `given` for a session whose `init` has run: one
@@ -1645,6 +1692,8 @@ impl<'p> Interp<'p> {
     fn do_turn(&mut self, sid: usize) {
         let p = self.p;
         self.sessions[sid].attrs[p.slot_turn] += 1.0;
+        let turn = self.sessions[sid].attrs[p.slot_turn] as u32;
+        self.log_who(sid, |who| EventKind::Turn { who, turn });
         if self.warm {
             self.turns += 1;
         }
@@ -1757,8 +1806,8 @@ impl<'p> Interp<'p> {
     fn client_turn(&mut self, sid: usize) -> Option<(usize, &mut ClientTurn)> {
         let r = match self.sessions[sid].leg {
             Leg::No => sid,
-            Leg::Of(r) => r,
-            Leg::Orphan => return None,
+            Leg::Of(r, _) => r,
+            Leg::Orphan(_) => return None,
         };
         let turn = self.sessions[sid].attrs[self.p.slot_turn];
         let c = self.sessions[r].client.as_mut()?;
@@ -1824,6 +1873,7 @@ impl<'p> Interp<'p> {
             ));
             return;
         }
+        self.log_who(sid, |who| EventKind::End { who });
         self.detach(sid);
         while let Some(h) = self.sessions[sid].holds.pop() {
             self.release_hold(sid, &h);
@@ -1882,7 +1932,7 @@ impl<'p> Interp<'p> {
             rng: substream(p.seed, s.serial, n, STREAM_LEG),
             turn_count: s.turn_count,
             readies: (f64::NAN, 0),
-            leg: Leg::Of(sid),
+            leg: Leg::Of(sid, n as u32),
             legs: 0,
             forks: 0,
             req: None,
@@ -1898,6 +1948,7 @@ impl<'p> Interp<'p> {
             }
         };
         self.ready.push_back(lid);
+        self.log_who(lid, |who| EventKind::Fork { who });
     }
 
     /// A hold that can never fit refuses the request: the session ends,
@@ -1909,19 +1960,22 @@ impl<'p> Interp<'p> {
     fn refuse(&mut self, sid: usize) {
         let session = match self.sessions[sid].leg {
             Leg::No => Some(sid),
-            Leg::Of(parent) => {
+            Leg::Of(parent, _) => {
                 self.end_leg(sid);
                 Some(parent)
             }
-            Leg::Orphan => {
+            Leg::Orphan(_) => {
                 self.end_leg(sid);
                 None
             }
         };
         if let Some(s) = session {
             for leg in self.sessions.iter_mut() {
-                if leg.leg == Leg::Of(s) && leg.status != Status::Ended {
-                    leg.leg = Leg::Orphan;
+                if let Leg::Of(p, n) = leg.leg
+                    && p == s
+                    && leg.status != Status::Ended
+                {
+                    leg.leg = Leg::Orphan(n);
                 }
             }
             self.sessions[s].legs = 0;
@@ -1933,11 +1987,12 @@ impl<'p> Interp<'p> {
     /// session, and a session waiting at a `join` for its last leg goes on.
     /// An orphan's leases end with it.
     fn end_leg(&mut self, sid: usize) {
+        self.log_who(sid, |who| EventKind::End { who });
         self.detach(sid);
         while let Some(h) = self.sessions[sid].holds.pop() {
             self.release_hold(sid, &h);
         }
-        let Leg::Of(parent) = self.sessions[sid].leg else {
+        let Leg::Of(parent, _) = self.sessions[sid].leg else {
             while !self.sessions[sid].leases.is_empty() {
                 self.end_lease(sid, 0);
             }
@@ -1976,7 +2031,9 @@ impl<'p> Interp<'p> {
             self.sessions
                 .iter()
                 .enumerate()
-                .filter(move |(_, x)| x.leg == Leg::Of(s) && x.status != Status::Ended)
+                .filter(move |(_, x)| {
+                    matches!(x.leg, Leg::Of(p, _) if p == s) && x.status != Status::Ended
+                })
                 .map(|(l, _)| l)
         };
         let mut stuck: Vec<bool> = self
@@ -2817,6 +2874,7 @@ impl<'p> Interp<'p> {
             }
             if self.round_up(pl, need) > self.pools[pl].cap {
                 self.pools[pl].rejected += 1;
+                self.log_who(sid, |who| EventKind::Refuse { who });
                 self.refuse(sid);
                 return false;
             }
@@ -2833,6 +2891,7 @@ impl<'p> Interp<'p> {
         } else {
             self.pools[pl].queue.push_back(entry);
         }
+        self.log_who(sid, |who| EventKind::Wait { who, pool: pl });
         self.schedule_queue_tick(pl);
         true
     }
@@ -3081,7 +3140,7 @@ impl<'p> Interp<'p> {
     /// The session a leg is of, else the session itself: the one that keeps
     /// `cached_chain`, since its legs share its entries.
     fn root(&self, mut sid: usize) -> usize {
-        while let Leg::Of(parent) = self.sessions[sid].leg {
+        while let Leg::Of(parent, _) = self.sessions[sid].leg {
             sid = parent;
         }
         sid
@@ -3153,6 +3212,7 @@ impl<'p> Interp<'p> {
             });
         }
         let pl = first_pool(&pending);
+        self.log_who(sid, |who| EventKind::Admit { who, pool: pl });
         if self.warm {
             let w = self.now - pending.queued_at;
             self.pools[pl].wait.push(w);
@@ -3928,6 +3988,7 @@ impl<'p> Interp<'p> {
         let slot_computed = self.p.slot_computed;
         self.sessions[victim].attrs[slot_computed] = computed;
         self.detach(victim);
+        self.log_who(victim, |who| EventKind::Preempt { who, pool: pl });
         if self.sessions[victim].holds[hi].request {
             // an engine's request: no body to run again. It keeps the tokens
             // it has and what it generated, caches what it computed, and asks
@@ -4049,6 +4110,7 @@ impl<'p> Interp<'p> {
     /// program this way (`docs/design/thunderagent.md`).
     fn revoke(&mut self, victim: usize, pl: usize) {
         let i = self.lease_of(victim, pl).expect("victim leases the pool");
+        self.log_who(victim, |who| EventKind::Revoke { who, pool: pl });
         self.pools[pl].preemptions += 1;
         if !matches!(
             self.p.pools[pl].preempt,
@@ -4254,6 +4316,11 @@ impl<'p> Interp<'p> {
         }
         if let Some(sid) = owner {
             self.sessions[sid].status = Status::InStage(st, id);
+            self.log_who(sid, |who| EventKind::Run {
+                who,
+                stages: vec![st],
+                mode,
+            });
         }
         // the linker refuses `growing` outside a hold of the pool
         let growing = growing.zip(owner).map(|(pl, sid)| {
@@ -4343,6 +4410,11 @@ impl<'p> Interp<'p> {
         }
         if let Some(sid) = owner {
             self.sessions[sid].status = Status::InStage(stages[0], id);
+            self.log_who(sid, |who| EventKind::Run {
+                who,
+                stages: stages.clone(),
+                mode: RunMode::Plain,
+            });
         }
         self.flows_advance();
         for (k, &s) in stages.iter().enumerate() {
@@ -4732,6 +4804,7 @@ impl<'p> Interp<'p> {
         if let Some(sid) = job.owner {
             self.sessions[sid].status = Status::Ready;
             self.ready.push_back(sid);
+            self.log_who(sid, |who| EventKind::Done { who, stage: st });
         }
     }
 
@@ -5009,6 +5082,22 @@ impl<'p> Interp<'p> {
                 kv.0,
                 kv.1
             );
+        }
+        if self.log.is_some() {
+            let reqs: Vec<Who> = assign
+                .iter()
+                .filter_map(|(id, _)| self.stages[st].jobs[id].owner)
+                .map(|sid| Who {
+                    serial: self.sessions[sid].serial,
+                    leg: self.sessions[sid].leg.number(),
+                })
+                .collect();
+            self.log(EventKind::Iter {
+                stage: st,
+                dur: cost,
+                tokens: ntok,
+                reqs,
+            });
         }
         let Kind::Step { iter, epoch, .. } = &mut self.stages[st].kind else {
             unreachable!()
@@ -5983,6 +6072,7 @@ impl<'p> Interp<'p> {
             claims,
             stages,
             pools,
+            log: self.log.take(),
         }
     }
 

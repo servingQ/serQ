@@ -4,7 +4,7 @@
 /// The interpreter's own command-line options, `--seed` and the rest. A
 /// program's inputs share the command line with them (`--seed 2 --Lambda
 /// 0.3`), so an input may not take one of these names.
-pub const OPTIONS: [&str; 12] = [
+pub const OPTIONS: [&str; 13] = [
     "seed",
     "horizon",
     "warmup",
@@ -14,6 +14,7 @@ pub const OPTIONS: [&str; 12] = [
     "def",
     "json",
     "dump",
+    "log",
     "inline-trace",
     "format",
     "out",

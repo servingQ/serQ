@@ -270,6 +270,9 @@ pub struct Report {
     pub claims: Vec<ClaimReport>,
     pub stages: Vec<StageReport>,
     pub pools: Vec<PoolReport>,
+    /// The log of the run, when it was asked for (`Interp::logged`): what
+    /// each session did, when. In the JSON only then, as `log`.
+    pub log: Option<crate::engine::log::Log>,
 }
 
 impl Report {
@@ -545,16 +548,8 @@ impl Report {
     }
 
     pub fn json(&self) -> String {
-        fn f(x: f64) -> String {
-            if x.is_finite() {
-                format!("{x}")
-            } else {
-                "null".into()
-            }
-        }
-        fn index(i: Option<u32>) -> String {
-            i.map_or("null".into(), |i| i.to_string())
-        }
+        let f = json_num;
+        let index = json_index;
         let mut s = String::from("{");
         // the interpreter that ran, for a record kept next to the IR
         let _ = write!(s, "\"serq_version\":\"{}\",", crate::VERSION);
@@ -686,7 +681,11 @@ impl Report {
                 p.growing_stalled
             );
         }
-        s.push_str("]}");
+        s.push(']');
+        if let Some(l) = &self.log {
+            let _ = write!(s, ",\"log\":{}", l.json());
+        }
+        s.push('}');
         s
     }
 }
@@ -734,8 +733,22 @@ fn table(s: &mut String, header: &[&str], rows: impl Iterator<Item = Vec<String>
 }
 
 /// A string as JSON writes it.
-fn json_string(x: &str) -> String {
+pub(crate) fn json_string(x: &str) -> String {
     serde_json::to_string(x).expect("a string serialises")
+}
+
+/// A number as the report's JSON writes it: a non-finite one is `null`.
+pub(crate) fn json_num(x: f64) -> String {
+    if x.is_finite() {
+        format!("{x}")
+    } else {
+        "null".into()
+    }
+}
+
+/// An array member's index, or `null` for a single pool or stage.
+pub(crate) fn json_index(i: Option<u32>) -> String {
+    i.map_or("null".into(), |i| i.to_string())
 }
 
 /// `table`, every column left-aligned when `left` (a column of words).
