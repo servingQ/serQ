@@ -30,7 +30,7 @@ fn source(schedule: &str, slot_cap: usize, kv_cap: usize) -> String {
             prefill (prompt) growing kv;
             observe prefill_done = now;
             observe prefill_who = id;
-            branch (id == 0) {{ decode (2) growing kv; }}
+            if (id == 0) {{ decode (2) growing kv; }}
             cache (100);
           }}
           schedule {{ {schedule} }}
@@ -199,7 +199,7 @@ fn an_exhausted_decode_budget_defers_waiting_prefill() {
           tokens cap 2;
           request (id) {
             observe admitted_at = now;
-            branch (id < 2) {
+            if (id < 2) {
               decode (2);
             } else {
               prefill (4);
@@ -247,7 +247,7 @@ fn preemption_keeps_only_committed_progress_and_defers_readmission() {
               known = max(2, computed);
               left = budget_left(llm);
             }
-            branch (id == 1) {
+            if (id == 1) {
               observe admitted_b = now;
               observe restored_b = known;
             }

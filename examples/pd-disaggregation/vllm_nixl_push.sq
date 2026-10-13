@@ -54,7 +54,7 @@ fn main() {
       set t0 = now;
       set prompt = new;
       run front (cost(front, h));
-      branch (concurrent) {
+      if (concurrent) {
         fork { P.prefill (prompt); }     // asyncio.create_task: the prefill leg runs beside
       } else {
         P.prefill (prompt);              // the sidecar's order: the prefill's answer first
@@ -120,7 +120,7 @@ fn main() {
            at admission (known = max(kept, computed + 1)) {
         set kept = known;
         set c = cached;
-        branch (!transferred) {
+        if (!transferred) {
           // WAITING_FOR_REMOTE_KVS: the blocks are registered with the
           // prefiller, which writes every block past the local hit once its
           // own prefill has ended, through its NIC and this pod's at once; the

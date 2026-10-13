@@ -110,7 +110,7 @@ fn an_l2_load_leaves_the_cache_its_kv() {
              pool kv {{ cap 1000; }}
              {SESSION}
              server {{
-               branch (K == 0) {{
+               if (K == 0) {{
                  hold kv (cost(kv, 10)) {{ kvt.l2_store (kv, lmc, 100, per_token = 0.01); }}
                }} else {{
                  hold kv (cost(kv, 100)) {{

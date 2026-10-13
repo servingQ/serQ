@@ -421,7 +421,7 @@ fn serving_forms_compile_to_the_kernel_ir() {
     let serving = format!(
         "{deployment} workload {{ {deployment_workload} session {{
             loop {{ turn; set K = T;
-              branch with (0.8) {{ tool Z; }} else {{ end; }}
+              if (~bernoulli(0.8)) {{ tool Z; }} else {{ end; }}
             }}
 
         }} }}
@@ -433,7 +433,7 @@ fn serving_forms_compile_to_the_kernel_ir() {
     let kernel = format!(
         "{deployment} workload {{ {deployment_workload} session {{
             loop {{ turn; set K = T;
-              branch with (0.8) {{ run tool (cost(tool, Z)); }} else {{ end; }}
+              if (~bernoulli(0.8)) {{ run tool (cost(tool, Z)); }} else {{ end; }}
             }}
 
         }} }}
@@ -468,7 +468,7 @@ fn serving_forms_compile_to_the_kernel_ir() {
 #[test]
 fn a_workload_tool_runs_on_its_own_delay() {
     let body = "workload { arrive poisson(0.5); turn { set Z = ~exp(3); }
-          session { loop { turn; branch with (0.8) { tool (Z); } else { end; } } }
+          session { loop { turn; if (~bernoulli(0.8)) { tool (Z); } else { end; } } }
         }
         server { run svc (cost(svc, 1)); }";
     let declared = format!("stage svc : fifo; stage tool : delay; {body}");
@@ -491,7 +491,7 @@ fn a_workload_tool_runs_on_its_own_delay() {
 fn a_declared_fifo_tool_is_still_used() {
     let src = "stage svc : fifo; stage tool : fifo;
         workload { arrive poisson(0.5); turn { set Z = ~exp(3); }
-          session { loop { turn; branch with (0.8) { tool (Z); } else { end; } } }
+          session { loop { turn; if (~bernoulli(0.8)) { tool (Z); } else { end; } } }
         }
         server { run svc (cost(svc, 1)); }";
     let p = compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap();
@@ -555,44 +555,29 @@ fn delay_is_ps_of_present() {
     assert!(!ir("ps(1)").stages[0].kind.is_delay());
 }
 
-/// `branch with (p)` is a draw and says so. It rewrites at parse time to
-/// `branch (~bernoulli(p))`: the sample is a 0 or a 1 by the time the guard
-/// sees it, and a bare `branch (p)` with a fractional `p` is an error, not a
-/// draw. So the sugar must be free: same IR as the explicit form.
+/// `else if` is the `else` block holding one `if`: the same IR as the
+/// nested form, in a session (`tests/iteration_body.rs` has the schedule).
 #[test]
-fn branch_with_is_sugar_for_bernoulli() {
-    let head = "stage tool : delay;
-
-        ";
-    let head_workload = "arrive poisson(0.5); turn { set Z = ~exp(3); }";
-    let sugar = format!(
-        "{head} workload {{ {head_workload} session {{  loop {{ branch with (0.8) {{ turn;  }} else {{ end; }} }} \n}} }}\nserver {{ run tool (cost(tool, Z));\n}}"
-    );
-    let explicit = format!(
-        "{head} workload {{ {head_workload} session {{  loop {{ branch (~bernoulli(0.8)) {{ turn;  }} else {{ end; }} }} \n}} }}\nserver {{ run tool (cost(tool, Z));\n}}"
-    );
-    let ov = Overrides {
-        warmup: Some(200.0),
-        seed: Some(1),
-        ..common::horizon(2000.0)
+fn else_if_is_the_nested_if() {
+    let session = |arms: &str| {
+        format!(
+            "stage svc : delay;
+            workload {{ arrive poisson(0.5); turn {{ set k = ~bernoulli(0.5) + ~bernoulli(0.5); }}
+              session {{ loop {{ turn; {arms} }} }} }}
+            server {{ run svc (cost(svc, 1)); }}"
+        )
     };
-    let a = serq::compile_source(&common::main_source(&sugar), &ov).expect("the sugar compiles");
-    let b = serq::compile_source(&common::main_source(&explicit), &ov)
-        .expect("the explicit form compiles");
+    let flat = session("if (k == 0) { end; } else if (k == 1) { tool (1); } else { tool (2); }");
+    let nested =
+        session("if (k == 0) { end; } else { if (k == 1) { tool (1); } else { tool (2); } }");
+    let ov = common::horizon(100.0);
+    let a = compile_source(&common::main_source(&flat), &ov).expect("`else if` compiles");
+    let b = compile_source(&common::main_source(&nested), &ov).expect("the nested form compiles");
     assert_eq!(
         a.to_json(),
         b.to_json(),
-        "`branch with` must reach the kernel as a bernoulli sample"
+        "`else if` must be the nested `if`"
     );
-
-    // and the same run as the explicit draw. The bare `branch (0.8)` this
-    // replaced is a link error now (`tests/lints.rs`), so the corpus-wide
-    // "no reported number moved" check that justified the rewrite cannot be
-    // written any more - it was run once, over all sixteen programs, before
-    // the lint existed.
-    let one = serq::run_source(&common::main_source(&sugar), &ov, None).expect("runs");
-    let two = serq::run_source(&common::main_source(&explicit), &ov, None).expect("runs");
-    assert_eq!(one.text(), two.text(), "the sugar must not move a run");
 }
 
 /// A figure has to say which edges are draws. The lecture's own
@@ -605,7 +590,7 @@ fn a_draw_is_labelled_w_p() {
     let src = "stage svc : fifo; stage tool : delay;
         workload { arrive poisson(0.5); turn { set Z = ~exp(3); }
           session {  loop { turn; run svc (cost(svc, 1));
-              branch with (0.8) { run tool (cost(tool, Z));  } else { end; } }
+              if (~bernoulli(0.8)) { run tool (cost(tool, Z));  } else { end; } }
           }
         }
         server {}
@@ -860,7 +845,7 @@ fn the_request_boundary_preserves_size_ownership() {
             loop {{
               turn;
               set K = prompt + o;
-              branch (more) {{ tool (~exp(3));  }} else {{ end; }}
+              if (more) {{ tool (~exp(3));  }} else {{ end; }}
             }}
           }}
         }}
@@ -877,7 +862,7 @@ fn the_request_boundary_preserves_size_ownership() {
           session {{
 
             loop {{ turn;
-              branch (more) {{ tool (~exp(3));  }} else {{ end; }}
+              if (more) {{ tool (~exp(3));  }} else {{ end; }}
             }}
 
           }}

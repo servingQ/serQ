@@ -583,7 +583,7 @@ impl Walker<'_> {
                 }
                 CStmt::Branch(c, t, e) => {
                     // A guard this path has decided (`set transferred = 0;`
-                    // before `branch (!transferred)`) takes one arm. The
+                    // before `if (!transferred)`) takes one arm. The
                     // other may still run, when a hold is executed again
                     // after a preemption: one with a station of its own is
                     // drawn, as any arm. One with none only skips stations,
@@ -1144,7 +1144,7 @@ fn same_site(p: &Program, a: &Site, b: &Site) -> bool {
 /// (`Side::Server`) inside the holds the workload has around them. Whether
 /// a session comes back, and when it ends, belongs to the workload. What the
 /// server reads of the workload's attributes is set by nothing here, so a
-/// server guard on one (`branch (first)`) draws both arms. `None`, and the
+/// server guard on one (`if (first)`) draws both arms. `None`, and the
 /// session is drawn whole, when it runs no server statement or runs two
 /// different things at its requests.
 pub fn request(p: &Program) -> Option<Program> {

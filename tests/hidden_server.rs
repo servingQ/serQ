@@ -66,7 +66,7 @@ fn the_server_may_run_cache_and_observe_by_a_hidden_attribute() {
 #[test]
 fn the_server_may_not_decide_on_a_hidden_attribute() {
     refused(
-        "branch (o > 2) { E (prompt); } else { observe skipped = 1; }",
+        "if (o > 2) { E (prompt); } else { observe skipped = 1; }",
         &[
             "`o` is hidden from the scheduler, but the server's branch reads it",
             "`decode (o);`",
@@ -87,7 +87,7 @@ fn the_server_is_checked_when_the_requests_differ() {
         workload { arrive poisson(1); hidden o;
           turn { set o = ~exp(10); }
           session { turn; hold live (cost(live, 1)) { turn; } } }
-        server { branch (o > 5) { run A (cost(A, 1)); } else { run B (cost(B, 1)); } }
+        server { if (o > 5) { run A (cost(A, 1)); } else { run B (cost(B, 1)); } }
         ";
     let err = compile_source(&common::main_source(src), &common::horizon(100.0)).unwrap_err();
     assert!(
@@ -101,7 +101,7 @@ fn the_server_is_checked_when_the_requests_differ() {
 #[test]
 fn the_server_may_not_decide_on_a_hidden_attribute_passed_to_a_function() {
     refused(
-        "branch (min(o, 1) > 0) { E (prompt); } else { observe skipped = 1; }",
+        "if (min(o, 1) > 0) { E (prompt); } else { observe skipped = 1; }",
         &["`o` is hidden from the scheduler, but the server's branch reads it"],
     );
     refused(
@@ -109,7 +109,7 @@ fn the_server_may_not_decide_on_a_hidden_attribute_passed_to_a_function() {
         &["server's choice reads it"],
     );
     refused(
-        "set y = min(o, 1); branch (y > 0) { E (prompt); } else { observe skipped = 1; }",
+        "set y = min(o, 1); if (y > 0) { E (prompt); } else { observe skipped = 1; }",
         &["`y` is set from the hidden `o`", "branch"],
     );
 }
@@ -138,7 +138,7 @@ fn what_the_server_sets_from_a_hidden_attribute_is_hidden() {
 fn a_loop_carries_what_it_sets_round_to_its_start() {
     refused(
         "set n = 0;
-         loop { branch (n > 3) { observe long = 1; } else { }
+         loop { if (n > 3) { observe long = 1; } else { }
                 E (prompt);
                 set n = o; }",
         &["`n` is set from the hidden `o`", "branch"],
@@ -154,12 +154,12 @@ fn a_top_level_session_cannot_bypass_the_server_check() {
                  execute (1); }
                pool kv on gpu { block 16; }
                workload { arrive batch(1); hidden o; init { set prompt = 32; set o = 4; } }
-               session { branch (o > 2) { E (prompt); } else { } end; }
+               session { if (o > 2) { E (prompt); } else { } end; }
                ";
     let err = compile_source(&common::main_source(src), &common::horizon(100.0)).unwrap_err();
     assert!(err.contains("`session` belongs inside `workload`"), "{err}");
     refused(
-        "branch (o > 2) { E (prompt); } else { }",
+        "if (o > 2) { E (prompt); } else { }",
         &["hidden from the scheduler"],
     );
 }
@@ -171,8 +171,8 @@ fn a_top_level_session_cannot_bypass_the_server_check() {
 fn a_run_reveals_what_its_work_reads() {
     let after = "set long = o > 2;
                  E (prompt, o);
-                 branch (long) { observe was_long = 1; } else { observe was_long = 0; }
-                 branch (o > 3) { observe longer = 1; } else { }";
+                 if (long) { observe was_long = 1; } else { observe was_long = 0; }
+                 if (o > 3) { observe longer = 1; } else { }";
     compile_source(
         &common::main_source(&program_with(BOTH, "p", after)),
         &common::horizon(100.0),
@@ -182,10 +182,12 @@ fn a_run_reveals_what_its_work_reads() {
     // engine's request, which runs in the server, may not decide on it
     refused_with(
         "request (p) { prefill (p) growing kv;
-                       branch (o > 2) { decode (o - 1) growing kv; } else { decode (1) growing kv; } }",
+                       if (o > 2) { decode (o - 1) growing kv; } else { decode (1) growing kv; } }",
         "p",
         "E (prompt);",
-        &["`o` is hidden from the scheduler, but the server's branch reads it before a run reveals it"],
+        &[
+            "`o` is hidden from the scheduler, but the server's branch reads it before a run reveals it",
+        ],
     );
 }
 
@@ -194,10 +196,10 @@ fn a_run_reveals_what_its_work_reads() {
 fn a_reveal_on_one_arm_only_does_not_reveal() {
     refused_with(
         "request (p, d) { prefill (p) growing kv;
-                          branch (p > 10) { decode (d) growing kv; } else { decode (1) growing kv; } }",
+                          if (p > 10) { decode (d) growing kv; } else { decode (1) growing kv; } }",
         "p",
         "E (prompt, o - 1);
-         branch (o > 2) { observe long = 1; } else { }",
+         if (o > 2) { observe long = 1; } else { }",
         &["`o` is hidden from the scheduler", "branch"],
     );
 }
@@ -240,7 +242,7 @@ fn hidden_values_propagate_through_every_loop_pass() {
         refused_with(
             request,
             "p",
-            &format!("{init} loop {{ branch (x0 == 0) {{ observe flag = 1; }} {work} {chain} }}"),
+            &format!("{init} loop {{ if (x0 == 0) {{ observe flag = 1; }} {work} {chain} }}"),
             &[
                 "`x0` is set from the hidden `o`",
                 "server's branch reads it",
@@ -266,9 +268,9 @@ fn loop_join_preserves_origins_of_reassigned_hidden_names() {
     let src = "stage svc : delay;
       workload { arrive batch(1); hidden a, b; init { set a = 1; set b = 2; set flag = 0; } }
       server { while (1) {
-        branch (flag) { set a = b; }
+        if (flag) { set a = b; }
         run svc (cost(svc, b));
-        branch (a > 0) {}
+        if (a > 0) {}
       } }";
     let error = compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap_err();
     // The else path leaves a's original hidden value. Running by b cannot
@@ -287,9 +289,9 @@ fn a_run_reveals_only_origins_present_on_every_path() {
         ))
     };
     for body in [
-        "branch (1) {} else { set a = b; } run svc (cost(svc, a)); branch (b > 0) { observe leaked = b; }",
-        "set c = 1 ? a : b; run svc (cost(svc, c)); branch (b > 0) {}",
-        "run svc (cost(svc, 1 || b)); branch (b > 0) {}",
+        "if (1) {} else { set a = b; } run svc (cost(svc, a)); if (b > 0) { observe leaked = b; }",
+        "set c = 1 ? a : b; run svc (cost(svc, c)); if (b > 0) {}",
+        "run svc (cost(svc, 1 || b)); if (b > 0) {}",
     ] {
         let error = compile_source(&model(body), &common::horizon(10.0)).unwrap_err();
         assert!(error.contains("`b` is hidden"), "{error}");
@@ -297,8 +299,8 @@ fn a_run_reveals_only_origins_present_on_every_path() {
     // Both branch arms depend on b: reading c genuinely reveals b.
     compile_source(
         &model(
-            "branch (1) { set c = b; } else { set c = b + 1; }
-         run svc (cost(svc, c)); branch (b > 0) {}",
+            "if (1) { set c = b; } else { set c = b + 1; }
+         run svc (cost(svc, c)); if (b > 0) {}",
         ),
         &common::horizon(10.0),
     )
@@ -306,9 +308,7 @@ fn a_run_reveals_only_origins_present_on_every_path() {
     // Preserve dependency information after revelation so repeated runs
     // remain evidence at every loop pass, without falsely revealing b.
     compile_source(
-        &model(
-            "set i = 0; while (i < 2) { run svc (cost(svc, a)); branch (a > 0) {} set i = i + 1; }",
-        ),
+        &model("set i = 0; while (i < 2) { run svc (cost(svc, a)); if (a > 0) {} set i = i + 1; }"),
         &common::horizon(10.0),
     )
     .unwrap();
@@ -318,7 +318,7 @@ fn a_run_reveals_only_origins_present_on_every_path() {
 fn a_cost_family_annotation_does_not_reveal_its_index() {
     let source = "fn main() { stage svc[2] : delay;
       workload { arrive batch(1); hidden secret; turn { set secret = 0; } }
-      server { run svc[0] (cost(svc[secret], 1)); branch (secret > 0) {} }
+      server { run svc[0] (cost(svc[secret], 1)); if (secret > 0) {} }
     }";
     let e = compile_source(source, &common::horizon(10.0)).unwrap_err();
     assert!(e.contains("hidden"), "{e}");
@@ -343,7 +343,7 @@ fn a_stage_passed_bare_does_not_reveal_an_attribute_of_its_name() {
           init {{ set prompt = 32; set {attribute} = 4; }}
           session {{ turn; end; }} }}
         server {{ E (prompt, {work});
-          branch ({attribute} > 2) {{ observe big = 1; }} else {{ observe small = 1; }} }}
+          if ({attribute} > 2) {{ observe big = 1; }} else {{ observe small = 1; }} }}
         }}"
         )
     };
@@ -376,7 +376,7 @@ fn what_the_workload_sets_from_a_hidden_attribute_before_the_request_is_hidden()
               init {{ {init} }}
               turn {{ {turn} }}
               session {{ {session} }} }}
-            server {{ branch (x > 5) {{ run A (cost(A, o)); }} else {{ run B (cost(B, o)); }} }}
+            server {{ if (x > 5) {{ run A (cost(A, o)); }} else {{ run B (cost(B, o)); }} }}
             "
         )
     };

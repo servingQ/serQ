@@ -94,8 +94,9 @@ transfer (X) from P to Q (n);      // run link (X); load Q (n); release P
 transfer on S, T (X) from P to Q (n);   // uses both links for the transfer
 tool[j] Z;  tool on S (Z);         // an instance of an array; an explicit stage
 
-branch (e) { … } [else { … }]      // a test: e is 0 or 1
-branch with (p) { … } [else { … }] // a draw: with probability p
+if (e) { … } [else { … }]      // a test: e is 0 or 1
+if (e) { … } else if (f) { … } // f is read only when e is 0
+if (~bernoulli(p)) { … } [else { … }] // a draw: with probability p
 loop { … }
 choose j in n by (k1, …);          // least key over indices 0 through n-1
 end;

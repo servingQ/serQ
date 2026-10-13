@@ -36,7 +36,7 @@ fn main() {
       set sp = prefill_work();
       set sd = decode_work();
       set kv = kv_tokens();
-      branch (mode == 0) {
+      if (mode == 0) {
         run agg (cost(agg, sp + sd + I));
       } else {
         run prefill (cost(prefill, sp / gP));

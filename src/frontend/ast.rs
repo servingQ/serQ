@@ -418,7 +418,7 @@ pub enum IterStmt {
         only: Option<Expr>,
         gate: Option<Expr>,
     },
-    /// `branch (e) { … } [else { … }]`
+    /// `if (e) { … } [else { … }]`
     Branch(Expr, Vec<IterStmt>, Vec<IterStmt>),
     /// `set NAME = e;`: one of the stage's registers.
     Set(String, Expr),

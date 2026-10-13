@@ -345,7 +345,7 @@ fn typed_declarations_do_not_override_resource_or_side_checks() {
 #[test]
 fn composite_cost_fields_require_initialization_on_every_path() {
     let e = compile(
-        "branch (items > 3) { Cost processing = { svc: items }; }
+        "if (items > 3) { Cost processing = { svc: items }; }
          run svc (processing.svc);",
         "Size items = 3;",
     )

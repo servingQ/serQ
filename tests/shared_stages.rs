@@ -71,9 +71,9 @@ fn three(share: &str, horizon: f64) -> serq::Report {
           }}
         }}
         server {{
-          branch (serial == 0) {{ run A, B (cost(A, B, 1), share = share.{share}); observe f1 = now; }}
-          branch (serial == 1) {{ run A (cost(A, 1)); observe f2 = now; }}
-          branch (serial == 2) {{ run B (cost(B, 1)); observe f3 = now; }}
+          if (serial == 0) {{ run A, B (cost(A, B, 1), share = share.{share}); observe f1 = now; }}
+          if (serial == 1) {{ run A (cost(A, 1)); observe f2 = now; }}
+          if (serial == 2) {{ run B (cost(B, 1)); observe f3 = now; }}
         }}
         "
         ),
@@ -334,12 +334,12 @@ fn each_fabric_has_its_own_policy() {
           }
         }
         server {
-          branch (serial == 0) { run A, B (cost(A, B, 1), share = share.maxmin); observe f1 = now; }
-          branch (serial == 1) { run A (cost(A, 1)); observe f2 = now; }
-          branch (serial == 2) { run B (cost(B, 1)); observe f3 = now; }
-          branch (serial == 3) { run C, D (cost(C, D, 1), share = share.bottleneck); observe g1 = now; }
-          branch (serial == 4) { run C (cost(C, 1)); observe g2 = now; }
-          branch (serial == 5) { run D (cost(D, 1)); observe g3 = now; }
+          if (serial == 0) { run A, B (cost(A, B, 1), share = share.maxmin); observe f1 = now; }
+          if (serial == 1) { run A (cost(A, 1)); observe f2 = now; }
+          if (serial == 2) { run B (cost(B, 1)); observe f3 = now; }
+          if (serial == 3) { run C, D (cost(C, D, 1), share = share.bottleneck); observe g1 = now; }
+          if (serial == 4) { run C (cost(C, 1)); observe g2 = now; }
+          if (serial == 5) { run D (cost(D, 1)); observe g3 = now; }
         }
         ",
         &common::horizon(5.0),
@@ -361,7 +361,7 @@ fn each_fabric_has_its_own_policy() {
 #[test]
 fn a_fabric_has_one_policy() {
     let e = server(
-        "branch (serial == 0) { run A, B (cost(A, B, 1), share = share.maxmin); }
+        "if (serial == 0) { run A, B (cost(A, B, 1), share = share.maxmin); }
          else { run B, E[0] (cost(B, E, 1), share = share.bottleneck); }",
     );
     assert!(

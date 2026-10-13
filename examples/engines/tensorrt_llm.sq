@@ -71,7 +71,7 @@ fn main() {
       loop {
         turn;
         set K = prompt + o;
-        branch (more) { tool (~exp(Z)); } else { end; }
+        if (more) { tool (~exp(Z)); } else { end; }
       }
     }
   }

@@ -221,7 +221,7 @@ fn a_reuse_bound_cuts_no_other_session() {
 /// the others keep theirs.
 #[test]
 fn a_shared_prefix_is_no_session_s_consumed_entry() {
-    let inner = "branch (serial == 1) {
+    let inner = "if (serial == 1) {
                    hold kv (cost(kv, 1216)) prefix (sys: 1200, serial: inf) {
                      observe inner = cached;
                    } cache (cost(kv, 1600));
@@ -291,12 +291,12 @@ fn a_key_is_its_attribute_and_its_value() {
         workload {{ arrive batch(3); init {{ set sys = 1; }} session {{ turn; }} }}
         server {{
           run user (cost(user, serial * 10));
-          branch (serial == 1) {{
+          if (serial == 1) {{
             hold kv (cost(kv, 1600)) {{
               run llm (cost(llm, 1));
             }} cache (cost(kv, 1600));
           }}
-          branch (serial == 2) {{
+          if (serial == 2) {{
             hold kv (cost(kv, 1600)) {CHAIN} {{
               observe got = cached;
               run llm (cost(llm, 1));
@@ -341,10 +341,10 @@ fn the_first_writer_does_not_own_the_shared_prompt() {
             &format!(
                 "run user (cost(user, serial * 10));
                  hold kv (cost(kv, serial == 1 ? 1200 : 1600)) {CHAIN} {{
-                   branch (serial == 2) {{ observe late = cached; }}
+                   if (serial == 2) {{ observe late = cached; }}
                    run llm (cost(llm, 1));
                  }} cache (cost(kv, 1600));
-                 branch (serial == 0) {{
+                 if (serial == 0) {{
                    run user (cost(user, 15));
                    hold kv (cost(kv, {units})) {CHAIN} {{
                      observe short = cached;
@@ -374,11 +374,11 @@ fn drop_takes_the_session_s_entry_alone() {
         &format!(
             "run user (cost(user, serial * 10));
              hold kv (cost(kv, 1600)) {CHAIN} {{
-               branch (serial == 1) {{ observe mid = cached; }}
+               if (serial == 1) {{ observe mid = cached; }}
                run llm (cost(llm, 1));
              }} cache (cost(kv, 1600));
              run user (cost(user, 1));
-             branch (serial == 0) {{ drop kv; }}"
+             if (serial == 0) {{ drop kv; }}"
         ),
     );
     let r = run(&src, &options(100.0));

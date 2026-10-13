@@ -131,7 +131,7 @@ fn not_read_in(value: &str, clause: &str) -> String {
     let (list, field) = value.split_once('.').expect("a list's value");
     if field == "preempted" || field == "admitted" {
         format!(
-            "`{value}` is what the iteration's schedule did, read in its `branch`, `while` and \
+            "`{value}` is what the iteration's schedule did, read in its `if`, `while` and \
              `set`, not in `{clause}`"
         )
     } else if list == "running" {
@@ -147,7 +147,7 @@ fn not_read_in(value: &str, clause: &str) -> String {
         )
     } else {
         let so_far = if ["tokens", "prefilled"].contains(&field) {
-            ", and as the batch so far in a schedule's `branch`, `while` and `set`"
+            ", and as the batch so far in a schedule's `if`, `while` and `set`"
         } else {
             ""
         };
@@ -659,7 +659,7 @@ impl Parser {
         let mut body = vec![];
         while *self.peek() != Tok::RBrace {
             if self.is_kw("let") {
-                return self.err("a schedule's `let` stands at its top, not in a `branch`");
+                return self.err("a schedule's `let` stands at its top, not in an `if`");
             }
             body.push(self.schedule_stmt()?);
         }
@@ -729,15 +729,8 @@ impl Parser {
             let cap = self.each_at_most()?;
             self.expect(&Tok::Semi)?;
             Ok(SStmt::Exclusive { cap })
-        } else if self.eat_kw("branch") {
-            let guard = self.paren_expr()?;
-            let then = self.schedule_block()?;
-            let other = if self.eat_kw("else") {
-                self.schedule_block()?
-            } else {
-                vec![]
-            };
-            Ok(SStmt::Branch(guard, then, other))
+        } else if self.eat_kw("if") {
+            self.schedule_if()
         } else if self.eat_kw("set") {
             let n = self.ident()?;
             self.expect(&Tok::Assign)?;
@@ -749,10 +742,24 @@ impl Parser {
         } else {
             self.err(format!(
                 "a schedule takes `advance running`, `admit waiting`, `exclusive prefill`, \
-                 `branch` and `set`; found {}",
+                 `if` and `set`; found {}",
                 self.peek()
             ))
         }
+    }
+
+    /// A schedule's `if (e) { … } [else { … } | else if …]`, after the `if`.
+    fn schedule_if(&mut self) -> PResult<SStmt> {
+        let guard = self.paren_expr()?;
+        let then = self.schedule_block()?;
+        let other = if !self.eat_kw("else") {
+            vec![]
+        } else if self.eat_kw("if") {
+            vec![self.schedule_if()?]
+        } else {
+            self.schedule_block()?
+        };
+        Ok(SStmt::Branch(guard, then, other))
     }
 
     /// A per-run cap as written: `inf` (no cap) stands as an outcome, the
@@ -1209,7 +1216,7 @@ fn reads_name(e: &Expr, n: &str) -> bool {
     e.any(&|x| matches!(x, Expr::Var(v) if v == n))
 }
 
-/// Each statement of a schedule, a `branch`'s included, before its own.
+/// Each statement of a schedule, an `if`'s included, before its own.
 fn visit(body: &[SStmt], f: &mut impl FnMut(&SStmt)) {
     for st in body {
         f(st);

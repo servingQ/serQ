@@ -85,7 +85,7 @@ sstmt    := advance running [only ( expr )] [admission | by ( expr , ... ) | dec
           | admit waiting [only ( expr )] [while ( expr )] [each at most ( expr )]
                 [taking POOL ( expr ) [reserve ( expr )] , ... [reuse ( expr )]] ;   -- what the admission takes of the request
           | exclusive prefill [each at most ( expr )] ;
-          | branch ( expr ) { sstmt* } [else { sstmt* }]
+          | if ( expr ) { sstmt* } [else ( { sstmt* } | if … )]
           | set NAME = expr ;
 wlitem   := arrive poisson ( rate ) ; | arrive renewal ( expr ) ; | arrive closed ( n ) ; | arrive batch ( n ) ; | arrive none ;
           | trace "file.csv" [ordered] ;      -- replay sessions from a trace
@@ -114,8 +114,7 @@ stmt     := turn ;                           -- draw attributes, submit, wait fo
                                              -- growing: inside a hold of POOL, which grows with the tokens
           | run STAGE , STAGE [, STAGE]* ( expr , share = POLICY ) ;   -- one job holding every stage at once
           | run ( expr ) ;                   -- in a queue's entry: the queue's own stage
-          | branch ( expr ) block [ else block ]          -- a test
-          | branch with ( expr ) block [ else block ]     -- a draw, w.p. expr
+          | if ( expr ) block [ else ( block | if … ) ]   -- a test; a draw is if (~bernoulli( p ))
           | while ( expr ) block             -- test before each pass; continue after the block
           | loop block
           | fork block                       -- the block runs beside the session: a leg of the request
@@ -158,7 +157,7 @@ See [Workload](api/workload.md) and [A finite run](api/program.md#a-finite-run).
 ### Expressions
 
 Arithmetic, comparisons (0/1), `&&`, `||`, `!` and
-`c ? a : b` (a non-zero operand is true; `branch` and `while` guards are held to 0
+`c ? a : b` (a non-zero operand is true; `if` and `while` guards are held to 0
 or 1); the draws `~exp`, `~det`, `~uniform`, `~erlang`, `~h2`,
 `~bernoulli`; functions, observables of pools and stages, and aggregates
 over an index, `max j in n (e)`, `min j in n (e)`, `sum j in n (e)`: `n` is
@@ -541,7 +540,7 @@ An entry sees its own. Its header — the units, `reserve`, `reuse`, the
 pools and stage, the constants, `cached` and `computed`, and what the
 entry sets above the
 hold, as a server's header reads an attribute set before it (`set kept =
-prompt;` before it, or in both arms of a `branch`; not in a loop or `fork`
+prompt;` before it, or in both arms of an `if`; not in a loop or `fork`
 that may not have run); a `prefix` key also reads `serial`, the session's
 number, so that an entry keys the session's own context (`prefix (system:
 S, serial: inf)`) whose role fixes its parameters. A local set only in the hold's body or after it is
@@ -967,7 +966,7 @@ running requests not yet served their tokens, skipping and leaving
 unserved those `p` excludes; `admit waiting [only (p)] [while (e)]` admits
 the heads of the queues the engine admits one at a time, each served at
 once unless `p` excludes it, while budget is left, the head fits and `e`
-is 1; and `branch (e) { … } else { … }`. A guard and a `while` read the
+is 1; and `if (e) { … } else { … }`. A guard and a `while` read the
 running requests as they stand, what the iteration has scheduled so far
 (`batch.tokens`, `batch.prefilled`), `waiting.admitted` and
 `running.preempted` (counts). See [Engine](api/engine.md#schedule) for
@@ -1025,7 +1024,7 @@ pool reqs on vllm { queue fifo; }
 | `advance running [order]; admit waiting while (running.preempted == 0);` | `serve` `By([keys])` of the order (`By([])` for none, admission order), no `iteration` |
 | the same with `only (p)` on both statements | `serve` as above, `iteration` `[Serve {only: p}, Admit {only: p, gate: !preempted}]` |
 | `exclusive prefill; admit waiting while (running.preempted == 0);` | `serve` `ExclusivePrefill`, no `iteration` |
-| any other `schedule { … }` | `serve` `By([])`, `iteration` the body: `advance running` a `Serve`, `admit waiting` an `Admit`, `branch` a `Branch`, `set` a `Set` |
+| any other `schedule { … }` | `serve` `By([])`, `iteration` the body: `advance running` a `Serve`, `admit waiting` an `Admit`, `if` a `Branch`, `set` a `Set` |
 | `running.count`, `running.decoding`, `running.kv_decode`, `running.kv_prefill`, `running.preempted`, `waiting.admitted` | `Nres`, `Ndec`, `Kvb`, `Kvp`, `Preempted`, `Admitted` |
 | `batch.tokens`, `batch.prefilled`, `batch.decoding`, `batch.kv_decode`, `batch.kv_prefill`, `batch.attention` | `Ntok`, `Npre`, `Ndec`, `Kvb`, `Kvp`, `Attn` |
 | `waiting.count` | `Queued` of each pool the engine admits, summed |
@@ -1058,7 +1057,7 @@ queues, `batch.…` the iteration's batch.
 | `batch.tokens`, `batch.prefilled` | no | yes: the batch so far | yes |
 | `batch.decoding`, `batch.kv_decode`, `batch.kv_prefill`, `batch.attention` | no | no | yes |
 
-`schedule` is its statements: `branch`, `while` and `set`, read as the
+`schedule` is its statements: `if`, `while` and `set`, read as the
 iteration is planned. A schedule's `only` and `by`, read for each resident
 at its turn, and its `each at most` and the `let`s it reads, read as the
 iteration starts, read what `tokens cap` reads: `running.count`,
@@ -1197,13 +1196,13 @@ See [Workload](api/workload.md#hidden) for the permitted positions.
 
 ### Branching
 
-`branch (e)` takes the first block when `e` is 1 and the
+`if (e)` takes the first block when `e` is 1 and the
 second when it is 0; any other value (a fraction, a count, a negative
 number, NaN) is a run-time error, since a guard is a test and a test has
-two answers. `branch with (p)` takes the first block with probability `p`,
-and is sugar the parser rewrites to `branch (~bernoulli(p))` — the IR, the
-interpreter and the Lean model know only the one form, and the draw is a
-0 or a 1 by the time the guard sees it. A constant guard that is not 0 or
+two answers. A draw is written `if (~bernoulli(p))`: it takes the first
+block with probability `p`, and the sample is a 0 or a 1 by the time the
+guard sees it. `else if (f) { … }` is `else { if (f) { … } }`, so `f` is
+read only when `e` is 0. A constant guard that is not 0 or
 1 is refused at link time; a computed one is refused when it is evaluated.
 
 ### Amounts and indices
@@ -1244,7 +1243,7 @@ A `loop` or `while` must let time pass on every pass
 through its body: every path through it reaches a `run` (a constant zero
 work does not count), a `hold` whose body does, or `end`; the linker
 refuses a loop that does not (`loop { set w = w + 1; }`, or a `run` on one
-arm of a `branch` only). What the linker cannot see — a `run` whose
+arm of an `if` only). What the linker cannot see — a `run` whose
 computed work is 0 on every pass, a `hold` that fits, grows past its pool
 and preempts itself — the run time catches: a session that executes a
 million statements without blocking, or that becomes ready a thousand
@@ -1260,7 +1259,7 @@ certainly not what their author meant: a `set` that reads live pool or
 stage state (`cachedin`, `budget_left`, `used`, …) and is then used in a
 hold's header, where the value is the one from before the session queued
 (`at admission` is the clause for it); a hold without `cache` that reads
-`cached` or writes `reuse`; and a constant `branch` guard other than 0 or 1
+`cached` or writes `reuse`; and a constant `if` guard other than 0 or 1
 (Branching, above). These are errors, not warnings.
 
 ### Statistics

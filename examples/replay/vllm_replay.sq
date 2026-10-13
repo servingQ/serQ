@@ -52,7 +52,7 @@ fn main() {
       observe prefix = prefix;
       observe sent = t0;
       prefill (known - c) growing kv;
-      branch (known == prompt) { observe ttft = now - t0; }   // not a resumed request's re-prefill
+      if (known == prompt) { observe ttft = now - t0; }   // not a resumed request's re-prefill
       decode (output - 1 - (known - prompt)) growing kv;
       cache (prompt + output - 1);   // every computed token, full blocks (kv_cache_manager.py:602)
     }

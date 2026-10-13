@@ -23,7 +23,7 @@ fn three(preempt: &str) -> String {
           reqs cap 3;
           tokens cap 64;
           request (prompt, id) {{
-            branch (computed > 0) {{ observe victim = id; }}
+            if (computed > 0) {{ observe victim = id; }}
             prefill (prompt) growing kv;
             decode (12) growing kv;
             cache (0);
@@ -231,7 +231,7 @@ fn lifo_is_by_minus_admission_on_a_pool_no_engine_reads() {
           }}
         }}
         server {{
-          branch (serial == 0) {{
+          if (serial == 0) {{
             hold a (cost(a, 4)) {{
               run svc (cost(svc, 1));
               hold b (cost(b, 1)) {{ run svc (cost(svc, 1)); grow a (cost(a, 4)); run svc (cost(svc, 1)); }}

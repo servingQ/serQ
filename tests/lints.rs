@@ -127,23 +127,23 @@ fn a_read_inside_the_body_is_fine() {
 fn a_constant_probability_guard_is_rejected() {
     let src = "stage tool : delay;
         workload { arrive poisson(1); turn { set Z = ~exp(3); }
-          session {  loop { branch (0.8) { turn;  } else { end; } }
+          session {  loop { if (0.8) { turn;  } else { end; } }
           }
         }
         server { run tool (cost(tool, Z));
         }
         ";
     let e = check(src).expect_err("rejected");
-    assert!(e.contains("`branch (0.8)` is not a test"), "{e}");
-    assert!(e.contains("branch with (0.8)"), "{e}");
+    assert!(e.contains("`if (0.8)` is not a test"), "{e}");
+    assert!(e.contains("if (~bernoulli(0.8))"), "{e}");
     // a constant that is neither 0 nor 1 and not a probability either
-    let e = check(&src.replace("branch (0.8)", "branch (2)")).expect_err("rejected");
+    let e = check(&src.replace("if (0.8)", "if (2)")).expect_err("rejected");
     assert!(
-        e.contains("`branch (2)` is not a test: a guard is 0 or 1."),
+        e.contains("`if (2)` is not a test: a guard is 0 or 1."),
         "{e}"
     );
-    assert!(!e.contains("branch with"), "{e}");
-    check(&src.replace("branch (0.8)", "branch (1)")).expect("0 and 1 are tests");
+    assert!(!e.contains("bernoulli"), "{e}");
+    check(&src.replace("if (0.8)", "if (1)")).expect("0 and 1 are tests");
 }
 
 /// 0 and 1 are tests, not draws, and stay legal.
@@ -153,14 +153,14 @@ fn zero_and_one_are_tests() {
         let src = format!(
             "stage tool : delay;
         workload {{ arrive poisson(1); turn {{ set Z = ~exp(3); }}
-          session {{  loop {{ branch ({g}) {{ turn;  }} else {{ end; }} }}
+          session {{  loop {{ if ({g}) {{ turn;  }} else {{ end; }} }}
           }}
         }}
         server {{ run tool (cost(tool, Z));
         }}
         "
         );
-        check(&src).unwrap_or_else(|e| panic!("`branch ({g})` is a test: {e}"));
+        check(&src).unwrap_or_else(|e| panic!("`if ({g})` is a test: {e}"));
     }
 }
 
@@ -549,7 +549,7 @@ fn a_stage_reads_no_session_attribute() {
         (
             engine(
                 "8",
-                "branch (prompt > 0) { advance running; } \
+                "if (prompt > 0) { advance running; } \
                  admit waiting while (running.preempted == 0) taking kv (prompt);",
                 "1",
             ),
@@ -695,7 +695,7 @@ fn cached_in_a_nested_hold_on_another_pool_is_rejected() {
     let inner = "hold reqs (cost(reqs, 1)) { run user (cost(user, 0.01)); }";
     for body in [
         format!("{inner} observe c = cached;"),
-        format!("{inner} branch (1 > 0) {{ observe c = cached; }}"),
+        format!("{inner} if (1 > 0) {{ observe c = cached; }}"),
         format!("loop {{ observe c = cached; {inner} }}"),
     ] {
         let e = check(&nested(&body)).expect_err("rejected");

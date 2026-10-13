@@ -37,13 +37,13 @@ fn a_loop_that_never_lets_time_pass_is_a_link_error() {
     assert!(e.contains("let time pass"), "{e}");
 }
 
-/// A `run` on one arm of a `branch` does not cover the other arm.
+/// A `run` on one arm of an `if` does not cover the other arm.
 #[test]
 fn a_run_on_one_arm_only_is_a_link_error() {
     let e = check(&format!(
         "{TOOL} workload {{ {CLIENT} session {{ turn;
         }} }}
-        server {{ loop {{ branch (w > 0) {{ run tool (cost(tool, w)); }} else {{ set w = w; }} }}
+        server {{ loop {{ if (w > 0) {{ run tool (cost(tool, w)); }} else {{ set w = w; }} }}
         }}
         "
     ))
@@ -81,13 +81,13 @@ fn a_hold_counts_only_through_its_body() {
 #[test]
 fn end_and_a_later_run_cover_the_loop() {
     check(&format!(
-        "{TOOL} workload {{ {CLIENT} session {{ turn; loop {{ branch (w > 0) {{ end; }} else {{ end; }} }} \n}} }}\nserver {{\n}} "
+        "{TOOL} workload {{ {CLIENT} session {{ turn; loop {{ if (w > 0) {{ end; }} else {{ end; }} }} \n}} }}\nserver {{\n}} "
     ))
     .expect("ends");
     check(&format!(
         "{TOOL} workload {{ {CLIENT} session {{ turn;
         }} }}
-        server {{ loop {{ branch (w > 0) {{ set flag = 0; }} else {{ set flag = 1; }} run tool (cost(tool, 1)); }}
+        server {{ loop {{ if (w > 0) {{ set flag = 0; }} else {{ set flag = 1; }} run tool (cost(tool, 1)); }}
         }}
         "
     ))
@@ -225,7 +225,7 @@ fn the_marks_of_a_session_turn_do_not_depend_on_the_machine() {
               observe nn = n; observe oo = o; observe uu = u0;
               turn;
               set K = prompt + o;
-              branch (more) {{ tool (~exp(3));  }} else {{ end; }}
+              if (more) {{ tool (~exp(3));  }} else {{ end; }}
             }}
           }}
         }}

@@ -332,7 +332,7 @@ fn a_hold_whose_body_changes_its_index_does_not_link() {
     };
     for body in [
         "set j = 1; grow kv[j] (cost(kv, 16));",
-        "branch (j == 0) { set j = 1; } grow kv[j] (cost(kv, 16));",
+        "if (j == 0) { set j = 1; } grow kv[j] (cost(kv, 16));",
         "grow kv[j] (cost(kv, 16)); choose j in 2 by (j);",
         "set j = 1;",
     ] {
@@ -379,7 +379,7 @@ fn a_transfer_overlaps_the_two_pools_for_the_link_run() {
           }
         }
         server {
-          branch (kind == 0) {
+          if (kind == 0) {
             hold memP (cost(memP, 10)) { run prefill (cost(prefill, 1)); } lease memP (inf);
             hold memD (cost(memD, 10)) {
               transfer (1) from memP to memD (10);
@@ -388,8 +388,8 @@ fn a_transfer_overlaps_the_two_pools_for_the_link_run() {
               run decode (cost(decode, 1));
             }
           }
-          branch (kind == 1) { run gate (cost(gate, 0.5)); hold memP (cost(memP, 10)) { observe p_admitted = now; } }
-          branch (kind == 2) { run gate (cost(gate, 1.5)); hold memD (cost(memD, 10)) { observe d_admitted = now; } }
+          if (kind == 1) { run gate (cost(gate, 0.5)); hold memP (cost(memP, 10)) { observe p_admitted = now; } }
+          if (kind == 2) { run gate (cost(gate, 1.5)); hold memD (cost(memD, 10)) { observe d_admitted = now; } }
         }
 
 "#;
@@ -562,9 +562,9 @@ fn an_engine_serves_its_queues_in_declaration_order() {
           pool {first} on llm {{ }}
           pool {second} on llm {{ }}
           decode (s) {{
-            branch (s == 0) {{ hold a (cost(a, 1)) {{ run llm decode (cost(llm, 50)); }} }}
-            branch (s == 1) {{ hold a (cost(a, 1)) {{ run llm decode (cost(llm, 1)); }} }}
-            branch (s == 2) {{ hold b (cost(b, 1)) {{ observe b_admitted = now; run llm decode (cost(llm, 1)); }} }}
+            if (s == 0) {{ hold a (cost(a, 1)) {{ run llm decode (cost(llm, 50)); }} }}
+            if (s == 1) {{ hold a (cost(a, 1)) {{ run llm decode (cost(llm, 1)); }} }}
+            if (s == 2) {{ hold b (cost(b, 1)) {{ observe b_admitted = now; run llm decode (cost(llm, 1)); }} }}
           }}
         }}
         stage gate : delay;
@@ -716,7 +716,7 @@ fn a_grow_with_nobody_to_preempt_waits() {
         }
         server {
           hold kv (cost(kv, 10)) {
-            branch (serial == 0) { run svc (cost(svc, 1)); grow kv (cost(kv, 10)); observe grew = now; run svc (cost(svc, 1)); }
+            if (serial == 0) { run svc (cost(svc, 1)); grow kv (cost(kv, 10)); observe grew = now; run svc (cost(svc, 1)); }
             else { run svc (cost(svc, 5)); }
           }
         }
@@ -743,7 +743,7 @@ fn an_untaken_lease_ends_at_its_bound_and_keeps_its_cache() {
           }
         }
         server {
-          branch (serial == 0) {
+          if (serial == 0) {
             hold kv (cost(kv, 10)) { run svc (cost(svc, 1)); } cache (cost(kv, 10)) lease kv (2);
             observe leased = used(kv);
             run svc (cost(svc, 5));
@@ -781,7 +781,7 @@ fn a_lease_ends_with_the_session() {
           }
         }
         server {
-          branch (serial == 0) {
+          if (serial == 0) {
             hold kv (cost(kv, 10)) { run svc (cost(svc, 1)); } cache (cost(kv, 10)) lease kv (inf);
             run svc (cost(svc, 1));
           } else {
@@ -810,7 +810,7 @@ fn a_lease_is_not_a_preemption_victim() {
           }
         }
         server {
-          branch (serial == 0) {
+          if (serial == 0) {
             hold kv (cost(kv, 5)) { run svc (cost(svc, 1)); grow kv (cost(kv, 10)); observe grew = now; run svc (cost(svc, 1)); }
           } else {
             run svc (cost(svc, 0.5));

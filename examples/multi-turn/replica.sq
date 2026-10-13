@@ -64,10 +64,10 @@ fn main() {
           turn;
           set K = K + n + o;
           set cold = 0;
-          branch (K > maxctx) { drop kv; end; }
+          if (K > maxctx) { drop kv; end; }
           // whether the session continues is decided when the tool returns
           tool (~exp(Z));
-          branch with (p) { } else { drop kv; end; }
+          if (~bernoulli(p)) { } else { drop kv; end; }
         }
       }
     }
@@ -83,6 +83,6 @@ fn main() {
                             : (K + n) + (b / a) * (K + n) * (K + n) / 2);
       llm (P, o);
     } cache (cost(reqs, kv, K + n + o));
-    branch (!cold) { observe hit = warm; }
+    if (!cold) { observe hit = warm; }
   }
 }

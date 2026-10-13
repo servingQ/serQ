@@ -105,10 +105,10 @@ fn main() {
       loop {
         turn;
         set K = prompt + o;
-        branch (more) {
-          branch (fan) { run delegate (cost(delegate, W)); } else { tool (~exp(Z)); }
+        if (more) {
+          if (fan) { run delegate (cost(delegate, W)); } else { tool (~exp(Z)); }
         } else {
-          branch (sub) { observe subagent = now - t_s; }
+          if (sub) { observe subagent = now - t_s; }
           end;
         }
       }

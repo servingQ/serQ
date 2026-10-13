@@ -142,7 +142,7 @@ fn no_self_edges() {
 }
 
 /// A chain of guards that moves nobody must not multiply the paths out.
-/// `routing.sq` has five sibling `branch (policy == k)` blocks.
+/// `routing.sq` has five sibling `if (policy == k)` blocks.
 #[test]
 fn guard_chains_do_not_multiply_edges() {
     let p = program("routing");
@@ -289,7 +289,7 @@ fn a_session_that_decides_first_starts_at_a_decision() {
           session { turn; end;
           }
         }
-        server { branch (a) { run s1 (cost(s1, 1)); } else { run s2 (cost(s2, 1)); }
+        server { if (a) { run s1 (cost(s1, 1)); } else { run s2 (cost(s2, 1)); }
         }
 
 "#,
@@ -534,7 +534,7 @@ fn a_release_in_one_arm_does_not_reach_the_other() {
           session { turn; end;
           }
         }
-        server { hold p (cost(p, 1)) { branch (c) { release p; run s1 (cost(s1, 1)); } else { run s2 (cost(s2, 1)); } run s3 (cost(s3, 1)); }
+        server { hold p (cost(p, 1)) { if (c) { release p; run s1 (cost(s1, 1)); } else { run s2 (cost(s2, 1)); } run s3 (cost(s3, 1)); }
         }
         ",
     );
@@ -572,9 +572,9 @@ fn a_lease_keeps_the_pool_on_the_stations_until_its_release() {
 fn a_pool_both_arms_hold_stays_held_whichever_hold_took_it() {
     let shapes = [
         // a lease grown in one arm, held anew in the other
-        "branch (turn_no > 1) { grow p (cost(p, 1)); } else { hold p (cost(p, 1)) { run s1 (cost(s1, 1)); } lease p (inf); }",
+        "if (turn_no > 1) { grow p (cost(p, 1)); } else { hold p (cost(p, 1)) { run s1 (cost(s1, 1)); } lease p (inf); }",
         // a lease each arm takes by a hold of its own
-        "branch (turn_no > 1) { hold p (cost(p, 1)) { run s1 (cost(s1, 1)); } lease p (inf); } else { hold p (cost(p, 2)) { run s3 (cost(s3, 1)); } lease p (inf); }",
+        "if (turn_no > 1) { hold p (cost(p, 1)) { run s1 (cost(s1, 1)); } lease p (inf); } else { hold p (cost(p, 2)) { run s3 (cost(s3, 1)); } lease p (inf); }",
     ];
     for shape in shapes {
         let p = compile(&format!(
@@ -762,7 +762,7 @@ fn the_router_branches_to_a_remote_or_a_local_prefill() {
     assert!(net.has_edge(pf, eg));
     assert!(net.has_edge(ing, d));
     assert!(!net.has_edge(eg, ing), "held at once, not passed in turn");
-    // `branch (!transferred)` right after `set transferred = 0`: the read is
+    // `if (!transferred)` right after `set transferred = 0`: the read is
     // skipped only when a preempted request runs its hold again, at D
     assert!(!net.has_edge(pf, d), "a remote request always reads");
     assert!(
@@ -874,7 +874,7 @@ fn requests_that_differ_in_the_ir_draw_the_session() {
 
 /// A server's guard on a workload attribute is not decided by the figure:
 /// the server does not know what the workload set (`routing.sq`'s
-/// `branch (first)`).
+/// `if (first)`).
 #[test]
 fn a_server_guard_on_the_workload_draws_both_arms() {
     let src = "stage big : fifo; stage small : fifo; stage tool : delay;
@@ -883,9 +883,9 @@ fn a_server_guard_on_the_workload_draws_both_arms() {
           init { set first = 1; }
           turn { set n = ~exp(10); }
           session { loop {  turn; set first = 0;
-              branch with (0.5) { run tool (cost(tool, 1)); } else { end; } } }
+              if (~bernoulli(0.5)) { run tool (cost(tool, 1)); } else { end; } } }
         }
-        server { branch (first) { run big (cost(big, n)); } else { run small (cost(small, n)); } }
+        server { if (first) { run big (cost(big, n)); } else { run small (cost(small, n)); } }
         ";
     let p = compile_source(&common::main_source(src), &common::horizon(100.0)).unwrap();
     let net = deployment::project(&p);
@@ -902,7 +902,7 @@ fn a_turn_forgets_what_the_path_set() {
           session { set n = 0;  turn;
           }
         }
-        server { branch (n > 0) { run A (cost(A, n)); } else { run B (cost(B, 1)); }
+        server { if (n > 0) { run A (cost(A, n)); } else { run B (cost(B, 1)); }
         }
         ",
     );
@@ -929,12 +929,12 @@ fn a_decided_guard_drops_only_an_arm_with_no_station() {
         "
         ))
     };
-    let p = program("branch (!x) { run B (cost(B, 1)); }");
+    let p = program("if (!x) { run B (cost(B, 1)); }");
     let net = deployment::project(&p);
     assert_eq!(drawn_stages(&p, &net), ["A", "B", "C"]);
     assert!(edge(&p, &net, "A", "C").is_none(), "the skip is not drawn");
     assert!(edge(&p, &net, "A", "B").is_some_and(|e| e.label.is_none()));
-    let p = program("branch (!x) { run B (cost(B, 1)); } else { run C (cost(C, 1)); }");
+    let p = program("if (!x) { run B (cost(B, 1)); } else { run C (cost(C, 1)); }");
     let net = deployment::project(&p);
     assert!(edge(&p, &net, "A", "C").is_some(), "an arm with a station");
 }
@@ -949,7 +949,7 @@ fn a_guard_on_constants_draws_both_arms() {
           session { turn; end;
           }
         }
-        server { branch (mode == 0) { run A (cost(A, 1)); } else { run B (cost(B, 1)); }
+        server { if (mode == 0) { run A (cost(A, 1)); } else { run B (cost(B, 1)); }
         }
         ",
     );
@@ -1012,7 +1012,7 @@ fn has(net: &deployment::Net, p: &Program, from: End, to: &str) -> Option<deploy
 #[test]
 fn a_loop_that_decides_first_returns_to_its_decision() {
     let (p, net) = shape(
-        "loop { set a = ~bernoulli(0.5); branch (a) { run A (cost(A, 1)); } else { run B (cost(B, 1)); } run C (cost(C, 1)); }",
+        "loop { set a = ~bernoulli(0.5); if (a) { run A (cost(A, 1)); } else { run B (cost(B, 1)); } run C (cost(C, 1)); }",
     );
     let d = decision(&net).expect("a decision");
     assert!(net.has_edge(End::Arrival, d));
@@ -1030,7 +1030,7 @@ fn a_loop_that_decides_first_returns_to_its_decision() {
 #[test]
 fn a_nested_loop_returns_to_the_inner_decision() {
     let (p, net) = shape(
-        "run C (cost(C, 1)); loop { loop { set a = ~bernoulli(0.5); branch (a) { run A (cost(A, 1)); } else { run B (cost(B, 1)); } } }",
+        "run C (cost(C, 1)); loop { loop { set a = ~bernoulli(0.5); if (a) { run A (cost(A, 1)); } else { run B (cost(B, 1)); } } }",
     );
     let d = decision(&net).expect("a decision");
     assert_eq!(
@@ -1055,7 +1055,7 @@ fn a_nested_loop_returns_to_the_inner_decision() {
 #[test]
 fn a_loop_through_an_empty_arm() {
     let (p, net) = shape(
-        "loop { set a = ~bernoulli(0.5); branch (a) { } else { run A (cost(A, 1)); } run B (cost(B, 1)); }",
+        "loop { set a = ~bernoulli(0.5); if (a) { } else { run A (cost(A, 1)); } run B (cost(B, 1)); }",
     );
     let d = decision(&net).expect("a decision");
     assert!(has(&net, &p, d, "A").is_some());
@@ -1070,7 +1070,7 @@ fn a_loop_through_an_empty_arm() {
 #[test]
 fn a_loop_that_can_end_before_a_station() {
     let (p, net) = shape(
-        "loop { set c = ~bernoulli(0.5); branch (c) { end; } run A (cost(A, 1)); run B (cost(B, 1)); }",
+        "loop { set c = ~bernoulli(0.5); if (c) { end; } run A (cost(A, 1)); run B (cost(B, 1)); }",
     );
     let d = decision(&net).expect("a decision");
     assert!(has(&net, &p, d, "exit").is_some_and(|e| e.label.as_deref() == Some("c")));
@@ -1085,7 +1085,7 @@ fn a_loop_that_can_end_before_a_station() {
 #[test]
 fn a_return_to_the_same_station_is_a_way_in() {
     let (p, net) = shape(
-        "run A (cost(A, 1)); loop { set c = ~bernoulli(0.5); branch (c) { end; } else { run A (cost(A, 1)); } }",
+        "run A (cost(A, 1)); loop { set c = ~bernoulli(0.5); if (c) { end; } else { run A (cost(A, 1)); } }",
     );
     let d = decision(&net).expect("a decision");
     assert!(has(&net, &p, d, "exit").is_some());
@@ -1100,7 +1100,7 @@ fn a_return_to_the_same_station_is_a_way_in() {
 fn a_decision_is_named_by_its_leading_chooses() {
     let (_, net) = shape(
         "set j = 0; loop { choose j in 2 by (0); set c = ~bernoulli(0.5);
-           branch (c) { choose k in 2 by (0); run A (cost(A, 1)); } else { run B (cost(B, 1)); }
+           if (c) { choose k in 2 by (0); run A (cost(A, 1)); } else { run B (cost(B, 1)); }
            choose m in 2 by (0); run C (cost(C, 1)); }",
     );
     let d = net
@@ -1122,7 +1122,7 @@ fn the_looking_pass_leaves_nothing() {
           session {
             loop {
               set c = ~bernoulli(0.5);
-              branch (c) { end; } turn;
+              if (c) { end; } turn;
               run x, y (cost(x, y, 1), share = share.maxmin);
               run A (cost(A, 1));
             }
@@ -1158,7 +1158,7 @@ fn a_decision_stays_before_its_stations() {
           hold kv[i] (cost(kv, 1)) { run A[i] (cost(A, 1)); }
           loop {
             set c = ~bernoulli(0.5);
-            branch (c) { hold kv[i] (cost(kv, 1)) { run B[i] (cost(B, 1)); } } else { hold kv[i] (cost(kv, 1)) { run C[i] (cost(C, 1)); } }
+            if (c) { hold kv[i] (cost(kv, 1)) { run B[i] (cost(B, 1)); } } else { hold kv[i] (cost(kv, 1)) { run C[i] (cost(C, 1)); } }
           }
         }
         ";
@@ -1186,7 +1186,7 @@ fn a_decision_stays_before_its_stations() {
 #[test]
 fn a_loop_with_one_way_in_has_no_decision() {
     let (p, net) = shape(
-        "loop { run A (cost(A, 1)); set c = ~bernoulli(0.5); branch (c) { end; } run B (cost(B, 1)); }",
+        "loop { run A (cost(A, 1)); set c = ~bernoulli(0.5); if (c) { end; } run B (cost(B, 1)); }",
     );
     assert!(decision(&net).is_none());
     assert!(edge(&p, &net, "B", "A").is_some_and(|e| e.back));
@@ -1526,7 +1526,7 @@ fn a_latency_before_two_transfers_stays_a_station() {
           hold kvP (cost(kvP, 10)) { run P (cost(P, 1)); } lease kvP (inf);
           set c = ~bernoulli(0.5);
           hold kvD (cost(kvD, 10)) {
-            branch (c) { transfer on a, L (1, share = share.maxmin) from kvP to kvD (10); }
+            if (c) { transfer on a, L (1, share = share.maxmin) from kvP to kvD (10); }
             else { transfer on b, L (1, share = share.maxmin) from kvP to kvD (10); }
           }
         }
@@ -1556,7 +1556,7 @@ fn a_transfers_note_is_what_every_run_over_it_moves() {
         }
         server {
           set c = ~bernoulli(0.5);
-          branch (c) {
+          if (c) {
             hold p1 (cost(p1, 1)) { run s (cost(s, 1)); } lease p1 (inf);
             hold q1 (cost(q1, 1)) { transfer on a, b (1, share = share.maxmin) from p1 to q1 (1); }
           } else {
@@ -1848,7 +1848,7 @@ fn a_load_in_the_else_arm_is_not_the_then_arms_transfer() {
         "set c = ~bernoulli(0.5);
          hold p[i] (cost(p, 1)) { run A[i] (cost(A, 1)); } lease p[i] (inf);
          hold q[j] (cost(q, 1)) {
-           branch (c) { run a[i], b[j] (cost(a, b, 1), share = share.maxmin); } else { load q[j] (cost(q, 1)); release p[i]; }
+           if (c) { run a[i], b[j] (cost(a, b, 1), share = share.maxmin); } else { load q[j] (cost(q, 1)); release p[i]; }
          }",
     );
     let n = &net.flow_notes[0];
@@ -1952,7 +1952,7 @@ fn after_a_branch_a_load_follows_no_arms_transfer() {
         "set c = ~bernoulli(0.5);
          hold q[j] (cost(q, 1)) {
            run a[i], b[j] (cost(a, b, 1), share = share.maxmin);
-           branch (c) { run P[i] (cost(P, 1)); } else { }
+           if (c) { run P[i] (cost(P, 1)); } else { }
            load q[j] (cost(q, 1));
          }",
     );
@@ -1970,7 +1970,7 @@ fn a_while_body_does_not_determine_its_continuation() {
       server {
         set flag = 0;
         while (flag) { run a (cost(a, 1)); set flag = 1; }
-        branch (flag) { run b (cost(b, 1)); } else { run c (cost(c, 1)); }
+        if (flag) { run b (cost(b, 1)); } else { run c (cost(c, 1)); }
       }
       ",
     );

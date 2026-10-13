@@ -61,7 +61,7 @@ fn main() {
       choose j in ND by (holders(D[j].kv) + queued(D[j].kv));
       set hitD = min(cachedin(D[j].kv), floor(prompt - 1, bs));
       set remote_prefill = prompt >= minp && prompt - hitD >= thr;
-      branch (remote_prefill) {
+      if (remote_prefill) {
         // Prefill profile: a pod that has the prefix (prefix-cache-affinity-filter),
         // then the least loaded (token-load-scorer).
         choose i in NP by (cachedin(P[i].kv) > 0 ? 0 : 1, work(P[i]) + queued(P[i].reqs));
@@ -147,7 +147,7 @@ fn main() {
            at admission (known = max(kept, computed + 1)) {
         set kept = known;
         set c = cached;
-        branch (!transferred) {
+        if (!transferred) {
           // WAITING_FOR_REMOTE_KVS: every block past the local hit is read
           // from the prefiller over NIXL, through its NIC and this pod's at
           // once; the read done, the prefiller's lease ends. The last prompt
@@ -205,7 +205,7 @@ fn main() {
     // vLLM refuses a prompt of max_model_len tokens or more before it is
     // scheduled (input_processor.py:512-536): the session ends there.
     observe too_long = K + n >= max_model_len;
-    branch (K + n >= max_model_len) { end; }
+    if (K + n >= max_model_len) { end; }
     gw.route();
   }
 

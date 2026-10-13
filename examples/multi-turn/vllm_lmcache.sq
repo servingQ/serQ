@@ -79,7 +79,7 @@ fn main() {
       set kept = known;
       set hit = min(cached, floor(known - 1, blocksize(kv)));
       set got = beyond(known, hit, fresh);
-      branch (!fresh) { observe l2_after_preemption = got; }   // vLLM loads nothing then (lmcache_mp_connector.py:758)
+      if (!fresh) { observe l2_after_preemption = got; }   // vLLM loads nothing then (lmcache_mp_connector.py:758)
       set fresh = 0;
       kvt.l2_load (lmc, kv, got, per_token = r);
       set c = hit + got;

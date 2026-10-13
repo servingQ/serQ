@@ -30,7 +30,7 @@ fn main() {
       loop {
         turn;
         set K = K + n + o;
-        branch with (p) { tool (~exp(Z)); } else { drop kv; end; }
+        if (~bernoulli(p)) { tool (~exp(Z)); } else { drop kv; end; }
       }
     }
   }
@@ -42,6 +42,6 @@ fn main() {
       set warm = cached >= K;
       run engine (cost(engine, (warm ? a * n : a * (K + n)) + d * o));
     } cache (cost(kv, K + n + o));
-    branch (K > 0) { observe hit = warm; }
+    if (K > 0) { observe hit = warm; }
   }
 }

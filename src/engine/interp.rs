@@ -2044,9 +2044,9 @@ impl<'p> Interp<'p> {
                     kind: FrameKind::Loop,
                 }),
                 CStmt::Branch(pe, a, b) => {
-                    // a guard is a test: 0 or 1. A draw is written `branch
-                    // with (p)`, which the parser rewrites to a Bernoulli
-                    // sample, so the guard never sees a fraction on purpose
+                    // a guard is a test: 0 or 1. A draw is written
+                    // `if (~bernoulli(p))`, a sample that is already 0 or 1,
+                    // so the guard never sees a fraction on purpose
                     let pr = self.eval(pe, &Ctx::session(sid), Which::Session);
                     let take = if pr == 1.0 {
                         true
@@ -2054,7 +2054,7 @@ impl<'p> Interp<'p> {
                         false
                     } else {
                         self.error = Some(format!(
-                            "`branch ({})`: the guard is {pr}, not 0 or 1; a draw is written `branch with (p)`",
+                            "`if ({})`: the guard is {pr}, not 0 or 1; a draw is written `if (~bernoulli(p))`",
                             self.p.show_expr(pe)
                         ));
                         return;
@@ -4463,7 +4463,7 @@ impl<'p> Interp<'p> {
                     }
                 }
                 CIter::Branch(g, a, b) => {
-                    let taken = if self.guard(g, plan, "a `branch` in a `schedule`") {
+                    let taken = if self.guard(g, plan, "an `if` in a `schedule`") {
                         a
                     } else {
                         b
@@ -4486,7 +4486,7 @@ impl<'p> Interp<'p> {
 
     /// A guard of an iteration body, read on the residents as they stand
     /// and what the iteration has done so far (`Moment::Plan`): 1 or 0, and
-    /// anything else fails the run, as a session's `branch` does.
+    /// anything else fails the run, as a session's `if` does.
     fn guard(&mut self, e: &CExpr, plan: &Plan, what: &str) -> bool {
         let v = self.plan_value(e, plan);
         if v == 1.0 {

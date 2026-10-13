@@ -131,7 +131,7 @@ fn a_request_preempted_during_decode_resumes_from_its_outputs() {
             at admission { known = computed < prompt ? prompt : computed + 1; }
             observe known_at = known;
             prefill (known) growing kv;
-            branch (known == prompt) { observe first = now; }
+            if (known == prompt) { observe first = now; }
             decode (o - 1 - (known - prompt)) growing kv;
           }
           schedule {
@@ -192,9 +192,9 @@ fn preempted_twice(set_kept: &str, known_is: &str) -> String {
             set kept = prompt;
             at admission {{ known = {known_is}; }}
             {set_kept}
-            branch (s == 2) {{ observe known_at = known; observe at = computed; }}
+            if (s == 2) {{ observe known_at = known; observe at = computed; }}
             prefill (known) growing kv;
-            branch (known == prompt) {{ observe first = s; }}
+            if (known == prompt) {{ observe first = s; }}
             decode (o - 1 - (known - prompt)) growing kv;
           }}
           schedule {{
@@ -314,9 +314,9 @@ fn preempted_twice_in_a_queue(set_kept: &str, known_is: &str) -> String {
             hold reqs (cost(reqs, 1)), kv (cost(kv, min(known, budget_left(D)))) reserve (cost(kv, known))
             at admission (known = {known_is}) {{
               {set_kept}
-              branch (prompt == 32) {{ observe known_at = known; observe at = computed; }}
+              if (prompt == 32) {{ observe known_at = known; observe at = computed; }}
               run D prefill (cost(D, known)) growing kv;
-              branch (known == prompt) {{ observe first = prompt; }}
+              if (known == prompt) {{ observe first = prompt; }}
               run D decode (cost(D, o - 1 - (known - prompt))) growing kv;
             }}
           }}
@@ -407,7 +407,7 @@ fn a_holder_preempted_before_its_first_step_has_computed_nothing() {
             execute (1);
           }
           decode (prompt) {
-            branch (prompt == 64) {
+            if (prompt == 64) {
               hold kv (cost(kv, prompt)) reserve (cost(kv, prompt)) {
                 run llm prefill (cost(llm, prompt)) growing kv;
                 run llm decode (cost(llm, o - 1)) growing kv;
@@ -721,7 +721,7 @@ fn next_turn_reuses_full_blocks_of_the_cached_prefix() {
         workload { arrive batch(1); init { set K = 0; set turns = 0; }
           session {
             loop { turn; set K = prompt + 10; set turns = turns + 1;
-              branch (turns >= 3) { end; }
+              if (turns >= 3) { end; }
             }
 
           }
@@ -755,7 +755,7 @@ fn lru_eviction_drops_tail_blocks_first() {
           tokens cap 8192;
           request (prompt, s) {
             at admission { c = min(cachedin(kv), floor((prompt - 1) / bs) * bs); }
-            branch (s == 0) { observe cached0 = cached; }
+            if (s == 0) { observe cached0 = cached; }
             prefill (prompt - min(cached, floor((prompt - 1) / bs) * bs)) growing kv;
             cache (prompt);
           }
@@ -776,7 +776,7 @@ fn lru_eviction_drops_tail_blocks_first() {
             // second turn then reuses 8 blocks.
             run gate (cost(gate, serial * 2));
             loop { turn; set K = prompt; set turns = turns + 1;
-              branch (turns >= 2 || serial == 1) { end; }
+              if (turns >= 2 || serial == 1) { end; }
               run gate (cost(gate, 10));
             }
 

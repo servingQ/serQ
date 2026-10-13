@@ -25,7 +25,7 @@ indices and predicates remain ordinary quantities.
 | [`release`](#release) | gives the innermost hold's units back now |
 | [`load`](#load) | the KV of some tokens arrived from outside |
 | [`run`](#run) | spends work at a stage |
-| [`branch`](#branch) | a test or a draw |
+| [`if`](#if) | a test or a draw |
 | [`while`](#while) | repeats while a condition holds |
 | [`loop`](#loop) | repeats a block |
 | [`choose`](#choose) | picks an index by the smallest key |
@@ -269,17 +269,21 @@ stage ingress[2] : ps(BwD);    // a decoder's NIC
 run egress[i], ingress[j] (cost(egress, ingress, tokens), share = share.maxmin);
 ```
 
-## `branch`
+## `if`
 
 ```serq
-branch (test) block [else block]
-branch with (p) block [else block]
+if (test) block [else block]
+if (test) block else if (test) block [else block]
+if (~bernoulli(p)) block [else block]
 ```
 
 | Form | Argument | Takes the first block |
 |---|---|---|
-| `branch (test)` | `expr`, must be 0 or 1 | when `test` is 1 |
-| `branch with (p)` | `expr`, a probability | with probability `p`; sugar for `branch (~bernoulli(p))` |
+| `if (test)` | `expr`, must be 0 or 1 | when `test` is 1 |
+| `if (~bernoulli(p))` | a draw, 1 with probability `p` | with probability `p` |
+
+`else if (test) block` is `else { if (test) block }`: the second test is read
+only when the first is 0.
 
 Any other value of `test` (a fraction, a count, a negative, NaN) is a run-time
 error, and a constant strictly between 0 and 1 is refused at link time as a

@@ -229,7 +229,7 @@ work(s: stage) -> number
 
 **Returns:** Unfinished work at `s`, in the stage's work unit.
 
-Not permitted in an engine's `only` predicate or a schedule's `branch` guard.
+Not permitted in an engine's `only` predicate or a schedule's `if` guard.
 
 #### `est_lambda` {#est_lambda}
 

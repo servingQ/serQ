@@ -12,7 +12,7 @@ fn main() {
       at admission { left = budget_left(llm); }
       prefill (prompt) growing kv;
       observe gated_ttft = now - t0;   // from the gate, B's arrival at the engine
-      branch (decodes) { decode (2) growing kv; }
+      if (decodes) { decode (2) growing kv; }
     }
     schedule {
       exclusive prefill each at most (4);
