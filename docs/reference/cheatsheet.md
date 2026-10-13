@@ -19,7 +19,6 @@ fn main() {
 
   workload { …  }  // arrivals, turns and client actions
   server { … }                       // what one request runs
-  share maxmin;                       // or bottleneck: how a run over several stages divides them
   gauge NAME = expr;                  // a time average of the state: max k in N (used(kv[k]))
   claim NAME: every iteration of E (demand < B || tokens == B);   // checked on the run; also `some iteration of`, `at end`
 }
@@ -87,7 +86,7 @@ release P;                         // give the enclosing hold's units of P back 
 load P (cost(P, n));                        // the KV of n tokens arrived: computed position += n
 
 run S [prefill|decode] (w) [growing P];
-run S, T (cost(S, T, w));                      // one job holding ps stages S and T at once, at the rate share gives
+run S, T (cost(S, T, w), share = share.maxmin); // one job holding ps stages S and T at once (use "std/share")
 
 // the serving vocabulary: the same statements, named by the request lifecycle
 tool Z;                            // run on the stage `tool`: Z is time (seconds)

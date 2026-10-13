@@ -27,7 +27,9 @@ use serde::{Deserialize, Serialize};
 /// and workload/server statement authority. 13 removes `CStageKind::Delay`,
 /// which meant `Ps(present)` (`CStageKind::delay`); 13 also adds
 /// `Preempt::Leases`, `Fun::Allocated`, `Shrink`, and `Grow` of a lease outside
-/// every hold of its pool (`docs/design/thunderagent.md`).
+/// every hold of its pool (`docs/design/thunderagent.md`), and moves
+/// `share` from the program to each `Run` over several stages, one policy
+/// per fabric.
 pub const IR_VERSION: u32 = 13;
 
 /// A reason `Program::validate` refuses a program, and the statement it is
@@ -658,10 +660,15 @@ pub enum CStmt {
         work: CExpr,
         growing: Option<CRef>,
         /// Further stages the same job holds from its start to its end: a
-        /// flow over `stage` and these, its rate set by the program's
-        /// `share` from their capacities. Empty for a run on one stage.
+        /// flow over `stage` and these, its rate set by `share` from their
+        /// capacities. Empty for a run on one stage.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         also: Vec<CRef>,
+        /// How the flows on this run's stages divide them: present exactly
+        /// when `also` is not empty, and the same for every run whose stages
+        /// some run joins to these (`Program::stage_shares`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        share: Option<Share>,
     },
     Branch(CExpr, BlockId, BlockId),
     Loop(BlockId),
@@ -938,10 +945,6 @@ pub struct Program {
     /// called at scheduler.py:2426), so a program that reserves `prompt + o`
     /// is one vLLM cannot be.
     pub hidden: Vec<usize>,
-    /// How the flows of runs over several stages divide the stages'
-    /// capacity; present exactly when some `Run` has a non-empty `also`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub share: Option<Share>,
     /// `gauge NAME = e;`: functions of the deployment's state whose time
     /// average the report gives. They read and do not act, so a reader that
     /// ignores them runs the same program (`docs/ir.md`, Stability).
@@ -1021,8 +1024,8 @@ impl ClaimKind {
     }
 }
 
-/// The sharing policy of `share`: how flows that hold several `ps` stages at
-/// once divide their capacities.
+/// The sharing policy of a run's `share`: how flows that hold several `ps`
+/// stages at once divide their capacities.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Share {
     /// Max-min fair: every flow's rate rises together until a stage fills,
@@ -1031,6 +1034,22 @@ pub enum Share {
     /// Each flow gets its equal share at the tightest of its stages,
     /// `min over s of φ_s / n_s`; what that leaves at the others is unused.
     Bottleneck,
+}
+
+impl Share {
+    /// The policies std/share supplies, by the name a program reads each
+    /// as (`share.maxmin`). Every site that names one reads this table.
+    pub const ALL: [(&'static str, Share); 2] =
+        [("maxmin", Share::MaxMin), ("bottleneck", Share::Bottleneck)];
+
+    /// The policy's name in std/share.
+    pub fn name(self) -> &'static str {
+        Share::ALL
+            .iter()
+            .find(|(_, s)| *s == self)
+            .map(|(n, _)| *n)
+            .expect("every policy is in the table")
+    }
 }
 
 /// One explicit session of `CArrival::Sessions`: preset attributes
@@ -1047,32 +1066,89 @@ pub struct SessionInit {
 }
 
 impl Program {
-    /// The stages some run over several stages holds, each array whole: a
-    /// run's index is known only when it starts. Every job on one of them
-    /// is a flow of the program's `share`; every other stage serves as its
-    /// kind says.
-    pub fn shared_stages(&self) -> Vec<bool> {
-        let mut shared = vec![false; self.stages.len()];
-        for b in &self.blocks {
-            for st in b {
-                if let CStmt::Run { stage, also, .. } = st
+    /// The policy of each stage some run over several stages holds, each
+    /// array whole (a run's index is known only when it starts), and `None`
+    /// for every other stage. The stages runs join, however indirectly, are
+    /// one fabric: their flows are solved together, so a fabric has one
+    /// policy, and one whose runs name two is an error, as is a run over
+    /// several stages that names none; the error is about the run that
+    /// names none, or the first that names a policy its fabric's runs did
+    /// not. Every job on a stage with a policy is a flow of it; every other
+    /// stage serves as its kind says.
+    pub fn stage_shares(&self) -> Result<Vec<Option<Share>>, Invalid> {
+        let n = self.stages.len();
+        let mut up: Vec<usize> = (0..n).collect();
+        fn root(up: &mut [usize], mut k: usize) -> usize {
+            while up[k] != k {
+                up[k] = up[up[k]];
+                k = up[k];
+            }
+            k
+        }
+        let mut runs = vec![];
+        for (bi, b) in self.blocks.iter().enumerate() {
+            for (si, st) in b.iter().enumerate() {
+                if let CStmt::Run {
+                    stage, also, share, ..
+                } = st
                     && !also.is_empty()
                 {
-                    for r in std::iter::once(stage).chain(also) {
-                        for k in r.base..(r.base + r.count.max(1)).min(shared.len()) {
-                            shared[k] = true;
-                        }
+                    let ks: Vec<usize> = std::iter::once(stage)
+                        .chain(also)
+                        .flat_map(|r| r.base..(r.base + r.count.max(1)).min(n))
+                        .collect();
+                    for w in ks.windows(2) {
+                        let (a, b) = (root(&mut up, w[0]), root(&mut up, w[1]));
+                        up[a] = b;
+                    }
+                    if let Some(&k) = ks.first() {
+                        runs.push((k, *share, bi, si));
                     }
                 }
             }
         }
-        shared
+        let mut policy: Vec<Option<Share>> = vec![None; n];
+        for (k, share, bi, si) in runs {
+            let Some(share) = share else {
+                return Err(Invalid::at(
+                    format!(
+                        "the run over several stages from stage `{}` names no `share`: \
+                         `share.maxmin` or `share.bottleneck`",
+                        self.stages[k].name
+                    ),
+                    bi,
+                    si,
+                ));
+            };
+            let r = root(&mut up, k);
+            match policy[r] {
+                Some(p) if p != share => {
+                    let mut joined: Vec<&str> = vec![];
+                    for j in 0..n {
+                        let name = self.stages[j].name.as_str();
+                        if root(&mut up, j) == r && !joined.contains(&name) {
+                            joined.push(name);
+                        }
+                    }
+                    return Err(Invalid::at(
+                        format!(
+                            "this run names `share.{}`, and an earlier run on its fabric \
+                             `share.{}`: runs join the stages `{}`, so their flows are solved \
+                             together, and one fabric has one policy",
+                            share.name(),
+                            p.name(),
+                            joined.join("`, `"),
+                        ),
+                        bi,
+                        si,
+                    ));
+                }
+                _ => policy[r] = Some(share),
+            }
+        }
+        Ok((0..n).map(|k| policy[root(&mut up, k)]).collect())
     }
 
-    /// A run over several stages holds `ps` stages of a constant capacity
-    /// (a flow is not described by the `n` a capacity could read), each
-    /// stage array once (an index is known only when the run starts), and
-    /// the program names its `share`; every run on a shared stage is plain.
     /// Every block the program reaches from `init`, `turn` and `session` is
     /// reached once: the blocks form a tree, as the linker builds them, so
     /// the walks over them (`enclosed`, `lets_time_pass`) end. IR from JSON
@@ -1295,21 +1371,19 @@ impl Program {
         out
     }
 
+    /// A run over several stages holds `ps` stages of a constant capacity
+    /// (a flow is not described by the `n` a capacity could read), each
+    /// stage array once (an index is known only when the run starts), and
+    /// names its `share`, one per fabric (`stage_shares`); a run on one
+    /// stage names none, and every run on a shared stage is plain.
     fn validate_flows(&self) -> Result<(), String> {
-        let shared = self.shared_stages();
-        let any = shared.iter().any(|&x| x);
-        match (any, self.share) {
-            (true, None) => {
-                return Err(
-                    "a run over several stages needs the program's `share` (`share maxmin;` or `share bottleneck;`)"
-                        .into(),
-                );
-            }
-            (false, Some(_)) => {
-                return Err("`share` without a run over several stages".into());
-            }
-            _ => {}
-        }
+        // `validate_located` checked the fabrics, with their statements
+        let shared: Vec<bool> = self
+            .stage_shares()
+            .map_err(|e| e.message)?
+            .iter()
+            .map(Option::is_some)
+            .collect();
         for (k, on) in shared.iter().enumerate() {
             if *on && !matches!(self.stages[k].kind, CStageKind::Ps(CExpr::Num(c)) if c > 0.0) {
                 return Err(format!(
@@ -1325,11 +1399,19 @@ impl Program {
                     mode,
                     growing,
                     also,
+                    share,
                     ..
                 } = st
                 else {
                     continue;
                 };
+                if also.is_empty() && share.is_some() {
+                    return Err(format!(
+                        "a run on the one stage `{}` names a `share`: a policy divides the stages \
+                         a run holds at once, and a run on a shared stage takes its fabric's",
+                        self.stages[stage.base].name
+                    ));
+                }
                 let on_shared = (stage.base..stage.base + stage.count.max(1))
                     .any(|k| shared.get(k).copied().unwrap_or(false));
                 if on_shared && (*mode != RunMode::Plain || growing.is_some()) {
@@ -1470,6 +1552,7 @@ impl Program {
     /// maps back to the program's text (#279).
     pub fn validate_located(&self) -> Result<(), Invalid> {
         self.validate_statements()?;
+        self.stage_shares()?;
         self.validate_declarations()?;
         self.validate_types()?;
         Ok(())
@@ -2783,6 +2866,7 @@ impl Validator<'_> {
                 work,
                 growing,
                 also,
+                ..
             } => {
                 self.cref(stage, ns, "stage", m)?;
                 let step = |i: usize| matches!(self.p.stages[i].kind, CStageKind::Step(_));

@@ -126,6 +126,7 @@ fn ir_that_skips_the_linker_meets_its_checks() {
         work: CExpr::Num(1.0),
         growing: None,
         also: vec![],
+        share: None,
     };
     refused(
         &|q| q.blocks[q.init].push(run_d.clone()),
@@ -196,6 +197,7 @@ fn ir_that_skips_the_linker_meets_its_checks() {
             work,
             growing,
             also,
+            share: None,
         }
     };
     let prefill_d = run_d_as(serq::ir::RunMode::Prefill, None);

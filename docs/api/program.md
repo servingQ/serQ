@@ -2,7 +2,7 @@
 
 ```
 program := (let | def | use)* fn main() { item* }
-item    := let | def | use | pool | stage | queue | workload | server | share | kvt.CALL | gauge | claim
+item    := let | def | use | pool | stage | queue | workload | server | kvt.CALL | gauge | claim
 ```
 
 `fn main()` is the single execution entry point: it constructs the deployment and
@@ -19,13 +19,12 @@ finds its stage among the stages declared above it.
 | [`let`](#let) | Declare a constant. |
 | [`args.number`](std/args.md) | Declare a numeric program input. |
 | [`def`](#def) | Define a reusable expression or statement body. |
-| [`use`](#use) | Import `std/args`, the program's inputs, or `std/kvt`, the KV-transfer vocabulary. |
+| [`use`](#use) | Import `std/args`, the program's inputs, `std/kvt`, the KV-transfer vocabulary, or `std/share`, the sharing policies. |
 | [`pool`](#pool) | Declare resource capacity, cache and admission policy. |
 | [`stage`](#stage) | Declare a server or step engine. |
 | [`workload`](#workload) | Define arrivals and request attributes. |
 | [`session`](#session) | Define the request's sequence of actions. |
 | [`server`](#server) | Define the scheduler side of a two-sided program. |
-| [`share`](#share) | Select rate sharing for flows across stages. |
 | [`gauge`](#gauge) | Measure a function of deployment state over time. |
 | [`claim`](#claim) | State a property of the program's paths. |
 
@@ -131,19 +130,22 @@ identify both the body and its use.
 ```serq
 use "std/args";
 use "std/kvt";
+use "std/share";
 ```
 
-Imports one of the two standard libraries: [`std/args`](std/args.md),
-the program's inputs, or [`std/kvt`](std/kvt.md), the KV-transfer
-vocabulary. The frontend provides both on every installation; no file and
-no other path is read. A program is one file: what several programs
+Imports one of the three standard libraries: [`std/args`](std/args.md),
+the program's inputs, [`std/kvt`](std/kvt.md), the KV-transfer
+vocabulary, or [`std/share`](std/share.md), the sharing policies. The
+frontend provides them on every installation; no file and no other path
+is read. A program is one file: what several programs
 share, each writes, so a reader of one program reads all of it.
 
 A library is a namespace the parser defines: its calls are rewritten
 into the language's own constructs before the IR is produced, and the IR
-has no node of its own for them. Calling `args.…` or `kvt.…` without its `use` is an error,
-and so is declaring something named `args` or `kvt` (a `let`, a pool, a
-stage, a queue, a `def`) beside the import.
+has no node of its own for them. Calling `args.…` or `kvt.…`, or naming
+`share.…`, without its `use` is an error, and so is declaring something
+named `args`, `kvt` or `share` (a `let`, a pool, a stage, a queue, a
+`def`) beside the import.
 
 ## `pool`
 
@@ -221,22 +223,6 @@ or end the client's session (`turn;` and `end;` are refused).
 An explicit session must contain a turn. A top-level `session` is an error.
 The default session is `session { turn; }`.
 See [the two sides](../language.md#the-two-sides).
-
-## `share`
-
-```serq
-share maxmin;
-share bottleneck;
-```
-
-How the flows of [runs over several stages](statements.md#run) divide the
-stages' capacity. Required when some run holds several stages, an error
-otherwise; there is no default.
-
-| Policy | A flow's rate |
-|---|---|
-| `maxmin` | Max-min fair: every flow's rate rises together until a stage fills; the flows through it stop there, the others go on. Uses all the capacity it can. |
-| `bottleneck` | Its equal share at the tightest of its stages, `min over s of φ_s / n_s`. What that leaves at its other stages is unused. |
 
 ## `gauge`
 

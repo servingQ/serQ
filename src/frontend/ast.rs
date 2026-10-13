@@ -532,8 +532,12 @@ pub enum Stmt {
         mode: RunMode,
         work: Expr,
         growing: Option<Ref>,
-        /// `run a, b (w)`: the further stages the job holds at once.
+        /// `run a, b (w, share = share.maxmin)`: the further stages the job
+        /// holds at once.
         also: Vec<Ref>,
+        /// How the flows on `also`'s fabric divide it: given exactly when
+        /// `also` is not empty.
+        share: Option<crate::ir::Share>,
     },
     Branch(Expr, Vec<Stmt>, Vec<Stmt>),
     Loop(Vec<Stmt>),
@@ -704,8 +708,6 @@ pub struct Program {
     /// at each `request`: the linker checks what it reveals of the
     /// workload's `hidden` attributes. Empty without a `server`.
     pub server: Vec<Stmt>,
-    /// `share maxmin;` or `share bottleneck;`
-    pub share: Option<crate::ir::Share>,
     /// `gauge NAME = e;`, in order.
     pub gauges: Vec<(String, Expr)>,
     /// `claim NAME …;`, in order.

@@ -45,7 +45,6 @@ variants as strings, `"Lru"`). JSON has no infinity: an infinite constant
 | `blocks` | the statement blocks (an arena; bodies of holds, branches and loops refer to blocks by index) |
 | `horizon`, `warmup`, `seed`, `arrivals` | the run; `arrivals` requires exactly N open arrivals and draining by `horizon` |
 | `hidden` | attribute slots the scheduler may not read (`hidden o;`): legal at `Session` and `Given`, below |
-| `share` | `MaxMin` or `Bottleneck`: how the flows of runs over several stages divide the stages' capacity; present exactly when some `Run` has a non-empty `also`, omitted otherwise |
 | `gauges` | `[{name, expr}]`: functions of the state whose time average the report gives, each read at the `Gauge` moment after every instant; omitted when empty. They read and do not act, so a reader that ignores them runs the same program |
 | `claims` | `[{name, given?, kind, expr}]`; read-only properties checked on the simulated path; omitted when empty |
 | `registers` | `[{name, stage, init}]`; persistent stage registers, below; omitted when empty |
@@ -135,7 +134,7 @@ between simulation checks and proofs.
 | `Grow(pool, e)`, `Shrink(pool, e)`, `Drop(pool)` | grow, or give `e` back from, the current hold, or outside every hold of the pool the session's lease of it (a hold keeps what it computed); drop the session's own cached entry |
 | `Release(pool)` | give the innermost enclosing hold's allocation on the pool back now, or end the session's lease of it, caching per the hold's `cache`; nothing held or leased there is a no-op. A KV transfer between instances is `Run` (the link), `Load` (the destination) and `Release` (the source's lease) |
 | `Load(pool, e)` | the KV of `e` tokens arrived from outside the engine (a NIXL read): the innermost enclosing hold's computed position on the pool advances by `e`, within its allocation |
-| `Run {stage, mode, work, growing?, also?}` | work at a stage; `mode` `Plain`, `Prefill`, `Decode` (step stages); `growing` the pool that grows with the tokens computed, whose innermost hold's position, when the run ends, is its position at the run's start plus `work`; `also` further stages the same job holds at once (a flow of `share`), omitted when empty |
+| `Run {stage, mode, work, growing?, also?, share?}` | work at a stage; `mode` `Plain`, `Prefill`, `Decode` (step stages); `growing` the pool that grows with the tokens computed, whose innermost hold's position, when the run ends, is its position at the run's start plus `work`; `also` further stages the same job holds at once, a flow, omitted when empty; `share` `MaxMin` or `Bottleneck`, how the flows of its fabric divide the stages' capacity, present exactly when `also` is not empty |
 | `While(guard, body)` | test `guard` before each pass (exactly 0 or 1); run `body` for 1, continue after the loop for 0; reevaluate after each completed body |
 | `Branch(e, then, else)`, `Loop(body)`, `Choose {var, count, key}` (`key` a list, compared in order), `End` | control; `End` ends the session |
 | `Fork(body)`, `Join` | `Fork` runs `body` beside the session as a leg of the request: from now, with a copy of the attributes, its own holds and stream; the leases it leaves pass to the session when it ends. `Join` waits until every leg the session forked has ended |
@@ -235,7 +234,9 @@ text and directly constructed IR meet the same rules. Validation covers:
   stages, and `growing` only there. Every stage family named by a
   multi-stage run is a `Ps` with constant capacity; all runs on such a
   shared stage are `Plain`, without `growing`. A run names each family
-  once. `share` is present exactly when some run has a nonempty `also`.
+  once, and has a `share` exactly when its `also` is nonempty. The stages
+  runs join, however indirectly, are one fabric, and the runs of a fabric
+  name one `share` (`Program::stage_shares`).
 
 `validate_located` identifies statement errors by block and statement
 index; the text frontend maps these to source locations. Declaration and

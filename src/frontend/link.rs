@@ -832,7 +832,6 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
         registers: lk.registers.clone(),
         version: IR_VERSION,
         hidden,
-        share: prog.share,
         slot_cached: slot(&lk, "cached"),
         slot_serial: slot(&lk, "serial"),
         slot_turn: slot(&lk, "turn_no"),
@@ -2172,6 +2171,7 @@ impl Linker<'_> {
                     work,
                     growing,
                     also,
+                    share,
                 } => {
                     let stage = self.stage_ref(stage)?;
                     let also = also
@@ -2184,6 +2184,7 @@ impl Linker<'_> {
                         work: self.expr(work)?,
                         growing: growing.as_ref().map(|g| self.pool_ref(g)).transpose()?,
                         also,
+                        share: *share,
                     }
                 }
                 Stmt::Branch(p, a, b) => {

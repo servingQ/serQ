@@ -78,8 +78,7 @@ gateway selected by `gw.route();` in the server.
 queue gw : gateway { route { … } }                 // the router and the sidecar
 queue P[NP] : prefill { device gpu { … kv cap blocksP * bs; } engine on gpu { … } pool reqs on P { … } pool kv on gpu { … } nic ps(BwP); prefill (prompt) { … } }
 queue D[ND] : decode  { device gpu { … kv cap blocksD * bs; } engine on gpu { … } pool reqs on D { … } pool kv on D.gpu { … } nic ps(BwD); decode (prompt) { … } decode (prompt) from P { … } }
-share maxmin;                          // concurrent copies divide the NICs max-min fairly
-kvt.nixl_pull (P, D, latency = x0);   // the decoder reads the KV from the prefiller
+kvt.nixl_pull (P, D, latency = x0, share = share.maxmin);   // the decoder reads the KV from the prefiller
 ```
 
 A queue's device, engine and pools are its members': `P[i].kv` is the KV of
@@ -91,10 +90,10 @@ request waits for its blocks, not for a slot, so its pool is `on D.gpu`:
 the decoder's scheduler admits it in an iteration, as vLLM's does. The family's size is the
 `let` the router chooses over (`queue D[ND]`, `choose j in ND`), so the
 number is written once. Each pod's NIC is its own (`nic ps(BwD);`, the
-stage `D.nic`), and `kvt.nixl_pull (P, D, latency = x0);`
-from `std/kvt` is the transfer's topology and mode in one line: the decoder reads the KV from the
-prefiller and waits `x0` before each read; `share maxmin;` says concurrent
-reads divide the two NICs max-min fairly.
+stage `D.nic`), and `kvt.nixl_pull (P, D, latency = x0, share = share.maxmin);`
+from `std/kvt` is the transfer's topology, mode and policy in one line: the decoder reads the KV from the
+prefiller and waits `x0` before each read, and `share.maxmin` (from
+`std/share`) says concurrent reads divide the two NICs max-min fairly.
 
 The router is the gateway's two `choose`s, and the instance it picked is
 the queue the request is handed to: `P[i].prefill (prompt)`, then

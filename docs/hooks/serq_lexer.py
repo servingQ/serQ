@@ -43,7 +43,6 @@ OPTIONS = (
     "admit", "while", "state", "taking", "via", "spill", "when", "ps", "delay", "cost",
     "granule", "serve", "latency", "nic", "exclusive", "first", "only", "arrive", "arrivals", "poisson", "renewal", "closed", "hidden",
     "batch", "trace", "ordered", "init", "horizon", "warmup", "seed",
-    "share", "maxmin", "bottleneck",
     # an engine's schedule and execution; `advance`, `each` and `most` are
     # read only in the phrases `advance running` and `each at most`, which
     # the rules below colour whole, and are listed for tests/docs_lexer.rs

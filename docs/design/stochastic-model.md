@@ -621,7 +621,8 @@ component and no other.
 
 **A link** $\mathsf{L}$. `run a, b (w)` is a flow holding two `ps` stages
 at once; its rate is a deterministic function of the set of flows present,
-set by `share maxmin` or `bottleneck` ([Bandwidth sharing](bandwidth-sharing.md)).
+set by its fabric's `share.maxmin` or `share.bottleneck` ([Bandwidth sharing](bandwidth-sharing.md),
+[A policy per fabric](fabric-share.md)).
 A `transfer` is a handoff whose work is the KV's size and whose completion
 advances the destination's position $p$ (`load`) and releases the source's
 lease.

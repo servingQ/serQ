@@ -14,9 +14,8 @@ queues and roles these calls name.
 ## `kvt.nixl_pull` and `kvt.nixl_push`
 
 ```serq
-share maxmin;
-kvt.nixl_pull (SOURCE, READER, latency = x);
-kvt.nixl_push (SOURCE, READER, latency = x);
+kvt.nixl_pull (SOURCE, READER, latency = x, share = POLICY);
+kvt.nixl_push (SOURCE, READER, latency = x, share = POLICY);
 ```
 
 NIXL's two modes of one copy between two queues with a `nic`, declared
@@ -33,10 +32,12 @@ over both NICs.
 | `SOURCE` | queue | The queue the KV leaves; it has a `nic`. |
 | `READER` | queue | The queue the KV arrives in; it has a `nic` and an entry `from SOURCE`. |
 | `latency = x` | `const` | The wait before each copy; optional. |
+| `share = POLICY` | [std/share](share.md) | How concurrent copies divide the two NICs, `share.maxmin` or `share.bottleneck`; required. |
 
 A reader with no entry `from` the source is refused at the call.
-Concurrent copies divide the two NICs by the program's
-[`share`](../program.md#share), which a program with a relation must write.
+Concurrent copies divide the two NICs by the relation's `share`, which
+has no default; two relations whose copies cross one NIC are one fabric and
+name one policy.
 A push and a pull of the same constants run the same numbers. Used in
 `examples/pd-disaggregation/llmd_nixl_pull.sq` and `vllm_nixl_push.sq` ([the P/D use
 case](../../use-cases/pd.md)).

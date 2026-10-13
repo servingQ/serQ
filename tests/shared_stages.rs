@@ -34,7 +34,7 @@ fn two_reads_share_the_senders_link() {
         let src = format!(
             "pool kvP {{ cap 100; }} pool kvD[2] {{ cap 100; }}
         stage P : delay; stage egress : ps(1); stage ingress[2] : ps(1); stage D[2] : delay;
-        share {share};
+        use \"std/share\";
         workload {{ arrive batch(2);
           session {{ turn;
             end;
@@ -45,7 +45,7 @@ fn two_reads_share_the_senders_link() {
           set j = serial;
           hold kvP (cost(kvP, 10)) {{ run P (cost(P, 1)); }} lease kvP (inf);
           hold kvD[j] (cost(kvD, 10)) {{
-            transfer on egress, ingress[j] (1) from kvP to kvD[j] (10);
+            transfer on egress, ingress[j] (1, share = share.{share}) from kvP to kvD[j] (10);
             observe transferred = now;
             run D[j] (cost(D, 1));
           }}
@@ -63,7 +63,7 @@ fn three(share: &str, horizon: f64) -> serq::Report {
     run(
         &format!(
             "stage A : ps(1); stage B : ps(2);
-        share {share};
+        use \"std/share\";
         workload {{ arrive batch(3);
           session {{ turn;
             end;
@@ -71,7 +71,7 @@ fn three(share: &str, horizon: f64) -> serq::Report {
           }}
         }}
         server {{
-          branch (serial == 0) {{ run A, B (cost(A, B, 1)); observe f1 = now; }}
+          branch (serial == 0) {{ run A, B (cost(A, B, 1), share = share.{share}); observe f1 = now; }}
           branch (serial == 1) {{ run A (cost(A, 1)); observe f2 = now; }}
           branch (serial == 2) {{ run B (cost(B, 1)); observe f3 = now; }}
         }}
@@ -142,17 +142,47 @@ const HEAD: &str = "stage A : ps(1); stage B : ps(2); stage C : fifo; stage E[2]
                     ";
 const HEAD_WORKLOAD: &str = "arrive batch(1);";
 
+fn server(body: &str) -> String {
+    err(&format!(
+        "{HEAD} use \"std/share\"; workload {{ {HEAD_WORKLOAD} session {{ turn; end; \n}} }}\nserver {{ {body}\n}} "
+    ))
+}
+
+/// A job over several stages names how their flows divide them, and a job
+/// on one stage names nothing: a policy divides what is held at once.
 #[test]
-fn a_run_over_several_stages_needs_the_programs_share() {
+fn a_run_over_several_stages_names_its_share() {
+    let e = server("run A, B (cost(A, B, 1));");
+    assert!(
+        e.contains("`run A, B` holds several stages at once: name how their flows divide them"),
+        "{e}"
+    );
+    let e = server("transfer on A, B (1) from kvP to kvD (1);");
+    assert!(e.contains("`transfer on A, B` holds several stages"), "{e}");
+    let e = server("run A (cost(A, 1), share = share.maxmin);");
+    assert!(e.contains("`run A` holds one stage"), "{e}");
+}
+
+/// The policies are std/share's: read only with the import, and only the
+/// ones it has (`Share::ALL`).
+#[test]
+fn a_policy_is_std_shares() {
     let e = err(&format!(
-        "{HEAD} workload {{ {HEAD_WORKLOAD} session {{ turn; end; \n}} }}\nserver {{ run A, B (cost(A, B, 1));\n}} "
+        "{HEAD} workload {{ {HEAD_WORKLOAD} session {{ turn; end; \n}} }}\nserver {{ run A, B (cost(A, B, 1), share = share.maxmin);\n}} "
     ));
-    assert!(e.contains("needs the program's `share`"), "{e}");
+    assert!(e.contains("`share.…` needs `use \"std/share\";`"), "{e}");
+    let e = server("run A, B (cost(A, B, 1), share = share.fair);");
+    assert!(
+        e.contains("std/share has no policy `fair`; it has `share.maxmin` or `share.bottleneck`"),
+        "{e}"
+    );
+    let e = server("run A, B (cost(A, B, 1), share = maxmin);");
+    assert!(e.contains("a sharing policy is std/share's"), "{e}");
     let e = err(&format!(
-        "{HEAD} share maxmin; workload {{ {HEAD_WORKLOAD} session {{ turn; end; \n}} }}\nserver {{ run A (cost(A, 1));\n}} "
+        "{HEAD} use \"std/share\"; stage share : ps(1); workload {{ {HEAD_WORKLOAD} session {{ turn; end; \n}} }}\nserver {{ run A (cost(A, 1));\n}} "
     ));
     assert!(
-        e.contains("`share` without a run over several stages"),
+        e.contains("`share` names the imported std/share module"),
         "{e}"
     );
 }
@@ -160,17 +190,17 @@ fn a_run_over_several_stages_needs_the_programs_share() {
 #[test]
 fn a_shared_stage_is_ps_of_a_constant() {
     let e = err(&format!(
-        "{HEAD} share maxmin; workload {{ {HEAD_WORKLOAD} session {{ turn; end; \n}} }}\nserver {{ run A, C (cost(A, C, 1));\n}} "
+        "{HEAD} use \"std/share\"; workload {{ {HEAD_WORKLOAD} session {{ turn; end; \n}} }}\nserver {{ run A, C (cost(A, C, 1), share = share.maxmin);\n}} "
     ));
     assert!(e.contains("stage `C`"), "{e}");
     assert!(e.contains("constant"), "{e}");
     let e = err(
-        "stage A : ps(1); stage N : ps(min(present, 4)); share maxmin;
+        "stage A : ps(1); stage N : ps(min(present, 4)); use \"std/share\";
         workload { arrive batch(1);
           session { turn; end;
           }
         }
-        server { run A, N (cost(A, N, 1));
+        server { run A, N (cost(A, N, 1), share = share.maxmin);
         } ",
     );
     assert!(e.contains("stage `N`"), "{e}");
@@ -181,17 +211,17 @@ fn a_shared_stage_is_ps_of_a_constant() {
 #[test]
 fn a_run_names_each_stage_array_once() {
     let e = err(&format!(
-        "{HEAD} share maxmin; workload {{ {HEAD_WORKLOAD} session {{ turn; end; \n}} }}\nserver {{ run E[0], E[1] (cost(E, E, 1));\n}} "
+        "{HEAD} use \"std/share\"; workload {{ {HEAD_WORKLOAD} session {{ turn; end; \n}} }}\nserver {{ run E[0], E[1] (cost(E, E, 1), share = share.maxmin);\n}} "
     ));
     assert!(e.contains("named twice"), "{e}");
 }
 
-/// `transfer on a, b (w) from P to Q (n)` is the kernel's
-/// `run a, b (w); load Q (n); release P;`.
+/// `transfer on a, b (w, share = share.maxmin) from P to Q (n)` is the kernel's
+/// `run a, b (w, share = share.maxmin); load Q (n); release P;`.
 #[test]
 fn transfer_on_several_stages_is_sugar() {
     let head = "pool p { cap 10; } pool q { cap 10; }
-                stage a : ps(1); stage b : ps(1); share maxmin;
+                stage a : ps(1); stage b : ps(1); use \"std/share\";
                 ";
     let head_workload = "arrive batch(1);";
     let ir = |body: &str| {
@@ -203,8 +233,8 @@ fn transfer_on_several_stages_is_sugar() {
             .to_json()
     };
     assert_eq!(
-        ir("transfer on a, b (1) from p to q (1);"),
-        ir("run a, b (cost(a, b, 1)); load q (cost(q, 1)); release p;")
+        ir("transfer on a, b (1, share = share.maxmin) from p to q (1);"),
+        ir("run a, b (cost(a, b, 1), share = share.maxmin); load q (cost(q, 1)); release p;")
     );
 }
 
@@ -222,7 +252,7 @@ fn a_flow_is_counted_at_each_of_its_stages() {
 #[test]
 fn a_seed_reproduces_a_run_with_flows() {
     let src = "stage E[3] : ps(1); stage F : ps(2); stage I[4] : ps(1);
-        share maxmin;
+        use \"std/share\";
         workload { arrive poisson(6.5);
           session { turn;
             end;
@@ -232,7 +262,7 @@ fn a_seed_reproduces_a_run_with_flows() {
         server {
           choose i in 3 by (~uniform(0, 1));
           choose j in 4 by (~uniform(0, 1));
-          run E[i], F, I[j] (cost(E, F, I, ~exp(0.3)));
+          run E[i], F, I[j] (cost(E, F, I, ~exp(0.3)), share = share.maxmin);
           observe left = work(F);
         }
         ";
@@ -263,29 +293,83 @@ fn a_seed_reproduces_a_run_with_flows() {
 
 #[test]
 fn a_shared_stage_has_a_capacity_above_zero() {
-    let e = err("stage A : ps(1); stage Z : ps(0); share maxmin;
+    let e = err("stage A : ps(1); stage Z : ps(0); use \"std/share\";
         workload { arrive batch(1);
           session { turn; end;
           }
         }
-        server { run A, Z (cost(A, Z, 1));
+        server { run A, Z (cost(A, Z, 1), share = share.maxmin);
         } ");
     assert!(e.contains("above 0"), "{e}");
 }
 
+/// The program's one `share` is gone: the old spelling says where the
+/// policy is written now.
 #[test]
-fn share_is_given_once() {
+fn the_programs_share_says_where_it_went() {
     let e = err("stage A : ps(1); stage B : ps(1);
         share maxmin;
-        share bottleneck;
-        workload { arrive batch(1);
-          session { turn; end;
-          }
-        }
+        workload { arrive batch(1); session { turn; end; } }
         server { run A, B (cost(A, B, 1));
         } ");
     assert!(
-        e.contains("`share` is given twice: the first is on line 2"),
+        e.contains("`share maxmin;` is std/share's now, and each relation's"),
         "{e}"
     );
+}
+
+/// Two fabrics, two policies: `A`, `B` under max-min and `C`, `D` under
+/// bottleneck, the flows of `three` on each. Each fabric's flows end as
+/// `three` gives them under its policy alone (f3 at 2/3, g3 at 1): the
+/// fabrics share no stage, so neither policy reads the other's flows.
+#[test]
+fn each_fabric_has_its_own_policy() {
+    let r = run(
+        "stage A : ps(1); stage B : ps(2); stage C : ps(1); stage D : ps(2);
+        use \"std/share\";
+        workload { arrive batch(6);
+          session { turn;
+            end;
+
+          }
+        }
+        server {
+          branch (serial == 0) { run A, B (cost(A, B, 1), share = share.maxmin); observe f1 = now; }
+          branch (serial == 1) { run A (cost(A, 1)); observe f2 = now; }
+          branch (serial == 2) { run B (cost(B, 1)); observe f3 = now; }
+          branch (serial == 3) { run C, D (cost(C, D, 1), share = share.bottleneck); observe g1 = now; }
+          branch (serial == 4) { run C (cost(C, 1)); observe g2 = now; }
+          branch (serial == 5) { run D (cost(D, 1)); observe g3 = now; }
+        }
+        ",
+        &common::horizon(5.0),
+    );
+    for (name, want) in [
+        ("f1", 2.0),
+        ("f2", 2.0),
+        ("f3", 2.0 / 3.0),
+        ("g1", 2.0),
+        ("g2", 2.0),
+        ("g3", 1.0),
+    ] {
+        close(&at(&r, name), &[want]);
+    }
+}
+
+/// Stages runs join, however indirectly, are one fabric, solved together:
+/// `A`-`B` and `B`-`C` join all three, and one fabric has one policy.
+#[test]
+fn a_fabric_has_one_policy() {
+    let e = server(
+        "branch (serial == 0) { run A, B (cost(A, B, 1), share = share.maxmin); }
+         else { run B, E[0] (cost(B, E, 1), share = share.bottleneck); }",
+    );
+    assert!(
+        e.contains(
+            "this run names `share.bottleneck`, and an earlier run on its fabric `share.maxmin`: runs join the stages `A`, `B`, `E`, so their flows are solved together, and one fabric has one policy"
+        ),
+        "{e}"
+    );
+    // at the run that names the second policy
+    assert!(e.contains("run B, E[0]"), "{e}");
 }
