@@ -818,16 +818,19 @@ program this way: its lease ends, and its next request is let in anew
 instead, at every multiple of `dt` seconds of the run (a constant, and
 positive). A lease's growth is let through at once, past the cap if it
 must: `free` reads below 0 until the tick. A hold that is admitted still
-needs room. At each tick, while the pool is over its cap, the lease with
-the least keys ends, as at a growth. With `suspend` too, the lease the
-tick takes is set aside instead: its units are the pool's again,
+needs room, and a hold's growth takes a lease at once, as without
+`every`. At each tick, while the pool is over its cap, the lease with
+the least keys ends, as at a growth. With `suspend` too, a lease taken,
+at a tick or by a hold's growth, is set aside instead: its units are the
+pool's again, a cached prefix it read is let go as at a release,
 `allocated` reads 0 and it is no victim, and at each later tick, before
 the pool takes any, the leases set aside come back in the keys' order
 while they fit, to a session that neither holds nor leases the pool
 again. A `release` of the pool, or the session's end, drops one; a hold
-of it anew does not. `suspend` needs `every`, and does not link on a pool
-with `block`, where a lease set aside would keep cached KV no allocation
-holds. ThunderAgent's router acts at a 5 s tick: it pauses then, and lets
+of it anew does not. `suspend` needs `every`, and `every` does not link
+on a pool with `reserve held`, whose reservations a growth let past the
+cap would take. A pool over its cap caches nothing until it is back
+within it. ThunderAgent's router acts at a 5 s tick: it pauses then, and lets
 a paused program in again at a tick before its next request when it
 fits.
 

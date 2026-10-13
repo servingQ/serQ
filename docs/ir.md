@@ -261,7 +261,7 @@ predicates and iteration-body guards, admission gates and assignments:
 | `Budget` | a step stage's `budget` and `chunk`, evaluated before the iteration from its residents (no `Attr`; a `BudgetLeft` is rejected: it is planned from a budget) | `Nres`, `Ndec`, `Kvb`, `Kvp`, `Now` |
 | `Step` | a step stage's `cost`, evaluated after the iteration is scheduled (no `Attr`) | `Ntok`, `Ndec`, `Npre`, `Nres`, `Kvb`, `Kvp`, `Attn`, `Now` |
 | `Serve` | a step stage's `serve by` keys and `only`, evaluated for one resident at its turn, the totals as the residents stand then (a session the iteration admitted included) | `Decoding`, `Admission`, `Remaining`, `Nres`, `Ndec`, `Kvb`, `Kvp`, `Now` (`only` not `Now`) |
-| `Victim` | a pool's preemption keys, evaluated for each candidate when growth cannot fit | `Decoding`, `Admission`, `Position`, `Now` |
+| `Victim` | a pool's preemption keys, evaluated for each candidate when growth cannot fit, and at a pool's tick over its lessees and the leases it set aside | `Decoding`, `Admission`, `Position`, `Now` |
 | `Plan` | iteration-body branch guards, admission gates and register assignments (no `Attr`) | `Nres`, `Ndec`, `Kvb`, `Kvp`, `Ntok`, `Npre`, `Admitted`, `Preempted` |
 | `Gauge` | a gauge, evaluated on the state an instant ends with and held until the next, with no session (an `Attr`, a `Sample`, `CachedIn`, `Allocated`, `Now`, `Work` or `BudgetLeft` is rejected, and an index is a `Num` in range, so reading it cannot fail the run) | none |
 | `Given` | a claim's `given`, evaluated for each session once its `init` has run (and its preset attributes are set), on its attributes (`hidden` ones included: a claim is no scheduler) and the constants; no `Sample`, no `Call` but arithmetic | none (not `Now`) |

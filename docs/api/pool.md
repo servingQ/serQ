@@ -86,8 +86,8 @@ What a [`grow`](statements.md#grow) (or a `growing` run) does when the pool has 
 | `by (k, …)` | Preempt the candidate with the least keys, compared in order; ties go to the last admitted. |
 | `lifo` | Shorthand for `by (-admission) requeue head`: preempt the last admitted. |
 | `leases by (k, …)` | End the lease with the least keys, compared in order; ties go to the last admitted. No hold is preempted. |
-| `leases by (k, …) every (dt)` | A lease's growth goes through, past the cap if it must; at every multiple of `dt` seconds, end leases in that order while the pool is over its cap. |
-| `leases by (k, …) every (dt) suspend` | As `every`, but a lease the tick takes is set aside, and a later tick gives it back, in the same order, if it fits; `release` or the session's end drops it. Not on a pool with `block`. |
+| `leases by (k, …) every (dt)` | A lease's growth goes through, past the cap if it must; at every multiple of `dt` seconds, end leases in that order while the pool is over its cap. A hold's growth takes a lease at once. Not on a pool with `reserve held`. |
+| `leases by (k, …) every (dt) suspend` | As `every`, but a lease taken is set aside, and a later tick gives it back, in the same order, if it fits; `release` or the session's end drops it. |
 
 Candidates are holders resident in the stage whose `memory` is this pool.
 If no stage names it as memory, candidates are holders with an active hold

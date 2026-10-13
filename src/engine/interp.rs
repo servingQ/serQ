@@ -2960,6 +2960,13 @@ impl<'p> Interp<'p> {
         // one addition: on the session's own entry, `back + delta` is what
         // it keeps
         self.pools[q].cached += back + delta;
+        // a pool over its cap between its ticks caches only within the cap
+        if matches!(
+            self.p.pools[q].preempt,
+            Preempt::Leases { every: Some(_), .. }
+        ) {
+            self.evict_for(q, 0.0);
+        }
     }
 
     /// `release P`: the innermost hold on `pl` gives its allocation there
@@ -2970,13 +2977,10 @@ impl<'p> Interp<'p> {
     fn release_early(&mut self, sid: usize, pl: usize) {
         let Some((hi, k)) = self.sessions[sid].innermost(pl) else {
             // the lease that holds units, else one a tick set aside
-            let set_aside = || {
-                self.sessions[sid]
-                    .leases
-                    .iter()
-                    .position(|l| l.pool == pl && l.suspended)
-            };
-            if let Some(i) = self.lease_of(sid, pl).or_else(set_aside) {
+            if let Some(i) = self
+                .lease_of(sid, pl)
+                .or_else(|| self.set_aside_of(sid, pl))
+            {
                 self.end_lease(sid, i);
             }
             return;
@@ -3029,6 +3033,14 @@ impl<'p> Interp<'p> {
             .leases
             .iter()
             .position(|l| l.pool == pl && !l.suspended)
+    }
+
+    /// The lease of `pl` a tick set aside for `sid` (`suspend`), if any.
+    fn set_aside_of(&self, sid: usize, pl: usize) -> Option<usize> {
+        self.sessions[sid]
+            .leases
+            .iter()
+            .position(|l| l.pool == pl && l.suspended)
     }
 
     /// What a `grow` of `pl` enlarges for `sid`: the innermost hold of
@@ -3480,7 +3492,29 @@ impl<'p> Interp<'p> {
     fn revoke(&mut self, victim: usize, pl: usize) {
         let i = self.lease_of(victim, pl).expect("victim leases the pool");
         self.pools[pl].preemptions += 1;
-        self.end_lease(victim, i);
+        if !matches!(
+            self.p.pools[pl].preempt,
+            Preempt::Leases { suspend: true, .. }
+        ) {
+            self.end_lease(victim, i);
+            return;
+        }
+        // set aside (`suspend`): the prefix it read is let go, as at a
+        // release, what no other hold reads is cached again, and the lease
+        // keeps only its own units to come back with at a tick
+        let serial = self.sessions[victim].serial;
+        let l = &mut self.sessions[victim].leases[i];
+        let (alloc, shared, path) = (l.alloc, l.shared, std::mem::take(&mut l.path));
+        l.alloc -= shared;
+        l.shared = 0.0;
+        l.suspended = true;
+        let (back, gone) = self.pools[pl].cache.unlock(&path, serial);
+        self.pools[pl].used -= alloc - (shared - back - gone);
+        self.pools[pl].cached += back;
+        if let Some(h) = self.pools[pl].holders.iter().position(|&x| x == victim) {
+            self.pools[pl].holders.remove(h);
+        }
+        self.schedule_tick(pl);
     }
 
     /// The next tick of `pl` under `preempt leases by … every (dt)`, at the
@@ -3531,12 +3565,10 @@ impl<'p> Interp<'p> {
                     aside.push(s);
                 }
             }
+            // in admission order, as `lessees` is: `admission` reads it
+            aside.sort_by_key(|&s| self.sessions[s].adm_seq);
             for s in self.in_order(pl, keys, aside) {
-                let Some(i) = self.sessions[s]
-                    .leases
-                    .iter()
-                    .position(|l| l.pool == pl && l.suspended)
-                else {
+                let Some(i) = self.set_aside_of(s, pl) else {
                     continue;
                 };
                 let alloc = self.sessions[s].leases[i].alloc;
@@ -3554,24 +3586,16 @@ impl<'p> Interp<'p> {
             let Some(v) = self.victim(pl, keys, self.lessees(pl)) else {
                 break;
             };
-            if *suspend {
-                let i = self.lease_of(v, pl).expect("victim leases the pool");
-                let alloc = self.sessions[v].leases[i].alloc;
-                self.pools[pl].preemptions += 1;
-                self.pools[pl].used -= alloc;
-                if let Some(h) = self.pools[pl].holders.iter().position(|&x| x == v) {
-                    self.pools[pl].holders.remove(h);
-                }
-                self.sessions[v].leases[i].suspended = true;
-            } else {
-                self.revoke(v, pl);
-            }
+            self.revoke(v, pl);
         }
+        // what was let go is cached only within the cap
+        self.evict_for(pl, 0.0);
         let leased = self
             .sessions
             .iter()
             .any(|ss| ss.status != Status::Ended && ss.leases.iter().any(|l| l.pool == pl));
-        if leased {
+        // (a lease set aside in this tick may have scheduled the next)
+        if leased && self.pools[pl].next_tick.is_none() {
             self.pools[pl].next_tick = Some(k + 1);
             self.at((k + 1) as f64 * dt, Ev::PoolTick { pool: pl });
         }

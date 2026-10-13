@@ -1768,10 +1768,10 @@ impl Program {
     /// some hold leases, and no engine's memory, where a lease is KV another
     /// instance has still to read (a prefiller's blocks before the
     /// decoder's transfer) and the engine's own rule is `preempt by`. Its
-    /// `every` is a positive number of seconds; `suspend` needs `every`,
-    /// since a set-aside lease comes back at a tick, and a pool without
-    /// `block`, since a lease set aside there would keep cached KV no
-    /// allocation holds.
+    /// `every` is a positive number of seconds, on a pool without `reserve
+    /// held`, whose promise a growth let past the cap would break;
+    /// `suspend` needs `every`, since a set-aside lease comes back at a
+    /// tick.
     fn validate_lease_preemption(&self) -> Result<(), String> {
         for (pi, p) in self.pools.iter().enumerate() {
             let Preempt::Leases { every, suspend, .. } = &p.preempt else {
@@ -1785,14 +1785,16 @@ impl Program {
                     "`every ({dt})`: a tick is a positive, finite number of seconds"
                 )));
             }
-            if *suspend && every.is_none() {
+            if every.is_some() && p.reserve_held {
                 return Err(at(
-                    "`suspend` without `every`: a lease set aside comes back at a tick, and                      without ticks it would never come back",
+                    "`every` on a pool with `reserve held`: a growth let past the cap until \
+                     the tick would take what the live holds reserved",
                 ));
             }
-            if *suspend && p.block.is_some() {
+            if *suspend && every.is_none() {
                 return Err(at(
-                    "`suspend` on a pool with `block`: a lease set aside there would keep                      cached KV that no allocation holds",
+                    "`suspend` without `every`: a lease set aside comes back at a tick, and \
+                     without ticks it would never come back",
                 ));
             }
             let memory = self
