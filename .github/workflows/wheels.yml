@@ -12,7 +12,7 @@ on:
         type: string
         required: true
       dev-version:
-        description: "X.Y.Z-dev.N to stamp (scripts/version.py dev); empty for a release"
+        description: "X.Y.Z-dev.N or X.Y.Z-alpha.N.dev.M to stamp (scripts/version.py dev); empty for a release"
         type: string
         default: ""
 
