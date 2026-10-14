@@ -17,6 +17,8 @@ use crate::ir::{ArgKind, CIter, MAX_SESSIONS};
 pub struct LinkError {
     pub message: String,
     pub span: Option<Span>,
+    /// The rule's code, for an editor (`diagnostic::Code`).
+    pub code: Option<crate::frontend::diagnostic::Code>,
 }
 
 impl LinkError {
@@ -24,6 +26,14 @@ impl LinkError {
         Self {
             message,
             span: None,
+            code: None,
+        }
+    }
+
+    pub(crate) fn coded(code: crate::frontend::diagnostic::Code, message: String) -> Self {
+        Self {
+            code: Some(code),
+            ..Self::new(message)
         }
     }
 
@@ -36,8 +46,17 @@ impl LinkError {
 
     pub fn render(&self, source: &str) -> String {
         match self.span {
-            Some(span) => span.render(source, &format!("link error: {}", self.message)),
+            Some(span) => span.render(source, &self.headed()),
             None => self.to_string(),
+        }
+    }
+
+    /// The message under its heading: `link error: …`, or a coded
+    /// message's own `error[E-…]: …` (`diagnostic::Code`).
+    pub fn headed(&self) -> String {
+        match self.code {
+            Some(c) => c.message(&self.message),
+            None => format!("link error: {}", self.message),
         }
     }
 }
@@ -47,7 +66,7 @@ impl fmt::Display for LinkError {
         if let Some(span) = self.span {
             write!(f, "{}:{}: ", span.line, span.col)?;
         }
-        write!(f, "link error: {}", self.message)
+        write!(f, "{}", self.headed())
     }
 }
 
@@ -945,6 +964,9 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
                         .as_ref()
                         .is_some_and(|r| r.pools.iter().any(|(q, _, _)| q.name == m.name))
                 });
+                if c.load.is_some() && taken.is_none() {
+                    return Err(connector_untaken(&decl.name, sp).at(decl.span));
+                }
                 let member = decl.array.then_some(i);
                 step.connector = Some(Box::new(lk.connector(c, &decl.name, taken, member)?));
             }
@@ -1025,6 +1047,44 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
     }
     crate::frontend::lint::lint(&linked).map_err(LinkError::new)?;
     Ok((linked, lk.spans))
+}
+
+/// The refusal of an engine whose connector loads into its memory, the KV
+/// pool on its device, which its `taking` does not take: the load would
+/// grow a hold the request does not have.
+fn connector_untaken(engine: &str, sp: &StepSpec) -> LinkError {
+    use crate::frontend::diagnostic::Code;
+    let message = format!(
+        "engine `{engine}`'s connector loads into the engine's memory, the pool on its device, \
+         which its `taking` does not take"
+    );
+    // the pool as the queue's text names its own (`kv`, not `D.kv`); how
+    // much a request takes of it is the program's to say (criterion 2)
+    let pool = |m: &Ref| {
+        m.name
+            .strip_prefix(&format!("{engine}."))
+            .unwrap_or(&m.name)
+            .to_string()
+    };
+    let help = match (&sp.memory, &sp.request) {
+        (Some(m), Some(_)) => format!(
+            "take `{}` in the `taking` of `{engine}`'s `admit waiting`: `{} (…)`, what a \
+             request holds of it once its KV is loaded",
+            pool(m),
+            pool(m)
+        ),
+        (Some(m), None) => format!(
+            "take `{}` in `{engine}`'s `admit waiting`: `taking {} (…)`, what a request holds \
+             of it once its KV is loaded",
+            pool(m),
+            pool(m)
+        ),
+        (None, _) => format!(
+            "put a KV pool on `{engine}`'s device (`pool kv on gpu {{ block 16; }}`) and take it \
+             in `admit waiting`"
+        ),
+    };
+    LinkError::coded(Code::ConnectorUntaken, format!("{message}\nhelp: {help}"))
 }
 
 /// Where a statement is: its first reference's, else its first located
@@ -2397,12 +2457,7 @@ impl Linker<'_> {
         let load = match &c.load {
             None => None,
             Some(n) => {
-                let Some(kv) = memory else {
-                    return Err(LinkError::new(format!(
-                        "engine `{engine}`'s connector loads into the engine's memory, the pool \
-                         on its device, which its `taking` does not take"
-                    )));
-                };
+                let kv = memory.expect("refused by `connector_untaken`");
                 let kv = own(&kv.name);
                 let mut body = match &c.kind {
                     ConnectorKind::L2 {

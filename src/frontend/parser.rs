@@ -68,6 +68,7 @@ use std::cell::Cell;
 use std::fmt;
 
 use crate::frontend::ast::*;
+use crate::frontend::diagnostic::Code;
 use crate::frontend::lexer::{LexError, Tok, Token, lex};
 use crate::frontend::link::{
     AGGREGATES, BUILTIN_ATTRS, CONNECTOR_ATTRS, Constants, FOLDED, KEY_ATTRS, LISTS, LResult,
@@ -802,16 +803,49 @@ fn sets_always(stmts: &[Stmt], name: &str) -> bool {
     })
 }
 
+/// The first statement of `stmts`, in a block in them as well, that `f`
+/// finds something in; `f` is told whether the statement is in a leg
+/// (`fork { … }`). The one walk of the blocks a statement holds, for the
+/// checks of a KV relation.
+fn find_stmt<'a, T>(
+    stmts: &'a [Stmt],
+    leg: bool,
+    f: &impl Fn(&'a Stmt, bool) -> Option<T>,
+) -> Option<T> {
+    stmts.iter().find_map(|s| {
+        f(s, leg).or_else(|| match s {
+            Stmt::Branch(_, a, b) => find_stmt(a, leg, f).or_else(|| find_stmt(b, leg, f)),
+            Stmt::Hold { body, .. } | Stmt::While(_, body) | Stmt::Loop(body) => {
+                find_stmt(body, leg, f)
+            }
+            Stmt::Fork(body) => find_stmt(body, true, f),
+            _ => None,
+        })
+    })
+}
+
 /// Whether `stmts` copy the KV over the NICs anywhere, an entry's
 /// `transfer (n) from S to kv (m)` (a run on `queue::PULL`).
 fn transfers(stmts: &[Stmt]) -> bool {
-    stmts.iter().any(|s| match s {
-        Stmt::Run { stage, .. } => stage.name == queue::PULL,
-        Stmt::Branch(_, a, b) => transfers(a) || transfers(b),
-        Stmt::Hold { body, .. } | Stmt::While(_, body) | Stmt::Loop(body) | Stmt::Fork(body) => {
-            transfers(body)
+    find_stmt(stmts, false, &|s, _| {
+        matches!(s, Stmt::Run { stage, .. } if stage.name == queue::PULL).then_some(())
+    })
+    .is_some()
+}
+
+/// Whether `stmts` write a `join` anywhere.
+fn joins(stmts: &[Stmt]) -> bool {
+    find_stmt(stmts, false, &|s, _| matches!(s, Stmt::Join).then_some(())).is_some()
+}
+
+/// The first call of an entry of `queue` in a leg of `stmts` (`fork { … }`),
+/// where its queue is written and its verb.
+fn forked_call<'a>(stmts: &'a [Stmt], queue: &str) -> Option<(Option<Span>, &'a str)> {
+    find_stmt(stmts, false, &|s, leg| match s {
+        Stmt::Call { queue: q, verb, .. } if leg && q.name == queue => {
+            Some((q.span, verb.as_str()))
         }
-        _ => false,
+        _ => None,
     })
 }
 
@@ -1817,6 +1851,19 @@ impl Parser {
         })
     }
 
+    /// `err_at` the token a parsed span starts at (a `def`'s expansion noted
+    /// as there), or at `pos` when there is none.
+    fn err_span<T>(&self, span: Option<Span>, pos: usize, msg: impl Into<String>) -> PResult<T> {
+        let at = span
+            .and_then(|s| {
+                self.toks
+                    .iter()
+                    .position(|t| t.line == s.line && t.col == s.col)
+            })
+            .unwrap_or(pos);
+        self.err_at(at, msg)
+    }
+
     fn advance(&mut self) -> Tok {
         let t = self.toks[self.pos].tok.clone();
         if self.pos + 1 < self.toks.len() {
@@ -2437,26 +2484,95 @@ impl Parser {
                 StageKind::Step(sp) if st.name == q.name => Some(sp),
                 _ => None,
             });
-            let has = match engine.map(|sp| sp.connector.as_ref()) {
+            // what a request loads is the program's to say, so no fix-it
+            // writes it (criterion 2): the help names the choice
+            let connector = format!("connector {} {{ load (…); }}", t.source);
+            let (has, help) = match engine.map(|sp| sp.connector.as_ref()) {
                 Some(Some(c)) if c.queue == t.source => continue,
-                Some(Some(c)) => format!(
-                    "`{}`'s engine has `connector {}`, not `connector {}`",
-                    q.name, c.queue, t.source
+                Some(Some(c)) => (
+                    format!(
+                        "`{}`'s engine has `connector {}`, not `connector {}`",
+                        q.name, c.queue, t.source
+                    ),
+                    format!(
+                        "fix-it: in `{}`'s engine, rename `connector {}` to `connector {}`",
+                        q.name, c.queue, t.source
+                    ),
                 ),
-                Some(None) => format!("`{}`'s engine has no `connector {}`", q.name, t.source),
-                None => format!("`{}` has no engine", q.name),
+                Some(None) => (
+                    format!("`{}`'s engine has no `connector {}`", q.name, t.source),
+                    format!(
+                        "in `{}`'s engine, write `{connector}`, the tokens a request loads \
+                         from `{}` (`request.input - request.hit`)",
+                        q.name, t.source
+                    ),
+                ),
+                None => (
+                    format!("`{}` has no engine", q.name),
+                    format!(
+                        "give `{}` an engine with `{connector}`, or an entry that `transfer`s \
+                         the KV `from {}`",
+                        q.name, t.source
+                    ),
+                ),
             };
             return self.err_at(
                 t.at,
                 format!(
-                    "{written} copies the KV `{0}` leases to `{1}`, and {has}, nor does an \
-                     entry of `{1}` `transfer` it: the reader's connector loads each copy, so \
-                     none would run\n\
-                     help: in `{1}`'s engine, write `connector {0} {{ load (…); }}`, the tokens a \
-                     request loads from `{0}` (`request.input - request.hit`)",
-                    t.source, q.name
+                    "{}\nhelp: {help}",
+                    Code::CopyNoConnector.message(format_args!(
+                        "{written} copies the KV `{0}` leases to `{1}`, and {has}, nor does an \
+                         entry of `{1}` `transfer` it: the reader's connector loads each copy, \
+                         so none would run",
+                        t.source, q.name
+                    ))
                 ),
             );
+        }
+        // the statements as written, before the calls are expanded
+        let bodies: Vec<&[Stmt]> = self
+            .server
+            .iter()
+            .chain(&self.wl_session)
+            .map(|(_, b)| b.as_slice())
+            .chain([prog.session.as_slice()])
+            .chain(
+                self.queues
+                    .iter()
+                    .flat_map(|q| &q.entries)
+                    .map(|e| e.body.as_slice()),
+            )
+            .collect();
+        // a pull: nothing waits for the leg the source's call is forked in,
+        // which a push's connector joins (a push toggled back)
+        let push = self
+            .queues
+            .iter()
+            .any(|q| q.takes.as_ref().is_some_and(|t| t.push));
+        if !push && !bodies.iter().any(|b| joins(b)) {
+            for q in &self.queues {
+                let Some(t) = &q.takes else {
+                    continue;
+                };
+                let Some((span, call)) = bodies.iter().find_map(|b| forked_call(b, &t.source))
+                else {
+                    continue;
+                };
+                let message = format!(
+                    "{}\nhelp: fix-it: take the call `{source}.{call} (…);` out of its \
+                     `fork {{ … }}`\nhelp: or make the copy a push: \
+                     `kvt.nixl_push ({source}, {reader}, …)`",
+                    Code::PullForked.message(format_args!(
+                        "`kvt.nixl_pull ({0}, {1})`: `{0}` is called in a leg (`fork`), and \
+                         in a pull nothing waits for that leg (`join`) as a push's connector \
+                         does, so the session could end while it runs",
+                        t.source, q.name
+                    )),
+                    source = t.source,
+                    reader = q.name,
+                );
+                return self.err_span(span, t.at, message);
+            }
         }
         Ok(())
     }
