@@ -2275,6 +2275,13 @@ fn the_svg_names_stages_pools_and_roles() {
     let svg = serq::view::render(&deployment::figure(&p), "svg").unwrap();
     assert!(svg.contains(r#"data-role="bracket" data-nodes="P.nic D.nic""#));
     assert!(svg.contains(r#"data-role="flow" data-from="P.nic" data-to="D.nic""#));
+    // the push's `join`: the prefill leg reaches the copy at the source's
+    // NIC, the session (the decode request) at the reader's, where its
+    // blocks wait for the bytes; the router sends nothing into `P.nic`
+    assert!(svg.contains(r#"data-role="flow" data-from="P" data-to="P.nic""#));
+    assert!(svg.contains(r#"data-role="flow" data-from="front" data-to="D.nic""#));
+    assert!(!svg.contains(r#"data-from="front" data-to="P.nic""#));
+    assert!(!svg.contains(r#"data-from="P" data-to="D.nic""#));
     // thunderagent: its queue `waiting_queue` is drawn as a queue glyph and a
     // drum, one pool under two roles, and its tick is a station of no stage
     let p = program("thunderagent");

@@ -277,6 +277,11 @@ struct Walker<'a> {
     /// The ends of the legs forked and not yet joined: the station after
     /// the `join` is reached from them as well.
     forked: Vec<(At, Option<String>)>,
+    /// The session's ends at a `join` that opens a copy (a push: its legs
+    /// end where the source posts the bytes): the copy's first station is
+    /// reached from the legs, and the reader's, where the session's request
+    /// waits for the bytes, from these.
+    joined: Vec<(At, Option<String>)>,
     /// Pools held right now, outermost first, each with the hold that took
     /// it (a `release` takes one off before its hold ends) and whether it
     /// encloses: a hold of no units only reserves, and occupies nothing.
@@ -372,8 +377,14 @@ impl Walker<'_> {
     }
 
     fn attach(&mut self, node: usize) {
-        let arm = self.arm.take();
         let frontier = std::mem::take(&mut self.frontier);
+        self.reach(frontier, node);
+        self.frontier = vec![(At::End(End::Node(node)), None)];
+    }
+
+    /// The arrows from each of `frontier`'s ends to `node`.
+    fn reach(&mut self, frontier: Vec<(At, Option<String>)>, node: usize) {
+        let arm = self.arm.take();
         for (from, label) in frontier {
             let from = match from {
                 At::Probe(k) => {
@@ -399,7 +410,6 @@ impl Walker<'_> {
                 back,
             });
         }
-        self.frontier = vec![(At::End(End::Node(node)), None)];
     }
 
     /// Add an edge unless the same one is already there. Programs written as
@@ -598,7 +608,8 @@ impl Walker<'_> {
     }
 
     fn walk_stmts(&mut self, stmts: Vec<CStmt>) {
-        for s in stmts {
+        let mut stmts = stmts.into_iter().peekable();
+        while let Some(s) = stmts.next() {
             match s {
                 CStmt::Run {
                     stage,
@@ -610,6 +621,9 @@ impl Walker<'_> {
                     ..
                 } => {
                     self.last_flow = None;
+                    // a push: the legs reach the source's side of the copy,
+                    // the session the reader's (below)
+                    let session = std::mem::take(&mut self.joined);
                     let label = self.p.show_stage_ref(&stage);
                     let note = stage.index.as_ref().and_then(|i| self.claim_choose(i));
                     self.visit_stage(stage.base, label, note);
@@ -646,6 +660,7 @@ impl Walker<'_> {
                             group.push(k);
                         }
                         let last = *group.last().unwrap();
+                        self.reach(session, last);
                         self.frontier = vec![(At::End(End::Node(last)), None)];
                         let k = match self.net.flows.iter().position(|g| *g == group) {
                             Some(k) => k,
@@ -875,8 +890,21 @@ impl Walker<'_> {
                 }
                 CStmt::Join => {
                     let mut ends = std::mem::take(&mut self.forked);
-                    self.frontier.append(&mut ends);
-                    dedupe(&mut self.frontier);
+                    // before a copy (`kvt.nixl_push`'s connector) the legs
+                    // end at the source, and the session does not pass
+                    // through it: the copy's run sorts the two out
+                    let copy =
+                        matches!(stmts.peek(), Some(CStmt::Run { also, .. }) if !also.is_empty());
+                    if copy && !ends.is_empty() {
+                        let mut session = std::mem::replace(&mut self.frontier, ends);
+                        // a station a leg ends at reaches the copy by its
+                        // NIC, whichever way the session came by it
+                        session.retain(|(at, _)| !self.frontier.iter().any(|(leg, _)| leg == at));
+                        self.joined = session;
+                    } else {
+                        self.frontier.append(&mut ends);
+                        dedupe(&mut self.frontier);
+                    }
                 }
                 CStmt::While(_, body) => {
                     self.known.clear();
@@ -1424,6 +1452,7 @@ pub fn project(p: &Program) -> Net {
         },
         frontier: vec![(At::End(End::Arrival), None)],
         forked: vec![],
+        joined: vec![],
         holds: vec![],
         next_hold: 0,
         pending: vec![],
