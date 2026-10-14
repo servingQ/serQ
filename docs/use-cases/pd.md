@@ -18,11 +18,12 @@ D` is the engine's running slots, `pool D.kv on D's device` its memory,
 iteration.
 
 The router picks a prefill instance and a decode instance, each a box with
-its engine, its NIC and its pools. The read crosses between them: it holds
-the prefiller's NIC and the decoder's at once, which is the bracket around
-`P.nic[i]` and `D.nic[j]`, and moves the prompt's KV from the
-prefiller's leased blocks to the decoder's (`P.kv[i] → D.kv[j]`) after the
-decoder's read latency.
+its engine, its NIC and its pools, one box per instance there is (`NP` and
+`ND`, two each). The read crosses between them, from each prefiller to each
+decoder: it holds the prefiller's NIC and the decoder's at once, `P.nic[i]`
+and `D.nic[j]`, and moves the prompt's KV from the prefiller's leased
+blocks to the decoder's (`P.kv[i] → D.kv[j]`) after the decoder's read
+latency.
 
 ## Configuration
 

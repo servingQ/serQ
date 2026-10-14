@@ -11,7 +11,8 @@ use std::collections::BTreeMap;
 
 use crate::ir::{CArrival, CExpr, CRef, CStageKind, CStmt, CtxVar, Program, RunMode, Side, UnOp};
 use crate::view::figure::{
-    Anchor, BoxStyle, CopyMark, EdgeStyle, Figure, Item, Rect, StationKind, TextSize, pt,
+    Anchor, BoxStyle, CopyMark, EdgeRole, EdgeStyle, Figure, Item, Point, Rect, StationKind,
+    TextSize, pt,
 };
 
 // --- the projection ---------------------------------------------------------
@@ -1818,6 +1819,143 @@ const DRUM_H: f64 = 26.0;
 /// An instance box's margin around what it holds, and the room for its title.
 const INST_PAD: f64 = 12.0;
 const INST_HEAD: f64 = 26.0;
+/// The members of an instance drawn at most: past them the figure says how
+/// many it left out.
+const MEMBERS_MAX: usize = 8;
+/// The room between two members' boxes, the lower one's title in it.
+const MEMBER_GAP: f64 = 34.0;
+
+/// An instance drawn once per member: `choose i in NP` picks one of `NP`
+/// pods, and the figure draws the `NP`, its box and all in it again a
+/// pitch further down for each, the arrows into it fanned out to every
+/// member and those between two of them drawn from each member to each.
+/// It is one when the instance's stations are the members of families
+/// (`P[i]`, `P.nic[i]`), as many as the smallest family has.
+struct Stack {
+    /// The members drawn, and how many there are.
+    count: usize,
+    all: usize,
+    /// The index the `choose` names (`i`), written `[i]` in the box.
+    var: String,
+    /// The names in the box that a member's own replaces (`P` by `P[1]`):
+    /// its stations' and its pools'.
+    names: Vec<String>,
+}
+
+impl Stack {
+    fn of(p: &Program, net: &Net, g: &Instance) -> Option<Stack> {
+        let family = |name: &str, index: Option<u32>, of: &mut dyn Iterator<Item = &str>| {
+            index.map(|_| of.filter(|n| *n == name).count())
+        };
+        let mut all = usize::MAX;
+        let mut names = vec![];
+        for &i in &g.nodes {
+            let st = &p.stages[net.nodes[i].stage?];
+            all = all.min(family(
+                &st.name,
+                st.index,
+                &mut p.stages.iter().map(|s| s.name.as_str()),
+            )?);
+            names.push(st.name.clone());
+        }
+        // its pools, and the members of a family its stations hold that a
+        // transfer holds too (`D.kv`), drawn in its box all the same
+        let held = g.nodes.iter().flat_map(|&i| &net.nodes[i].pools);
+        for &q in g.pools.iter().chain(held) {
+            let pool = &p.pools[q];
+            if pool.index.is_some() && !names.contains(&pool.name) {
+                names.push(pool.name.clone());
+            }
+        }
+        let var = g
+            .label
+            .strip_prefix("choose ")?
+            .split(" of ")
+            .next()?
+            .to_string();
+        Some(Stack {
+            count: all.min(MEMBERS_MAX),
+            all,
+            var,
+            names,
+        })
+    }
+
+    /// What member `m` calls `name`.
+    fn name(&self, name: &str, m: usize) -> String {
+        if self.names.iter().any(|n| n == name) {
+            format!("{name}[{m}]")
+        } else {
+            name.to_string()
+        }
+    }
+
+    /// `item`, drawn for member `m`, `dy` further down.
+    fn member(&self, item: &Item, m: usize, dy: f64) -> Item {
+        let down = |r: &Rect| Rect::new(r.x, r.y + dy, r.w, r.h);
+        let name = |n: &String| self.name(n, m);
+        let mut item = item.clone();
+        match &mut item {
+            Item::Box {
+                rect, nodes, copy, ..
+            } => {
+                *rect = down(rect);
+                *nodes = nodes.iter().map(name).collect();
+                if let Some(c) = copy {
+                    c.poster = name(&c.poster);
+                }
+            }
+            Item::Station {
+                rect, stage, node, ..
+            } => {
+                *rect = down(rect);
+                *stage = stage.as_ref().map(name);
+                *node = name(node);
+            }
+            Item::Queue { rect, pool, .. } | Item::Drum { rect, pool } => {
+                *rect = down(rect);
+                *pool = name(pool);
+            }
+            Item::Edge {
+                pts, role, copy, ..
+            } => {
+                pts.iter_mut().for_each(|q| q.y += dy);
+                match role {
+                    Some(EdgeRole::Flow { from, to }) => {
+                        *from = name(from);
+                        *to = name(to);
+                    }
+                    Some(EdgeRole::Arrival { to }) => *to = name(to),
+                    Some(EdgeRole::Exit { from }) => *from = name(from),
+                    None => {}
+                }
+                if let Some(c) = copy {
+                    c.poster = name(&c.poster);
+                }
+            }
+            Item::Dot { at, .. } => at.y += dy,
+            Item::Text { at, text, .. } => {
+                at.y += dy;
+                *text = text.replace(&format!("[{}]", self.var), &format!("[{m}]"));
+            }
+        }
+        item
+    }
+}
+
+/// Whether an item is drawn wholly in `area`.
+fn within(item: &Item, area: &Rect) -> bool {
+    let at =
+        |q: &Point| q.x >= area.x && q.x <= area.right() && q.y >= area.y && q.y <= area.bottom();
+    match item {
+        Item::Box { rect, .. }
+        | Item::Station { rect, .. }
+        | Item::Queue { rect, .. }
+        | Item::Drum { rect, .. } => area.contains(rect),
+        Item::Edge { pts, .. } => pts.iter().all(at),
+        Item::Dot { at: q, .. } | Item::Text { at: q, .. } => at(q),
+    }
+}
 
 /// A pool's extent over the station row, and the geometry the walk gives it.
 struct Group {
@@ -2137,8 +2275,18 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
     }
     let row_right = x;
 
+    // An instance whose stations are a family's members is drawn once per
+    // member, the boxes stacked down from the row (`members`)
+    let stacks: Vec<Option<Stack>> = net.instances.iter().map(|g| Stack::of(p, net, g)).collect();
+    let stack_of = |i: usize| net.instance_of(i).and_then(|k| stacks[k].as_ref());
+
     // A run over several stages: its stations bracketed as one job.
     for (g, group) in net.flows.iter().enumerate() {
+        // a copy between two stacked instances is an arrow from each member
+        // to each, drawn once the members are
+        if spanning(g) && group.iter().any(|&i| stack_of(i).is_some()) {
+            continue;
+        }
         let r = group
             .iter()
             .map(|&i| rects[i])
@@ -2350,6 +2498,7 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
             })
     };
     let any_prefill_only = (0..net.instances.len()).any(prefill_only);
+    let mut inst_boxes: Vec<Rect> = vec![];
     for (k, g) in net.instances.iter().enumerate() {
         let mut r = g
             .nodes
@@ -2410,6 +2559,162 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
             g.label.clone(),
             Anchor::Start,
         );
+        inst_boxes.push(r);
+    }
+
+    // The members: a stacked instance's box and all drawn in it again, a
+    // pitch further down per member, named by the member's own (`P[1]`,
+    // `P.kv[1]`); member 0 is the box drawn, its `choose` written once.
+    let pitch = (0..stacks.len())
+        .filter(|&k| stacks[k].is_some())
+        .map(|k| inst_boxes[k].h + MEMBER_GAP)
+        .fold(0.0, f64::max);
+    let drawn = std::mem::take(&mut f.items);
+    let (mut under, mut over) = (vec![], vec![]);
+    let mut kept = drawn.clone();
+    for (k, s) in stacks.iter().enumerate() {
+        let Some(s) = s else { continue };
+        let b = inst_boxes[k];
+        let area = Rect::new(b.x, b.y - 20.0, b.w, b.h + 20.0);
+        let choose = &net.instances[k].label;
+        for (i, item) in drawn.iter().enumerate() {
+            if !within(item, &area) {
+                continue;
+            }
+            kept[i] = s.member(item, 0, 0.0);
+            if matches!(item, Item::Text { text, .. } if text == choose) {
+                continue;
+            }
+            for m in 1..s.count {
+                match s.member(item, m, m as f64 * pitch) {
+                    // under everything, as the first box is
+                    i @ Item::Box {
+                        style: BoxStyle::Instance,
+                        ..
+                    } => under.push(i),
+                    i => over.push(i),
+                }
+            }
+        }
+        if s.all > s.count {
+            let last = b.bottom() + (s.count - 1) as f64 * pitch;
+            over.push(Item::Text {
+                at: pt(b.x + 10.0, last + 14.0),
+                text: format!("{} of {} members drawn", s.count, s.all),
+                anchor: Anchor::Start,
+                size: TextSize::Small,
+                dim: true,
+            });
+        }
+    }
+    f.items = under.into_iter().chain(kept).chain(over).collect();
+    let box_of = |i: usize| net.instance_of(i).map(|k| inst_boxes[k]);
+    // a node's members, by index and name: one, itself, outside a stack
+    let members_of = |i: usize| -> Vec<(usize, String)> {
+        let name = net.name(p, i);
+        match stack_of(i) {
+            Some(s) => (0..s.count).map(|m| (m, s.name(&name, m))).collect(),
+            None => vec![(0, name)],
+        }
+    };
+    let dy = |m: usize| m as f64 * pitch;
+    // the members an arrow joins: within one stacked instance each to
+    // itself, else each to each
+    let pairs = |a: usize, b: usize| -> Vec<((usize, String), (usize, String))> {
+        let (ma, mb) = (members_of(a), members_of(b));
+        if stack_of(a).is_some() && net.instance_of(a) == net.instance_of(b) {
+            ma.into_iter().zip(mb).collect()
+        } else {
+            ma.iter()
+                .flat_map(|x| mb.iter().map(move |y| (x.clone(), y.clone())))
+                .collect()
+        }
+    };
+    // From member `m`'s station `i`, at `x`, down to below the stack: a
+    // member above the last leaves its box through the gap under it and
+    // goes down beside the stack, on the side `right` says.
+    let down = |i: usize, m: usize, x: f64, right: bool| -> Vec<Point> {
+        let top = pt(x, frames[i].bottom() + dy(m));
+        match (stack_of(i), box_of(i)) {
+            (Some(s), Some(b)) if m + 1 < s.count => {
+                let gy = b.bottom() + dy(m) + 8.0;
+                let side = if right { b.right() + 8.0 } else { b.x - 8.0 };
+                vec![top, pt(x, gy), pt(side, gy)]
+            }
+            _ => vec![top],
+        }
+    };
+    // along a lane at `y`: from `a`'s member down, across, up into `b`'s
+    let lane_path = |a: (usize, usize, f64), b: (usize, usize, f64), y: f64| -> Vec<Point> {
+        let mut pts = down(a.0, a.1, a.2, b.2 > a.2);
+        pts.push(pt(pts.last().unwrap().x, y));
+        let mut up = down(b.0, b.1, b.2, a.2 > b.2);
+        up.reverse();
+        pts.push(pt(up[0].x, y));
+        pts.extend(up);
+        pts
+    };
+    // along the row, from `a`'s member to `b`'s: straight between two
+    // stacks, else turning down (or up) by the stack's side
+    let row_path = |a: (usize, usize), b: (usize, usize)| -> Vec<Point> {
+        let (ra, rb) = (rects[a.0], rects[b.0]);
+        let (ya, yb) = (ra.centre().y + dy(a.1), rb.centre().y + dy(b.1));
+        if ya == yb || (stack_of(a.0).is_some() && stack_of(b.0).is_some()) {
+            return vec![pt(ra.right(), ya), pt(rb.x, yb)];
+        }
+        let x = match (box_of(b.0), box_of(a.0)) {
+            (Some(bb), _) if stack_of(b.0).is_some() => bb.x - 8.0,
+            (_, Some(ba)) => ba.right() + 8.0,
+            _ => (ra.right() + rb.x) / 2.0,
+        };
+        vec![pt(ra.right(), ya), pt(x, ya), pt(x, yb), pt(rb.x, yb)]
+    };
+
+    // a copy between two stacked instances: an arrow from each member to
+    // each, what it moves and waits for written once, above the first
+    for (g, group) in net.flows.iter().enumerate() {
+        if !(spanning(g) && group.iter().any(|&i| stack_of(i).is_some())) {
+            continue;
+        }
+        let (a, b) = (group[0], *group.last().unwrap());
+        let copy = copy_mark(g);
+        for ((ma, na), (mb, nb)) in pairs(a, b) {
+            let mark = copy.clone().map(|c| CopyMark {
+                poster: if c.poster == net.name(p, a) {
+                    na.clone()
+                } else if c.poster == net.name(p, b) {
+                    nb.clone()
+                } else {
+                    c.poster
+                },
+                ..c
+            });
+            f.copy_flow(row_path((a, ma), (b, mb)), na, nb, mark);
+        }
+        // the poster: a dot over each member's station, with no bracket
+        if let Some(&node) = net.flow_notes[g].posters.first()
+            && copy.is_some()
+        {
+            for (m, _) in members_of(node) {
+                let r = rects[node];
+                f.push(Item::Dot {
+                    at: pt(r.centre().x, r.y - 6.0 + dy(m)),
+                    r: 3.0,
+                });
+            }
+        }
+        let (ra, rb) = (rects[a], rects[b]);
+        let (mid, y) = ((ra.right() + rb.x) / 2.0, ra.centre().y);
+        let (moves, wait) = flow_texts(g);
+        let lines: Vec<String> = [moves, wait].into_iter().flatten().collect();
+        for (k, t) in lines.iter().enumerate() {
+            let above = (lines.len() - k) as f64;
+            f.note(
+                pt(mid, y - 8.0 - (above - 1.0) * NOTE_LINE),
+                t.clone(),
+                Anchor::Middle,
+            );
+        }
     }
 
     // One counter for every edge that needs a lane below the station row:
@@ -2422,7 +2727,13 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
         .chain(enclosures.iter().map(|(_, _, r)| r))
         .map(|r| r.bottom())
         .fold(0.0, f64::max);
-    let base = (row_y + STATION_H + deep + BACK_DROP).max(floor + 14.0);
+    // and below the members
+    let base = (row_y + STATION_H + deep + BACK_DROP).max(floor + 14.0)
+        + stacks
+            .iter()
+            .flatten()
+            .map(|s| (s.count - 1) as f64 * pitch)
+            .fold(0.0, f64::max);
     let lane = |n: &mut f64| {
         *n += 1.0;
         base + *n * 22.0
@@ -2437,8 +2748,20 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
                 arrivals += 1;
                 if arrivals == 1 && i == 0 {
                     // The arrow starts at the margin and the label rides above
-                    // it, clear of the pool glyphs it passes.
-                    f.arrival(vec![pt(MARGIN, y), pt(r.x, y)], net.name(p, i));
+                    // it, clear of the pool glyphs it passes; into a stack,
+                    // it turns down beside it to each member.
+                    for (m, to) in members_of(i) {
+                        let pts = match box_of(i) {
+                            Some(b) if m > 0 => vec![
+                                pt(MARGIN, y),
+                                pt(b.x - 8.0, y),
+                                pt(b.x - 8.0, y + dy(m)),
+                                pt(r.x, y + dy(m)),
+                            ],
+                            _ => vec![pt(MARGIN, y), pt(r.x, y)],
+                        };
+                        f.arrival(pts, to);
+                    }
                     f.note(pt(MARGIN, y - 10.0), arrival_text.clone(), Anchor::Start);
                 } else {
                     // A session that opens with a branch has more than one entry
@@ -2450,49 +2773,38 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
                     }
                     let ly = lane(&mut lanes);
                     let x = r.x + r.w * 0.25;
-                    f.arrival(
-                        vec![
-                            pt(MARGIN, y),
-                            pt(MARGIN, ly),
-                            pt(x, ly),
-                            pt(x, frames[i].bottom()),
-                        ],
-                        net.name(p, i),
-                    );
+                    for (m, to) in members_of(i) {
+                        let mut up = down(i, m, x, false);
+                        up.reverse();
+                        let mut pts = vec![pt(MARGIN, y), pt(MARGIN, ly), pt(up[0].x, ly)];
+                        pts.extend(up);
+                        f.arrival(pts, to);
+                    }
                 }
             }
             (End::Node(i), End::Exit) => {
                 let r = rects[i];
-                let from = net.name(p, i);
                 // a request leaving the deployment, or a session that ends
                 // inside it: both go out, and only the second has a guard
                 let text = label.map_or("out".into(), |l| format!("out ({l})"));
                 if i + 1 == net.nodes.len() {
-                    // The last station leaves to the right.
-                    f.exit(
-                        vec![
-                            pt(r.right(), r.centre().y),
-                            pt(row_right + 26.0, r.centre().y),
-                        ],
-                        from,
-                    );
-                    f.note(
-                        pt(row_right + 30.0, r.centre().y + 3.0),
-                        text,
-                        Anchor::Start,
-                    );
+                    // The last station leaves to the right, each member's.
+                    for (m, from) in members_of(i) {
+                        let y = r.centre().y + dy(m);
+                        f.exit(vec![pt(r.right(), y), pt(row_right + 26.0, y)], from);
+                        f.note(pt(row_right + 30.0, y + 3.0), text.clone(), Anchor::Start);
+                    }
                 } else {
                     // An earlier station's exit drops into a lane of its own
                     // rather than running a line through the stations after it.
                     let y = lane(&mut lanes);
-                    f.exit(
-                        vec![
-                            pt(r.x + r.w * 0.75, frames[i].bottom()),
-                            pt(r.x + r.w * 0.75, y),
-                            pt(row_right + 26.0, y),
-                        ],
-                        from,
-                    );
+                    let x = r.x + r.w * 0.75;
+                    for (m, from) in members_of(i) {
+                        let mut pts = down(i, m, x, true);
+                        pts.push(pt(pts.last().unwrap().x, y));
+                        pts.push(pt(row_right + 26.0, y));
+                        f.exit(pts, from);
+                    }
                     f.note(pt(row_right + 30.0, y + 3.0), text, Anchor::Start);
                 }
             }
@@ -2504,17 +2816,14 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
                 // clear of the 0.25 a return leaves and enters by and the
                 // 0.75 an early exit leaves by
                 let (ax, bx) = (ra.x + ra.w * 0.625, rb.x + rb.w * 0.5);
-                f.flow(
-                    vec![
-                        pt(ax, frames[a].bottom()),
-                        pt(ax, y),
-                        pt(bx, y),
-                        pt(bx, frames[b].bottom()),
-                    ],
-                    EdgeStyle::Flow,
-                    net.name(p, a),
-                    net.name(p, b),
-                );
+                for ((ma, na), (mb, nb)) in pairs(a, b) {
+                    f.flow(
+                        lane_path((a, ma, ax), (b, mb, bx), y),
+                        EdgeStyle::Flow,
+                        na,
+                        nb,
+                    );
+                }
                 if let Some(l) = label {
                     f.note(
                         pt((ra.centre().x + rb.centre().x) / 2.0, y - 5.0),
@@ -2524,13 +2833,10 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
                 }
             }
             (End::Node(a), End::Node(b)) if !e.back => {
-                let (ra, rb) = (rects[a], rects[b]);
-                f.flow(
-                    vec![pt(ra.right(), ra.centre().y), pt(rb.x, rb.centre().y)],
-                    EdgeStyle::Flow,
-                    net.name(p, a),
-                    net.name(p, b),
-                );
+                let ra = rects[a];
+                for ((ma, na), (mb, nb)) in pairs(a, b) {
+                    f.flow(row_path((a, ma), (b, mb)), EdgeStyle::Flow, na, nb);
+                }
                 if let Some(l) = label {
                     // by the station it leaves: the pool glyphs before the
                     // next one stand in the middle
@@ -2545,17 +2851,14 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
                 let (ra, rb) = (rects[a], rects[b]);
                 let y = lane(&mut lanes);
                 let (ax, bx) = (ra.x + ra.w * 0.25, rb.x + rb.w * 0.25);
-                f.flow(
-                    vec![
-                        pt(ax, frames[a].bottom()),
-                        pt(ax, y),
-                        pt(bx, y),
-                        pt(bx, frames[b].bottom()),
-                    ],
-                    EdgeStyle::Back,
-                    net.name(p, a),
-                    net.name(p, b),
-                );
+                for ((ma, na), (mb, nb)) in pairs(a, b) {
+                    f.flow(
+                        lane_path((a, ma, ax), (b, mb, bx), y),
+                        EdgeStyle::Back,
+                        na,
+                        nb,
+                    );
+                }
                 if let Some(l) = label {
                     f.note(
                         pt((ra.centre().x + rb.centre().x) / 2.0, y - 5.0),
