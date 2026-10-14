@@ -2793,9 +2793,22 @@ impl Linker<'_> {
                     names(&i.params)
                 )))
             }
-            crate::ir::Side::Workload if i.server.iter().any(|c| c == n) => {
+            crate::ir::Side::Workload
+                if self.attr_index.contains_key(n) && !i.workload.iter().any(|c| c == n) =>
+            {
+                if i.params.iter().any(|p| p == n) {
+                    return Err(LinkError::new(format!(
+                        "the workload reads `{n}`, the server's parameter: `send` binds it, \
+                         and the workload reads its own attributes"
+                    )));
+                }
                 let help = if i.reply.iter().any(|r| r == n) {
                     format!("read the reply: `reply.{n}`")
+                } else if n.contains('.') {
+                    format!(
+                        "set it under a name in the server (`set x = {n};`), add `x` to \
+                         `reply (…)` and read `reply.x`"
+                    )
                 } else {
                     format!("add `{n}` to the server's `reply (…)` and read `reply.{n}`")
                 };

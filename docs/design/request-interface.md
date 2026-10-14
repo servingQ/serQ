@@ -91,22 +91,22 @@ carries. The workload conforms.
 
 ## The rules
 
-- `server (P, hidden Q, R = c) reply (S) { … }`. A parameter may be `hidden`
-  (the workload's `hidden` clause moves here, and is refused beside a
-  signature) and may have a constant default, which a workload that does
-  not send it gets: a deployment that reads a context still pairs with a
-  single-turn workload.
+- `server (P, hidden Q) reply (S) { … }`. A parameter may be `hidden` (the
+  workload's `hidden` clause moves here, and is refused beside a
+  signature).
 - `send (P: e, …);` in `workload`, once. Each `turn;` evaluates it after the
   `turn` block's draws. `send (s)` sends the attribute `s` as it is; `s: s`
-  is refused as a second spelling of it. Every parameter without a default
-  is named; a name the server does not take is an error; a parameter named
+  is refused as a second spelling of it. Every parameter is named; a name the server does not take is an error; a parameter named
   as an attribute the workload sets is that attribute, sent as it is, and
   binding it to another value is refused (one name, two values).
-- The server, its gateways' routes, the queues' entries (expanded into it)
-  and the scheduler's expressions (pool keys, an engine's schedule) read the
-  parameters and what the server sets, never an attribute the workload
-  keeps. The workload reads `reply.S` in its session, never an attribute the
-  server or the scheduler sets (`cached`, `computed`, a queue's marks).
+- The server, its gateways' routes and the scheduler's expressions (pool
+  keys, an engine's schedule) read the parameters and what the server sets,
+  never an attribute the workload keeps; a queue's entry reads what it is
+  passed and the hidden parameters, as it read the hidden attributes. The
+  workload reads what it keeps, the parameters it sends as they are, and
+  `reply.S` after a `turn;` of its session: never a parameter it binds to
+  an expression (the server's name) nor an attribute the server, the
+  scheduler or an engine sets (`cached`, a queue's marks, `vllm.first`).
   `serial`, the session's number, every request carries: a queue keys its
   prefix by it.
 - The server sets each reply attribute on every path that completes the
@@ -115,8 +115,7 @@ carries. The workload conforms.
   sticky `home`); the parameters are bound anew at each.
 
 The parser lowers it to the kernel: a binding `P: e` becomes `set P = e;` at
-the end of the `turn` block, a default `set P = c;` in `init`, a hidden
-parameter an entry of `hidden`, and `reply.S` the attribute `S`. The checks
+the end of the `turn` block, a hidden parameter an entry of `hidden`, and `reply.S` the attribute `S`. The checks
 are the linker's, at the one place a name is resolved, by the side reading
 it (`Linker::cross`). A parameter sent as it is adds no statement, so the
 IR of a program migrated that way is the IR it had.
@@ -130,7 +129,9 @@ change gives the test programs, the reference pages' and the Python
 pages' inline examples (`docs/api/`, `docs/python/`) and the companion
 programs (`serving-queue-theory`) their signatures, then makes a bare
 `server { … }` a server with no parameters and refuses the workload's
-`hidden`. Until then
+`hidden`. Until then `server () { … }` (no parameters, nothing crosses)
+and `server { … }` (everything shared) differ by two characters; no
+program writes the first. Until then
 the language has two forms; this document is where the second one is
 scheduled to go.
 
@@ -154,6 +155,19 @@ scheduled to go.
   time it was sent, and the IR and the proofs stay as they are.
 - **A deprecation warning for a bare server.** serQ has no warnings, by
   design (`src/frontend/lint.rs`); the second change refuses instead.
+- **A default, `server (input, context = 0)`.** It would let a deployment
+  that reads a context pair with a single-turn workload, but no program
+  needs one yet, and a construct no program uses is a path only tests
+  exercise (CLAUDE.md). Refused with a message; added with the first
+  program that pairs that way.
+- **Names.** The vLLM family's twelve servers take `input`/`output`; the
+  others take the workload's names as they are (`routing.sq`'s `first`,
+  `thunderagent.sq`'s `K`, the oracle programs' `prompt`, `o`, whose IR the
+  oracle files fix). A common spelling for them is the second change's,
+  with the tests.
+- **`reply.` as a dotted name.** The parser hands the linker
+  `reply.S`, which it resolves to `S`; the side and the turn before it are
+  the parser's to check, which it does where it reads the name.
 - **Typing parameters (`Size`, a cost).** A parameter is a `Size` slot the
   workload sets, as before; a cost is still constructed by the server.
 

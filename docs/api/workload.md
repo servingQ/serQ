@@ -104,17 +104,18 @@ send (s);
 
 What each request carries, for a server with a signature, `server (input,
 hidden output) { … }`: its parameters, which the server, its gateways'
-routes, the queues' entries and the scheduler's expressions read instead of
+routes and the scheduler's expressions read instead of
 the workload's attributes. Each `turn;` evaluates the binding after the
 `turn` block's draws, at moment `Session`, with the attributes as they are
 then.
 
-Each parameter without a default is named, once; a name the server does not
+Each parameter is named, once; a name the server does not
 take is an error. A parameter named as an attribute the workload sets is
 that attribute, sent as it is, `send (s)`, and `s: s` is refused as a
 second spelling of it. The workload reads the reply after `turn;` as
-`reply.R` ([Program](program.md#server)), and no other attribute the server
-or the scheduler sets. `send` without a signature is an error.
+`reply.R` ([Program](program.md#server)), and no other attribute the server,
+the scheduler or an engine sets; a parameter bound to an expression is the
+server's name, which the workload does not read. `send` without a signature is an error.
 
 ## `session`
 

@@ -818,10 +818,12 @@ pub struct Interface {
     pub params: Vec<String>,
     /// `reply (R, …)`, in order; the workload reads each as `reply.R`.
     pub reply: Vec<String>,
-    /// What the workload sets and does not send: its own state.
+    /// What the workload sets and does not send: its own state, which the
+    /// server may not read.
     pub client: Vec<String>,
-    /// What the server and the scheduler set: the server's own state.
-    pub server: Vec<String>,
+    /// What the workload may read: its own state, what it sends as it is,
+    /// and the session's number; no other attribute.
+    pub workload: Vec<String>,
 }
 
 /// `claim NAME [given (e)] : every iteration of STAGE (e) ;`, `… some

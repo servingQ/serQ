@@ -170,8 +170,14 @@ struct Parser {
     /// The workload's `send (P: e, …);`, with the position of `send` and
     /// of each parameter's name.
     send: Option<(usize, Binds)>,
-    /// Each `reply.R` read: the position of `reply`, `R`, and the side.
-    reply_reads: Vec<(usize, String, Side)>,
+    /// Each `reply.R` read: the position of `reply`, `R`, the side, and
+    /// whether a `turn;` of the session comes before it in the text.
+    reply_reads: Vec<(usize, String, Side, bool)>,
+    /// A `turn;` of the workload's session has been read.
+    turned: bool,
+    /// The parameters the workload sends as they are (`send (s)`): its own
+    /// attributes, which it reads; the others are the server's names.
+    sent_as_is: Vec<String>,
     /// The position of the workload's first `hidden`.
     hidden_at: Option<usize>,
     /// Header bindings the body of their hold reads, with the position of
@@ -561,8 +567,6 @@ struct Param {
     at: usize,
     name: String,
     hidden: bool,
-    /// A constant the request carries when the workload does not send one.
-    default: Option<Expr>,
 }
 
 /// Where a statement sits: declarations, the workload session, or a server.
@@ -1399,7 +1403,13 @@ fn collect_entry(
 /// How an entry that reads `n` from outside it gets it: as a parameter, or,
 /// when the entry is its role's and the role fixes the parameters, from a
 /// `hidden` attribute; a `prefix` key reads the `KEY_ATTRS` as they are.
-fn pass_help(q: &QueueDecl, e: &queue::Entry, n: &str, header: bool) -> String {
+fn pass_help(q: &QueueDecl, e: &queue::Entry, n: &str, header: bool, signed: bool) -> String {
+    // under a server's signature, hiding is a parameter's
+    let hide = if signed {
+        format!("take `{n}` `hidden` in `server (…, hidden {n})`")
+    } else {
+        format!("mark `{n}` `hidden`")
+    };
     let fixed = queue::role_of_verb(&e.verb, e.from.is_some())
         .is_some_and(|r| q.roles.iter().any(|x| x == r.name));
     let mut help = match (fixed, header) {
@@ -1408,11 +1418,11 @@ fn pass_help(q: &QueueDecl, e: &queue::Entry, n: &str, header: bool) -> String {
             format!("pass `{n}` as a parameter or `mark` a moment for the caller to read")
         }
         (true, true) => format!(
-            "`{}`'s parameters are its role's: mark `{n}` `hidden` and set a local from it above the hold",
+            "`{}`'s parameters are its role's: {hide} and set a local from it above the hold",
             e.verb
         ),
         (true, false) => format!(
-            "`{}`'s parameters are its role's: mark `{n}` `hidden` or `mark` a moment for the caller to read",
+            "`{}`'s parameters are its role's: {hide} or `mark` a moment for the caller to read",
             e.verb
         ),
     };
@@ -1641,6 +1651,8 @@ impl Parser {
             signature: None,
             send: None,
             reply_reads: vec![],
+            turned: false,
+            sent_as_is: vec![],
             hidden_at: None,
             body_binds: vec![],
             header_binds: vec![],
@@ -2311,7 +2323,7 @@ impl Parser {
                                      parameters and the queue's pools and stage. {}",
                                     q.name,
                                     e.verb,
-                                    pass_help(q, e, n, true)
+                                    pass_help(q, e, n, true, self.signature.is_some())
                                 )
                             });
                         return self.err_at(e.at, message);
@@ -2323,6 +2335,10 @@ impl Parser {
                         // a name nothing sets is no attribute set outside
                         // the queue: it is unknown, as it is anywhere (#444)
                         let set = self.definitions.iter().any(|(d, _)| d == n)
+                            || self
+                                .signature
+                                .as_ref()
+                                .is_some_and(|s| s.params.iter().any(|p| p.name == *n))
                             || BUILTIN_ATTRS.contains(&n.as_str())
                             || self.body_binds.iter().any(|(_, b, _)| b == n);
                         // the body sees attributes: a device is one only
@@ -2355,7 +2371,7 @@ impl Parser {
                                  request's `hidden` attributes; {}",
                                 q.name,
                                 e.verb,
-                                pass_help(q, e, n, false)
+                                pass_help(q, e, n, false, self.signature.is_some())
                             ),
                         );
                     }
@@ -2442,7 +2458,7 @@ impl Parser {
         if let Some((_, server)) = &self.server {
             assigned_in(server, &mut served.server);
         }
-        self.interface(prog, served)?;
+        self.interface(prog)?;
         match (self.wl_session.take(), self.server.take()) {
             (None, None) if prog.workload.is_some() => self.err("a workload needs a `server` block to handle its turns"),
             (None, None) => Ok(()),
@@ -2485,7 +2501,7 @@ impl Parser {
                      help: name them: `server (P, …) { … }`",
                 );
             }
-            if let Some((at, _, _)) = self.reply_reads.first() {
+            if let Some((at, ..)) = self.reply_reads.first() {
                 return self.err_at(
                     *at,
                     "`reply.…` reads what the server's `reply (…)` declares, and \
@@ -2533,7 +2549,7 @@ impl Parser {
                 );
             }
         }
-        let lets: Vec<&str> = prog.lets.iter().map(|(n, _)| n.as_str()).collect();
+        let mut sent_as_is = vec![];
         for p in &sig.params {
             let set = sets.contains(&p.name) || turn_attr(&p.name);
             match binds.iter().find(|(_, n, _)| *n == p.name) {
@@ -2543,6 +2559,7 @@ impl Parser {
                         read = inner;
                     }
                     if matches!(read, Expr::Var(v) if *v == p.name) {
+                        sent_as_is.push(p.name.clone());
                         if !set {
                             return self.err_at(
                                 *at,
@@ -2567,53 +2584,23 @@ impl Parser {
                         w.turn.push(Stmt::Set(p.name.clone(), e.clone()));
                     }
                 }
-                None => match &p.default {
-                    Some(d) => {
-                        if set {
-                            return self.err_at(
-                                p.at,
-                                format!(
-                                    "the workload sets `{0}`, which the server takes with a \
-                                     default: send it (`send ({0})`) or name it apart",
-                                    p.name
-                                ),
-                            );
-                        }
-                        let (mut vars, mut refs) = (vec![], vec![]);
-                        names(d, &mut vars, &mut refs);
-                        let read = vars
-                            .iter()
-                            .chain(refs.iter().map(|r| &r.name))
-                            .find(|n| !lets.contains(&n.as_str()) && *n != "inf");
-                        if let Some(n) = read {
-                            return self.err_at(
-                                p.at,
-                                format!(
-                                    "the default of `{}` reads `{n}`: a default is a constant",
-                                    p.name
-                                ),
-                            );
-                        }
-                        w.init.push(Stmt::Set(p.name.clone(), d.clone()));
-                    }
-                    None => {
-                        return self.err_at(
-                            p.at,
-                            format!(
-                                "the server takes `{0}`, and the workload does not send it\n\
-                                 help: `send ({0}: …);` in `workload`",
-                                p.name
-                            ),
-                        );
-                    }
-                },
+                None => {
+                    return self.err_at(
+                        p.at,
+                        format!(
+                            "the server takes `{0}`, and the workload does not send it\n\
+                             help: `send ({0}: …);` in `workload`",
+                            p.name
+                        ),
+                    );
+                }
             }
             if p.hidden {
                 w.hidden.push(p.name.clone());
             }
         }
-        for (at, field, side) in &self.reply_reads {
-            if *side != Side::WorkloadSession {
+        for (at, field, side, turned) in &self.reply_reads {
+            if *side != Side::WorkloadSession || !turned {
                 return self.err_at(
                     *at,
                     format!("`reply.{field}` is read in the workload's `session`, after `turn;`"),
@@ -2635,6 +2622,7 @@ impl Parser {
                 );
             }
         }
+        self.sent_as_is = sent_as_is;
         for (at, r) in &sig.reply {
             if sets.contains(r) {
                 return self.err_at(
@@ -2652,7 +2640,7 @@ impl Parser {
     /// Under a server's signature, once the queues' entries are in place:
     /// the server sets its reply on every way it completes a request, and
     /// the linker learns what each side keeps to itself.
-    fn interface(&self, prog: &mut Program, served: &Served) -> PResult<()> {
+    fn interface(&self, prog: &mut Program) -> PResult<()> {
         let Some(sig) = &self.signature else {
             return Ok(());
         };
@@ -2686,19 +2674,19 @@ impl Parser {
                 .filter(|a| turn_attr(a))
                 .map(|a| a.to_string()),
         );
-        let mut server: Vec<String> = served.server.clone();
-        server.extend(served.shared.iter().cloned());
-        server.retain(|n| !client.contains(n));
         client.retain(|n| !params.contains(n));
         client.sort();
         client.dedup();
-        server.sort();
-        server.dedup();
+        // what the workload reads: its own, what it sends as it is, and
+        // the session's number; nothing the server or the engine sets
+        let mut workload = client.clone();
+        workload.extend(self.sent_as_is.iter().cloned());
+        workload.extend(KEY_ATTRS.iter().map(|a| a.to_string()));
         prog.interface = Some(Interface {
             params,
             reply: sig.reply.iter().map(|(_, r)| r.clone()).collect(),
             client,
-            server,
+            workload,
         });
         Ok(())
     }
@@ -4892,17 +4880,12 @@ impl Parser {
                 if sig.params.iter().any(|p| p.name == name) {
                     return self.err_at(at, format!("duplicate parameter `{name}`"));
                 }
-                let default = if self.eat(&Tok::Assign) {
-                    Some(self.expr()?)
-                } else {
-                    None
-                };
-                sig.params.push(Param {
-                    at,
-                    name,
-                    hidden,
-                    default,
-                });
+                if *self.peek() == Tok::Assign {
+                    return self.err(format!(
+                        "`{name} = …`: a parameter has no default; the workload sends it"
+                    ));
+                }
+                sig.params.push(Param { at, name, hidden });
                 if !self.eat(&Tok::Comma) {
                     break;
                 }
@@ -5040,6 +5023,7 @@ impl Parser {
                     return self.err_at(at, "duplicate session in workload");
                 }
                 self.side = Side::WorkloadSession;
+                self.turned = false;
                 let body = self.block()?;
                 self.side = Side::Session;
                 self.wl_session = Some((at, body));
@@ -5409,6 +5393,9 @@ impl Parser {
                 }
                 self.advance();
                 self.expect(&Tok::Semi)?;
+                if self.side == Side::WorkloadSession {
+                    self.turned = true;
+                }
                 Ok(Stmt::Turn)
             }
             "end" => {
@@ -6444,7 +6431,8 @@ impl Parser {
                     let at = self.pos - 1;
                     self.advance();
                     let field = self.ident()?;
-                    self.reply_reads.push((at, field.clone(), self.side));
+                    self.reply_reads
+                        .push((at, field.clone(), self.side, self.turned));
                     Ok(Expr::Located(
                         span,
                         Box::new(Expr::Var(format!("reply.{field}"))),

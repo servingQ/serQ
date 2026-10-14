@@ -130,7 +130,7 @@ fn the_server_sets_its_reply_on_every_path_that_completes() {
 }
 
 #[test]
-fn every_parameter_is_sent_or_has_a_default() {
+fn every_parameter_is_sent() {
     refused(
         &with("", "server (work) { run svc (cost(svc, work)); }"),
         &["the server takes `work`, and the workload does not send it"],
@@ -142,17 +142,84 @@ fn every_parameter_is_sent_or_has_a_default() {
         ),
         &["`send` binds `other`, which the server does not take; it takes `work`"],
     );
-    compile(&with(
-        "send (work: s);",
-        "server (work, factor = 2) { run svc (cost(svc, work * factor)); }",
-    ))
-    .unwrap();
+    // no program needs a default yet (CLAUDE.md, a construct some program uses)
     refused(
         &with(
             "send (work: s);",
-            "server (work, factor = s) { run svc (cost(svc, work * factor)); }",
+            "server (work, factor = 2) { run svc (cost(svc, work * factor)); }",
         ),
-        &["the default of `factor` reads `s`: a default is a constant"],
+        &["`factor = …`: a parameter has no default; the workload sends it"],
+    );
+}
+
+/// The workload reads its own attributes, what it sends as it is and the
+/// reply: not the server's parameter names, nor what an engine marks.
+#[test]
+fn the_workload_reads_its_own() {
+    refused(
+        &with(
+            "send (work: s); session { turn; observe x = work; }",
+            "server (work) { run svc (cost(svc, work)); }",
+        ),
+        &["the workload reads `work`, the server's parameter"],
+    );
+    compile(&with(
+        "send (s); session { turn; observe x = s; }",
+        "server (s) { run svc (cost(svc, s)); }",
+    ))
+    .unwrap();
+    let engine = "device gpu { kv cap 1000; }
+        engine e on gpu { tokens cap inf;
+          scheduler { advance running; admit waiting while (running.preempted == 0) taking kv (request.input); }
+          worker { forward (1); } }
+        pool kv on gpu { block 16; }";
+    refused(
+        &format!(
+            "{engine}
+            {}",
+            with(
+                "send (work: ceil(s * 10) + 1); session { turn; observe x = e.first; }",
+                "server (work) { e (work, 1); }",
+            )
+        ),
+        &[
+            "the workload reads `e.first`, which the server sets",
+            "(`set x = e.first;`), add `x` to `reply (…)`",
+        ],
+    );
+}
+
+/// A queue's entry reads what it is passed and the hidden parameters, as it
+/// read the hidden attributes; the help names the parameter's `hidden`.
+#[test]
+fn an_entry_reads_the_hidden_parameters() {
+    let program = |server: &str| {
+        format!(
+            "queue gw : gateway {{ route {{ E.decode (prompt); }} }}
+             queue E : decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }}
+               engine on gpu {{ tokens cap inf; scheduler {{ advance running; admit waiting while (running.preempted == 0); }} worker {{ forward (1); }} }}
+               decode (prompt) {{ hold kv (cost(kv, prompt)) {{
+                 run E prefill (cost(E, 1)) growing kv; run E decode (cost(E, o - 1)) growing kv; }} }} }}
+             workload {{ arrive batch(1); init {{ set p = 32; set out = 4; }}
+               send (prompt: p, o: out); session {{ turn; end; }} }}
+             server ({server}) {{ gw.route(); }}"
+        )
+    };
+    compile(&program("prompt, hidden o")).unwrap();
+    refused(
+        &program("prompt, o"),
+        &["take `o` `hidden` in `server (…, hidden o)`"],
+    );
+}
+
+#[test]
+fn a_reply_is_read_after_a_turn() {
+    refused(
+        &with(
+            "send (work: s); session { observe x = reply.done; turn; }",
+            "server (work) reply (done) { run svc (cost(svc, work)); set done = 1; }",
+        ),
+        &["`reply.done` is read in the workload's `session`, after `turn;`"],
     );
 }
 

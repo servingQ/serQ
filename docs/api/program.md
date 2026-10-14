@@ -212,7 +212,7 @@ Use `end;` only to exit early. Queue entry calls belong in the server.
 ## `server`
 
 ```serq
-server [( [hidden] NAME [= const] [, …]* )] [reply ( NAME [, …]* )] block
+server [( [hidden] NAME [, …]* )] [reply ( NAME [, …]* )] block
 ```
 
 The deployment's handling of each turn. Every workload uses one server;
@@ -224,10 +224,9 @@ Its signature is the deployment's interface:
 
 | Part | Description |
 |---|---|
-| `NAME` | A parameter: what each request carries, bound by the workload's [`send`](workload.md#send). The server, its gateways' routes, the queues' entries and the scheduler's expressions read it, and no attribute the workload keeps. |
-| `hidden NAME` | A parameter the scheduler may not read until a run reveals it ([`hidden`](workload.md#hidden)). |
-| `NAME = const` | A parameter a workload that does not send it gets as this constant. |
-| `reply (NAME, …)` | What the reply carries. The server sets each on every path that completes the request; the workload's session reads it after `turn;` as `reply.NAME`, and no other attribute the server or the scheduler sets. |
+| `NAME` | A parameter: what each request carries, bound by the workload's [`send`](workload.md#send). The server, its gateways' routes and the scheduler's expressions read it, and no attribute the workload keeps; a queue's entry reads what it is passed. |
+| `hidden NAME` | A parameter the scheduler may not read until a run reveals it ([`hidden`](workload.md#hidden)); a queue's entry reads it without being passed it. |
+| `reply (NAME, …)` | What the reply carries. The server sets each on every path that completes the request; the workload's session reads it after `turn;` as `reply.NAME`, and no other attribute the server, the scheduler or an engine sets. |
 
 What the server sets stays the session's from one request to the next;
 the parameters are bound anew at each. `serial`, the session's number,

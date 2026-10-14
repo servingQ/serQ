@@ -39,7 +39,7 @@ item     := let NAME = expr ;
           | pool NAME on OWNER { poolopt* }    -- a capacity of a device or an engine, as a pool
           | pool NAME on ENGINE.DEVICE { poolopt* }   -- the device's capacity, whose queue the engine admits: the name before the dot is that engine
           | workload { wlitem* }
-          | server block                      -- request handling; the session lives inside workload
+          | server [ ( [hidden] NAME , … ) ] [ reply ( NAME , … ) ] block   -- request handling, and what a request and its reply carry; the session lives inside workload
           | queue NAME [ '[' expr ']' ] [ : ROLE [, ROLE]* ] { qitem* }   -- a station: its pools, stage and entries (below, *Queues*)
           | kvt.nixl_pull ( QUEUE , QUEUE [, latency = expr ] , share = POLICY ) ;   -- the source, its reader, the read (below, *Queues*)
           | kvt.nixl_push ( QUEUE , QUEUE [, latency = expr ] , share = POLICY ) ;   -- the source, its reader, the write
@@ -92,8 +92,9 @@ sstmt    := advance running [only ( expr )] [admission | by ( expr , ... ) | dec
 wlitem   := arrive poisson ( rate ) ; | arrive renewal ( expr ) ; | arrive closed ( n ) ; | arrive batch ( n ) ; | arrive none ;
           | trace "file.csv" [ordered] ;      -- replay sessions from a trace
           | init block | turn block          -- Size / set / observe
-          | session block                    -- optional: the sequence of completed turns
-          | hidden NAME [, NAME]* ;           -- the scheduler may not read these
+          | send ( NAME [: expr] , … ) ;      -- what each request carries: the server's parameters
+          | session block                    -- optional: the sequence of completed turns; reads the reply as reply.NAME
+          | hidden NAME [, NAME]* ;           -- the scheduler may not read these (a bare server's; else `server (hidden NAME)`)
 stmt     := turn ;                           -- draw attributes, submit, wait for the response (session only)
           | Size NAME = expr ;                -- workload request quantity
           | Cost NAME = expr ;                -- expression must have a resource Cost type
@@ -370,17 +371,20 @@ evaluates the binding after the `turn` block's draws; `send (s)` sends the
 attribute `s` as it is. After `turn;` the workload reads the reply as
 `reply.R`. Nothing else crosses:
 
-- the server, its gateways' routes, the queues' entries and the scheduler's
-  expressions (queue, preempt and eviction keys, an engine's schedule) read
-  the parameters, never an attribute the workload keeps (`K` above);
-- the workload reads the reply, never an attribute the server or the
-  scheduler sets;
+- the server, its gateways' routes and the scheduler's expressions (queue,
+  preempt and eviction keys, an engine's schedule) read the parameters,
+  never an attribute the workload keeps (`K` above); a queue's entry reads
+  what it is passed and the `hidden` parameters, as it read the hidden
+  attributes;
+- the workload reads its own attributes, those it sends as they are, and
+  the reply after a `turn;`: never a parameter it binds to an expression,
+  nor anything the server, the scheduler or an engine sets (`cached`,
+  `vllm.first`);
 - `serial`, the session's number, every request carries.
 
-A parameter may be `hidden` ([`hidden`](api/workload.md#hidden)), and may
-have a constant default, `server (input, context = 0)`, which a workload
-that does not send it gets. The server sets each reply attribute on every
-path that completes the request. What the server sets stays the session's
+A parameter may be `hidden` ([`hidden`](api/workload.md#hidden)). The
+server sets each reply attribute on every path that completes the
+request. What the server sets stays the session's
 from one request to the next (a sticky `home` in
 `examples/multi-turn/routing.sq`); the parameters are bound anew at each.
 `examples/pd-disaggregation/llmd_nixl_pull.sq` replies with the tokens the
@@ -403,7 +407,7 @@ attribute, as before the signature; it is refused once every program has
 one ([the design](design/request-interface.md)).
 
 The parser puts what `send` binds at the end of the `turn` block, a
-default in `init`, and a hidden parameter in the IR's `hidden`; it expands
+hidden parameter in the IR's `hidden`; it expands
 each source `turn;` into the IR's attribute-drawing `Turn` followed by the
 server's statements. The interface is the frontend's: it adds no IR
 construct, scope or dispatch, and a parameter sent as it is (`send (s)`)
@@ -1600,7 +1604,7 @@ from the cache alone rather than from the previous prompt, and caches `request.i
 | `allocate_slots` block by block as the request advances | the memory pool grows with the request's position | `kv_cache_manager.py:371-608` |
 | preemption of `running[-1]`, `waiting.prepend_request`, `num_computed_tokens = 0`, no admission in a step that preempted | `preempt lifo`, re-queued at the head, admitted again; `admit waiting while (running.preempted == 0)` | `scheduler.py:742-813, 869, 1539-1582` |
 | a preempted request keeps its output tokens: it is rescheduled with `num_tokens = prompt + outputs`, reserves and recomputes that many, and generates the rest | the engine keeps the request's tokens: `request.known` is `max(known, computed + 1)` after a preemption, it computes what the cache does not hold of them and generates the rest | `scheduler.py:1560-1561`, `request.py:295-296`, `kv_cache_manager.py:515-531` |
-| the scheduler reserves by `num_tokens` (prompt and generated so far), never by the final length: it knows `max_tokens` and learns the length when `check_stop` sees EOS or the cap | `hidden o;`: no header, key or budget reads `o` | `kv_cache_manager.py:517, 533-534`, `config/scheduler.py:191`, `scheduler.py:639, 2426`, `sched/utils.py:98-119` |
+| the scheduler reserves by `num_tokens` (prompt and generated so far), never by the final length: it knows `max_tokens` and learns the length when `check_stop` sees EOS or the cap | `server (input, hidden output)`: no header, key or budget reads `output` | `kv_cache_manager.py:517, 533-534`, `config/scheduler.py:191`, `scheduler.py:639, 2426`, `sched/utils.py:98-119` |
 | the prefix cache holds every *computed* full block, generated tokens included; a hit is the longest run of cached full blocks, at most `num_tokens − 1` | `cache (request.input + request.output − 1)`; `reuse (floor(min(prev prompt, prompt − 1), bs))`; the unmatched blocks stay cached, dead | `kv_cache_manager.py:289-300, 602-606`, `single_type_kv_cache_manager.py:743-838` |
 | the free queue: freed blocks appended tail first (LRU), in the order requests finish | `evict lru` per block from the tail, ties by release order | `block_pool.py:776-805`, `single_type_kv_cache_manager.py:557-585` |
 | a finished session's blocks stay in the free queue | `end` keeps the cache | `block_pool.py:776-805` |
