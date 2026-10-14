@@ -2047,12 +2047,12 @@ fn the_svg_names_stages_pools_and_roles() {
         let svg = serq::view::render(&f, "svg").unwrap();
         for st in &want {
             assert!(
-                svg.contains(&format!(r#"<g data-stage="{st}">"#)),
+                svg.contains(&format!(r#"<g data-node="{st}" data-stage="{st}">"#)),
                 "{name}: {st}"
             );
         }
         // one group per station, every group closed
-        assert_eq!(svg.matches("<g data-stage=").count(), want.len(), "{name}");
+        assert_eq!(svg.matches(" data-stage=").count(), want.len(), "{name}");
         assert_eq!(svg.matches("<g data-").count(), svg.matches("</g>").count());
         // a pool's groups are told apart by their role
         for m in svg.match_indices("<g data-pool=") {
@@ -2080,14 +2080,34 @@ fn the_svg_names_stages_pools_and_roles() {
     // sessions arrive at the router's decision, the first node
     assert!(svg.contains(r##"data-role="arrival" data-to="#0""##));
     // every arrow between two nodes says which: as many as the net has
-    // edges between nodes, plus the transfer's arrow across the gap
-    // (`P.nic` to `D.nic`, the flow's stages in the order they are named)
+    // edges between nodes, plus one across the gap per run that spans two
+    // instances (`P.nic` to `D.nic`, the flow's stages in the order they
+    // are named)
     let between = net
         .edges
         .iter()
         .filter(|e| matches!((e.from, e.to), (End::Node(_), End::Node(_))))
         .count();
-    assert_eq!(svg.matches(r#"data-role="flow""#).count(), between + 1);
+    let spanning = net.flows.iter().filter(|g| net.spans(g)).count();
+    assert_eq!(spanning, 1);
+    assert_eq!(
+        svg.matches(r#"data-role="flow""#).count(),
+        between + spanning
+    );
+    // every name an arrow uses is a node in the figure, and the bracket
+    // names the two NICs the transfer holds at once
+    for m in svg
+        .match_indices("data-from=\"")
+        .chain(svg.match_indices("data-to=\""))
+    {
+        let rest = &svg[m.0 + m.1.len()..];
+        let name = &rest[..rest.find('"').unwrap()];
+        assert!(
+            svg.contains(&format!(r#"<g data-node="{name}""#)),
+            "{name} is not a node"
+        );
+    }
+    assert!(svg.contains(r#"data-role="bracket" data-nodes="P.nic D.nic""#));
     assert!(svg.contains(r#"data-role="flow" data-from="P.nic" data-to="D.nic""#));
     // the decision to the prefiller (`remote_prefill`), and to the decoder
     // alone (`else`); the next turn goes through the workload, which the
@@ -2095,10 +2115,20 @@ fn the_svg_names_stages_pools_and_roles() {
     assert!(svg.contains(r##"data-role="flow" data-from="#0" data-to="P""##));
     assert!(svg.contains(r##"data-role="flow" data-from="#0" data-to="D""##));
     assert!(!svg.contains(r#"data-from="D" data-to="#));
+    // a transfer whose NICs sit side by side has a bracket and no arrow
+    // between them: the push mode's prefiller and decoder share a box
+    let p = program("vllm_nixl_push");
+    let svg = serq::view::render(&deployment::figure(&p), "svg").unwrap();
+    assert!(svg.contains(r#"data-role="bracket" data-nodes="P.nic D.nic""#));
+    assert!(!svg.contains(r#"data-from="P.nic" data-to="D.nic""#));
     // thunderagent: its queue `waiting_queue` is drawn as a queue glyph and a
     // drum, one pool under two roles, and its tick is a station of no stage
     let p = program("thunderagent");
     let svg = serq::view::render(&deployment::figure(&p), "svg").unwrap();
     assert!(svg.contains(r#"<g data-pool="waiting_queue" data-role="queue">"#));
     assert!(svg.contains(r#"<g data-pool="waiting_queue" data-role="drum">"#));
+    // its decision and its tick are nodes without a stage
+    assert!(svg.contains(r##"<g data-node="#0">"##));
+    assert!(svg.contains(r##"<g data-node="#1">"##));
+    assert!(svg.contains(r##"data-role="flow" data-from="#0" data-to="#1""##));
 }

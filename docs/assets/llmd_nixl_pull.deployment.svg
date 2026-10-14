@@ -21,7 +21,7 @@
 <rect class="bg" fill="#ffffff" x="0" y="0" width="1627.6" height="390"/>
 <rect class="instance" fill="#f5f7f9" stroke="#4b5563" stroke-width="1.2" x="940.4" y="89" width="545.2" height="224" rx="10"/>
 <rect class="instance" fill="#f5f7f9" stroke="#4b5563" stroke-width="1.2" x="320" y="89" width="468.4" height="224" rx="10"/>
-<rect class="rail" fill="none" stroke="#4b5563" stroke-width="1" x="686.4" y="135" width="356" height="64" rx="4"/>
+<rect class="rail" fill="none" stroke="#4b5563" stroke-width="1" data-role="bracket" data-nodes="P.nic D.nic" x="686.4" y="135" width="356" height="64" rx="4"/>
 <path class="flow" fill="none" stroke="#4b5563" stroke-width="1.3" data-role="flow" data-from="P.nic" data-to="D.nic" d="M776.4 167 L952.4 167" marker-end="url(#a)"/>
 <text x="864.4" y="159" text-anchor="middle" font-size="8" fill="#6b7280" class="dim">P.kv[i] → D.kv[j]</text>
 <text x="864.4" y="182" text-anchor="middle" font-size="8" fill="#6b7280" class="dim">D.nic latency (2e-3)</text>
@@ -55,9 +55,11 @@
 </g>
 <text x="1154.4" y="276" text-anchor="start" font-size="10" fill="#1d2021">pool D.reqs on D</text>
 <text x="1154.4" y="288" text-anchor="start" font-size="8" fill="#6b7280" class="dim">cap 64</text>
+<g data-node="#0">
 <polygon class="station" fill="#d8e6e4" stroke="#4b5563" stroke-width="1.3" points="204,141 230,167 204,193 178,167"/>
+</g>
 <text x="204" y="133" text-anchor="middle" font-size="10" fill="#1d2021">choose j, i</text>
-<g data-stage="P">
+<g data-node="P" data-stage="P">
 <rect class="station" fill="#d8e6e4" stroke="#4b5563" stroke-width="1.3" x="433.2" y="141" width="84" height="52" rx="3"/>
 <rect class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" x="441.2" y="180" width="68" height="6"/>
 <rect class="solid" fill="#eef2f5" stroke="#4b5563" stroke-width="1.1" data-role="budget" x="441.2" y="180" width="42.16" height="6"/>
@@ -65,19 +67,19 @@
 </g>
 <text x="475.2" y="133" text-anchor="middle" font-size="10" fill="#1d2021">P[i]</text>
 <text x="475.2" y="206" text-anchor="middle" font-size="8" fill="#6b7280" class="dim">tokens cap 8192</text>
-<g data-stage="P.nic">
+<g data-node="P.nic" data-stage="P.nic">
 <circle class="station" fill="#d8e6e4" stroke="#4b5563" stroke-width="1.3" cx="734.4" cy="167" r="26"/>
 <text x="734.4" y="170.5" text-anchor="middle" font-size="10" fill="#1d2021">PS</text>
 </g>
 <text x="734.4" y="133" text-anchor="middle" font-size="10" fill="#1d2021">P.nic[i]</text>
 <text x="734.4" y="206" text-anchor="middle" font-size="8" fill="#6b7280" class="dim">200000</text>
-<g data-stage="D.nic">
+<g data-node="D.nic" data-stage="D.nic">
 <circle class="station" fill="#d8e6e4" stroke="#4b5563" stroke-width="1.3" cx="994.4" cy="167" r="26"/>
 <text x="994.4" y="170.5" text-anchor="middle" font-size="10" fill="#1d2021">PS</text>
 </g>
 <text x="994.4" y="133" text-anchor="middle" font-size="10" fill="#1d2021">D.nic[j]</text>
 <text x="994.4" y="206" text-anchor="middle" font-size="8" fill="#6b7280" class="dim">200000</text>
-<g data-stage="D">
+<g data-node="D" data-stage="D">
 <rect class="station" fill="#d8e6e4" stroke="#4b5563" stroke-width="1.3" x="1250" y="141" width="84" height="52" rx="3"/>
 <rect class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" x="1258" y="180" width="68" height="6"/>
 <rect class="solid" fill="#eef2f5" stroke="#4b5563" stroke-width="1.1" data-role="budget" x="1258" y="180" width="42.16" height="6"/>

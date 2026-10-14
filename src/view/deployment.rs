@@ -178,6 +178,16 @@ impl Net {
     /// It does when its stations, in the order named, are one instance's
     /// and then another's (`egress[i], ingress[j]`); any other mixture
     /// (`a[i], b[j], c[i]`) is bracketed where it stands.
+    /// What the SVG calls node `i`: its stage's name, or, for a decision or
+    /// a tick, which is no stage, its place among the nodes (`#0`). A name
+    /// the arrows use within one figure: the place moves with the layout.
+    pub fn name(&self, p: &Program, i: usize) -> String {
+        match self.nodes[i].stage {
+            Some(st) => p.stages[st].name.clone(),
+            None => format!("#{i}"),
+        }
+    }
+
     pub fn spans(&self, flow: &[usize]) -> bool {
         let mut runs: Vec<Option<usize>> = vec![];
         for &k in flow {
@@ -1989,15 +1999,6 @@ fn groups(net: &Net) -> Vec<Group> {
 }
 
 /// Lay a projected network out as a figure.
-/// What the SVG calls node `i` of the net: its stage's name, or, for a
-/// decision or a tick, which is no stage, its place among the nodes (`#0`).
-fn node_name(p: &Program, net: &Net, i: usize) -> String {
-    match net.nodes[i].stage {
-        Some(st) => p.stages[st].name.clone(),
-        None => format!("#{i}"),
-    }
-}
-
 pub fn layout(p: &Program, net: &Net) -> Figure {
     let mut f = Figure {
         title: String::new(),
@@ -2208,10 +2209,9 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
             .reduce(|a, b| a.union(&b))
             .expect("a flow holds a stage");
         let pad = 6.0;
-        f.boxed(
+        f.bracket(
             Rect::new(r.x - pad, r.y - pad, r.w + 2.0 * pad, r.h + 2.0 * pad),
-            BoxStyle::Flow,
-            4.0,
+            group.iter().map(|&i| net.name(p, i)).collect(),
         );
         let (moves, wait) = flow_texts(g);
         if spanning(g) {
@@ -2222,8 +2222,8 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
             f.flow(
                 vec![pt(a.right(), y), pt(b.x, y)],
                 EdgeStyle::Flow,
-                node_name(p, net, group[0]),
-                node_name(p, net, *group.last().unwrap()),
+                net.name(p, group[0]),
+                net.name(p, *group.last().unwrap()),
             );
             let mid = (a.right() + b.x) / 2.0;
             if let Some(t) = moves {
@@ -2355,6 +2355,7 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
             kind: n.kind,
             text: n.inner.clone(),
             stage: n.stage.map(|st| p.stages[st].name.clone()),
+            node: net.name(p, i),
         });
         f.text(
             pt(r.centre().x, r.y - 8.0),
@@ -2415,6 +2416,7 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
                 rect: r,
                 style: BoxStyle::Instance,
                 round: 10.0,
+                nodes: vec![],
             },
         );
         // named after its engine, and for prefill/decode by its part
@@ -2470,7 +2472,7 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
                 if arrivals == 1 && i == 0 {
                     // The arrow starts at the margin and the label rides above
                     // it, clear of the pool glyphs it passes.
-                    f.arrival(vec![pt(MARGIN, y), pt(r.x, y)], node_name(p, net, i));
+                    f.arrival(vec![pt(MARGIN, y), pt(r.x, y)], net.name(p, i));
                     f.note(pt(MARGIN, y - 10.0), arrival_text.clone(), Anchor::Start);
                 } else {
                     // A session that opens with a branch has more than one entry
@@ -2489,13 +2491,13 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
                             pt(x, ly),
                             pt(x, frames[i].bottom()),
                         ],
-                        node_name(p, net, i),
+                        net.name(p, i),
                     );
                 }
             }
             (End::Node(i), End::Exit) => {
                 let r = rects[i];
-                let from = node_name(p, net, i);
+                let from = net.name(p, i);
                 // a request leaving the deployment, or a session that ends
                 // inside it: both go out, and only the second has a guard
                 let text = label.map_or("out".into(), |l| format!("out ({l})"));
@@ -2544,8 +2546,8 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
                         pt(bx, frames[b].bottom()),
                     ],
                     EdgeStyle::Flow,
-                    node_name(p, net, a),
-                    node_name(p, net, b),
+                    net.name(p, a),
+                    net.name(p, b),
                 );
                 if let Some(l) = label {
                     f.note(
@@ -2560,8 +2562,8 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
                 f.flow(
                     vec![pt(ra.right(), ra.centre().y), pt(rb.x, rb.centre().y)],
                     EdgeStyle::Flow,
-                    node_name(p, net, a),
-                    node_name(p, net, b),
+                    net.name(p, a),
+                    net.name(p, b),
                 );
                 if let Some(l) = label {
                     // by the station it leaves: the pool glyphs before the
@@ -2585,8 +2587,8 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
                         pt(bx, frames[b].bottom()),
                     ],
                     EdgeStyle::Back,
-                    node_name(p, net, a),
-                    node_name(p, net, b),
+                    net.name(p, a),
+                    net.name(p, b),
                 );
                 if let Some(l) = label {
                     f.note(

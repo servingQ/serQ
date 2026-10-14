@@ -169,6 +169,9 @@ pub enum Item {
         style: BoxStyle,
         /// Corner radius in points; 0 for square corners.
         round: f64,
+        /// For a `Flow` bracket: the nodes one job holds at once (the SVG's
+        /// `data-nodes`), between which it draws no arrow. Empty otherwise.
+        nodes: Vec<String>,
     },
     /// A queueing station.
     Station {
@@ -181,6 +184,9 @@ pub enum Item {
         /// SVG writer puts it on the glyph as `data-stage`, so that the
         /// figure is addressable as well as a picture.
         stage: Option<String>,
+        /// What the arrows call it (`EdgeRole`): the stage's name, or `#k`
+        /// for a decision or a tick (`data-node`).
+        node: String,
     },
     /// The queueing-theory queue glyph: `cells` boxes between two rails,
     /// where holds of `pool` wait (`data-pool`).
@@ -195,7 +201,8 @@ pub enum Item {
         pts: Vec<Point>,
         style: EdgeStyle,
         arrow: bool,
-        /// An arrival or an exit, which the SVG writer marks (`data-role`).
+        /// An arrival, a flow or an exit, which the SVG writer marks
+        /// (`data-role`, `data-from`, `data-to`); `None` for a relation.
         role: Option<EdgeRole>,
     },
     Text {
@@ -293,7 +300,22 @@ impl Figure {
     }
 
     pub fn boxed(&mut self, rect: Rect, style: BoxStyle, round: f64) {
-        self.push(Item::Box { rect, style, round });
+        self.push(Item::Box {
+            rect,
+            style,
+            round,
+            nodes: vec![],
+        });
+    }
+
+    /// The bracket around the stations one job holds at once, `nodes`.
+    pub fn bracket(&mut self, rect: Rect, nodes: Vec<String>) {
+        self.push(Item::Box {
+            rect,
+            style: BoxStyle::Flow,
+            round: 4.0,
+            nodes,
+        });
     }
 
     pub fn edge(&mut self, pts: Vec<Point>, style: EdgeStyle) {
