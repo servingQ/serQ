@@ -5,6 +5,7 @@ pub mod args;
 pub mod ast;
 pub mod diagnostic;
 pub mod fmt;
+pub mod highlight;
 pub mod lexer;
 pub mod link;
 pub mod lint;

@@ -215,7 +215,7 @@ fn the_docs_lexer_leaves_exactly_the_arithmetic_functions_plain() {
 /// nor a declaration an attribute's (#470).
 #[test]
 fn the_docs_lexer_knows_every_name_the_language_supplies() {
-    use serq::frontend::link::{AGGREGATES, BUILTIN_ATTRS, CONTEXT_VARS, FOLDED};
+    use serq::frontend::link::{AGGREGATES, BUILTIN_ATTRS, CONTEXT_VARS, FOLDED, INF};
     let supplied = CONTEXT_VARS
         .iter()
         .map(|(n, _)| *n)
@@ -223,7 +223,7 @@ fn the_docs_lexer_knows_every_name_the_language_supplies() {
         .chain(AGGREGATES.iter().map(|(n, _)| *n))
         .chain(FOLDED)
         .chain(BUILTIN_ATTRS)
-        .chain(["inf"]);
+        .chain([INF]);
 
     let mut listed = coloured();
     listed.extend(lexer_list("ARITHMETIC"));
@@ -232,4 +232,67 @@ fn the_docs_lexer_knows_every_name_the_language_supplies() {
     listed.extend(lexer_list("ENGINE_VALUES"));
     let missing: Vec<&str> = supplied.filter(|w| !listed.contains(*w)).collect();
     assert!(missing.is_empty(), "{LEXER} does not colour {missing:?}");
+}
+
+/// The keywords' roles are `frontend::highlight`'s lists, which an editor
+/// reads; the lexer's copies are the same words, both ways.
+#[test]
+fn the_docs_lexer_gives_the_keywords_the_roles_highlight_does() {
+    use serq::frontend::highlight::{OPTIONS, STATEMENTS, STRUCTURE};
+    for (name, list) in [
+        ("STRUCTURE", &STRUCTURE[..]),
+        ("STATEMENTS", &STATEMENTS[..]),
+        ("OPTIONS", &OPTIONS[..]),
+    ] {
+        let rust: BTreeSet<String> = list.iter().map(|w| w.to_string()).collect();
+        assert_eq!(lexer_list(name), rust, "{LEXER}: {name}");
+    }
+}
+
+/// The words the lexer colours as read are the ones `highlight` does, both
+/// ways: a word a keyword's role takes first (`cost`, `queue`) is neither's,
+/// and `request.input` is the ENGINE_VALUES rule's.
+#[test]
+fn the_docs_lexer_colours_as_read_what_highlight_does() {
+    use serq::frontend::highlight::{Role, word_role};
+    use serq::frontend::link::{BUILTIN_ATTRS, CONTEXT_VARS, FOLDED, INF};
+    let read = |w: &str| !w.contains('.') && word_role(w, false) == Role::Observable;
+    let rust: BTreeSet<String> = CONTEXT_VARS
+        .iter()
+        .map(|(n, _)| *n)
+        .chain(serq::ir::Fun::names())
+        .chain(FOLDED)
+        .chain(BUILTIN_ATTRS)
+        .chain([INF])
+        .filter(|w| read(w))
+        .map(String::from)
+        .collect();
+    // a word the lexer lists that a keyword's role takes first is dead there
+    let py: BTreeSet<String> = lexer_list("BUILTINS")
+        .into_iter()
+        .filter(|w| {
+            !matches!(
+                word_role(w, false),
+                Role::Structure | Role::Statement | Role::Option
+            )
+        })
+        .collect();
+    assert_eq!(
+        py,
+        rust,
+        "{LEXER}: BUILTINS; only in the lexer {:?}, only in highlight {:?}",
+        py.difference(&rust).collect::<Vec<_>>(),
+        rust.difference(&py).collect::<Vec<_>>()
+    );
+}
+
+/// A run's aggregates are coloured only as a call, in both: the lexer's list
+/// is the linker's `AGGREGATES`, both ways.
+#[test]
+fn the_docs_lexer_knows_exactly_the_aggregates() {
+    let rust: BTreeSet<String> = serq::frontend::link::AGGREGATES
+        .iter()
+        .map(|(n, _)| n.to_string())
+        .collect();
+    assert_eq!(lexer_list("AGGREGATES"), rust, "{LEXER}: AGGREGATES");
 }

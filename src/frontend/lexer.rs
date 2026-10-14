@@ -148,13 +148,62 @@ fn emit(
     });
 }
 
+/// What `lex` read before an error: the tokens before the item it could not
+/// read, ending in `Eof` with the trivia before that item, and where the
+/// item starts, in chars. The tokens and `chars[rest..]` are the source.
+#[derive(Debug, Clone)]
+pub struct Partial {
+    pub tokens: Vec<Token>,
+    pub rest: usize,
+    pub error: LexError,
+}
+
 pub fn lex(src: &str) -> Result<Vec<Token>, LexError> {
+    lex_partial(src).map_err(|p| p.error)
+}
+
+/// `lex`, keeping what it read before an error. A program being typed has
+/// a string not closed yet, and an editor still colours what comes before.
+pub fn lex_partial(src: &str) -> Result<Vec<Token>, Partial> {
     let chars: Vec<char> = src.chars().collect();
     let mut out = Vec::new();
     let mut pending: Vec<Trivia> = Vec::new();
+    let mut item = 0;
+    let read = scan(&chars, &mut out, &mut pending, &mut item);
+    let (line, col) = match &read {
+        Ok(end) => *end,
+        Err(e) => (e.line, e.col),
+    };
+    out.push(Token {
+        tok: Tok::Eof,
+        line,
+        col,
+        text: String::new(),
+        leading: pending,
+    });
+    match read {
+        Ok(_) => Ok(out),
+        Err(error) => Err(Partial {
+            tokens: out,
+            rest: item,
+            error,
+        }),
+    }
+}
+
+/// Reads `chars` into `out`, leaving the trivia after the last token in
+/// `pending`; `item` is where the token or trivia being read starts. Returns
+/// the line and column of the end.
+fn scan(
+    chars: &[char],
+    out: &mut Vec<Token>,
+    pending: &mut Vec<Trivia>,
+    item: &mut usize,
+) -> Result<(usize, usize), LexError> {
     let (mut i, mut line, mut col) = (0usize, 1usize, 1usize);
     let n = chars.len();
     while i < n {
+        *item = i;
         let c = chars[i];
         // whitespace, kept as one run so that blank lines survive
         if c.is_whitespace() {
@@ -251,16 +300,7 @@ pub fn lex(src: &str) -> Result<Vec<Token>, LexError> {
                 msg: format!("bad number `{text}`"),
             })?;
             col += i - start;
-            emit(
-                &mut out,
-                &mut pending,
-                Tok::Num(v),
-                tline,
-                tcol,
-                &chars,
-                tok_start,
-                i,
-            );
+            emit(out, pending, Tok::Num(v), tline, tcol, chars, tok_start, i);
             continue;
         }
         // identifiers
@@ -272,12 +312,12 @@ pub fn lex(src: &str) -> Result<Vec<Token>, LexError> {
             let s: String = chars[start..i].iter().collect();
             col += i - start;
             emit(
-                &mut out,
-                &mut pending,
+                out,
+                pending,
                 Tok::Ident(s),
                 tline,
                 tcol,
-                &chars,
+                chars,
                 tok_start,
                 i,
             );
@@ -302,16 +342,7 @@ pub fn lex(src: &str) -> Result<Vec<Token>, LexError> {
             }
             i += 1;
             col += 1;
-            emit(
-                &mut out,
-                &mut pending,
-                Tok::Str(s),
-                tline,
-                tcol,
-                &chars,
-                tok_start,
-                i,
-            );
+            emit(out, pending, Tok::Str(s), tline, tcol, chars, tok_start, i);
             continue;
         }
         let two = if i + 1 < n {
@@ -362,25 +393,9 @@ pub fn lex(src: &str) -> Result<Vec<Token>, LexError> {
         };
         i += len;
         col += len;
-        emit(
-            &mut out,
-            &mut pending,
-            tok,
-            tline,
-            tcol,
-            &chars,
-            tok_start,
-            i,
-        );
+        emit(out, pending, tok, tline, tcol, chars, tok_start, i);
     }
-    out.push(Token {
-        tok: Tok::Eof,
-        line,
-        col,
-        text: String::new(),
-        leading: std::mem::take(&mut pending),
-    });
-    Ok(out)
+    Ok((line, col))
 }
 
 #[cfg(test)]
