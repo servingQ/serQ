@@ -39,6 +39,11 @@ A call, a `choose` or a workload statement a `def` expands to is written
 in the `def`, and is not among the `calls`, the `chooses` or the
 `workload_items`.
 
+A pair (a deployment file and a workload file, `serq::outline_paired`) has
+two outlines, each with ranges into its own file: the workload file's has
+its `uses`, `decls`, `workload` and `workload_items`; the deployment's,
+the rest.
+
 From `examples/pd-disaggregation/llmd_nixl_pull.sq`, a few items:
 
 ```json

@@ -245,4 +245,20 @@ fn a_pair_has_two_outlines() {
     assert!(WORKLOAD[range.0..range.1].starts_with("workload {"));
     let decl = w.decls.iter().find(|x| x.name == "rate").unwrap();
     assert_eq!(&WORKLOAD[decl.range.0..decl.range.1], "let rate = 1;");
+    // the workload's statements are the workload file's, in its own text
+    assert!(d.workload_items.is_empty());
+    let text = |r: serq::frontend::outline::Range| &WORKLOAD[r.0..r.1];
+    let items: Vec<_> = w
+        .workload_items
+        .iter()
+        .map(|i| (i.kind.as_str(), text(i.range), i.value.map(text)))
+        .collect();
+    assert_eq!(
+        items,
+        [
+            ("arrive", "arrive poisson(rate);", Some("poisson(rate)")),
+            ("set", "set s = ~exp(1);", Some("~exp(1)")),
+            ("send", "send (work: s);", Some("work: s")),
+        ]
+    );
 }
