@@ -119,6 +119,11 @@ const PAINTS: &[Paint] = &[
         dark: "stroke:#b6bfcc",
     },
     Paint {
+        class: "poster",
+        light: "fill=\"#4b5563\" stroke=\"none\"",
+        dark: "fill:#b6bfcc",
+    },
+    Paint {
         class: "relation",
         light: "fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\" stroke-dasharray=\"2 3\"",
         dark: "stroke:#9aa4b2",
@@ -152,6 +157,18 @@ fn stylesheet() -> String {
 }
 
 /// Render a figure as a complete SVG document.
+/// A copy's `data-copy` (`pull` or `push`) and `data-poster` (its node).
+fn copy_tag(copy: &Option<crate::view::figure::CopyMark>) -> String {
+    match copy {
+        Some(c) => format!(
+            r#" data-copy="{}" data-poster="{}""#,
+            c.word(),
+            esc(&c.poster)
+        ),
+        None => String::new(),
+    }
+}
+
 pub fn render(f: &Figure) -> String {
     let mut s = String::new();
     let _ = writeln!(
@@ -183,6 +200,7 @@ pub fn render(f: &Figure) -> String {
                 style,
                 round,
                 nodes,
+                copy,
             } => {
                 // a bracket names the nodes one job holds at once, which no
                 // arrow joins: a page walking a request treats them as one place
@@ -190,8 +208,9 @@ pub fn render(f: &Figure) -> String {
                     String::new()
                 } else {
                     format!(
-                        r#" data-role="bracket" data-nodes="{}""#,
-                        esc(&nodes.join(" "))
+                        r#" data-role="bracket" data-nodes="{}"{}"#,
+                        esc(&nodes.join(" ")),
+                        copy_tag(copy)
                     )
                 };
                 let _ = writeln!(
@@ -409,6 +428,7 @@ pub fn render(f: &Figure) -> String {
                 style,
                 arrow,
                 role,
+                copy,
             } => {
                 let mut d = String::new();
                 for (i, p) in pts.iter().enumerate() {
@@ -439,7 +459,22 @@ pub fn render(f: &Figure) -> String {
                     ),
                     None => String::new(),
                 };
-                let _ = writeln!(s, r#"<path {}{r} d="{d}"{m}/>"#, paint(edge_class(*style)));
+                let c = copy_tag(copy);
+                let _ = writeln!(
+                    s,
+                    r#"<path {}{r}{c} d="{d}"{m}/>"#,
+                    paint(edge_class(*style))
+                );
+            }
+            Item::Dot { at, r } => {
+                let _ = writeln!(
+                    s,
+                    r#"<circle {} cx="{}" cy="{}" r="{}"/>"#,
+                    paint("poster"),
+                    n(at.x),
+                    n(at.y),
+                    n(*r)
+                );
             }
             Item::Text {
                 at,

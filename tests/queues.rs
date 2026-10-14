@@ -1364,7 +1364,9 @@ fn the_contract_holds_at_four_more_edges() {
 /// `kvt.nixl_pull (P, D, latency = x, share = share.maxmin);`: the queues own their NICs, and a
 /// `transfer` without `on` in `D`'s entry is the read over `P`'s NIC and
 /// `D`'s at once, after `D`'s wait (the run's `latency`) - the flat program
-/// with the stages and the policy written out (#200).
+/// with the stages and the policy written out (#200). The relation also
+/// names who posts the copy (`"poster": 1`, the reader's NIC), which a
+/// `transfer on` written by hand does not: the run is the same.
 #[test]
 fn a_pull_relation_is_the_flat_read() {
     let queues = "

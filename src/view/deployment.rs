@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 
 use crate::ir::{CArrival, CExpr, CRef, CStageKind, CStmt, CtxVar, Program, RunMode, Side, UnOp};
 use crate::view::figure::{
-    Anchor, BoxStyle, EdgeStyle, Figure, Item, Rect, StationKind, TextSize, pt,
+    Anchor, BoxStyle, CopyMark, EdgeStyle, Figure, Item, Rect, StationKind, TextSize, pt,
 };
 
 // --- the projection ---------------------------------------------------------
@@ -99,13 +99,17 @@ pub struct Instance {
 }
 
 /// What a run over several stages moves and waits for, when it is a
-/// transfer: the pool it releases and the one it loads, and the run's
-/// `latency`, written on it (`latency (x0)`).
+/// transfer: the pool it releases and the one it loads, the run's
+/// `latency`, written on it (`latency (x0)`), and who posts it.
 #[derive(Clone, Debug, Default)]
 pub struct FlowNote {
     pub from: Option<String>,
     pub to: Option<String>,
     pub latency: Vec<String>,
+    /// The nodes the runs over these stations name as their poster
+    /// (`CStmt::Run::poster`): a copy is drawn as a pull or a push when
+    /// they name one.
+    pub posters: Vec<usize>,
     /// Two runs over these stations moved different pools: the figure
     /// says neither.
     pub several: bool,
@@ -601,6 +605,7 @@ impl Walker<'_> {
                     mode,
                     work,
                     latency,
+                    poster,
                     ..
                 } => {
                     self.last_flow = None;
@@ -656,6 +661,12 @@ impl Walker<'_> {
                             if !self.net.flow_notes[k].latency.contains(&wait) {
                                 self.net.flow_notes[k].latency.push(wait);
                             }
+                        }
+                        // who posts the copy, when the run names its side
+                        if let Some(node) = poster.and_then(|i| self.net.flows[k].get(i).copied())
+                            && !self.net.flow_notes[k].posters.contains(&node)
+                        {
+                            self.net.flow_notes[k].posters.push(node);
                         }
                         self.last_flow = Some(k);
                     }
@@ -1963,18 +1974,41 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
             + cached as f64 * 16.0
             + 4.0
     };
+    let spanning = |g: usize| net.spans(&net.flows[g]);
+    // who posts a copy: one poster for all the runs over these stations,
+    // at the arrow's head (where the bytes arrive: a pull) or its tail (a
+    // push); the arrow goes from the first stage the run names to the last
+    let copy_mark = |g: usize| -> Option<CopyMark> {
+        let group = &net.flows[g];
+        match net.flow_notes[g].posters[..] {
+            [node] => Some(CopyMark {
+                pull: node != group[0],
+                poster: net.name(p, node),
+            }),
+            _ => None,
+        }
+    };
     // a transfer between two instances is drawn in the gap between their
     // boxes, with what it moves above and what it waits for below
     let flow_texts = |g: usize| -> (Option<String>, Option<String>) {
         let n = &net.flow_notes[g];
-        let moves = match (&n.from, &n.to) {
+        let mut moves = match (&n.from, &n.to) {
             (Some(a), Some(b)) => Some(format!("{a} → {b}")),
             _ => None,
         };
-        let wait = (!n.latency.is_empty()).then(|| n.latency.join(" + "));
+        let mut wait = (!n.latency.is_empty()).then(|| n.latency.join(" + "));
+        // the word leads the first line written: what the copy moves, across
+        // a gap between instances; else its wait, under its bracket
+        if let Some(c) = copy_mark(g) {
+            let word = c.word();
+            match (&mut moves, &mut wait) {
+                (Some(m), _) if spanning(g) => *m = format!("{word} · {m}"),
+                (_, Some(w)) => *w = format!("{word} · {w}"),
+                (_, None) => wait = Some(word.to_string()),
+            }
+        }
         (moves, wait)
     };
-    let spanning = |g: usize| net.spans(&net.flows[g]);
     let cached_here = |g: &Group| net.cached.contains(&g.pool);
     // Room under the station row for the stacked pool options and the strip.
     let own_below = |g: &Group| {
@@ -2111,21 +2145,32 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
             .reduce(|a, b| a.union(&b))
             .expect("a flow holds a stage");
         let pad = 6.0;
+        let copy = copy_mark(g);
         f.bracket(
             Rect::new(r.x - pad, r.y - pad, r.w + 2.0 * pad, r.h + 2.0 * pad),
             group.iter().map(|&i| net.name(p, i)).collect(),
+            copy.clone(),
         );
+        // the poster: a dot on the bracket over its station
+        if let Some(&node) = net.flow_notes[g].posters.first()
+            && copy.is_some()
+        {
+            f.push(Item::Dot {
+                at: pt(rects[node].centre().x, r.y - pad),
+                r: 3.0,
+            });
+        }
         let (moves, wait) = flow_texts(g);
         if spanning(g) {
             // the job crosses from one instance to the other: an arrow
             // through the gap, in the order the stages are named
             let (a, b) = (rects[group[0]], rects[*group.last().unwrap()]);
             let y = a.centre().y;
-            f.flow(
+            f.copy_flow(
                 vec![pt(a.right(), y), pt(b.x, y)],
-                EdgeStyle::Flow,
                 net.name(p, group[0]),
                 net.name(p, *group.last().unwrap()),
+                copy,
             );
             let mid = (a.right() + b.x) / 2.0;
             if let Some(t) = moves {
@@ -2209,6 +2254,7 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
                     style: EdgeStyle::Relation,
                     arrow: true,
                     role: None,
+                    copy: None,
                 });
             }
         }
@@ -2319,6 +2365,7 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
                 style: BoxStyle::Instance,
                 round: 10.0,
                 nodes: vec![],
+                copy: None,
             },
         );
         // named after its engine, and for prefill/decode by its part

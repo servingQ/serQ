@@ -434,7 +434,7 @@ impl Ctx<'_> {
             source,
             latency,
             share,
-            ..
+            push,
         }) = &self.q.takes
         else {
             return err(
@@ -484,6 +484,8 @@ impl Ctx<'_> {
             also: vec![own(format!("{}.nic", self.q.name))],
             share: Some(*share),
             latency: latency.clone(),
+            // the source's NIC is the run's stage, the reader's its `also`
+            poster: Some(if *push { 0 } else { 1 }),
         });
         Ok(out)
     }
@@ -554,6 +556,7 @@ impl Ctx<'_> {
                 also,
                 share,
                 latency,
+                poster,
             } => Stmt::Run {
                 stage: self.reference(stage)?,
                 mode: *mode,
@@ -565,6 +568,7 @@ impl Ctx<'_> {
                     .collect::<Result<_, _>>()?,
                 share: *share,
                 latency: latency.as_ref().map(|l| self.expr(l)).transpose()?,
+                poster: *poster,
             },
             Stmt::Branch(p, a, b) => Stmt::Branch(self.expr(p)?, self.stmts(a)?, self.stmts(b)?),
             Stmt::Loop(b) => Stmt::Loop(self.stmts(b)?),

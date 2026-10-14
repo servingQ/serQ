@@ -46,7 +46,9 @@ OUT = os.path.join(ROOT, "lean", "Serq", "Oracle.lean")
 # session streams (serQ #297), which the fragment never reads, as for 11.
 # 14 adds `Run.latency`, a wait before a run's work at its stages, which was
 # a delay stage of its own run before it; outside the fragment (below, with
-# `also`), and no oracle program has one.
+# `also`), and no oracle program has one. Untagged, 14 also gains
+# `Run.poster`, which side of a copy posts it: only on a run with `also`,
+# already outside the fragment, and the run is the same whichever it is.
 IR_VERSION = 14
 SUPPORTED_IR_VERSIONS = (7, 8, 9, 10, 11, 12, 13, IR_VERSION)
 

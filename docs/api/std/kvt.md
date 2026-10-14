@@ -38,7 +38,9 @@ A reader with no entry `from` the source is refused at the call.
 Concurrent copies divide the two NICs by the relation's `share`, which
 has no default; two relations whose copies cross one NIC are one fabric and
 name one policy.
-A push and a pull of the same constants run the same numbers. Used in
+A push and a pull of the same constants run the same numbers; the
+[deployment view](../../visualization/deployment.md) draws them apart, a
+dot over the NIC of the side that posts the copy. Used in
 `examples/pd-disaggregation/llmd_nixl_pull.sq` and `vllm_nixl_push.sq` ([the P/D use
 case](../../use-cases/pd.md)).
 

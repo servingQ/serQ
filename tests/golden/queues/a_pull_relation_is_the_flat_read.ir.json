@@ -407,7 +407,8 @@
           "share": "MaxMin",
           "latency": {
             "Num": 0.5
-          }
+          },
+          "poster": 1
         }
       },
       {

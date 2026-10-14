@@ -12,7 +12,9 @@ read crosses from the prefiller's box to the decoder's: it holds the
 prefiller's NIC and the decoder's at once, so its two stations are bracketed
 as one job, and what it moves (`P.kv[i] → D.kv[j]`: the prefiller's blocks
 stay leased until it ends, the decoder's are allocated before it starts) and
-the link's latency are written on it.
+the link's latency are written on it. It is a `pull`: the decoder's worker
+starts each read, so the dot on the bracket stands over `D.nic[j]`. In
+`vllm_nixl_push.sq` the same copy is a `push`, the dot over `P.nic`.
 
 ## Request flow
 
@@ -39,6 +41,7 @@ every way through holds it, whichever hold took it on each.
 | Dashed enclosure | A pool held across several stations. |
 | Unfilled frame | Pools held at one station, listed below its glyph. |
 | Transfer bracket | A job using both endpoints' NICs; its label names the source and destination KV. |
+| `pull` / `push`, a dot on the bracket | Who posts a KV relation's copy (`kvt.nixl_pull`, `kvt.nixl_push`): the dot stands over the poster's NIC, and the word leads the copy's label. A pull is posted at the arrow's head, where the bytes arrive; a push at its tail. A `transfer on` written by hand names no poster and has neither. |
 | Latency label | A delay before a single transfer. A delay leading to several transfers remains a station. |
 
 The diagram simplifies control flow. Consecutive visits to one station do
@@ -77,6 +80,11 @@ TikZ writer ignores the ids.
 | `exit` | a `<path>` | an arrow sessions leave by, from `data-from` |
 | `budget` | a `<rect>` inside `<g data-stage>` | the used part of an engine's budget bar |
 | `bracket` | a `<rect>` | the stations one job holds at once (a transfer over two NICs); `data-nodes` lists them, and no arrow joins them |
+
+A KV relation's copy also says who posts it, on its bracket and, when it
+crosses from one instance to another, on its `flow` arrow:
+`data-copy="pull"` or `"push"`, and `data-poster` the poster's node
+(`D.nic`). The dot is a `<circle class="poster">`.
 
 An arrow's ends name a station by its stage, and a decision or a tick, which
 is no stage, by its place among the figure's nodes: `#0` is the first. The

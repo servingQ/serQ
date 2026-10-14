@@ -5087,6 +5087,7 @@ impl Parser {
                     also,
                     share,
                     latency,
+                    poster: None,
                 })
             }
             "if" => {
@@ -5626,6 +5627,7 @@ impl Parser {
                     also,
                     share,
                     latency,
+                    poster: None,
                 },
                 Stmt::Load(to.clone(), Expr::cost(&[to], units)),
                 Stmt::Release(from),
@@ -5656,6 +5658,7 @@ impl Parser {
             also,
             share,
             latency: written,
+            poster: None,
         }])
     }
 
