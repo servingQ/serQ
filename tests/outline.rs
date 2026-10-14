@@ -121,6 +121,116 @@ fn a_pull_relation_its_queues_and_its_calls_are_found_in_the_text() {
 }
 
 #[test]
+fn a_routers_chooses_their_counts_and_keys_are_found_in_the_text() {
+    let src = read("examples/pd-disaggregation/llmd_nixl_pull.sq");
+    let o = outline(&src);
+    let chooses: Vec<_> = o
+        .chooses
+        .iter()
+        .map(|c| {
+            (
+                c.var.as_str(),
+                text(&src, c.count),
+                c.keys.iter().map(|&k| text(&src, k)).collect::<Vec<_>>(),
+                c.block.as_str(),
+                c.owner.as_deref(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        chooses,
+        [
+            (
+                "j",
+                "ND",
+                vec!["holders(D[j].kv) + queued(D[j].kv)"],
+                "route",
+                Some("gw")
+            ),
+            (
+                "i",
+                "NP",
+                vec![
+                    "cachedin(P[i].kv) > 0 ? 0 : 1",
+                    "work(P[i]) + queued(P[i].reqs)",
+                    "~uniform(0, 1)"
+                ],
+                "route",
+                Some("gw")
+            ),
+        ]
+    );
+    let j = &o.chooses[0];
+    assert_eq!(
+        text(&src, j.range),
+        "choose j in ND by (holders(D[j].kv) + queued(D[j].kv));"
+    );
+    assert_eq!(text(&src, j.by), "(holders(D[j].kv) + queued(D[j].kv))");
+}
+
+#[test]
+fn a_workloads_statements_are_found_in_the_text() {
+    let src = read("examples/pd-disaggregation/llmd_nixl_pull.sq");
+    let o = outline(&src);
+    let items: Vec<_> = o
+        .workload_items
+        .iter()
+        .map(|w| {
+            (
+                w.kind.as_str(),
+                w.name.as_deref(),
+                w.block.as_str(),
+                w.value.map(|v| text(&src, v)),
+            )
+        })
+        .collect();
+    assert_eq!(
+        items,
+        [
+            ("arrive", None, "workload", Some("poisson(Lambda)")),
+            ("set", Some("K"), "init", Some("0")),
+            (
+                "set",
+                Some("n"),
+                "turn",
+                Some("ceil(K == 0 ? ~uniform(1000, 3000) : ~exp(500))")
+            ),
+            ("set", Some("o"), "turn", Some("floor(~exp(200)) + 1")),
+            ("set", Some("more"), "turn", Some("~bernoulli(p)")),
+            ("send", None, "workload", Some("input: K + n, output: o")),
+            ("turn", None, "session", None),
+            ("set", Some("K"), "session", Some("K + n + reply.produced")),
+            ("tool", None, "session", Some("~exp(Z)")),
+            ("turn", None, "session", None),
+        ]
+    );
+    let arrive = &o.workload_items[0];
+    assert_eq!(text(&src, arrive.range), "arrive poisson(Lambda);");
+}
+
+#[test]
+fn a_choose_in_the_server_is_the_servers() {
+    let src = read("examples/pd-disaggregation/pd_two_fabrics.sq");
+    let o = outline(&src);
+    let chooses: Vec<_> = o
+        .chooses
+        .iter()
+        .map(|c| (text(&src, c.range), c.block.as_str(), c.owner.as_deref()))
+        .collect();
+    assert_eq!(
+        chooses,
+        [
+            ("choose i in NP by (work(P[i]));", "server", None),
+            (
+                "choose j in ND by (holders(kvD[j]) + queued(kvD[j]));",
+                "server",
+                None
+            ),
+        ]
+    );
+}
+
+#[test]
 fn a_push_relation_says_push() {
     let src = read("examples/pd-disaggregation/vllm_nixl_push.sq");
     let o = outline(&src);

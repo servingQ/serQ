@@ -250,6 +250,9 @@ struct Parser {
     forks_open: usize,
     /// Where each declaration is written, when outlining (`serq::outline`).
     outline: Option<crate::frontend::outline::Recorder>,
+    /// The workload block being parsed (`init`, `turn`, `session`): its
+    /// statements are the outline's `workload_items`.
+    wl_block: Option<&'static str>,
 }
 
 /// What a declaration declares.
@@ -1760,6 +1763,7 @@ impl Parser {
             holds_open: 0,
             forks_open: 0,
             outline: None,
+            wl_block: None,
         }
     }
 
@@ -5085,6 +5089,7 @@ impl Parser {
             hidden: vec![],
         };
         while *self.peek() != Tok::RBrace {
+            let at = self.pos;
             if self.is_kw("hidden") {
                 self.hidden_at.get_or_insert(self.pos);
                 self.advance();
@@ -5125,26 +5130,39 @@ impl Parser {
                 w.trace_ordered = self.eat_kw("ordered");
                 self.expect(&Tok::Semi)?;
             } else if self.is_kw("send") {
-                let at = self.pos;
                 self.advance();
                 self.send(at)?;
             } else if self.eat_kw("init") {
-                w.init = self.block()?;
+                self.wl_block = Some("init");
+                let b = self.block();
+                self.wl_block = None;
+                w.init = b?;
+                continue;
             } else if self.eat_kw("turn") {
-                w.turn = self.block()?;
+                self.wl_block = Some("turn");
+                let b = self.block();
+                self.wl_block = None;
+                w.turn = b?;
+                continue;
             } else if self.is_kw("session") {
-                let at = self.pos;
                 self.advance();
                 if self.wl_session.is_some() {
                     return self.err_at(at, "duplicate session in workload");
                 }
                 self.side = Side::WorkloadSession;
                 self.turned = false;
-                let body = self.block()?;
+                self.wl_block = Some("session");
+                let body = self.block();
+                self.wl_block = None;
+                let body = body?;
                 self.side = Side::Session;
                 self.wl_session = Some((at, body));
+                continue;
             } else {
                 return self.err(format!("unexpected {} in workload", self.peek()));
+            }
+            if let Some(r) = self.outline.as_mut() {
+                r.workload_item(&self.toks, at, self.pos - 1, "workload");
             }
         }
         self.expect(&Tok::RBrace)?;
@@ -5181,6 +5199,18 @@ impl Parser {
     /// One statement into `out`. A serving form is parsed here because
     /// `transfer … from P to Q (n)` stands for three kernel statements.
     fn stmt_into(&mut self, out: &mut Vec<Stmt>) -> PResult<()> {
+        let at = self.pos;
+        self.stmt_into_(out)?;
+        // a workload's statement, for the outline: not one a `def`'s use expanded into
+        if let (Some(block), Some(r)) = (self.wl_block, self.outline.as_mut())
+            && !self.expanded.iter().any(|e| e.start <= at && at < e.end)
+        {
+            r.workload_item(&self.toks, at, self.pos - 1, block);
+        }
+        Ok(())
+    }
+
+    fn stmt_into_(&mut self, out: &mut Vec<Stmt>) -> PResult<()> {
         if self.eat(&Tok::Unread) {
             self.expect(&Tok::LParen)?;
             out.push(Stmt::Unread(self.unread_args()?));
@@ -5677,19 +5707,48 @@ impl Parser {
                 Ok(Stmt::Join)
             }
             "choose" => {
+                let at = self.pos;
                 self.advance();
                 let var = self.definition()?;
                 self.expect_kw("in")?;
+                let count_at = self.pos;
                 let count = self.expr()?;
+                let count_end = self.pos - 1;
                 self.expect_kw("by")?;
+                let open = self.pos;
                 self.expect(&Tok::LParen)?;
+                let mut keys = vec![(self.pos, 0)];
                 let mut key = vec![self.expr()?];
+                keys[0].1 = self.pos - 1;
                 while *self.peek() == Tok::Comma {
                     self.advance();
+                    let k = self.pos;
                     key.push(self.expr()?);
+                    keys.push((k, self.pos - 1));
                 }
                 self.expect(&Tok::RParen)?;
+                let close = self.pos - 1;
                 self.expect(&Tok::Semi)?;
+                // a choose a `def`'s use expanded into is written in the `def`, not here
+                let expanded = self.expanded.iter().any(|e| e.start <= at && at < e.end);
+                let (block, owner) = match self.in_queue {
+                    Some(qi) if self.entry_gateway => ("route", Some(self.queues[qi].name.as_str())),
+                    Some(qi) => ("entry", Some(self.queues[qi].name.as_str())),
+                    None => ("server", None),
+                };
+                if let (false, Some(r)) = (expanded, self.outline.as_mut()) {
+                    r.choose(
+                        &self.toks,
+                        at,
+                        self.pos - 1,
+                        &var,
+                        (count_at, count_end),
+                        &keys,
+                        (open, close),
+                        block,
+                        owner,
+                    );
+                }
                 Ok(Stmt::Choose { var, count, key })
             }
             "mark" => {

@@ -116,6 +116,44 @@ pub struct Call {
     pub owner: Option<String>,
 }
 
+/// `choose v in N by (k1, k2, …);`, as written in the server, a gateway's
+/// route or an entry.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Choose {
+    pub var: String,
+    /// The count, after `in`.
+    pub count: Range,
+    /// Each key, in order, inside `by (…)`.
+    pub keys: Vec<Range>,
+    /// The key list, with its parentheses.
+    pub by: Range,
+    /// The statement, to its `;`.
+    pub range: Range,
+    /// Where it is written: `server`, `route` or `entry`.
+    pub block: String,
+    /// The queue whose route or entry it is in.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
+}
+
+/// A statement of the workload: `arrive poisson(L);`, `hidden o;`, and in
+/// its `init`, `turn` and `session`, `set n = …;`, `tool (…);`, `turn;`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct WorkloadItem {
+    /// Its first word: `arrive`, `hidden`, `set`, `tool`, `turn`, …
+    pub kind: String,
+    /// A `set`'s or a `hidden`'s name; a `hidden` of two names is two items.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Where it is written: `workload` at its top, or `init`, `turn`, `session`.
+    pub block: String,
+    /// What it says: an `arrive`'s process (`poisson(L)`), a `set`'s
+    /// right-hand side, what a `tool` or `send` takes between its parentheses.
+    pub value: Option<Range>,
+    /// The statement, to its `;`.
+    pub range: Range,
+}
+
 /// A parameter of the server's signature: what a request carries.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Param {
@@ -149,6 +187,8 @@ pub struct Outline {
     pub signature: Option<Signature>,
     pub workload: Option<Range>,
     pub calls: Vec<Call>,
+    pub chooses: Vec<Choose>,
+    pub workload_items: Vec<WorkloadItem>,
 }
 
 impl Outline {
@@ -408,6 +448,86 @@ impl Recorder {
             index,
             verb: verb.into(),
             from: from.map(str::to_string),
+            range: self.range(toks, at, last),
+            block: block.into(),
+            owner: owner.map(str::to_string),
+        });
+    }
+
+    /// A statement of the workload, tokens `at..=last`, in `block`
+    /// (`workload` at its top, or `init`, `turn`, `session`). One that
+    /// holds a block (`while`, `if`) is not an item; its statements are.
+    pub(crate) fn workload_item(&mut self, toks: &[Token], at: usize, last: usize, block: &str) {
+        if (at..=last).any(|k| toks[k].tok == Tok::LBrace) {
+            return;
+        }
+        let kind = match &toks[at].tok {
+            Tok::Ident(s) => s.clone(),
+            t => t.to_string(),
+        };
+        let range = self.range(toks, at, last);
+        // the value: between the first `t` and the `;`, less a closing `)`
+        let after = |t: Tok, paren: bool| {
+            let first = (at..last).find(|&k| toks[k].tok == t)? + 1;
+            let end = if paren && toks[last - 1].tok == Tok::RParen {
+                last - 2
+            } else {
+                last - 1
+            };
+            (first <= end).then(|| self.range(toks, first, end))
+        };
+        let (names, value) = match kind.as_str() {
+            "hidden" => (
+                (at + 1..last)
+                    .filter_map(|k| word(&toks[k]))
+                    .map(str::to_string)
+                    .collect(),
+                None,
+            ),
+            "set" => (vec![Self::name_at(toks, at + 1)], after(Tok::Assign, false)),
+            "arrive" | "trace" => (
+                vec![],
+                (at < last - 1).then(|| self.range(toks, at + 1, last - 1)),
+            ),
+            "tool" | "send" => (vec![], after(Tok::LParen, true)),
+            _ => (vec![], None),
+        };
+        let item = |name: Option<String>| WorkloadItem {
+            kind: kind.clone(),
+            name,
+            block: block.into(),
+            value,
+            range,
+        };
+        if names.is_empty() {
+            self.out.workload_items.push(item(None));
+        } else {
+            for n in names {
+                self.out.workload_items.push(item(Some(n)));
+            }
+        }
+    }
+
+    /// A `choose`, tokens `at..=last`: the tokens of its count, of each
+    /// key, and its key list's parentheses.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn choose(
+        &mut self,
+        toks: &[Token],
+        at: usize,
+        last: usize,
+        var: &str,
+        count: (usize, usize),
+        keys: &[(usize, usize)],
+        by: (usize, usize),
+        block: &str,
+        owner: Option<&str>,
+    ) {
+        self.out.chooses.push(Choose {
+            var: var.into(),
+            count: self.range(toks, count.0, count.1),
+            keys: keys.iter().map(|&(a, b)| self.range(toks, a, b)).collect(),
+            by: self.range(toks, by.0, by.1),
             range: self.range(toks, at, last),
             block: block.into(),
             owner: owner.map(str::to_string),
