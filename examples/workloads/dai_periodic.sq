@@ -1,0 +1,13 @@
+// Dai et al.'s arrivals (arXiv 2504.07347): one request every `gap`, every
+// one the same (examples/papers/dai_fastertransformer.sq and dai_sarathi.sq
+// run it).
+
+let gap = 46750;  // one arrival every 467.5 ms
+
+// --8<-- [start:workload]
+workload {
+  arrive renewal(gap);
+  init { set t0 = now; }
+  send (t0);
+}
+// --8<-- [end:workload]

@@ -1,0 +1,6 @@
+// The sessions of tests/lean-regress/cost_ctx.sq.
+workload {
+  arrive batch(2);
+  init { set n = 0; set o = 0; set t0 = 0; }
+  send (n, o, t0);
+}

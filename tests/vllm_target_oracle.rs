@@ -22,7 +22,7 @@ mod common;
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
-use serq::{compile_source, program_path, run_ir};
+use serq::{paired_workload, program_path, run_ir};
 
 fn dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tools/oracle/serve")
@@ -54,7 +54,10 @@ fn ir(name: &str) -> serq::Program {
     if num(&sc, "chunk") > 0.0 {
         ov.set_num("chunk", num(&sc, "chunk")).unwrap();
     }
-    let src = std::fs::read_to_string(program_path("vllm_request")).unwrap();
+    let path = program_path("vllm_request");
+    let src = std::fs::read_to_string(&path).unwrap();
+    let workload =
+        std::fs::read_to_string(paired_workload(&path).expect("the example's workload")).unwrap();
     assert!(src.contains(RUNNING), "the oracle program's engine moved");
     let serve = sc["serve"].as_str().expect("a scenario names its order");
     let src = src.replace(
@@ -73,7 +76,7 @@ fn ir(name: &str) -> serq::Program {
             ]
         })
         .collect();
-    compile_source(&common::main_source(&src), &ov)
+    common::compile(&common::main_source(&src), &workload, &ov)
         .unwrap()
         .with_sessions(&sessions)
         .unwrap()

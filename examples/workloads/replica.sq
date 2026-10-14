@@ -1,0 +1,50 @@
+// The open-session scenario of `libqueuingsim::validation::open_session_cfg`
+// (examples/multi-turn/replica.sq runs it): two classes of sessions (agents,
+// one-shot documents), each holding a live slot for its whole conversation
+// and ending past `maxctx` tokens of context. At most `cap` sessions are live
+// at once; the rest wait to enter.
+
+let Lambda = 0.28;   // sessions per second
+let maxctx = 3e5;    // half the KV pool (the server's C / 2)
+let cap = 24;        // live sessions (entry queue beyond)
+
+pool live { cap cap; }
+
+workload {
+  arrive poisson(Lambda);
+  init {
+    set doc = ~bernoulli(0.5);          // class: 0 agent, 1 document
+    set K = 0;
+    set cold = 1;
+    set p = doc ? 0.3 : 0.95;
+    set Z = doc ? 2 : 6;
+  }
+  turn {
+    set n = cold ? (doc ? ~uniform(15000, 30000) : ~uniform(4000, 8000))
+                 : (doc ? ~exp(500) : ~exp(800));
+    set o = ~exp(300);
+    // the session ends past `maxctx` tokens of context, or after this
+    // turn's tool call when it does not continue
+    set full = K + n + o > maxctx;
+    set more = ~bernoulli(p);
+  }
+  // the session's last request: the server drops its KV after it, before
+  // a last tool call (libqueuingsim's session drops it after that call)
+  send (K, n, o, cold, final: full || more == 0);
+  // A session waits to enter and then holds a live slot for its whole
+  // conversation.
+  session {
+    set t_arr = now;
+    hold live (cost(live, 1)) {
+      observe entry_wait = now - t_arr;
+      loop {
+        turn;
+        set K = K + n + o;
+        set cold = 0;
+        if (full) { end; }
+        tool (~exp(Z));
+        if (more == 0) { end; }
+      }
+    }
+  }
+}

@@ -1,0 +1,26 @@
+// Chapter 4's workload: chapter 3's sessions, each turn sending its context
+// so far and its new tokens apart, and whether it is the session's last, so
+// the server drops the session's cached KV after it (04-cache.sq runs it).
+
+let Lambda = 0.5;
+let p = 0.8;
+let Z = 3.0;
+
+workload {
+  arrive poisson(Lambda);
+  init { set K = 0; }
+  turn {
+    set n = K == 0 ? ~uniform(1000, 3000) : ~exp(500);
+    set o = ~exp(200);
+    set more = ~bernoulli(p);
+  }
+  send (K, n, o, final: more == 0);
+
+  session {
+    loop {
+      turn;
+      set K = K + n + o;
+      if (more) { tool (~exp(Z)); } else { end; }
+    }
+  }
+}

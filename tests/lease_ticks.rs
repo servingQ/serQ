@@ -9,8 +9,6 @@
 
 mod common;
 
-use serq::{check_source, run_source};
-
 /// Two programs lease 4 of 10 units. Serial 1 comes back at t = 2 and
 /// grows its lease by 4: 12 of 10, let through until the tick at t = 5,
 /// which takes serial 0's (the least key). Serial 1 gives its lease back
@@ -20,10 +18,6 @@ fn two(preempt: &str) -> String {
         r#"
         stage svc : fifo(2);
         pool prog {{ cap 10; preempt leases by (serial) {preempt}; }}
-        workload {{ arrive batch(2);
-          send (turn_no);
-          session {{ turn; tool (serial == 0 ? 10 : 1); turn; tool 4; turn; }}
-        }}
         server (turn_no) {{
           if (serial == 1 && turn_no == 3) {{ release prog; end; }}
           if (allocated(prog) > 0) {{
@@ -42,11 +36,17 @@ fn two(preempt: &str) -> String {
     )
 }
 
+/// The workload of `two`: serial 0 at its tool for 10 s, serial 1 for 1.
+const TWO: &str = "workload { arrive batch(2);
+  send (turn_no);
+  session { turn; tool (serial == 0 ? 10 : 1); turn; tool 4; turn; }
+}";
+
 fn run(preempt: &str) -> serq::Report {
-    run_source(
+    common::run(
         &common::main_source(&two(preempt)),
+        TWO,
         &common::horizon(100.0),
-        None,
     )
     .unwrap()
 }
@@ -108,7 +108,8 @@ fn without_every_the_growth_takes_the_lease_at_once() {
 fn a_tick_is_positive_and_suspend_needs_one_and_reserve_held_none() {
     let refused = |pool: &str, needle: &str| {
         let src = two("").replace("pool prog { cap 10; preempt leases by (serial) ; }", pool);
-        let e = check_source(&common::main_source(&src), &common::horizon(10.0)).unwrap_err();
+        let e =
+            common::compile(&common::main_source(&src), TWO, &common::horizon(10.0)).unwrap_err();
         assert!(e.contains(needle), "{e}");
     };
     refused(
@@ -134,10 +135,6 @@ fn a_lease_set_aside_lets_go_of_the_prefix_it_read() {
     let src = r#"
         stage svc : fifo(2);
         pool prog { cap 10; preempt leases by (serial) every (5) suspend by (serial); }
-        workload { arrive batch(2);
-          send (turn_no);
-          session { turn; tool 1; turn; tool (serial == 0 ? 10 : 1); turn; tool 4; turn; }
-        }
         server (turn_no) {
           if (serial == 1 && turn_no == 4) { release prog; end; }
           if (serial == 0 && turn_no == 1) {
@@ -153,8 +150,12 @@ fn a_lease_set_aside_lets_go_of_the_prefix_it_read() {
           run svc (cost(svc, 1));
         }
 "#;
+    let workload = "workload { arrive batch(2);
+      send (turn_no);
+      session { turn; tool 1; turn; tool (serial == 0 ? 10 : 1); turn; tool 4; turn; }
+    }";
     // the debug build's conservation check panicked at the tick, t = 5
-    run_source(&common::main_source(src), &common::horizon(100.0), None).unwrap();
+    common::run(&common::main_source(src), workload, &common::horizon(100.0)).unwrap();
 }
 
 /// A hold that ends while its pool is over the cap, between ticks, cached
@@ -165,10 +166,6 @@ fn a_pool_over_its_cap_between_ticks_caches_within_it() {
         stage svc : fifo(2);
         stage slow : fifo(1);
         pool prog { cap 10; preempt leases by (serial) every (5); }
-        workload { arrive batch(2);
-          send (turn_no);
-          session { turn; tool 1; turn; tool 10; turn; }
-        }
         server (turn_no) {
           if (serial == 0 && turn_no == 1) {
             hold prog (cost(prog, 4)) { run slow (cost(slow, 3)); } cache (cost(prog, 4));
@@ -185,7 +182,11 @@ fn a_pool_over_its_cap_between_ticks_caches_within_it() {
 "#;
     // serial 1's lease grows to 8 at t = 2 and the pool holds 12 of 10;
     // serial 0's hold ends at t = 3 and cached 4 past the cap
-    run_source(&common::main_source(src), &common::horizon(100.0), None).unwrap();
+    let workload = "workload { arrive batch(2);
+      send (turn_no);
+      session { turn; tool 1; turn; tool 10; turn; }
+    }";
+    common::run(&common::main_source(src), workload, &common::horizon(100.0)).unwrap();
 }
 
 /// A hold's growth is an admission's and needs room at once, `every` or
@@ -200,10 +201,6 @@ fn a_holds_growth_sets_a_lease_aside_as_a_tick_does() {
             r#"
             stage svc : fifo(2);
             pool prog {{ cap 10; preempt leases by (serial) {preempt}; }}
-            workload {{ arrive batch(2);
-              send (turn_no);
-              session {{ turn; tool (serial == 0 ? 10 : 2); turn; }}
-            }}
             server (turn_no) {{
               if (serial == 0 && turn_no == 1) {{ hold prog (cost(prog, 4)) {{ }} lease prog (inf); }}
               if (serial == 1 && turn_no == 2) {{
@@ -214,11 +211,19 @@ fn a_holds_growth_sets_a_lease_aside_as_a_tick_does() {
             }}
 "#
         );
-        run_source(&common::main_source(&src), &common::horizon(100.0), None)
-            .unwrap()
-            .observe("back")
-            .unwrap()
-            .samples[0]
+        let workload = "workload { arrive batch(2);
+          send (turn_no);
+          session { turn; tool (serial == 0 ? 10 : 2); turn; }
+        }";
+        common::run(
+            &common::main_source(&src),
+            workload,
+            &common::horizon(100.0),
+        )
+        .unwrap()
+        .observe("back")
+        .unwrap()
+        .samples[0]
     };
     assert_eq!(run("every (5) suspend by (serial)"), 4.0);
     assert_eq!(run("every (5)"), 0.0);
@@ -237,10 +242,6 @@ fn suspend_by_orders_the_leases_given_back() {
             r#"
             stage svc : fifo(3);
             pool prog {{ cap 10; preempt leases by (serial) every (5) suspend by ({keys}); }}
-            workload {{ arrive batch(3);
-              send (turn_no);
-              session {{ turn; tool (serial == 2 ? 1 : 10); turn; tool (serial == 2 ? 4 : 1); turn; tool 20; turn; }}
-            }}
             server (turn_no) {{
               if (turn_no == 1) {{ hold prog (cost(prog, 3)) {{ }} lease prog (inf); }}
               if (serial == 2 && turn_no == 2) {{ grow prog (cost(prog, 7)); }}
@@ -250,12 +251,20 @@ fn suspend_by_orders_the_leases_given_back() {
             }}
 "#
         );
-        run_source(&common::main_source(&src), &common::horizon(100.0), None)
-            .unwrap()
-            .observe("back")
-            .unwrap()
-            .samples
-            .clone()
+        let workload = "workload { arrive batch(3);
+          send (turn_no);
+          session { turn; tool (serial == 2 ? 1 : 10); turn; tool (serial == 2 ? 4 : 1); turn; tool 20; turn; }
+        }";
+        common::run(
+            &common::main_source(&src),
+            workload,
+            &common::horizon(100.0),
+        )
+        .unwrap()
+        .observe("back")
+        .unwrap()
+        .samples
+        .clone()
     };
     // (serial 0's, serial 1's)
     assert_eq!(back("serial"), vec![3.0, 0.0]);

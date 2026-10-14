@@ -3,7 +3,7 @@
 *pronounced "ser-Q" — **se**rving + **Q**ueue*
 
 A serving specification language: an LLM serving deployment is a program
-— memory pools, stages, a workload and the policy every session runs —
+— memory pools, stages and the policy every request runs, under a workload —
 written once and both simulated and formally checked against the real
 system. What P4 is to a packet switch, serQ is meant to be to a serving
 engine; running a program in place of the engine's scheduler is the next
@@ -36,15 +36,20 @@ theorems.
 ## Quickstart
 
 ```bash
-cargo run --release -- run examples/multi-turn/vllm.sq --seed 2 --horizon 3000 --warmup 200
-cargo run --release -- ir examples/multi-turn/vllm.sq --horizon 3000 > vllm.json      # the IR
-cargo run --release -- draw examples/multi-turn/vllm.sq --format svg --out vllm.svg   # experimental
+cargo run --release -- run examples/multi-turn/vllm.sq --workload examples/workloads/chat.sq --seed 2 --horizon 3000 --warmup 200
+cargo run --release -- ir examples/multi-turn/vllm.sq --workload examples/workloads/chat.sq --horizon 3000 > vllm.json      # the IR
+cargo run --release -- draw examples/multi-turn/vllm.sq --workload examples/workloads/chat.sq --format svg --out vllm.svg   # experimental
 ```
 
-Source programs construct their deployment inside `fn main()`. Import
-`"std/args"` and use `let rate = args.number("rate", 0.3);` to expose a numeric
-input; pass it as `serq run model.sq --horizon 10 --rate 0.5`. Ordinary
+A program is the deployment, constructed inside `fn main()`; its workload
+(how sessions arrive and what each turn sends) is a file of its own, given
+when it runs with `--workload` (pyserq: `workload=`). The examples'
+workloads are in `examples/workloads/`, and `examples/pairs.json` names each
+program's. Import `"std/args"` and use `let rate = args.number("rate", 0.3);`
+to expose a numeric input; pass it as
+`serq run model.sq --workload workload.sq --horizon 10 --rate 0.5`. Ordinary
 `let` constants stay internal. See the [complete example](examples/single-turn/arguments.sq)
+(its workload: [`examples/workloads/batch.sq`](examples/workloads/batch.sq))
 and [input reference](docs/api/std/args.md).
 
 As a dependency, pin a release tag:

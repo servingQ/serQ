@@ -17,6 +17,7 @@
 // prompt at a time, a decoder decodes with room to spare, and its KV pool
 // is what bounds it. examples/pd-disaggregation/llmd_nixl_pull.sq has the
 // engines and the router of a deployment; this program has its fabrics.
+// Its workload: examples/workloads/pd_two_fabrics.sq.
 use "std/args";
 use "std/share";
 
@@ -30,7 +31,6 @@ let capD = 1e5;        // KV tokens a decoder holds
 let x0 = 0.002;        // wait before an RDMA read: posting it and polling its completion (s)
 
 fn main() {
-  let Lambda = args.number("Lambda", 60.0);   // requests per second
   let BwNV = args.number("BwNV", 2e6);        // an NVLink port, tokens/s (128 KB per token at 256 GB/s)
   let BwRDMA = args.number("BwRDMA", 2e5);    // a NIC, tokens/s (128 KB per token at 25 GB/s)
 
@@ -42,15 +42,6 @@ fn main() {
   stage nvl_in[ND] : ps(BwNV);    // a decoder's
   stage nic_out[NP] : ps(BwRDMA); // a prefiller's NIC
   stage nic_in[ND] : ps(BwRDMA);  // a decoder's
-
-  workload {
-    arrive poisson(Lambda);
-    turn {
-      set n = floor(~uniform(1000, 3000));
-      set o = floor(~exp(200)) + 1;
-    }
-    send (n, o);
-  }
 
   server (n, o) {
     set t0 = now;

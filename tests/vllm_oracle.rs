@@ -28,7 +28,7 @@ use std::path::Path;
 
 use serde_json::Value;
 use serq::frontend::parser;
-use serq::{Overrides, compile_source, program_path, run_ir};
+use serq::{Overrides, paired_workload, program_path, run_ir};
 
 fn dir() -> std::path::PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tools/oracle")
@@ -64,6 +64,8 @@ fn oracle_ir(name: &str) -> serq::Program {
         ..common::horizon(100000.0)
     };
     let path = program_path("vllm_request");
+    let workload =
+        std::fs::read_to_string(paired_workload(&path).expect("the example's workload")).unwrap();
     let src = std::fs::read_to_string(&path).unwrap();
     let reqs = sc["requests"].as_array().unwrap();
     let sessions: Vec<Vec<(&str, f64)>> = reqs
@@ -76,7 +78,7 @@ fn oracle_ir(name: &str) -> serq::Program {
             ]
         })
         .collect();
-    compile_source(&common::main_source(&src), &ov)
+    common::compile(&common::main_source(&src), &workload, &ov)
         .unwrap()
         .with_sessions(&sessions)
         .unwrap()

@@ -113,10 +113,19 @@ is FCFS:
 
 ### The workload
 
-Six requests at once, each a 256-token prompt wanting 16 tokens back:
+Six requests at once, each a 256-token prompt wanting 16 tokens back. The
+workload is not in the program: it is a file of its own,
+`examples/workloads/rbln_batch.sq`, given when the program runs (`serq run
+examples/vendors/rbln.sq --workload examples/workloads/rbln_batch.sq`):
+
+```serq title="examples/workloads/rbln_batch.sq"
+--8<-- "examples/workloads/rbln_batch.sq:workload"
+```
+
+The server takes each request's prompt and output to the engine:
 
 ```serq
---8<-- "examples/vendors/rbln.sq:workload"
+--8<-- "examples/vendors/rbln.sq:server"
 ```
 
 In this workload neither the prefix cache nor preemption fires: the six
@@ -128,10 +137,14 @@ The example covers local phase isolation. PP caps, remote-KV decode-ready
 admission guards and sub-block copy semantics remain outside it. The hand-derived
 interpreter regressions do not establish native scheduler equivalence.
 
-??? example "The whole program"
+??? example "The whole program, and its workload"
 
     ```serq title="examples/vendors/rbln.sq"
     --8<-- "examples/vendors/rbln.sq"
+    ```
+
+    ```serq title="examples/workloads/rbln_batch.sq"
+    --8<-- "examples/workloads/rbln_batch.sq"
     ```
 
 ## Remaining gaps

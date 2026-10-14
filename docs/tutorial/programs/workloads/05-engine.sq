@@ -1,0 +1,28 @@
+// Chapter 5's workload: chapter 4's sessions, each turn one request with its
+// context and its output, and whether it is the session's last (05-engine.sq
+// runs it).
+use "std/args";
+
+let p = 0.8;
+let Lambda = args.number("Lambda", 0.5);
+let Z = args.number("Z", 3.0);
+
+workload {
+  arrive poisson(Lambda);
+  init { set K = 0; }
+  turn {
+    set n = K == 0 ? ~uniform(1000, 3000) : ~exp(500);
+    set o = ~exp(200) + 1;
+    set more = ~bernoulli(p);
+  }
+  send (input: K + n, output: o, final: more == 0);
+  // the conversation: a request per turn, then a tool call and the next
+  // turn, or the end
+  session {
+    loop {
+      turn;
+      set K = K + n + o;
+      if (more) { tool (~exp(Z)); } else { end; }
+    }
+  }
+}

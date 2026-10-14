@@ -371,17 +371,22 @@ enum SetValue {
     Expr(String),
 }
 
-/// `compile(path=None, *, source=None, sets={}, defs={}, seed=None,
-/// horizon=None, warmup=None, arrivals=None, trace=None)`: a program file or
-/// program text to its IR. Source models require `horizon`; settings are supplied
+/// `compile(path=None, *, source=None, workload=None, workload_source=None,
+/// sets={}, defs={}, seed=None, horizon=None, warmup=None, arrivals=None,
+/// trace=None)`: a program file or program text to its IR. The deployment
+/// runs the workload file `workload`, or the workload text
+/// `workload_source`, as `serq run FILE --workload W`
+/// (`docs/design/paired-workload.md`). Source models require `horizon`; settings are supplied
 /// here, separately from the model, with the options of `serq run` (`sets` supply
 /// inputs declared with `args.number`, `defs` the bodies of expression definitions, by name).
 #[pyfunction]
-#[pyo3(signature = (path=None, *, source=None, sets=HashMap::new(), defs=HashMap::new(), seed=None, horizon=None, warmup=None, arrivals=None, trace=None))]
+#[pyo3(signature = (path=None, *, source=None, workload=None, workload_source=None, sets=HashMap::new(), defs=HashMap::new(), seed=None, horizon=None, warmup=None, arrivals=None, trace=None))]
 #[allow(clippy::too_many_arguments)]
 fn compile(
     path: Option<PathBuf>,
     source: Option<&str>,
+    workload: Option<PathBuf>,
+    workload_source: Option<&str>,
     sets: HashMap<String, SetValue>,
     defs: HashMap<String, String>,
     seed: Option<u64>,
@@ -399,20 +404,118 @@ fn compile(
         ..Default::default()
     };
     overriding(&mut ov, sets, defs)?;
-    let (ir, base) = match (&path, source) {
-        (Some(p), None) => (serq::load(p, &ov), p.parent().map(Path::to_path_buf)),
-        (None, Some(src)) => (serq::compile_source(src, &ov), None),
-        _ => {
-            return Err(PyValueError::new_err(
-                "compile takes exactly one of a path and a source",
-            ));
-        }
+    let w = Workload::given(workload, workload_source)?;
+    let program = Deployment::given(path, source, "compile")?;
+    // a trace is the workload's, read beside its file
+    let base = match (&w, &program) {
+        _ if ov.trace.is_some() => None,
+        (Some(w), _) => w.dir.clone(),
+        (None, Deployment::Path(p)) => p.parent().map(Path::to_path_buf),
+        (None, Deployment::Source(_)) => None,
     };
-    let base = if ov.trace.is_some() { None } else { base };
     Ok(Program {
-        ir: ir.map_err(PyValueError::new_err)?,
+        ir: program.compile(w.as_ref(), &ov, false)?,
         base,
     })
+}
+
+/// The workload a deployment runs: a file's text, or text given as it is.
+struct Workload {
+    name: String,
+    text: String,
+    /// Its file, read by `serq::load_paired`, when it has one.
+    path: Option<PathBuf>,
+    /// The file's directory, where its trace is read.
+    dir: Option<PathBuf>,
+}
+
+impl Workload {
+    fn given(path: Option<PathBuf>, source: Option<&str>) -> PyResult<Option<Workload>> {
+        match (path, source) {
+            (None, None) => Ok(None),
+            (Some(p), None) => {
+                let text = std::fs::read_to_string(&p).map_err(|e| {
+                    PyValueError::new_err(format!("cannot read {}: {e}", p.display()))
+                })?;
+                Ok(Some(Workload {
+                    name: p.display().to_string(),
+                    text,
+                    dir: p.parent().map(Path::to_path_buf),
+                    path: Some(p),
+                }))
+            }
+            (None, Some(text)) => Ok(Some(Workload {
+                name: "workload".into(),
+                text: text.into(),
+                path: None,
+                dir: None,
+            })),
+            _ => Err(PyValueError::new_err(
+                "give the workload as a path or as a source (`workload_source`), not both",
+            )),
+        }
+    }
+}
+
+/// The deployment: a program file (text, or IR as `.json`), or its text.
+enum Deployment<'a> {
+    Path(PathBuf),
+    Source(&'a str),
+}
+
+impl<'a> Deployment<'a> {
+    fn given(path: Option<PathBuf>, source: Option<&'a str>, f: &str) -> PyResult<Self> {
+        match (path, source) {
+            (Some(p), None) => Ok(Deployment::Path(p)),
+            (None, Some(src)) => Ok(Deployment::Source(src)),
+            _ => Err(PyValueError::new_err(format!(
+                "{f} takes exactly one of a path and a source"
+            ))),
+        }
+    }
+
+    /// Its IR, with the workload `w` paired (`serq::compile_paired`);
+    /// `inspected` gives text without a horizon a placeholder one.
+    fn compile(
+        &self,
+        w: Option<&Workload>,
+        ov: &serq::Overrides,
+        inspected: bool,
+    ) -> PyResult<serq::Program> {
+        let ir = match (self, w) {
+            (Deployment::Path(p), None) if inspected => serq::load_inspected(p, ov),
+            (Deployment::Path(p), None) => serq::load(p, ov),
+            (Deployment::Source(src), None) if inspected => serq::compile_inspected(src, ov),
+            (Deployment::Source(src), None) => serq::compile_source(src, ov),
+            (Deployment::Path(p), Some(w)) => match &w.path {
+                Some(wp) if inspected => serq::load_paired_inspected(p, wp, ov),
+                Some(wp) => serq::load_paired(p, wp, ov),
+                None if p.extension().is_some_and(|e| e == "json") => {
+                    Err(serq::IR_HAS_ITS_WORKLOAD.into())
+                }
+                None => std::fs::read_to_string(p)
+                    .map_err(|e| format!("cannot read {}: {e}", p.display()))
+                    .and_then(|text| {
+                        let names = (p.display().to_string(), w.name.clone());
+                        let f = if inspected {
+                            serq::compile_paired_inspected
+                        } else {
+                            serq::compile_paired
+                        };
+                        f(&text, &w.text, (&names.0, &names.1), ov)
+                    }),
+            },
+            (Deployment::Source(src), Some(w)) => {
+                let names = ("deployment", w.name.as_str());
+                if inspected {
+                    serq::compile_paired_inspected(src, &w.text, names, ov)
+                } else {
+                    serq::compile_paired(src, &w.text, names, ov)
+                }
+            }
+        };
+        ir.map_err(PyValueError::new_err)
+    }
 }
 
 /// `sets` and `defs` into `ov`, as `--name value` and `--def`.
@@ -453,38 +556,50 @@ impl<'py> FromPyObject<'py> for Drawn {
     }
 }
 
-/// `draw(path=None, *, source=None, sets={}, defs={}, format="tikz")`: the
+/// `draw(path=None, *, source=None, workload=None, workload_source=None,
+/// sets={}, defs={}, format="tikz")`: the
 /// deployment view, as `serq draw` prints it: what one request runs
 /// (`serq::view::deployment::request`). `path` may be a compiled
 /// `Program`, drawn from its IR as a `.json` file is.
 #[pyfunction]
-#[pyo3(signature = (path=None, *, source=None, sets=HashMap::new(), defs=HashMap::new(), format="tikz"))]
+#[pyo3(signature = (path=None, *, source=None, workload=None, workload_source=None, sets=HashMap::new(), defs=HashMap::new(), format="tikz"))]
 fn draw(
     path: Option<Drawn>,
     source: Option<&str>,
+    workload: Option<PathBuf>,
+    workload_source: Option<&str>,
     sets: HashMap<String, SetValue>,
     defs: HashMap<String, String>,
     format: &str,
 ) -> PyResult<String> {
     let mut ov = serq::Overrides::default();
     overriding(&mut ov, sets, defs)?;
-    let figure = match (&path, source) {
-        (Some(Drawn::Program(p)), None) => {
-            serq::refuse_text_overrides(&ov).map(|()| serq::view::deployment::figure(&p.get().ir))
+    let w = Workload::given(workload, workload_source)?;
+    let figure = match path {
+        Some(Drawn::Program(p)) if source.is_none() => {
+            if w.is_some() {
+                return Err(PyValueError::new_err(
+                    "a compiled Program holds its workload already",
+                ));
+            }
+            serq::refuse_text_overrides(&ov)
+                .map(|()| serq::view::deployment::figure(&p.get().ir))
+                .map_err(PyValueError::new_err)?
         }
-        (Some(Drawn::Path(p)), None) => {
-            serq::load_inspected(p, &ov).map(|ir| serq::view::deployment::figure(&ir))
+        path => {
+            let path = match path {
+                Some(Drawn::Path(p)) => Some(p),
+                Some(Drawn::Program(_)) => {
+                    return Err(PyValueError::new_err(
+                        "draw takes exactly one of a path and a source",
+                    ));
+                }
+                None => None,
+            };
+            let ir = Deployment::given(path, source, "draw")?.compile(w.as_ref(), &ov, true)?;
+            serq::view::deployment::figure(&ir)
         }
-        (None, Some(src)) => {
-            serq::compile_inspected(src, &ov).map(|ir| serq::view::deployment::figure(&ir))
-        }
-        _ => {
-            return Err(PyValueError::new_err(
-                "draw takes exactly one of a path and a source",
-            ));
-        }
-    }
-    .map_err(PyValueError::new_err)?;
+    };
     serq::view::render(&figure, format).map_err(PyValueError::new_err)
 }
 

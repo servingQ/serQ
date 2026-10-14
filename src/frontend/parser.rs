@@ -741,6 +741,9 @@ pub fn outline_paired(
 pub fn outline(src: &str) -> PResult<crate::frontend::outline::Outline> {
     let toks = lex(src)?;
     let mut p = Parser::new(toks);
+    // a deployment read without its workload: what is written where, not
+    // what only a whole program is checked for
+    p.syntax_only = true;
     p.outline = Some(crate::frontend::outline::Recorder::new(src));
     p.program()?;
     Ok(p.outline.take().expect("set above").out)
@@ -893,7 +896,10 @@ fn is_pure(name: &str) -> bool {
 
 /// The words #136 took out of the language, with what a program writes
 /// instead: one spelling for one admission.
-fn retired(word: &str) -> Option<&'static str> {
+/// The modules `use "std/NAME";` imports, by the name a program calls them.
+pub(crate) const STD_MODULES: [&str; 3] = ["args", "kvt", "share"];
+
+pub(crate) fn retired(word: &str) -> Option<&'static str> {
     RETIRED
         .iter()
         .find(|(w, _)| *w == word)
@@ -1030,7 +1036,7 @@ pub(crate) fn is_function(name: &str) -> bool {
 /// A word a definition or its parameter may not take: a keyword, a
 /// function or a distribution. A parameter is replaced token by token, so
 /// one named `uniform` turned `~uniform(…)` in its body into `~3(…)`.
-fn is_reserved(name: &str) -> bool {
+pub(crate) fn is_reserved(name: &str) -> bool {
     KEYWORDS.contains(&name) || is_function(name) || DistKind::from_name(name).is_some()
 }
 
@@ -2154,6 +2160,15 @@ impl Parser {
                 self.stages.push(d.name.clone());
                 prog.stages.push(d);
             } else if self.eat_kw("workload") {
+                if self.paired.is_none() {
+                    return self.err_at(
+                        item_at,
+                        "a workload is a file of its own, given when the program runs: \
+                         `--workload W.sq` (pyserq: `workload=`)\n\
+                         help: move `workload { … }`, with the `let`s, `def`s, stages and pools \
+                         only it reads, to a file of its own",
+                    );
+                }
                 if prog.workload.is_some() {
                     return self.err("duplicate workload");
                 }
@@ -2452,7 +2467,12 @@ impl Parser {
         }
         if self.wl_session.is_none() && self.server.is_some() {
             if prog.workload.is_none() {
-                return self.err("`server` needs a `workload`: its default session is one turn");
+                let at = self.server.as_ref().map_or(self.pos, |(at, _)| *at);
+                return self.err_at(
+                    at,
+                    "the server needs a workload to run: give the workload's file, \
+                     `--workload W.sq` (pyserq: `workload=`)",
+                );
             }
             self.wl_session = Some((self.pos, vec![Stmt::Turn, Stmt::Request]));
         }
@@ -2997,7 +3017,7 @@ impl Parser {
 
     /// `use "std/args";`, the program's inputs, `use "std/kvt";`, the
     /// KV-transfer vocabulary, and `use "std/share";`, the sharing policies.
-    /// A program is one file, so no other `use` reads anything.
+    /// The std modules (`STD_MODULES`); a file imports no other file.
     fn use_std(&mut self) -> PResult<()> {
         let at = self.pos;
         self.advance();
@@ -3012,7 +3032,7 @@ impl Parser {
                     at,
                     format!(
                         "`use \"{path}\"`: `use` reads only `std/args`, `std/kvt` and \
-                         `std/share`; a program is one file, so write its definitions in it"
+                         `std/share`; a file imports no other, so write its definitions in it"
                     ),
                 );
             }
@@ -4008,6 +4028,15 @@ impl Parser {
         if self.is_kw("on") {
             if !on_ok {
                 return self.err("a queue's pool is its own: `pool NAME on …` is a deployment's");
+            }
+            if self.paired.is_some_and(|l| self.toks[at].line > l) {
+                // the workload's own capacity (a session cap), not the
+                // deployment's memory
+                return self.err_at(
+                    at,
+                    "a workload file's pool is its own: `pool NAME { cap …; }`, on no \
+                     device or engine, which are the deployment file's",
+                );
             }
             if array.is_some() {
                 return self.err_at(
@@ -5015,11 +5044,17 @@ impl Parser {
         let Tok::Ident(kw) = self.peek().clone() else {
             return Ok(());
         };
-        let own = ["use", "let", "def", "stage", "workload"];
+        let own = ["use", "let", "def", "stage", "pool", "workload"];
+        if in_workload && kw == "session" {
+            return self.err(
+                "`session` belongs inside `workload { … }`: the sequence of a session's turns",
+            );
+        }
         if in_workload && !own.contains(&kw.as_str()) && KEYWORDS.contains(&kw.as_str()) {
             return self.err(format!(
                 "`{kw}` is the deployment file's: a workload file declares its constants and \
-                 inputs (`let`), definitions (`def`), its own stages and `workload {{ … }}`"
+                 inputs (`let`), definitions (`def`), its own stages and pools and \
+                 `workload {{ … }}`"
             ));
         }
         if !in_workload && kw == "workload" {
@@ -6749,6 +6784,27 @@ mod tests {
         }
     }
 
+    /// A deployment's main body and the workload's file beside it, paired
+    /// (`frontend::paired`); a message names the constants and defs as written.
+    pub fn pair(body: &str, workload: &str) -> PResult<Program> {
+        let src = main_source(body);
+        let p =
+            crate::frontend::paired::Paired::new(&src, workload, ("deployment.sq", "workload.sq"));
+        let spliced = p.tokens().map_err(|msg| ParseError {
+            line: 0,
+            col: 0,
+            msg,
+        })?;
+        let mut parser = Parser::new(spliced.toks);
+        parser.paired = Some(spliced.split);
+        let mut prog = parser.program().map_err(|mut e| {
+            e.msg = crate::frontend::paired::written(&e.msg);
+            e
+        })?;
+        prog.paired = Some(spliced.stages);
+        Ok(prog)
+    }
+
     #[test]
     fn parses_a_small_program() {
         let src = r#"
@@ -6756,6 +6812,16 @@ mod tests {
         pool kv { cap 3e5; evict lru; preempt lifo; }
         stage prefill : fifo;
         stage decode : ps(min(present, 8));
+        server {
+          hold kv (cost(kv, K + n + o)) {
+            run prefill (cost(prefill, a * (K + n - cached)));
+            observe ttft = now - t0;
+            run decode (cost(decode, o * 2e-4));
+          } cache (cost(kv, K + n + o));
+        }
+
+"#;
+        let workload = r#"
         stage tool : delay;
         workload {
           arrive poisson(0.3);
@@ -6770,19 +6836,13 @@ mod tests {
 
           }
         }
-        server {
-          hold kv (cost(kv, K + n + o)) {
-            run prefill (cost(prefill, a * (K + n - cached)));
-            observe ttft = now - t0;
-            run decode (cost(decode, o * 2e-4));
-          } cache (cost(kv, K + n + o));
-        }
-
 "#;
-        let p = parse(&main_source(src)).unwrap();
+        let p = pair(src, workload).unwrap();
         assert_eq!(p.pools.len(), 1);
+        // the workload's stage after the deployment's
         assert_eq!(p.stages.len(), 3);
-        assert_eq!(p.lets[0].0, "a");
+        assert_eq!(p.stages[2].name, "tool");
+        assert_eq!(crate::frontend::paired::written(&p.lets[0].0), "a");
         assert!(matches!(p.session[0], Stmt::Loop(_)));
     }
 
@@ -6800,8 +6860,11 @@ mod tests {
         stage prefill : fifo;
         stage link : ps(1);
         stage decode : ps(present);
-        stage tool : delay;
     "#;
+
+    /// A workload of one turn a session, for a deployment whose server is
+    /// what a test reads.
+    const TURN: &str = "workload { session { turn; \n} }";
 
     /// An engine `llm` with no token budget and a unit iteration, a memory
     /// pool and a tool. The engine is one line, so the line a test asserts
@@ -6815,7 +6878,8 @@ mod tests {
     /// Compare executable expansion, erasing authority markers only in this
     /// parser test. `size_cost` and IR tests check the retained authority;
     /// moving a size assignment across it is no longer a valid equivalence.
-    fn same(a: &str, b: &str) {
+    /// Each side is a deployment's main body and the workload's file.
+    fn same(a: (&str, &str), b: (&str, &str)) {
         fn executable(stmts: &mut Vec<Stmt>) {
             stmts.retain(|s| !matches!(s, Stmt::Side(_)));
             for s in stmts {
@@ -6832,8 +6896,8 @@ mod tests {
                 }
             }
         }
-        let run = |s: &str| {
-            let mut p = without_locations(parse(&main_source(s)).unwrap());
+        let run = |(body, workload): (&str, &str)| {
+            let mut p = without_locations(pair(body, workload).unwrap());
             p.server.clear();
             executable(&mut p.session);
             p
@@ -6844,23 +6908,27 @@ mod tests {
     #[test]
     fn serving_forms_desugar_to_the_kernel() {
         same(
-            &format!(
-                "{PD} workload {{ session {{ turn;
-            if (~bernoulli(p)) {{ tool Z;  }} else {{ end; }}
-
-        }} }}
-        server {{
+            (
+                &format!(
+                    "{PD} server {{
           hold kvD (cost(kvD, K)) {{ transfer X from kv to kvD (K); }}
         }}"
-            ),
-            &format!(
-                "{PD} workload {{ session {{ turn;
-            if (~bernoulli(p)) {{ run tool (cost(tool, Z));  }} else {{ end; }}
+                ),
+                "stage tool : delay; workload { session { turn;
+            if (~bernoulli(p)) { tool Z;  } else { end; }
 
-        }} }}
-        server {{
+        } }",
+            ),
+            (
+                &format!(
+                    "{PD} server {{
           hold kvD (cost(kvD, K)) {{ run link (cost(link, X)); load kvD (cost(kvD, K)); release kv; }}
         }}"
+                ),
+                "stage tool : delay; workload { session { turn;
+            if (~bernoulli(p)) { run tool (cost(tool, Z));  } else { end; }
+
+        } }",
             ),
         );
     }
@@ -6872,9 +6940,10 @@ mod tests {
             ("prefill (n) growing kv;", "prefill"),
             ("decode on llm (o);", "decode"),
         ] {
-            let e = parse(&main_source(&format!(
-                "{ENGINE} workload {{ session {{ turn; \n}} }}\nserver {{ hold kv (cost(kv, 1)) {{ {form} }}\n}}"
-            )))
+            let e = pair(
+                &format!("{ENGINE} \n\nserver {{ hold kv (cost(kv, 1)) {{ {form} }}\n}}"),
+                TURN,
+            )
             .unwrap_err();
             assert!(
                 e.msg.contains(&format!("`{kw}` is the mode of a `run`")),
@@ -6891,27 +6960,39 @@ mod tests {
     #[test]
     fn serving_forms_name_their_stage_explicitly() {
         // the role's stage array, indexed
+        const WL: &str = "workload { session { turn; \n} }";
         same(
-            "stage tool[2] : fifo; workload { session { turn; \n} }\nserver { choose j in 2 by (work(tool[j])); tool[j] S;\n}",
-            "stage tool[2] : fifo; workload { session { turn; \n} }\nserver { choose j in 2 by (work(tool[j])); run tool[j] (cost(tool, S));\n}",
+            (
+                "stage tool[2] : fifo;\nserver { choose j in 2 by (work(tool[j])); tool[j] S;\n}",
+                WL,
+            ),
+            (
+                "stage tool[2] : fifo;\nserver { choose j in 2 by (work(tool[j])); run tool[j] (cost(tool, S));\n}",
+                WL,
+            ),
         );
         // any stage
         same(
-            "stage rep[2] : fifo; workload { session { turn; \n} }\nserver { tool on rep[1] S;\n}",
-            "stage rep[2] : fifo; workload { session { turn; \n} }\nserver { run rep[1] (cost(rep, S));\n}",
+            ("stage rep[2] : fifo;\nserver { tool on rep[1] S;\n}", WL),
+            (
+                "stage rep[2] : fifo;\nserver { run rep[1] (cost(rep, S));\n}",
+                WL,
+            ),
         );
         // a stage named `transfer` plays transfer
         same(
-            "pool a { cap 1; } pool b { cap 1; } stage transfer : fifo;
-        workload { session { turn;
-        } }
+            (
+                "pool a { cap 1; } pool b { cap 1; } stage transfer : fifo;
         server { hold b (cost(b, 1)) { hold a (cost(a, 1)) { transfer X from a to b (1); } }
         }",
-            "pool a { cap 1; } pool b { cap 1; } stage transfer : fifo;
-        workload { session { turn;
-        } }
+                WL,
+            ),
+            (
+                "pool a { cap 1; } pool b { cap 1; } stage transfer : fifo;
         server { hold b (cost(b, 1)) { hold a (cost(a, 1)) { run transfer (cost(transfer, X)); load b (cost(b, 1)); release a; } }
         }",
+                WL,
+            ),
         );
     }
 
@@ -6919,38 +7000,44 @@ mod tests {
     fn a_binding_the_body_reads_is_set_at_the_top_of_the_body() {
         // the body sees `known` at its admission value, which for attributes
         // and constants is the value it has at the top of the body
-        same(
-            &format!(
-                "{ENGINE} workload {{ session {{ turn;
+        const WL: &str = "workload { session { turn;
             end;
 
-        }} }}
-        server {{
+        } }";
+        same(
+            (
+                &format!(
+                    "{ENGINE} server {{
           hold kv (cost(kv, known)) at admission (known = computed < p ? p : computed + 1) {{
             run tool (cost(tool, known - cached));
           }}
         }}"
+                ),
+                WL,
             ),
-            &format!(
-                "{ENGINE} workload {{ session {{ turn;
-            end;
-
-        }} }}
-        server {{
+            (
+                &format!(
+                    "{ENGINE} server {{
           hold kv (cost(kv, computed < p ? p : computed + 1)) {{
             set known = computed < p ? p : computed + 1;
             run tool (cost(tool, known - cached));
           }}
         }}"
+                ),
+                WL,
             ),
         );
         // a binding the body does not read stays in the header
         same(
-            &format!(
-                "{ENGINE} workload {{ session {{ turn; \n}} }}\nserver {{ hold kv (cost(kv, h)) at admission (h = 1) {{ }}\n}}"
+            (
+                &format!(
+                    "{ENGINE}\nserver {{ hold kv (cost(kv, h)) at admission (h = 1) {{ }}\n}}"
+                ),
+                TURN,
             ),
-            &format!(
-                "{ENGINE} workload {{ session {{ turn; \n}} }}\nserver {{ hold kv (cost(kv, 1)) {{ }}\n}}"
+            (
+                &format!("{ENGINE}\nserver {{ hold kv (cost(kv, 1)) {{ }}\n}}"),
+                TURN,
             ),
         );
     }
@@ -6964,10 +7051,10 @@ mod tests {
             ("hit = cached", "read `cached`"),
             ("hit = now", "with a `set` in the body"),
         ] {
-            let e = parse(&main_source(&format!(
-                "{ENGINE} workload {{ session {{ turn; \n}} }}\nserver {{ hold kv (cost(kv, hit)) at admission ({binding}) {{ observe h = hit; }}\n}}"
+            let e = pair(
+                &format!("{ENGINE}\nserver {{ hold kv (cost(kv, hit)) at admission ({binding}) {{ observe h = hit; }}\n}}"),
+                TURN,
             )
-            ))
             .unwrap_err();
             assert!(
                 e.msg.contains("the body reads `hit`, and `hit` reads"),
@@ -6978,9 +7065,9 @@ mod tests {
         }
         // `n` is a context variable unless the program assigns it
         let src = format!(
-            "{ENGINE} workload {{ session {{ turn; \n}} }}\nserver {{ set n = 3; hold kv (cost(kv, m)) at admission (m = n + 1) {{ observe x = m; }}\n}}"
+            "{ENGINE}\nserver {{ set n = 3; hold kv (cost(kv, m)) at admission (m = n + 1) {{ observe x = m; }}\n}}"
         );
-        parse(&main_source(&src)).unwrap();
+        pair(&src, TURN).unwrap();
     }
 
     #[test]
@@ -7005,30 +7092,30 @@ mod tests {
                 ""
             };
             let name = binding.split(' ').next().unwrap();
-            let e = parse(&main_source(&format!(
-                "{pre} {ENGINE} workload {{ session {{ turn; \n}} }}\nserver {{ {assign} hold kv (cost(kv, 1)) at admission ({binding}) {{ observe a = {name}; }}\n}}"
+            let e = pair(
+                &format!("{pre} {ENGINE}\nserver {{ {assign} hold kv (cost(kv, 1)) at admission ({binding}) {{ observe a = {name}; }}\n}}"),
+                TURN,
             )
-            ))
             .unwrap_err();
             assert!(e.msg.contains(what), "{binding}: {}", e.msg);
         }
-        let e = parse(&main_source(&format!(
-            "{ENGINE} workload {{ session {{ turn; \n}} }}\nserver {{ hold kv (cost(kv, 1)) at admission (k = k + 1) {{ observe a = k; }}\n}}"
+        let e = pair(
+            &format!("{ENGINE}\nserver {{ hold kv (cost(kv, 1)) at admission (k = k + 1) {{ observe a = k; }}\n}}"),
+            TURN,
         )
-        ))
         .unwrap_err();
         assert!(e.msg.contains("reads itself"), "{}", e.msg);
-        let e = parse(&main_source(&format!(
-            "{ENGINE} workload {{ session {{ turn; \n}} }}\nserver {{ hold kv (cost(kv, 1)) at admission (j = k, k = 5) {{ observe a = j; }}\n}}"
+        let e = pair(
+            &format!("{ENGINE}\nserver {{ hold kv (cost(kv, 1)) at admission (j = k, k = 5) {{ observe a = j; }}\n}}"),
+            TURN,
         )
-        ))
         .unwrap_err();
         assert!(e.msg.contains("bound after it"), "{}", e.msg);
         // an attribute the body sets itself is not the binding
-        let e = parse(&main_source(&format!(
-            "{ENGINE} workload {{ session {{ turn; \n}} }}\nserver {{ hold kv (cost(kv, hit)) at admission (hit = min(cachedin(kv), 1)) {{ set hit = cached; observe h = hit; }}\n}}"
+        let e = pair(
+            &format!("{ENGINE}\nserver {{ hold kv (cost(kv, hit)) at admission (hit = min(cachedin(kv), 1)) {{ set hit = cached; observe h = hit; }}\n}}"),
+            TURN,
         )
-        ))
         .unwrap_err();
         assert!(e.msg.contains("an attribute the program sets"), "{}", e.msg);
     }
@@ -7040,28 +7127,27 @@ mod tests {
             "hold kv (cost(kv, k)) { }",
             "if (k > 1) { } else { }",
         ] {
-            let e = parse(&main_source(&format!(
-                "{ENGINE} workload {{ session {{ turn; \n}} }}\nserver {{ hold kv (cost(kv, 1)) at admission (k = 2) {{ observe a = k; }} {after}\n}}"
+            let e = pair(
+                &format!("{ENGINE}\nserver {{ hold kv (cost(kv, 1)) at admission (k = 2) {{ observe a = k; }} {after}\n}}"),
+                TURN,
             )
-            ))
             .unwrap_err();
             assert!(e.msg.contains("outside the body"), "{after}: {}", e.msg);
         }
-        let e = parse(&main_source(
+        let e = pair(
             "pool kv { cap 100; queue by (k); }
-        workload { session { turn;
-        } }
         server { hold kv (cost(kv, 1)) at admission (k = 2) { observe a = k; }
         }",
-        ))
+            "workload { session { turn;
+        } }",
+        )
         .unwrap_err();
         assert!(e.msg.contains("outside the body"), "{}", e.msg);
         // two holds may bind one name, and a nested hold may bind it again
         // over a live outer binding its body does not read
-        parse(&main_source(&format!(
-            "{ENGINE} workload {{ session {{ turn;
-
-        }} }}
+        pair(
+            &format!(
+                "{ENGINE}
         server {{
           hold kv (cost(kv, 1)) at admission (k = 2) {{ observe a = k; }}
           hold kv (cost(kv, 1)) at admission (k = 3) {{ observe b = k; }}
@@ -7069,282 +7155,290 @@ mod tests {
             hold kv (cost(kv, 1)) at admission (h = 1) {{ observe c = h; }}
           }}
         }}"
-        )))
+            ),
+            "workload { session { turn;
+
+        } }",
+        )
         .unwrap();
     }
 
     #[test]
     fn a_def_is_its_body_where_it_is_used() {
+        const WL: &str = "workload { session { turn; end; } }";
         // an expression: the argument in parentheses, the body too
         same(
-            &format!(
-                "{ENGINE} def full(x) {{ floor((x - 1) / bs) * bs }}
-        workload {{ session {{ turn;
-        }} }}
+            (
+                &format!(
+                    "{ENGINE} def full(x) {{ floor((x - 1) / bs) * bs }}
         server {{ set h = full(a + b) * 2; set g = min(full(k), 3);
         }}"
+                ),
+                "workload { session { turn;\n} }",
             ),
-            &format!(
-                "{ENGINE} workload {{ session {{ turn;
-
-        }} }}
+            (
+                &format!(
+                    "{ENGINE}
         server {{
           set h = (floor(((a + b) - 1) / bs) * bs) * 2;
           set g = min(floor((k - 1) / bs) * bs, 3);
         }}"
+                ),
+                "workload { session { turn;\n} }",
             ),
         );
         // a serving form in a def finds its stage where the def is used
         same(
-            "stage T[2] : fifo; def put(s, n) { tool on s (n); }
-        workload { session { turn; end;
-        } }
+            (
+                "stage T[2] : fifo; def put(s, n) { tool on s (n); }
         server { choose j in 2 by (work(T[j])); put(T[j], 3);
         }",
-            "stage T[2] : fifo;
-        workload { session { turn;
-            end;
-
-        } }
+                WL,
+            ),
+            (
+                "stage T[2] : fifo;
         server {
           choose j in 2 by (work(T[j]));
           run T[j] (cost(T, 3));
         }",
+                WL,
+            ),
         );
         // statements, with references for pools and stages (a station
         // family: an engine runs only through its request)
         same(
-            "pool kv[2] { cap 100; } stage S[2] : fifo;
+            (
+                "pool kv[2] { cap 100; } stage S[2] : fifo;
         def put(p, s, n) { hold p (cost(p, n)) { run s (cost(s, n)); } cache (cost(p, n)); }
-        workload { session { turn; end;
-        } }
         server { choose j in 2 by (used(kv[j])); put(kv[j], S[j], k + 1);
         }",
-            "pool kv[2] { cap 100; } stage S[2] : fifo;
-        workload { session { turn;
-            end;
-
-        } }
+                WL,
+            ),
+            (
+                "pool kv[2] { cap 100; } stage S[2] : fifo;
         server {
           choose j in 2 by (used(kv[j]));
           hold kv[j] (cost(kv[j], (k + 1))) { run S[j] (cost(S[j], (k + 1))); } cache (cost(kv[j], (k + 1)));
         }",
+                WL,
+            ),
         );
         // the side is the use's: a `hold` in a server
         same(
-            &format!(
-                "{ENGINE} def take(n) {{ hold kv (cost(kv, n)) {{ run tool (cost(tool, n)); }} }}
-        workload {{ session {{ turn; end; }} }}
+            (
+                &format!(
+                    "{ENGINE} def take(n) {{ hold kv (cost(kv, n)) {{ run tool (cost(tool, n)); }} }}
         server {{ take(4); }}"
+                ),
+                WL,
             ),
-            &format!(
-                "{ENGINE} workload {{ session {{ turn; end; }} }}
+            (
+                &format!(
+                    "{ENGINE}
         server {{ hold kv (cost(kv, 4)) {{ run tool (cost(tool, 4)); }} }}"
+                ),
+                WL,
+            ),
+        );
+        // and a `turn` in the workload: a def the session uses is the
+        // workload's, in its file
+        same(
+            (
+                "pool kv { cap 1; } server { hold kv (cost(kv, 1)) { } }",
+                "def ask() { turn; } workload { session { ask(); end; } }",
+            ),
+            (
+                "pool kv { cap 1; } server { hold kv (cost(kv, 1)) { } }",
+                "workload { session { turn; end; } }",
             ),
         );
     }
 
     #[test]
     fn floor_with_a_step_rounds_down_to_a_multiple_of_it() {
-        let bs = "let bs = 16; workload { init { set k = 40; } session { turn; end; } }";
+        const WL: &str = "workload { init { set k = 40; } session { turn; end; } }";
         same(
-            &format!("{ENGINE} {bs} server {{ set c = floor(k - 1, bs); }}"),
-            &format!("{ENGINE} {bs} server {{ set c = floor((k - 1) / bs) * bs; }}"),
+            (
+                &format!("{ENGINE} let bs = 16; server {{ set c = floor(k - 1, bs); }}"),
+                WL,
+            ),
+            (
+                &format!("{ENGINE} let bs = 16; server {{ set c = floor((k - 1) / bs) * bs; }}"),
+                WL,
+            ),
         );
-        let err = |src: &str| {
-            parse(&main_source(&format!(
-                "{ENGINE} workload {{ init {{ set k = 40; }} session {{ turn; end; }} }} {src}"
-            )))
-            .unwrap_err()
-            .msg
-        };
+        let err = |src: &str| pair(&format!("{ENGINE} {src}"), WL).unwrap_err().msg;
         assert!(err("server { set c = floor(k, ~exp(1)); }").contains("may not draw"));
         assert!(err("server { set c = floor(k, kv[0]); }").contains("not a resource"));
     }
 
     #[test]
     fn a_def_says_what_goes_wrong() {
-        let err = |src: &str| {
-            parse(&main_source(&format!("{ENGINE} {src}")))
-                .unwrap_err()
-                .msg
-        };
+        let err = |src: &str| pair(&format!("{ENGINE} {src}"), TURN).unwrap_err().msg;
+        // a definition the workload uses is the workload's, in its file
+        let werr =
+            |src: &str, workload: &str| pair(&format!("{ENGINE} {src}"), workload).unwrap_err().msg;
+        assert!(err("def f(x) { x }\nserver { f(1);\n}").contains("is an expression"));
+        assert!(err("def f(x) { end; }\nserver { set a = f(1);\n}").contains("is statements"));
         assert!(
-            err("def f(x) { x } workload { session { turn; \n} }\nserver { f(1);\n}")
-                .contains("is an expression")
-        );
-        assert!(
-            err("def f(x) { end; } workload { session { turn; \n} }\nserver { set a = f(1);\n}")
-                .contains("is statements")
-        );
-        assert!(
-            err("def f(x) { x } workload { session { turn; \n} }\nserver { set a = f(1, 2);\n}")
+            err("def f(x) { x }\nserver { set a = f(1, 2);\n}")
                 .contains("takes 1 argument(s), got 2")
         );
         assert!(
-            err("def f(x) { x + x } workload { session { turn; \n} }\nserver { set a = f(~exp(1));\n}").contains("would draw 2 times")
+            err("def f(x) { x + x }\nserver { set a = f(~exp(1));\n}")
+                .contains("would draw 2 times")
         );
-        assert!(
-            err("def f(x) { f(x) } workload { session { turn; \n} }\nserver {\n}")
-                .contains("uses itself")
-        );
-        assert!(
-            err("def min(x) { x } workload { session { turn; \n} }\nserver {\n}")
-                .contains("a word of the language")
-        );
-        assert!(
-            err("def uniform(x) { x } workload { session { turn; \n} }\nserver {\n}")
-                .contains("a word of the language")
-        );
-        assert!(
-            err("def f(on) { on } workload { session { turn; \n} }\nserver {\n}")
-                .contains("a word of the language")
-        );
-        assert!(
-            err("def f(min) { min(min, 1) } workload { session { turn; \n} }\nserver {\n}")
-                .contains("a word of the language")
-        );
+        assert!(err("def f(x) { f(x) }\nserver {\n}").contains("uses itself"));
+        // a def named after a word of the language, in either file of a
+        // pair: the pair keeps the word's spelling, so the parser sees it
+        for src in ["def min(x) { x }\n", "def uniform(x) { x }\n"] {
+            let e = pair(src, TURN).unwrap_err();
+            assert!(e.msg.contains("a word of the language"), "{e}");
+            let e = pair("", &format!("{src}{TURN}")).unwrap_err();
+            assert!(e.msg.contains("a word of the language"), "{e}");
+        }
+        assert!(err("def f(on) { on }\nserver {\n}").contains("a word of the language"));
+        assert!(err("def f(min) { min(min, 1) }\nserver {\n}").contains("a word of the language"));
         // a parameter is replaced token by token: one named `uniform` made
         // `~uniform(1, uniform)` in a use `~3(1, 3)`, a parse error there
         assert!(
-            err("def f(uniform) { ~uniform(1, uniform) } workload { session { turn; \n} }\nserver {\n}")
+            err("def f(uniform) { ~uniform(1, uniform) }\nserver {\n}")
                 .contains("`uniform` is a word of the language: name the parameter otherwise")
         );
         // a definition uses only the ones before it: no recursion
         assert!(
-            err("def g(x) { f(x) } def f(x) { g(x) } workload { session { turn; \n} }\nserver { set a = g(1);\n}")
+            err("def g(x) { f(x) } def f(x) { g(x) }\nserver { set a = g(1);\n}")
                 .contains("`g` uses `f`, which is defined after it")
         );
         assert!(
-            err("def g(x) { f(x); } def f(x) { g(x); } workload { session { turn; \n} }\nserver { g(1);\n}")
+            err("def g(x) { f(x); } def f(x) { g(x); }\nserver { g(1);\n}")
                 .contains("defined after it")
         );
         // a stray closer
-        assert!(
-            err("def f(x) { x } workload { session { turn; \n} }\nserver { set a = f(1]);\n}")
-                .contains("unmatched")
-        );
+        assert!(err("def f(x) { x }\nserver { set a = f(1]);\n}").contains("unmatched"));
         // a definition that draws draws when it is an argument
         assert!(
-            err("def d() { ~exp(1) } def twice(x) { x + x } workload { session { turn; \n} }\nserver { set a = twice(d());\n}")
+            err("def d() { ~exp(1) } def twice(x) { x + x }\nserver { set a = twice(d());\n}")
                 .contains("would draw 2 times")
         );
         // an argument the body would capture
         assert!(
-            err("def f(x) { set s = 10; observe o = x; } workload { session { turn; \n} }\nserver { f(s + 1);\n}")
+            err("def f(x) { set s = 10; observe o = x; }\nserver { f(s + 1);\n}")
                 .contains("which `f` assigns")
         );
         // an observation's name is not captured
-        parse(&main_source(&format!(
-            "{ENGINE} def f(x) {{ observe s = 10; observe o = x; }} workload {{ session {{ turn; \n}} }}\nserver {{ f(s + 1);\n}}"
+        pair(
+            &format!(
+                "{ENGINE} def f(x) {{ observe s = 10; observe o = x; }}\nserver {{ f(s + 1);\n}}"
+            ),
+            TURN,
         )
-        ))
         .unwrap();
-        assert!(
-            err("def f(p) { set p = 1; } workload { session { turn; \n} }\nserver { f(2);\n}")
-                .contains("is a parameter")
-        );
+        assert!(err("def f(p) { set p = 1; }\nserver { f(2);\n}").contains("is a parameter"));
         assert!(
             err(
-                "def f(h) { hold kv (cost(kv, h)) at admission (h = 3) { observe a = h; } } workload { session { turn; \n} }\nserver { f(2);\n}"
+                "def f(h) { hold kv (cost(kv, h)) at admission (h = 3) { observe a = h; } }\nserver { f(2);\n}"
             )
             .contains("is a parameter")
         );
         // a parameter may not be an aggregate's index, and a count may be one
         assert!(
-            err("def tally(k) { sum k in 2 (k) } workload { session { turn; \n} }\nserver { set x = tally(7);\n}")
+            err("def tally(k) { sum k in 2 (k) }\nserver { set x = tally(7);\n}")
                 .contains("is a parameter")
         );
-        parse(&main_source("def tally(n) { sum k in n (k) } workload { session { turn; \n} }\nserver { set x = tally(2);\n}",
-        )).unwrap();
+        pair(
+            "def tally(n) { sum k in n (k) }\nserver { set x = tally(2);\n}",
+            TURN,
+        )
+        .unwrap();
         // a parenthesised count: the body's `k` is still the aggregate's
-        parse(&main_source(
+        pair(
+            "server {}",
             "def tally() { sum k in (1 + 1) (k) } def next(x) { turn; observe p = x; } workload { turn { set k = 1; }
           session { next(tally()); turn; end; }
-        } server {}",
-        )
+        }",
         )
         .unwrap();
         // an aggregate's index is its own, not a name the argument reads
-        parse(&main_source(
+        pair(
+            "server {}",
             "def tally() { sum i in 2 (i) } def next(x) { turn; observe p = x; } workload { turn { set i = 1; }
           session { next(tally()); turn; end; }
-        } server {}",
-        )
+        }",
         )
         .unwrap();
         // what a turn, a request or an admission assigns is captured too
         assert!(
-            err("def next(x) { turn; observe p = x; } workload { turn { set n = 1; } \n  session { next(n); turn; end; } } server {}")
+            werr("server {}", "def next(x) { turn; observe p = x; } workload { turn { set n = 1; } \n  session { next(n); turn; end; } }")
                 .contains("which its `turn;` assigns")
         );
         assert!(
-            err("def go(x) { turn; observe b = x; } workload { init { set t0 = 0; } session { go(t0); end; } } server { set t0 = now; }")
+            werr("server { set t0 = now; }", "def go(x) { turn; observe b = x; } workload { init { set t0 = 0; } session { go(t0); end; } }")
                 .contains("which its `turn;` assigns")
         );
         assert!(
-            err("def take(x) { hold kv (cost(kv, 4)) { observe got = x; } } workload { session { turn; \n} }\nserver { take(cached);\n}")
+            err("def take(x) { hold kv (cost(kv, 4)) { observe got = x; } }\nserver { take(cached);\n}")
                 .contains("which `take` assigns")
         );
         // the clock and live state are read where the body reads them
         assert!(
-            err("stage svc : fifo; def timed(t) { run svc (cost(svc, 1)); observe took = now - t; } workload { session { turn; \n} }\nserver { timed(now);\n}")
+            err("stage svc : fifo; def timed(t) { run svc (cost(svc, 1)); observe took = now - t; }\nserver { timed(now);\n}")
                 .contains("reads `now`, which changes")
         );
         assert!(
-            err("def f(q) { observe b = q; } workload { session { turn; \n} }\nserver { f(used(kv));\n}").contains("reads `used(…)`")
+            err("def f(q) { observe b = q; }\nserver { f(used(kv));\n}")
+                .contains("reads `used(…)`")
         );
         // an expression's argument is read where the expression is
-        parse(&main_source(&format!(
-            "{ENGINE} def g(x) {{ x + 1 }} workload {{ session {{ turn; \n}} }}\nserver {{ set a = g(now);\n}}"
+        pair(
+            &format!("{ENGINE} def g(x) {{ x + 1 }}\nserver {{ set a = g(now);\n}}"),
+            TURN,
         )
-        ))
         .unwrap();
         // `n` is an attribute when the program sets it
-        parse(&main_source(&format!(
-            "{ENGINE} def f(x) {{ observe b = x; }} workload {{ session {{ turn; \n}} }}\nserver {{ set n = 1; f(n);\n}}"
+        pair(
+            &format!("{ENGINE} def f(x) {{ observe b = x; }}\nserver {{ set n = 1; f(n);\n}}"),
+            TURN,
         )
-        ))
         .unwrap();
         // and through an expression the argument uses
         assert!(
-            err("stage svc : fifo; def clock() { now } def timed(t) { run svc (cost(svc, 1)); observe took = now - t; } workload { session { turn; \n} }\nserver { timed(clock());\n}")
+            err("stage svc : fifo; def clock() { now } def timed(t) { run svc (cost(svc, 1)); observe took = now - t; }\nserver { timed(clock());\n}")
                 .contains("reads `now`")
         );
         assert!(
-            err("def occ(p) { used(p) } def f(q) { observe b = q; } workload { session { turn; \n} }\nserver { f(occ(kv));\n}")
+            err("def occ(p) { used(p) } def f(q) { observe b = q; }\nserver { f(occ(kv));\n}")
                 .contains("reads `used(…)`")
         );
         assert!(
-            err("def plus(x) { s + x } def f(v) { set s = 10; observe o = v; } workload { session { turn; \n} }\nserver { f(plus(1));\n}")
+            err("def plus(x) { s + x } def f(v) { set s = 10; observe o = v; }\nserver { f(plus(1));\n}")
                 .contains("which `f` assigns")
         );
         // and through a definition the body uses
         assert!(
-            err("def reset() { set s = 10; } def f(x) { reset(); observe o = x; } workload { session { turn; \n} }\nserver { f(s + 1);\n}")
+            err("def reset() { set s = 10; } def f(x) { reset(); observe o = x; }\nserver { f(s + 1);\n}")
                 .contains("which `f` assigns")
         );
         assert!(
-            err("def adv() { turn; } def next(x) { adv(); observe p = x; } workload { turn { set n = 1; } \n  session { next(n); turn; end; } } server {}")
+            werr("server {}", "def adv() { turn; } def next(x) { adv(); observe p = x; } workload { turn { set n = 1; } \n  session { next(n); turn; end; } }")
                 .contains("which its `turn;` assigns")
         );
         assert!(
-            err("def ask() { turn; } def go(x) { ask(); observe b = x; } workload { session { go(cached); end; } } server { }")
+            werr("server { }", "def ask() { turn; } def go(x) { ask(); observe b = x; } workload { session { go(cached); end; } }")
                 .contains("which its `turn;` assigns")
         );
         // a name that is a declaration's
         assert!(
-            err("def kv(x) { x } workload { session { turn; \n} }\nserver {\n}")
+            err("def kv(x) { x }\nserver {\n}")
                 .contains("a definition named `kv` would make the one word mean two things")
         );
         assert!(
-            err("stage svc : fifo; def svc(x) { x } workload { session { turn; \n} }\nserver {\n}")
+            err("stage svc : fifo; def svc(x) { x }\nserver {\n}")
                 .contains("a definition named `svc` would make the one word mean two things")
         );
         // a pool and a stage of one name, in either order, and a pool before
         // or after an engine or a queue (#409): `cost(E, …)` would read either
-        let server =
-            "workload { arrive batch(1); }\nserver { hold E (cost(E, 1)) { run E (cost(E, 1)); } }";
+        let server = "\nserver { hold E (cost(E, 1)) { run E (cost(E, 1)); } }";
         for decls in [
             "stage E : fifo; pool E { cap 1; }",
             "pool E { cap 1; } stage E : fifo;",
@@ -7356,15 +7450,14 @@ mod tests {
             assert!(e.contains("a pool and a stage share one name space"), "{e}");
         }
         // `engine` is the keyword of an engine's declaration
-        assert!(
-            err("def engine(x) { x } workload { session { turn; \n} }\nserver {\n}")
-                .contains("a word of the language")
-        );
+        let e = pair("def engine(x) { x }\n", TURN).unwrap_err();
+        assert!(e.msg.contains("a word of the language"), "{e}");
         // the name of a statement body's attribute is not a use, but an
         // attribute may not take its definition's name (#470)
-        let e = parse(&main_source(&format!(
-            "{ENGINE} def c(x) {{ set c = x; }} workload {{ session {{ turn; \n}} }}\nserver {{ c(1);\n}}"
-        )))
+        let e = pair(
+            &format!("{ENGINE} def c(x) {{ set c = x; }}\nserver {{ c(1);\n}}"),
+            TURN,
+        )
         .unwrap_err();
         assert!(
             e.msg.contains("a definition named `c` would make"),
@@ -7372,25 +7465,24 @@ mod tests {
             e.msg
         );
         // an error in the body says where the definition was used
-        let e =
-            err("def take(n) { turn; } workload { session { turn; end; } } server { take(4); }");
-        assert!(e.contains("note: in `take`, used at"), "{e}");
-        assert!(
-            err("def f(x) { x } def f(y) { y } workload { session { turn; \n} }\nserver {\n}")
-                .contains("defined twice")
+        let e = werr(
+            "def take(n) { turn; } server { take(4); }",
+            "workload { session { turn; end; } }",
         );
+        assert!(e.contains("note: in `take`, used at"), "{e}");
+        assert!(err("def f(x) { x } def f(y) { y }\nserver {\n}").contains("defined twice"));
         // an argument used once may draw
-        parse(&main_source(&format!(
-            "{ENGINE} def f(x) {{ x + 1 }} workload {{ session {{ turn; \n}} }}\nserver {{ set a = f(~exp(1));\n}}"
+        pair(
+            &format!("{ENGINE} def f(x) {{ x + 1 }}\nserver {{ set a = f(~exp(1));\n}}"),
+            TURN,
         )
-        ))
         .unwrap();
         // a def used before it is defined is a call of an unknown function,
         // which the linker reports
-        parse(&main_source(&format!(
-            "{ENGINE} workload {{ session {{ turn; \n}} }}\nserver {{ set a = f(1);\n}} def f(x) {{ x }}"
+        pair(
+            &format!("{ENGINE}\nserver {{ set a = f(1);\n}} def f(x) {{ x }}"),
+            TURN,
         )
-        ))
         .unwrap();
     }
 
@@ -7398,23 +7490,21 @@ mod tests {
     fn a_transfer_says_where_the_kv_goes() {
         // without `from P to Q` it would be a link that stores and forwards,
         // which is the kernel's `run`, not a transfer
-        let e = parse(&main_source(&format!(
-            "{PD} workload {{ session {{ turn; \n}} }}\nserver {{ hold kv (cost(kv, K)) {{ transfer X; }}\n}}"
-        )))
+        let e = pair(
+            &format!("{PD}\nserver {{ hold kv (cost(kv, K)) {{ transfer X; }}\n}}"),
+            TURN,
+        )
         .unwrap_err();
         assert!(
             e.msg.contains("`transfer` without `from P to Q (n)`"),
             "{e}"
         );
         assert!(e.msg.contains("`run link (cost(link, w));`"), "{e}");
-        let e = parse(&main_source(
-            "stage link[2] : ps(1); workload { session { turn; \n} }\nserver { transfer[0] X;\n}",
-        ))
-        .unwrap_err();
+        let e = pair("stage link[2] : ps(1);\nserver { transfer[0] X;\n}", TURN).unwrap_err();
         assert!(e.msg.contains("`run link[…] (cost(link, w));`"), "{e}");
-        let e = parse(&main_source(
-            "pool kv { cap 1; } stage nic : ps(1); workload { session { turn; \n} }\nserver { transfer on nic X growing kv;\n}",
-        )
+        let e = pair(
+            "pool kv { cap 1; } stage nic : ps(1);\nserver { transfer on nic X growing kv;\n}",
+            TURN,
         )
         .unwrap_err();
         assert!(
@@ -7426,36 +7516,28 @@ mod tests {
 
     #[test]
     fn serving_forms_need_exactly_one_stage() {
-        let e = parse(&main_source(
-            "stage svc : fifo; workload { session { turn; \n} }\nserver { tool S;\n}",
-        ))
-        .unwrap_err();
+        let e = pair("stage svc : fifo; \n\nserver { tool S;\n}", TURN).unwrap_err();
         assert!(
             e.msg.contains("no stage declared above plays `tool`"),
             "{e}"
         );
         assert_eq!((e.line, e.col), (3, 10));
-        let e =
-            parse(&main_source("pool a { cap 1; } pool b { cap 1; } stage link : fifo; stage transfer : fifo; workload { session { turn; \n} }\nserver { transfer X from a to b (1);\n}",
-        ))
-                .unwrap_err();
+        let e = pair(
+            "pool a { cap 1; } pool b { cap 1; } stage link : fifo; stage transfer : fifo;\nserver { transfer X from a to b (1);\n}",
+            TURN,
+        )
+        .unwrap_err();
         assert!(
             e.msg
                 .contains("several stages play `transfer` (link, transfer)"),
             "{e}"
         );
-        let e = parse(&main_source(&format!(
-            "{ENGINE} workload {{ session {{ turn; \n}} }}\nserver {{ transfer X;\n}}"
-        )))
-        .unwrap_err();
+        let e = pair(&format!("{ENGINE}\nserver {{ transfer X;\n}}"), TURN).unwrap_err();
         assert!(
             e.msg.contains("no stage declared above plays `transfer`"),
             "{e}"
         );
-        let e = parse(&main_source(
-            "stage tool : delay; workload { session { turn; \n} }\nserver { tool on other Z;\n}",
-        ))
-        .unwrap_err();
+        let e = pair("stage tool : delay;\nserver { tool on other Z;\n}", TURN).unwrap_err();
         assert!(e.msg.contains("no stage `other` is declared above"), "{e}");
     }
 
@@ -7475,7 +7557,6 @@ mod tests {
         }
         pool kv on gpu { block 16; evict lru; }
         pool reqs on llm { }
-        stage tool : delay;
     "#;
 
     const CLIENT: &str =
@@ -7486,8 +7567,15 @@ mod tests {
     #[test]
     fn the_two_sides_are_one_session() {
         same(
-            &format!(
-                "{DEPLOYMENT} workload {{ {CLIENT}
+            (
+                &format!(
+                    "{DEPLOYMENT} server {{
+          set prompt = K + n;
+          llm (prompt, o);
+        }}"
+                ),
+                &format!(
+                    "stage tool : delay; workload {{ {CLIENT}
           session {{
 
             loop {{
@@ -7496,14 +7584,19 @@ mod tests {
               if (more) {{ tool 3;  }} else {{ end; }}
             }}
           }}
-        }}
-        server {{
+        }}"
+                ),
+            ),
+            (
+                &format!(
+                    "{DEPLOYMENT} server {{
           set prompt = K + n;
           llm (prompt, o);
+          set K = prompt + o;
         }}"
-            ),
-            &format!(
-                "{DEPLOYMENT} workload {{ {CLIENT}
+                ),
+                &format!(
+                    "stage tool : delay; workload {{ {CLIENT}
           session {{
 
             loop {{ turn;
@@ -7511,12 +7604,8 @@ mod tests {
             }}
 
           }}
-        }}
-        server {{
-          set prompt = K + n;
-          llm (prompt, o);
-          set K = prompt + o;
         }}"
+                ),
             ),
         );
     }
@@ -7524,38 +7613,68 @@ mod tests {
     #[test]
     fn request_is_spliced_at_any_depth_and_as_often_as_written() {
         same(
-            "stage s : fifo; workload { session { if (x) { turn; } else { loop { turn; end; } } } }
-        server { run s (cost(s, 1)); }",
-            "stage s : fifo; workload { \n  session { if (x) { turn; } else { loop { turn; end; } } \n  }\n} server { run s (cost(s, 1));\n}",
+            (
+                "stage s : fifo; server { run s (cost(s, 1)); }",
+                "workload { session { if (x) { turn; } else { loop { turn; end; } } } }",
+            ),
+            (
+                "stage s : fifo; server { run s (cost(s, 1));\n}",
+                "workload { \n  session { if (x) { turn; } else { loop { turn; end; } } \n  }\n}",
+            ),
         );
         // the kernel is written on either side
         same(
-            "pool kv { cap 1; } workload { session { turn; end; } } server { hold kv (cost(kv, 1)) { } }",
-            "pool kv { cap 1; } workload { \n  session { turn; end; \n  }\n} server { hold kv (cost(kv, 1)) { }\n}",
+            (
+                "pool kv { cap 1; } server { hold kv (cost(kv, 1)) { } }",
+                "workload { session { turn; end; } }",
+            ),
+            (
+                "pool kv { cap 1; } server { hold kv (cost(kv, 1)) { }\n}",
+                "workload { \n  session { turn; end; \n  }\n}",
+            ),
         );
-        // the order of the blocks does not matter
-        same(
+        // the order of the blocks was free in one file; a `workload` in the
+        // deployment is refused, before the server or after it
+        for body in [
             "stage s : fifo; server { run s (cost(s, 1)); } workload { session { turn; end; } }",
-            "stage s : fifo; workload { \n  session { turn; end; \n  }\n} server { run s (cost(s, 1));\n}",
-        );
+            "stage s : fifo; workload { session { turn; end; } } server { run s (cost(s, 1)); }",
+        ] {
+            let e = parse(&main_source(body)).unwrap_err();
+            assert!(e.msg.contains("a workload is a file of its own"), "{e}");
+            assert!(e.msg.contains("--workload"), "{e}");
+        }
     }
 
-    fn refused(src: &str, needle: &str) {
-        let e = parse(&main_source(src)).unwrap_err();
-        assert!(e.msg.contains(needle), "{src}\n  {e}");
+    /// A deployment's main body, refused with the workload's file `workload`
+    /// beside it.
+    fn refused(body: &str, workload: &str, needle: &str) {
+        let e = pair(body, workload).unwrap_err();
+        assert!(e.msg.contains(needle), "{body}\n{workload}\n  {e}");
     }
 
     #[test]
     fn a_session_belongs_only_inside_workload() {
+        const WL: &str = "workload { session { turn; end; } }";
+        // in the deployment, before the server or after it
         for source in [
             "session {}",
             "session { end; }",
-            "workload { arrive batch(1); } session { end; }",
-            "session {} workload { session { turn; end; } } server {}",
-            "workload { session { turn; end; } } server {} session {}",
+            "session {} server {}",
+            "server {} session {}",
         ] {
-            refused(source, "`session` belongs inside `workload`");
-            refused(source, "describe its turns with `turn;`");
+            refused(source, WL, "`session` belongs inside `workload`");
+            refused(source, WL, "describe its turns with `turn;`");
+        }
+        // in the workload's file, beside its `workload { … }`
+        for workload in [
+            "workload { arrive batch(1); } session { end; }",
+            "session {} workload { session { turn; end; } }",
+        ] {
+            refused(
+                "server {}",
+                workload,
+                "`session` belongs inside `workload { … }`",
+            );
         }
     }
 
@@ -7564,27 +7683,49 @@ mod tests {
         const WL: &str = "workload { session { turn; } }";
         // the session's words in a server
         refused(
-            &format!("stage s : fifo; {WL} server {{ turn; }}"),
+            "stage s : fifo; server { turn; }",
+            WL,
             "`turn` is the session's",
         );
         // a server's `end` refuses the request, but not from inside a hold
         // or a leg
         refused(
-            &format!("pool p {{ cap 1; }} {WL} server {{ hold p (cost(p, 1)) {{ end; }} }}"),
+            "pool p { cap 1; } server { hold p (cost(p, 1)) { end; } }",
+            WL,
             "`end` inside a `hold` in a server",
         );
         refused(
-            &format!("{WL} server {{ fork {{ end; }} join; }}"),
+            "server { fork { end; } join; }",
+            WL,
             "`end` inside a `fork` in a server",
         );
         refused(
-            &format!("stage s : fifo; {WL} server {{ request; }}"),
+            "stage s : fifo; server { request; }",
+            WL,
             "`request` is replaced",
         );
         refused(
             "pool kv { cap 1; } session { turn; }",
+            WL,
             "`session` belongs inside `workload`",
         );
+        // and the deployment's words in the workload's file
+        refused(
+            "server { }",
+            "workload { session { turn; } } server { }",
+            "`server` is the deployment file's",
+        );
+        refused(
+            "server { }",
+            "fn main() { } workload { session { turn; } }",
+            "a workload file has no `fn main()`",
+        );
+        // but a pool of its own (no `on`) is the workload file's to declare
+        pair(
+            "server { }",
+            "pool kv { cap 1; } workload { session { turn; } }",
+        )
+        .unwrap();
     }
 
     #[test]
@@ -7592,83 +7733,309 @@ mod tests {
         // the words #136 took out say what a program writes instead
         const WL: &str = "workload { session { turn; } }";
         for (src, now) in [
+            ("\nserver { enter kv (1) { }\n}", "`enter` is now `hold`"),
             (
-                "workload { session { turn; \n} }\nserver { enter kv (1) { }\n}",
-                "`enter` is now `hold`",
-            ),
-            (
-                &*format!("{WL} server {{ admit if kv (1) fit {{ }} }}"),
+                "server { admit if kv (1) fit { } }",
                 "is now `hold … at admission",
             ),
             (
-                "workload { session { turn; \n} }\nserver { hold kv (cost(kv, 1)) { } keep (1);\n}",
+                "\nserver { hold kv (cost(kv, 1)) { } keep (1);\n}",
                 "`keep` is now `cache`",
             ),
             (
-                "workload { session { turn; \n} }\nserver { hold kv (cost(kv, 1)) where x = 1 { }\n}",
+                "\nserver { hold kv (cost(kv, 1)) where x = 1 { }\n}",
                 "`where x = e` is now `at admission (x = e)`",
             ),
             (
-                "workload { session { turn; \n} }\nserver { hold kv (cost(kv, 1)) fit { }\n}",
+                "\nserver { hold kv (cost(kv, 1)) fit { }\n}",
                 "`fit` is gone",
             ),
         ] {
-            refused(&format!("pool kv {{ cap 1; }} {src}"), now);
+            refused(&format!("pool kv {{ cap 1; }} {src}"), WL, now);
         }
         // and none of them names anything, so a name never means two things
+        const END: &str = "workload { session { turn; end; \n} }";
+        // a def's own name
+        let e = pair(
+            "pool kv { cap 1; } def keep(n) { observe k = n; }\nserver {\n}",
+            TURN,
+        )
+        .unwrap_err();
+        assert!(e.msg.contains("is a retired word"), "{e}");
         for src in [
-            "def keep(n) { observe k = n; } workload { session { turn; end; \n} }\nserver {\n}",
-            "def f(where) { where } workload { session { turn; end; \n} }\nserver {\n}",
-            "workload { session { turn; end; \n} }\nserver { set fit = 1;\n}",
-            "workload { session { turn; end; \n} }\nserver { hold kv (cost(kv, 1)) at admission (enter = 1) { observe e = enter; }\n}",
+            "def f(where) { where }\nserver {\n}",
+            "\nserver { set fit = 1;\n}",
+            "\nserver { hold kv (cost(kv, 1)) at admission (enter = 1) { observe e = enter; }\n}",
         ] {
-            refused(&format!("pool kv {{ cap 1; }} {src}"), "is a retired word");
+            refused(
+                &format!("pool kv {{ cap 1; }} {src}"),
+                END,
+                "is a retired word",
+            );
         }
         // `hold` is written on either side, with its bindings
-        parse(&main_source(&format!(
-            "pool kv {{ cap 1; }} {WL} server {{ hold kv (cost(kv, x)) at admission (x = 1) {{ }} cache (cost(kv, 1)); }}"
+        pair(
+            "pool kv { cap 1; } server { hold kv (cost(kv, x)) at admission (x = 1) { } cache (cost(kv, 1)); }",
+            WL,
         )
-        ))
         .unwrap();
     }
 
     #[test]
     fn a_side_needs_the_other() {
+        // a workload against a deployment with no server
         refused(
+            "",
             "stage s : fifo; workload { session { run s (cost(s, 1)); } }",
             "written against a `server` block",
         );
+        // a server with no workload's file: the deployment alone is refused
+        // when it runs, and read when it is only formatted or outlined
+        let deployment = main_source("stage s : fifo; server { run s (cost(s, 1)); }");
+        let e = parse(&deployment).unwrap_err();
+        assert!(e.msg.contains("the server needs a workload to run"), "{e}");
+        assert!(e.msg.contains("--workload"), "{e}");
+        parse_half(&deployment, crate::frontend::paired::File::Deployment).unwrap();
         refused(
             "stage s : fifo; server { run s (cost(s, 1)); }",
-            "`server` needs a `workload`",
-        );
-        refused(
-            "stage s : fifo; workload { session { run s (cost(s, 1)); } } server { run s (cost(s, 1)); }",
+            "stage u : delay; workload { session { run u (cost(u, 1)); } }",
             "session has no `turn;`",
         );
         refused(
-            "stage s : fifo; workload { session { turn; } } server { run s (cost(s, 1)); } session { run s (cost(s, 1)); }",
+            "stage s : fifo; server { run s (cost(s, 1)); } session { run s (cost(s, 1)); }",
+            "workload { session { turn; } }",
             "`session` belongs inside `workload`",
         );
         refused(
-            "stage s : fifo; session { run s (cost(s, 1)); } workload { session { turn; } } server { run s (cost(s, 1)); }",
+            "stage s : fifo; session { run s (cost(s, 1)); } server { run s (cost(s, 1)); }",
+            "workload { session { turn; } }",
             "`session` belongs inside `workload`",
         );
         refused(
             "stage s : fifo; server { run s (cost(s, 1)); } server { run s (cost(s, 1)); }",
+            "workload { session { turn; } }",
             "duplicate server",
+        );
+        refused(
+            "stage s : fifo; server { run s (cost(s, 1)); }",
+            "workload { session { turn; } } workload { session { turn; } }",
+            "duplicate workload",
+        );
+        refused(
+            "stage s : fifo;",
+            "let p = 1;",
+            "a workload file declares `workload { … }`",
         );
     }
 
     #[test]
+    fn a_workload_is_a_file_of_its_own() {
+        // in a deployment's main, where the one file had it, it is refused
+        // at the `workload`, with the file and the flag that give it
+        for body in [
+            "stage s : fifo;\nworkload { session { turn; } }\nserver { run s (cost(s, 1)); }",
+            "stage s : fifo;\nserver { run s (cost(s, 1)); }\nworkload { session { turn; } }",
+        ] {
+            let e = parse(&main_source(body)).unwrap_err();
+            assert!(e.msg.contains("a workload is a file of its own"), "{e}");
+            assert!(e.msg.contains("`--workload W.sq`"), "{e}");
+            assert!(e.msg.contains("help: move `workload { … }`"), "{e}");
+            assert_eq!(e.col, 1, "{e}");
+            assert!(e.line == 2 || e.line == 3, "{e}");
+            // and beside a workload's file, which is where it goes
+            refused(
+                body,
+                "workload { session { turn; } }",
+                "the workload is the workload file's: this deployment is paired with one",
+            );
+            // and by the deployment read alone
+            assert!(
+                parse_half(
+                    &main_source(body),
+                    crate::frontend::paired::File::Deployment
+                )
+                .is_err()
+            );
+        }
+        // a workload's file holds `workload { … }`, with its own constants,
+        // defs and stages
+        let w = pair(
+            "stage s : fifo; server { run s (cost(s, 1)); }",
+            "use \"std/args\";\nlet p = 0.9;\nlet Lambda = args.number(\"Lambda\", 0.3);\n\
+             def pause() { ~exp(3) }\nstage user : delay;\n\
+             workload { arrive poisson(Lambda); session { turn; run user (cost(user, pause())); end; } }",
+        )
+        .unwrap();
+        assert!(w.workload.is_some());
+        assert_eq!(w.stages.len(), 2);
+        assert_eq!(w.lets.len(), 2);
+        let e = parse_half("let p = 0.9;", crate::frontend::paired::File::Workload).unwrap_err();
+        assert!(
+            e.contains("a workload file declares `workload { … }`"),
+            "{e}"
+        );
+        // a workload file may declare its own pool (no `on`)
+        parse_half(
+            "pool kv { cap 1; } workload { session { turn; } }",
+            crate::frontend::paired::File::Workload,
+        )
+        .unwrap();
+        // the workload's error is at its own file's line
+        let e = compiled(
+            "stage s : fifo;\nserver { run s (cost(s, 1)); }",
+            "workload { session { turn; } }\nserver { }",
+        )
+        .unwrap_err();
+        assert!(e.starts_with("workload.sq: 2:1: "), "{e}");
+        assert!(e.contains("`server` is the deployment file's"), "{e}");
+    }
+
+    /// The deployment and the workload's file, compiled as `serq run FILE
+    /// --workload workload.sq` compiles them.
+    fn compiled(deployment: &str, workload: &str) -> Result<crate::ir::Program, String> {
+        let ov = crate::Overrides {
+            horizon: Some(10.0),
+            ..Default::default()
+        };
+        crate::compile_paired(
+            &main_source(deployment),
+            workload,
+            ("deployment.sq", "workload.sq"),
+            &ov,
+        )
+    }
+
+    #[test]
+    fn each_file_reads_only_its_own_names() {
+        const SERVER: &str = "let S = 1.0; stage svc : fifo;\n\
+             server (work_size) { run svc (cost(svc, S * work_size)); }";
+        const WORKLOAD: &str = "let Lambda = 0.8;\n\
+             workload { arrive poisson(Lambda); turn { set work_size = ~exp(1); } send (work_size); }";
+        compiled(SERVER, WORKLOAD).unwrap();
+        // a def of the workload's is read after the server, which does not
+        // know it
+        let e = compiled(
+            "stage svc : fifo;\nserver (work_size) { run svc (cost(svc, size_of(work_size))); }",
+            "def size_of(w) { 2 * w }\nworkload { arrive poisson(0.8); turn { set work_size = ~exp(1); } send (work_size); }",
+        )
+        .unwrap_err();
+        assert!(e.starts_with("deployment.sq: 2:41: "), "{e}");
+        assert!(e.contains("`size_of` is the workload file's"), "{e}");
+        // the server reads a constant or a stage of the workload's
+        for (deployment, workload, name) in [
+            (
+                "stage svc : fifo;\nserver (work_size) { run svc (cost(svc, Lambda * work_size)); }",
+                WORKLOAD,
+                "`Lambda` is the workload file's",
+            ),
+            (
+                "server (work_size) { run user (cost(user, work_size)); }",
+                "stage user : delay;\nworkload { arrive poisson(0.8); turn { set work_size = ~exp(1); } send (work_size); }",
+                "stage `user` is the workload file's",
+            ),
+        ] {
+            let e = compiled(deployment, workload).unwrap_err();
+            assert!(e.starts_with("deployment.sq: "), "{name}: {e}");
+            assert!(e.contains(name), "{name}: {e}");
+        }
+        // the workload reads a constant, a def, a stage or a pool of the
+        // deployment's
+        for (deployment, workload, needle) in [
+            (
+                SERVER,
+                "workload { arrive poisson(0.8); turn { set work_size = ~exp(S); } send (work_size); }",
+                "`S` is the deployment file's",
+            ),
+            (
+                &*format!("def twice(w) {{ 2 * w }} {SERVER}"),
+                "workload { arrive poisson(0.8); turn { set work_size = twice(~exp(1)); } send (work_size); }",
+                "`twice` is the deployment file's",
+            ),
+            (
+                SERVER,
+                "workload { arrive poisson(0.8); turn { set work_size = ~exp(1); } send (work_size); session { turn; run svc (cost(svc, 1)); end; } }",
+                "stage `svc` is the deployment file's",
+            ),
+            (
+                &*format!("pool kv {{ cap 10; }} {SERVER}"),
+                "workload { arrive poisson(0.8); turn { set work_size = ~exp(1); } send (work_size); session { turn; hold kv (cost(kv, 1)) { } end; } }",
+                "pool `kv` is the deployment file's",
+            ),
+        ] {
+            let e = compiled(deployment, workload).unwrap_err();
+            assert!(e.starts_with("workload.sq: "), "{needle}: {e}");
+            assert!(e.contains(needle), "{needle}: {e}");
+        }
+        // a constant's value
+        let e = compiled(
+            SERVER,
+            "let Lambda = S * 0.8;\n\
+             workload { arrive poisson(Lambda); turn { set work_size = ~exp(1); } send (work_size); }",
+        )
+        .unwrap_err();
+        assert!(e.starts_with("workload.sq: 1:14: "), "{e}");
+        assert!(e.contains("`S` is the deployment file's"), "{e}");
+    }
+
+    #[test]
     fn a_step_stage_is_written_as_an_engine() {
-        const WL: &str = "workload { session { turn; end; } } server { }";
+        const WL: &str = "workload { session { turn; end; } }";
         for decl in [
             "stage E : step { cost 1; }",
             "queue Q { serve step { cost 1; } }",
             "queue Q { nic step { cost 1; } }",
         ] {
-            refused(&format!("{decl} {WL}"), "`step` is an engine's");
+            refused(&format!("{decl} server {{ }}"), WL, "`step` is an engine's");
         }
+    }
+
+    /// The pair renames each file's own constants and definitions apart
+    /// (`frontend::paired`), never a word of the language: a name the
+    /// language supplies, a built-in attribute or a std module is refused
+    /// in a pair as in one file, and an option's word (`cap cap;`) stays an
+    /// option.
+    #[test]
+    fn a_pair_renames_no_word_of_the_language() {
+        for (body, workload, needle) in [
+            ("let self = 2;\nserver {\n}", TURN, "`self`"),
+            (
+                "server {\n}",
+                "let self = 2;\nworkload { session { turn; } }",
+                "`self`",
+            ),
+            ("def more(x) { x }\nserver {\n}", TURN, "`more`"),
+            (
+                "server {\n}",
+                "def think(x) { x }\nworkload { session { turn; } }",
+                "`think`",
+            ),
+        ] {
+            let e = crate::compile_paired(
+                &main_source(body),
+                workload,
+                ("deployment.sq", "workload.sq"),
+                &crate::Overrides {
+                    horizon: Some(10.0),
+                    ..Default::default()
+                },
+            )
+            .unwrap_err();
+            assert!(e.contains(needle), "{body} | {workload}\n  {e}");
+        }
+        // a constant named like a pool's option
+        let p = pair(
+            "stage s : fifo;\nserver { run s (cost(s, 1)); }",
+            "let cap = 3;\npool live { cap cap; }\n\
+             workload { session { hold live (cost(live, 1)) { turn; } } }",
+        )
+        .unwrap();
+        assert!(p.pools.iter().any(|d| d.name == "live"));
+        // and a workload's pool is on nothing of the deployment's
+        let e = pair(
+            "device gpu { kv cap 10; }\nstage s : fifo;\nserver { run s (cost(s, 1)); }",
+            "pool live on gpu { cap 3; }\nworkload { session { turn; } }",
+        )
+        .unwrap_err();
+        assert!(e.msg.contains("a workload file's pool is its own"), "{e}");
     }
 }

@@ -109,14 +109,11 @@ values across scheduling policies. See [workloads](../use-cases/workloads.md).
 
 ## Examples
 
-A complete program with bursty arrivals and Erlang service times:
+A complete program with bursty arrivals and Erlang service times, a deployment and its workload:
 
-```serq
+```serq title="model.sq"
 fn main() {
   stage svc : fifo;
-  workload {
-    arrive renewal(~h2(2, 4));
-  }
   server {
     set t0 = now;
     run svc (cost(svc, ~erlang(4, 1)));
@@ -125,10 +122,16 @@ fn main() {
 }
 ```
 
-Save as `model.sq`, then run:
+```serq title="workload.sq"
+workload {
+  arrive renewal(~h2(2, 4));
+}
+```
+
+Save the deployment as `model.sq` and its workload as `workload.sq`, then run:
 
 ```sh
-serq run model.sq --horizon 1000 --seed 10
+serq run model.sq --workload workload.sq --horizon 1000 --seed 10
 ```
 
 ## See also

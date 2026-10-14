@@ -357,9 +357,9 @@ engine vllm on gpu {
 pool reqs on vllm { queue fifo; }
 ```
 
-A complete program:
+A complete program, a deployment and its workload:
 
-```serq
+```serq title="model.sq"
 fn main() {
   device gpu { }
   engine llm on gpu {
@@ -369,9 +369,6 @@ fn main() {
       forward (1);
     }
   }
-  workload {
-    arrive batch(2);
-  }
   server {
     llm (8, 3);
     observe finished = now;
@@ -379,10 +376,16 @@ fn main() {
 }
 ```
 
-Save as `model.sq`, then run:
+```serq title="workload.sq"
+workload {
+  arrive batch(2);
+}
+```
+
+Save the deployment as `model.sq` and its workload as `workload.sq`, then run:
 
 ```sh
-serq run model.sq --horizon 10
+serq run model.sq --workload workload.sq --horizon 10
 ```
 
 ## See also

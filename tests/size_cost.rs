@@ -2,36 +2,52 @@
 //! These tests exercise the public compiler and JSON validator directly.
 mod common;
 
-use serq::{Program, compile_source, run_ir};
+use serq::{Program, run_ir};
+
+/// One request, served once.
+const BATCH: &str = "workload { arrive batch(1); session { turn; end; } }";
+/// One request, with the default session.
+const ARRIVE: &str = "workload { arrive batch(1); }";
 
 fn compile(server: &str, turn: &str) -> Result<Program, String> {
-    // a stage no statement runs does not link: declare those the program names
-    let stage = |name: &str, kind: &str| {
-        let named = server.contains(name) || turn.contains(name);
+    // a stage no statement runs does not link: declare those the program
+    // names, in the deployment when the server names it, else in the
+    // workload's file
+    let stage = |name: &str, kind: &str, ours: bool| {
+        let named = if ours {
+            server.contains(name)
+        } else {
+            !server.contains(name) && turn.contains(name)
+        };
         if named {
             format!("stage {name} : {kind};")
         } else {
             String::new()
         }
     };
-    let (svc, tool) = (stage("svc", "fifo"), stage("tool", "delay"));
+    let (svc, tool) = (stage("svc", "fifo", true), stage("tool", "delay", true));
+    let (wsvc, wtool) = (stage("svc", "fifo", false), stage("tool", "delay", false));
     // a request carries the items its turn sets
     let (send, takes) = if turn.contains("items") {
         ("send (items);", "(items)")
     } else {
         ("", "")
     };
-    compile_source(
+    common::compile(
         &format!(
             r#"fn main() {{
         pool mem {{ cap 10; }}
         pool other {{ cap 10; }}
         {svc}
         {tool}
-        workload {{ arrive batch(1); turn {{ {turn} }} {send}
-            session {{ turn; end; }} }}
         server {takes} {{ {server} }}
     }}"#
+        ),
+        &format!(
+            r#"{wsvc}
+        {wtool}
+        workload {{ arrive batch(1); turn {{ {turn} }} {send}
+            session {{ turn; end; }} }}"#
         ),
         &common::horizon(20.0),
     )
@@ -93,7 +109,14 @@ fn workload_cannot_supply_server_cost() {
         "set items = cost(svc, 3);",
         "set c = cost(svc, 3); set items = c;",
     ] {
-        assert!(compile("run svc (cost(svc, 1));", turn).is_err());
+        // the workload converts with no stage of the deployment's: `svc`
+        // is the server's to price
+        let e = compile("run svc (cost(svc, 1));", turn).unwrap_err();
+        assert!(
+            e.starts_with("workload.sq: 3:")
+                && e.contains("stage `svc` is the deployment file's: the workload runs on and holds its own stages and pools"),
+            "{turn}: {e}"
+        );
     }
 }
 
@@ -136,17 +159,18 @@ fn json_cannot_omit_the_contract_or_erase_a_conversion() {
 #[test]
 fn client_tool_cost_does_not_grant_server_resource_access() {
     let source = r#"fn main() {
-        stage svc : fifo; stage tool : delay;
-        workload { arrive batch(1); turn { set items = 3; } send (items);
-          session { turn; run tool (cost(tool, 2)); end; } }
+        stage svc : fifo;
         server (items) { run svc (cost(svc, items)); }
     }"#;
-    compile_source(source, &common::horizon(10.0)).unwrap();
-    let bad = source.replace("run tool (cost(tool, 2))", "run svc (cost(svc, 2))");
+    let workload = r#"stage tool : delay;
+        workload { arrive batch(1); turn { set items = 3; } send (items);
+          session { turn; run tool (cost(tool, 2)); end; } }"#;
+    common::compile(source, workload, &common::horizon(10.0)).unwrap();
+    let bad = workload.replace("run tool (cost(tool, 2))", "run svc (cost(svc, 2))");
+    let e = common::compile(source, &bad, &common::horizon(10.0)).unwrap_err();
     assert!(
-        compile_source(&bad, &common::horizon(10.0))
-            .unwrap_err()
-            .contains("workload cannot")
+        e.contains("stage `svc` is the deployment file's: the workload runs on and holds its own stages and pools"),
+        "{e}"
     );
 }
 
@@ -221,13 +245,11 @@ fn json_cannot_retype_builtins_or_restore_workload_authority_inside_server() {
 #[test]
 fn serving_vocabulary_converts_quantities_not_already_converted_costs() {
     for body in ["tool(cost(svc, 3));", "set c = cost(svc, 3); tool(c);"] {
-        let src = format!(
-            "fn main() {{ stage svc : delay; workload {{ arrive batch(1); session {{ turn; end; }} }} server {{ {body} }} }}"
-        );
+        let src = format!("fn main() {{ stage svc : delay; server {{ {body} }} }}");
         // Explicit on: this stage's name need not be the vocabulary's default.
         let src = src.replace("tool(", "tool on svc (");
         assert!(
-            compile_source(&src, &common::horizon(10.0))
+            common::compile(&src, BATCH, &common::horizon(10.0))
                 .unwrap_err()
                 .contains("ordinary quantity")
         );
@@ -238,10 +260,10 @@ fn serving_vocabulary_converts_quantities_not_already_converted_costs() {
 fn family_annotations_check_written_indices_before_projecting_the_type() {
     for index in ["missing", "99", "~uniform(0, 2)"] {
         let src = format!(
-            "fn main() {{ stage svc[2] : delay; workload {{ arrive batch(1); session {{ turn; end; }} }} server {{ run svc[0] (cost(svc[{index}], 1)); }} }}"
+            "fn main() {{ stage svc[2] : delay; server {{ run svc[0] (cost(svc[{index}], 1)); }} }}"
         );
         assert!(
-            compile_source(&src, &common::horizon(10.0)).is_err(),
+            common::compile(&src, BATCH, &common::horizon(10.0)).is_err(),
             "{src}"
         );
     }
@@ -250,11 +272,13 @@ fn family_annotations_check_written_indices_before_projecting_the_type() {
 #[test]
 fn workload_cannot_supply_a_cost_for_server_growth_or_load() {
     for action in ["grow mem(c);", "load mem(c);"] {
-        let src = format!(
-            "fn main() {{ pool mem {{ cap 10; }} workload {{ arrive batch(1); send (c); session {{ set c = cost(mem, 3); hold mem(cost(mem, 1)) {{ turn; }} end; }} }} server (c) {{ {action} }} }}"
+        let src = format!("fn main() {{ pool mem {{ cap 10; }} server (c) {{ {action} }} }}");
+        let workload = "workload { arrive batch(1); send (c); session { set c = cost(mem, 3); hold mem(cost(mem, 1)) { turn; } end; } }";
+        let e = common::compile(&src, workload, &common::horizon(10.0)).unwrap_err();
+        assert!(
+            e.contains("pool `mem` is the deployment file's: the workload runs on and holds its own stages and pools"),
+            "{e}"
         );
-        let e = compile_source(&src, &common::horizon(10.0)).unwrap_err();
-        assert!(e.contains("workload cannot"), "{e}");
     }
 }
 
@@ -321,40 +345,57 @@ fn composite_costs_can_hold_multiple_existing_pools_in_one_scope() {
 
 #[test]
 fn typed_declarations_do_not_override_resource_or_side_checks() {
-    for (server, turn) in [
-        ("Size items = 3; run svc (cost(svc, 1));", "Size items = 3;"),
+    const SVC: &str = "stage `svc` is the deployment file's: the workload runs on and holds its own stages and pools";
+    for (server, turn, said) in [
+        (
+            "Size items = 3; run svc (cost(svc, 1));",
+            "Size items = 3;",
+            "deployment.sq: 6:31: a server cannot declare a request Size",
+        ),
         (
             "Cost duration = items; run svc (duration);",
             "Size items = 3;",
+            "`duration` is declared Cost but its assignments do not have that type",
         ),
-        ("run svc (cost(svc, 1));", "Size items = cost(svc, 3);"),
-        ("run svc (cost(svc, 1));", "Cost processing = { svc: 3 };"),
+        ("run svc (cost(svc, 1));", "Size items = cost(svc, 3);", SVC),
+        (
+            "run svc (cost(svc, 1));",
+            "Cost processing = { svc: 3 };",
+            SVC,
+        ),
         (
             "Cost processing = { mem: items }; run svc (processing.mem);",
             "Size items = 3;",
+            "deployment.sq: 6:64: resource use requires its cost type",
         ),
         (
             "Cost processing = { mem: items }; hold other (processing.mem) { run svc (cost(svc, 1)); }",
             "Size items = 3;",
+            "deployment.sq: 6:65: resource use requires its cost type",
         ),
         (
             "Cost processing = {}; run svc (cost(svc, 1));",
             "Size items = 3;",
+            "a Cost record must name at least one resource",
         ),
         (
             "Cost processing = { mem: 1, mem: 2 }; run svc (cost(svc, 1));",
             "Size items = 3;",
+            "Cost `processing` repeats resource `mem`",
         ),
         (
             "Cost processing = { absent: 1 }; run svc (cost(svc, 1));",
             "Size items = 3;",
+            "unknown cost resource `absent`",
         ),
         (
             "Cost processing = { mem: 1 }; run svc (processing.absent);",
             "Size items = 3;",
+            "no entry of `processing` marks or sets `absent`, and `processing` has no pool `absent`",
         ),
     ] {
-        assert!(compile(server, turn).is_err(), "{server} / {turn}");
+        let e = compile(server, turn).unwrap_err();
+        assert!(e.contains(said), "{server} / {turn}: {e}");
     }
 }
 
@@ -395,10 +436,9 @@ fn queue_records_keep_their_own_names_and_admission_rules() {
     let model = r#"fn main() {
       queue A : prefill { serve fifo; prefill(n) { Cost c = { A: n }; run(c.A); } }
       queue B : prefill { serve fifo; prefill(n) { Cost c = { B: 2 * n }; run(c.B); } }
-      workload { arrive batch(1); }
       server { A.prefill(1); B.prefill(1); observe finished = now; }
     }"#;
-    let p = compile_source(model, &common::horizon(10.0)).unwrap();
+    let p = common::compile(model, ARRIVE, &common::horizon(10.0)).unwrap();
     let report: serde_json::Value =
         serde_json::from_str(&run_ir(&p, None).unwrap().json()).unwrap();
     assert_eq!(report["observes"]["finished"]["mean"], 3.0);
@@ -407,18 +447,19 @@ fn queue_records_keep_their_own_names_and_admission_rules() {
         format!(
             r#"fn main() {{
               queue A : prefill {{ pool mem {{ cap 10; }} serve fifo; prefill(n) {{ {body} }} }}
-              workload {{ arrive batch(1); }}
               server {{ A.prefill(1); }}
             }}"#
         )
     };
-    compile_source(
+    common::compile(
         &entry("Cost c = { mem: n, A: n }; hold mem(c.mem) { run(c.A); }"),
+        ARRIVE,
         &common::horizon(10.0),
     )
     .unwrap();
-    let e = compile_source(
+    let e = common::compile(
         &entry("hold mem(c.mem) { Cost c = { mem: n, A: n }; run(c.A); }"),
+        ARRIVE,
         &common::horizon(10.0),
     )
     .unwrap_err();

@@ -1,0 +1,26 @@
+// Multi-turn sessions whose clients ask for at most `max_new` output tokens
+// (TGI's max_new_tokens), a tool call between turns (examples/engines/tgi.sq
+// runs it).
+
+let max_new = 1024;    // the clients' max_new_tokens (the server's `mnt`)
+let Lambda = 0.3;      // sessions per second
+let p = 0.9;           // continue after a turn
+let Z = 3.0;           // tool time (s)
+
+workload {
+  arrive poisson(Lambda);
+  init { set K = 0; }
+  turn {
+    set n = ceil(K == 0 ? ~uniform(1000, 3000) : ~exp(500));
+    set o = min(floor(~exp(300)) + 1, max_new);
+    set more = ~bernoulli(p);
+  }
+  send (input: K + n, output: o);
+  session {
+    loop {
+      turn;
+      set K = K + n + o;
+      if (more) { tool (~exp(Z)); } else { end; }
+    }
+  }
+}

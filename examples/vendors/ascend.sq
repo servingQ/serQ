@@ -1,5 +1,6 @@
 // vllm-ascend v0.27.1rc1's short-request-first FCFS lanes, approximated.
-// docs/use-cases/ascend.md explains it a part at a time.
+// docs/use-cases/ascend.md explains it a part at a time; its workload is
+// examples/workloads/ascend_batch.sq.
 // --8<-- [start:lanes]
 let short_tokens = 128;
 let max_wait = 0.003;
@@ -9,17 +10,6 @@ def waiting_class(urgent, prompt, elapsed) {
 // --8<-- [end:lanes]
 
 fn main() {
-  // --8<-- [start:workload]
-  workload {
-    arrive batch(6);
-    turn {
-      set prompt = serial == 1 || serial == 5 ? 256 : 64;
-      set immediate = serial == 4;
-      set out = serial == 0 ? 4 : 1;
-    }
-    send (prompt, immediate, out);
-  }
-  // --8<-- [end:workload]
   // --8<-- [start:engine]
   device npu { kv cap 4096; }
   engine llm on npu {

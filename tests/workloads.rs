@@ -12,11 +12,7 @@
 use serq::program_path;
 
 fn engine(name: &str) -> Vec<String> {
-    engine_of(&program_path(name), name)
-}
-
-fn engine_of(path: &std::path::Path, name: &str) -> Vec<String> {
-    let src = std::fs::read_to_string(path).unwrap();
+    let src = std::fs::read_to_string(program_path(name)).unwrap();
     let lines: Vec<&str> = src
         .lines()
         .filter(|l| !l.contains("--8<--"))
@@ -44,11 +40,4 @@ fn every_workload_runs_the_vllm_engine() {
     for name in ["vllm_single_turn", "vllm_chat", "vllm_subagents"] {
         assert_eq!(engine(name), vllm, "{name}'s engine is not vllm.sq's");
     }
-    // the deployment the paired workloads run on (docs/design/paired-workload.md)
-    let paired = std::path::Path::new("examples/paired/deployments/vllm.sq");
-    assert_eq!(
-        engine_of(paired, "paired vllm"),
-        vllm,
-        "the paired deployment's engine is not vllm.sq's"
-    );
 }

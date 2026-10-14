@@ -5,7 +5,7 @@
 
 mod common;
 
-use serq::{Overrides, run_source};
+use serq::Overrides;
 
 /// `n` requests present at t = 0 (closed population, one turn each), with
 /// prompt `prompt` and `out` output tokens, on a device of `blocks` blocks
@@ -21,12 +21,12 @@ fn engine(
     budget: usize,
     max_seqs: usize,
     schedule: &str,
-) -> String {
+) -> (String, String) {
     let schedule = taking(
         schedule,
         &format!("reqs (1), kv (min(request.input, {budget}))"),
     );
-    format!(
+    let deployment = format!(
         r#"
         let bs = {bs};
         device gpu {{ kv cap {blocks} * bs; }}
@@ -38,13 +38,6 @@ fn engine(
         }}
         pool kv on gpu {{ block bs; evict lru; preempt lifo; }}
         pool reqs on llm {{ }}
-        workload {{ arrive batch({n}); init {{ set prompt = {prompt}; set o = {out}; }}
-          send (prompt, o);
-          session {{ turn;
-            end;
-
-          }}
-        }}
         server (prompt, o) {{
           set t0 = now;
           llm (prompt, o);
@@ -56,7 +49,19 @@ fn engine(
         }}
 
 "#
-    )
+    );
+    let workload = format!(
+        r#"
+        workload {{ arrive batch({n}); init {{ set prompt = {prompt}; set o = {out}; }}
+          send (prompt, o);
+          session {{ turn;
+            end;
+
+          }}
+        }}
+"#
+    );
+    (deployment, workload)
 }
 
 /// `scheduler` with `taking {pools}` on each `admit waiting`: what the
@@ -79,8 +84,14 @@ fn taking(schedule: &str, pools: &str) -> String {
 /// preempted (`scheduler.py:624`, `scheduler.py:869`).
 const VLLM: &str = "advance running; admit waiting while (running.preempted == 0);";
 
-fn run(src: &str, options: &Overrides) -> serq::Report {
-    run_source(&common::main_source(src), options, None).unwrap()
+/// A deployment and its workload's file.
+fn run((src, workload): &(impl AsRef<str>, impl AsRef<str>), options: &Overrides) -> serq::Report {
+    common::run(
+        &common::main_source(src.as_ref()),
+        workload.as_ref(),
+        options,
+    )
+    .unwrap()
 }
 
 /// scheduler.py:742-813 (`test_preempt_during_execution`): two 80-token
@@ -121,7 +132,8 @@ fn growth_preempts_the_last_admitted_request() {
 /// Recomputing the prompt alone and every output again would end at 60.
 #[test]
 fn a_request_preempted_during_decode_resumes_from_its_outputs() {
-    let src = r#"
+    let src = (
+        r#"
         let bs = 16;
         device gpu { kv cap 10 * bs; }
         engine llm on gpu {
@@ -136,13 +148,6 @@ fn a_request_preempted_during_decode_resumes_from_its_outputs() {
         }
         pool kv on gpu { block bs; evict lru; preempt lifo; }
         pool reqs on llm { }
-        workload { arrive batch(2); init { set prompt = serial == 0 ? 64 : 48; set o = serial == 0 ? 20 : 40; }
-          send (prompt, o);
-          session { turn;
-            end;
-
-          }
-        }
         server (prompt, o) {
           llm (prompt, o);
           observe first = llm.first;
@@ -150,8 +155,18 @@ fn a_request_preempted_during_decode_resumes_from_its_outputs() {
           observe order = serial;
         }
 
-"#;
-    let r = run(src, &common::horizon(1000.0));
+"#,
+        r#"
+        workload { arrive batch(2); init { set prompt = serial == 0 ? 64 : 48; set o = serial == 0 ? 20 : 40; }
+          send (prompt, o);
+          session { turn;
+            end;
+
+          }
+        }
+"#,
+    );
+    let r = run(&src, &common::horizon(1000.0));
     let kv = r.pool("kv").unwrap();
     assert_eq!(kv.preemptions, 1, "{}", r.text());
     assert_eq!(kv.stuck, 0, "{}", r.text());
@@ -174,8 +189,9 @@ fn a_request_preempted_during_decode_resumes_from_its_outputs() {
 
 /// Three requests on 6 blocks of 16, prefill chunks of 8: A (16 tokens, 30
 /// out), C (16, 60) and B (32, 10), admitted in that order.
-fn preempted_twice() -> String {
-    r#"
+fn preempted_twice() -> (&'static str, &'static str) {
+    (
+        r#"
         let bs = 16;
         device gpu { kv cap 6 * bs; }
         engine llm on gpu {
@@ -190,6 +206,13 @@ fn preempted_twice() -> String {
         }
         pool kv on gpu { block bs; evict lru; preempt lifo; }
         pool reqs on llm { }
+        server (prompt, o) {
+          llm (prompt, o);
+          observe done = now;
+        }
+
+"#,
+        r#"
         workload { arrive batch(3);
           init { set prompt = serial == 2 ? 32 : 16; set o = serial == 0 ? 30 : (serial == 1 ? 60 : 10); }
           send (prompt, o);
@@ -198,13 +221,8 @@ fn preempted_twice() -> String {
 
           }
         }
-        server (prompt, o) {
-          llm (prompt, o);
-          observe done = now;
-        }
-
-"#
-    .to_string()
+"#,
+    )
 }
 
 /// scheduler.py:1560-1561 again: a preemption resets `num_computed_tokens`
@@ -255,9 +273,10 @@ fn a_request_preempted_twice_keeps_its_outputs() {
 /// `examples/pd-disaggregation/`: `kept` is the entry's local, set above the
 /// hold whose header reads it (#475). B is the request with a 32-token
 /// prompt.
-fn preempted_twice_in_a_queue(set_kept: &str, known_is: &str) -> String {
-    format!(
-        r#"
+fn preempted_twice_in_a_queue(set_kept: &str, known_is: &str) -> (String, &'static str) {
+    (
+        format!(
+            r#"
         let bs = 16;
         queue D : agg {{
           device gpu {{ kv cap 6 * bs; }}
@@ -284,20 +303,23 @@ fn preempted_twice_in_a_queue(set_kept: &str, known_is: &str) -> String {
             }}
           }}
         }}
-        workload {{ arrive batch(3);
-          init {{ set prompt = serial == 2 ? 32 : 16; set o = serial == 0 ? 30 : (serial == 1 ? 60 : 10); }}
-          send (prompt, o);
-          session {{ turn;
-            end;
-
-          }}
-        }}
         server (prompt, hidden o) {{
           D.decode (prompt);
           observe done = now;
         }}
 
 "#
+        ),
+        r#"
+        workload { arrive batch(3);
+          init { set prompt = serial == 2 ? 32 : 16; set o = serial == 0 ? 30 : (serial == 1 ? 60 : 10); }
+          send (prompt, o);
+          session { turn;
+            end;
+
+          }
+        }
+"#,
     )
 }
 
@@ -359,7 +381,8 @@ fn a_request_preempted_twice_in_a_queue_keeps_its_outputs() {
 /// device (`llm.kv`); A is the 64-token prompt.
 #[test]
 fn a_holder_preempted_before_its_first_step_has_computed_nothing() {
-    let src = r#"
+    let src = (
+        r#"
         let bs = 16;
         stage svc : fifo;
         queue llm : agg {
@@ -381,6 +404,13 @@ fn a_holder_preempted_before_its_first_step_has_computed_nothing() {
             }
           }
         }
+        server (prompt, hidden o) {
+          llm.decode (prompt);
+          observe done = now;
+        }
+
+"#,
+        r#"
         workload { arrive batch(2); init { set prompt = serial == 0 ? 64 : 32; set o = 20; }
           send (prompt, o);
           session { turn;
@@ -388,13 +418,9 @@ fn a_holder_preempted_before_its_first_step_has_computed_nothing() {
 
           }
         }
-        server (prompt, hidden o) {
-          llm.decode (prompt);
-          observe done = now;
-        }
-
-"#;
-    let r = run(src, &common::horizon(200.0));
+"#,
+    );
+    let r = run(&src, &common::horizon(200.0));
     assert_eq!(r.pool("llm.kv").unwrap().preemptions, 1, "{}", r.text());
     // first execution, then the re-execution after A frees its blocks at 20
     assert_eq!(
@@ -420,10 +446,19 @@ fn a_holder_preempted_before_its_first_step_has_computed_nothing() {
 /// 13). `decode first` is `by (decoding ? 0 : 1)`.
 #[test]
 fn serve_by_orders_residents_by_the_declared_keys() {
+    const WORKLOAD: &str = "workload { arrive batch(2); init { set o = serial == 0 ? 10 : 3; }
+          send (o);
+          session { turn;
+            end;
+
+          }
+        }
+";
     // `order` is what follows `advance running`
     let prog = |order: &str| {
-        format!(
-            "device gpu {{ kv cap 1000; }}
+        (
+            format!(
+                "device gpu {{ kv cap 1000; }}
         engine llm on gpu {{
           tokens cap 1;
           scheduler {{
@@ -433,19 +468,14 @@ fn serve_by_orders_residents_by_the_declared_keys() {
           worker {{ forward (1); }}
         }}
         pool kv on gpu {{ }}
-        workload {{ arrive batch(2); init {{ set o = serial == 0 ? 10 : 3; }}
-          send (o);
-          session {{ turn;
-            end;
-
-          }}
-        }}
         server (o) {{
           llm (1, o);
           observe done = now;
           observe order = serial;
         }}
         "
+            ),
+            WORKLOAD,
         )
     };
     let r = run(&prog("admission"), &common::horizon(100.0));
@@ -478,17 +508,25 @@ fn serve_by_orders_residents_by_the_declared_keys() {
     assert_eq!(r.observe("done").unwrap().samples, vec![10.0, 13.0]);
     // `decode first` and its expansion are the same program
     let ir = |s: &str| {
-        serq::compile_source(&common::main_source(&prog(s)), &common::horizon(100.0))
-            .unwrap()
-            .to_json()
+        common::compile(
+            &common::main_source(&prog(s).0),
+            WORKLOAD,
+            &common::horizon(100.0),
+        )
+        .unwrap()
+        .to_json()
     };
     assert_eq!(ir("decode first"), ir("by (decoding ? 0 : 1)"));
     // a serve key is read at its own moment only: the engine refuses the
     // batch, which is formed after the order, and the linker a variable of
     // another moment
     let refused = |order: &str| {
-        serq::compile_source(&common::main_source(&prog(order)), &common::horizon(100.0))
-            .unwrap_err()
+        common::compile(
+            &common::main_source(&prog(order).0),
+            WORKLOAD,
+            &common::horizon(100.0),
+        )
+        .unwrap_err()
     };
     let e = refused("by (tokens)");
     assert!(e.contains("`by` is read before the batch is formed"), "{e}");
@@ -509,7 +547,8 @@ fn serve_by_orders_residents_by_the_declared_keys() {
 /// have given A both tokens at step 2 and B nothing.
 #[test]
 fn a_resident_admitted_mid_iteration_is_served_once_under_serve_by() {
-    let src = r#"
+    let src = (
+        r#"
         device gpu { kv cap 1e5; }
         engine llm on gpu {
           reqs cap 8;
@@ -523,13 +562,6 @@ fn a_resident_admitted_mid_iteration_is_served_once_under_serve_by() {
         pool reqs on llm { }
         pool kv on gpu { }
         stage gate : delay;
-        workload { arrive batch(2); init { set arrive = serial; set o = serial == 0 ? 4 : 1; }
-          send (arrive, o);
-          session { turn;
-            end;
-
-          }
-        }
         server (arrive, o) {
           run gate (cost(gate, arrive));
           llm (1, o);
@@ -537,8 +569,18 @@ fn a_resident_admitted_mid_iteration_is_served_once_under_serve_by() {
           observe order = serial;
         }
 
-"#;
-    let r = run(src, &common::horizon(50.0));
+"#,
+        r#"
+        workload { arrive batch(2); init { set arrive = serial; set o = serial == 0 ? 4 : 1; }
+          send (arrive, o);
+          session { turn;
+            end;
+
+          }
+        }
+"#,
+    );
+    let r = run(&src, &common::horizon(50.0));
     assert_eq!(
         r.observe("order").unwrap().samples,
         vec![1.0, 0.0],
@@ -654,7 +696,8 @@ fn adaptive_long_prefill_threshold_floors_the_cap_at_a_fair_share() {
 /// is not cached.
 #[test]
 fn next_turn_reuses_full_blocks_of_the_cached_prefix() {
-    let src = r#"
+    let src = (
+        r#"
         let bs = 16;
         device gpu { kv cap 1000 * bs; }
         engine llm on gpu {
@@ -671,6 +714,13 @@ fn next_turn_reuses_full_blocks_of_the_cached_prefix() {
         }
         pool kv on gpu { block bs; evict lru; preempt lifo; }
         pool reqs on llm { }
+        server (K) reply (prompt) {
+          set prompt = K + 100;
+          llm (prompt, 10);
+        }
+
+"#,
+        r#"
         workload { arrive batch(1); init { set K = 0; set turns = 0; }
           send (K);
           session {
@@ -680,13 +730,9 @@ fn next_turn_reuses_full_blocks_of_the_cached_prefix() {
 
           }
         }
-        server (K) reply (prompt) {
-          set prompt = K + 100;
-          llm (prompt, 10);
-        }
-
-"#;
-    let r = run(src, &common::horizon(1000.0));
+"#,
+    );
+    let r = run(&src, &common::horizon(1000.0));
     let seen = &r.observe("llm.reused").unwrap().samples;
     let pre = &r.observe("llm.prefill").unwrap().samples;
     // turn 1: nothing cached, prefill 100; context after = 110 -> 6 full
@@ -701,7 +747,8 @@ fn next_turn_reuses_full_blocks_of_the_cached_prefix() {
 /// first, so a session keeps a shorter prefix rather than losing it whole.
 #[test]
 fn lru_eviction_drops_tail_blocks_first() {
-    let src = r#"
+    let src = (
+        r#"
         let bs = 16;
         device gpu { kv cap 20 * bs; }
         engine llm on gpu {
@@ -718,6 +765,13 @@ fn lru_eviction_drops_tail_blocks_first() {
         }
         pool kv on gpu { block bs; evict lru; preempt lifo; }
         pool reqs on llm { }
+        server (K) reply (prompt) {
+          set prompt = serial == 0 ? K + 160 : 192;
+          llm (prompt, 1);
+        }
+
+"#,
+        r#"
         stage gate : delay;
         workload { arrive batch(2); init { set K = 0; set turns = 0; }
           send (K);
@@ -733,13 +787,9 @@ fn lru_eviction_drops_tail_blocks_first() {
 
           }
         }
-        server (K) reply (prompt) {
-          set prompt = serial == 0 ? K + 160 : 192;
-          llm (prompt, 1);
-        }
-
-"#;
-    let r = run(src, &common::horizon(1000.0));
+"#,
+    );
+    let r = run(&src, &common::horizon(1000.0));
     // what session 0's admissions read of the cache
     let reused = r.observe("llm.reused").unwrap();
     let c0: Vec<f64> = reused

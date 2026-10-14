@@ -4,10 +4,13 @@
 
 mod common;
 
-use serq::{Program, compile_source, ir::CStmt};
+use serq::{Program, ir::CStmt};
+
+/// The workload of every program here: requests of 100 tokens.
+const WORKLOAD: &str = "workload { arrive poisson(1); turn { set n = 100; } send (n); }";
 
 fn check(src: &str) -> Result<Program, String> {
-    compile_source(&common::main_source(src), &common::horizon(10.0))
+    common::compile(&common::main_source(src), WORKLOAD, &common::horizon(10.0))
 }
 
 /// An aggregated queue `name`, its entry running its engine, with `nic` in it.
@@ -28,7 +31,6 @@ fn queue(name: &str, nic: &str) -> String {
 fn program(decls: &str) -> String {
     format!(
         "{}{decls}
-        workload {{ arrive poisson(1); turn {{ set n = 100; }} send (n); }}
         server (n) {{ E1.decode (n); }}
         ",
         queue("E1", "")

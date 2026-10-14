@@ -1,7 +1,8 @@
 //! # serQ
 //!
 //! A serQ program describes an LLM serving deployment: memory pools and
-//! stages, a workload of sessions, and the program every session runs.
+//! stages, and the server every request runs; the workload of sessions is a
+//! file of its own, paired with it when the program runs.
 //! Its definition is the IR (`ir::Program`, `docs/ir.md`): `engine::interp` runs it,
 //! the Lean model is generated from it, and tools build or edit it as data.
 //! The text syntax (`frontend`; `docs/language.md`) is one frontend
@@ -9,11 +10,13 @@
 //! vLLM v1.
 //!
 //! ```
-//! let src = std::fs::read_to_string("examples/single-turn/mg1.sq").unwrap();
+//! let deployment = std::fs::read_to_string("examples/single-turn/mg1.sq").unwrap();
+//! let workload = std::fs::read_to_string("examples/workloads/mg1.sq").unwrap();
 //! let options = serq::Overrides {
 //!     horizon: Some(100.0), warmup: Some(10.0), ..Default::default()
 //! };
-//! let report = serq::run_source(&src, &options, None).unwrap();
+//! let names = ("mg1.sq", "workloads/mg1.sq");
+//! let report = serq::run_paired(&deployment, &workload, names, &options, None).unwrap();
 //! println!("{}", report.text());
 //! ```
 
@@ -237,6 +240,9 @@ pub fn load_paired(
     workload: &Path,
     ov: &Overrides,
 ) -> Result<ir::Program, String> {
+    if deployment.extension().is_some_and(|e| e == "json") {
+        return Err(IR_HAS_ITS_WORKLOAD.into());
+    }
     let read = |path: &Path| {
         std::fs::read_to_string(path).map_err(|e| format!("cannot read {}: {e}", path.display()))
     };
@@ -247,6 +253,11 @@ pub fn load_paired(
     );
     compile_paired(&d, &w, (&names.0, &names.1), ov)
 }
+
+/// Why a workload is not paired with IR (`.json`): the IR is the whole
+/// program, workload included.
+pub const IR_HAS_ITS_WORKLOAD: &str =
+    "--workload pairs a .sq deployment with a workload file; an IR is a whole program already";
 
 /// `load_paired`, for inspection (`load_inspected`).
 pub fn load_paired_inspected(
@@ -333,16 +344,32 @@ pub fn run_file(path: &Path, ov: &Overrides) -> Result<Report, String> {
 }
 
 /// The path of `examples/<group>/<name>.sq` in this crate. Example names
-/// are unique across groups, so the group is not part of the name.
+/// are unique across groups, so the group is not part of the name; the
+/// workloads (`examples/workloads/`) are not programs.
 pub fn program_path(name: &str) -> std::path::PathBuf {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples");
     let file = format!("{name}.sq");
     std::fs::read_dir(&root)
         .unwrap_or_else(|e| panic!("{}: {e}", root.display()))
         .flatten()
+        .filter(|g| g.file_name() != "workloads")
         .map(|g| g.path().join(&file))
         .find(|p| p.is_file())
         .unwrap_or_else(|| panic!("no examples/*/{file}"))
+}
+
+/// The workload file `examples/pairs.json` pairs the program at `path`
+/// with: which workload each example and tutorial program runs, for tests
+/// and tools (`docs/design/paired-workload.md`). `path` is this crate's,
+/// absolute or relative to it.
+pub fn paired_workload(path: &Path) -> Option<std::path::PathBuf> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let list = root.join("examples/pairs.json");
+    let text = std::fs::read_to_string(&list).unwrap_or_else(|e| panic!("{}: {e}", list.display()));
+    let pairs: std::collections::BTreeMap<String, String> =
+        serde_json::from_str(&text).unwrap_or_else(|e| panic!("{}: {e}", list.display()));
+    let path = path.strip_prefix(root).unwrap_or(path);
+    pairs.get(path.to_str()?).map(|w| root.join(w))
 }
 
 /// Convenience for tests: run `examples/*/<name>.sq` with overrides given
@@ -360,5 +387,9 @@ pub fn run_program(name: &str, sets: &[&str], seed: Option<u64>, horizon: Option
         let e = frontend::parser::parse_expr(v).expect("override expression");
         ov.lets.push((k.trim().to_string(), e));
     }
-    run_file(&path, &ov).unwrap_or_else(|e| panic!("{name}: {e}"))
+    let workload = paired_workload(&path).unwrap_or_else(|| panic!("{name}: no pair"));
+    // a trace is the workload's, read beside its file
+    load_paired(&path, &workload, &ov)
+        .and_then(|p| run_ir(&p, workload.parent()))
+        .unwrap_or_else(|e| panic!("{name}: {e}"))
 }

@@ -8,10 +8,11 @@
 
 mod common;
 
-use serq::{Overrides, compile_source, program_path};
+use serq::{Overrides, program_path};
 
-fn check(src: &str) -> Result<(), String> {
-    compile_source(&common::main_source(src), &common::horizon(500.0)).map(|_| ())
+/// Compile the deployment `src` with the workload's file `workload`.
+fn check(src: &str, workload: &str) -> Result<(), String> {
+    common::compile(&common::main_source(src), workload, &common::horizon(500.0)).map(|_| ())
 }
 
 /// Engine `llm` admitted `taking` its pools. Five lines, as
@@ -29,6 +30,14 @@ fn engine(taking: &str) -> String {
 }
 const ENGINE_WORKLOAD: &str = "arrive poisson(0.3); init { set K = 0; }
                turn { set n = ~exp(500); set o = ~exp(200) + 1; }";
+/// The workload of `engine`'s programs, sending `send` and running `session`.
+fn engine_workload(send: &str, session: &str) -> String {
+    format!("workload {{ {ENGINE_WORKLOAD} send ({send}); session {{ {session} }} }}")
+}
+/// The stale-header programs' workload: the context `K` grows each turn.
+fn multi_turn() -> String {
+    engine_workload("K, n, o", "loop { turn; set K = K + n + o; end; }")
+}
 /// The admission of the stale-header programs below.
 const CACHED_PREFIX: &str = "reqs (1), kv (c + min(request.input - c, budget_left(llm))) cache (request.input + request.output)";
 
@@ -40,15 +49,14 @@ const CACHED_PREFIX: &str = "reqs (1), kv (c + min(request.input - c, budget_lef
 fn a_stale_header_read_is_rejected() {
     let llm = engine(CACHED_PREFIX);
     let src = format!(
-        "{llm} workload {{ {ENGINE_WORKLOAD} send (K, n, o); session {{ loop {{ turn; set K = K + n + o; end; }}
-        }} }}
+        "{llm}
         server (K, n, o) {{
           set prompt = K + n;
           set c = min(cachedin(kv), prompt - 1);
           llm (prompt, o);
         }}"
     );
-    let e = check(&src).expect_err("rejected");
+    let e = check(&src, &multi_turn()).expect_err("rejected");
     assert!(e.contains("`c` reads cachedin(kv)"), "{e}");
 }
 
@@ -60,14 +68,13 @@ fn the_request_s_hit_is_the_way_through() {
          reuse (request.input - 1) cache (request.input + request.output)",
     );
     let src = format!(
-        "{llm} workload {{ {ENGINE_WORKLOAD} send (K, n, o); session {{ loop {{ turn; set K = K + n + o; end; }}
-        }} }}
+        "{llm}
         server (K, n, o) {{
           set prompt = K + n;
           llm (prompt, o);
         }}"
     );
-    check(&src).expect("the request's hit is the way to say it");
+    check(&src, &multi_turn()).expect("the request's hit is the way to say it");
 }
 
 /// Reassigning before the call means the stale value never reaches the
@@ -76,8 +83,7 @@ fn the_request_s_hit_is_the_way_through() {
 fn a_reassignment_clears_the_lint() {
     let llm = engine("reqs (1), kv (c + request.input) cache (request.input)");
     let src = format!(
-        "{llm} workload {{ {ENGINE_WORKLOAD} send (K, n, o); session {{ loop {{ turn; set K = K + n + o; end; }}
-        }} }}
+        "{llm}
         server (K, n, o) {{
           set prompt = K + n;
           set c = min(cachedin(kv), prompt - 1);
@@ -85,7 +91,7 @@ fn a_reassignment_clears_the_lint() {
           llm (prompt, 1);
         }}"
     );
-    check(&src).expect("the read no longer reaches the header");
+    check(&src, &multi_turn()).expect("the read no longer reaches the header");
 }
 
 /// A read after the request is not a header's.
@@ -93,8 +99,7 @@ fn a_reassignment_clears_the_lint() {
 fn a_read_after_the_request_is_fine() {
     let llm = engine("reqs (1), kv (request.input) cache (request.input)");
     let src = format!(
-        "{llm} workload {{ {ENGINE_WORKLOAD} send (K, n, o); session {{ loop {{ turn; set K = K + n + o; end; }}
-        }} }}
+        "{llm}
         server (K, n, o) {{
           set prompt = K + n;
           llm (prompt, 1);
@@ -102,7 +107,7 @@ fn a_read_after_the_request_is_fine() {
           observe hit = c;
         }}"
     );
-    check(&src).expect("after admission is not stale");
+    check(&src, &multi_turn()).expect("after admission is not stale");
 }
 
 /// A constant guard strictly between 0 and 1 is not a test; it was meant as
@@ -110,41 +115,43 @@ fn a_read_after_the_request_is_fine() {
 #[test]
 fn a_constant_probability_guard_is_rejected() {
     let src = "stage tool : delay;
-        workload { arrive poisson(1); turn { set Z = ~exp(3); } send (Z);
-          session {  loop { if (0.8) { turn;  } else { end; } }
-          }
-        }
         server (Z) { run tool (cost(tool, Z));
         }
         ";
-    let e = check(src).expect_err("rejected");
+    let wl = "workload { arrive poisson(1); turn { set Z = ~exp(3); } send (Z);
+          session {  loop { if (0.8) { turn;  } else { end; } }
+          }
+        }
+        ";
+    let e = check(src, wl).expect_err("rejected");
     assert!(e.contains("`if (0.8)` is not a test"), "{e}");
     assert!(e.contains("if (~bernoulli(0.8))"), "{e}");
     // a constant that is neither 0 nor 1 and not a probability either
-    let e = check(&src.replace("if (0.8)", "if (2)")).expect_err("rejected");
+    let e = check(src, &wl.replace("if (0.8)", "if (2)")).expect_err("rejected");
     assert!(
         e.contains("`if (2)` is not a test: a guard is 0 or 1."),
         "{e}"
     );
     assert!(!e.contains("bernoulli"), "{e}");
-    check(&src.replace("if (0.8)", "if (1)")).expect("0 and 1 are tests");
+    check(src, &wl.replace("if (0.8)", "if (1)")).expect("0 and 1 are tests");
 }
 
 /// 0 and 1 are tests, not draws, and stay legal.
 #[test]
 fn zero_and_one_are_tests() {
     for g in ["0", "1"] {
-        let src = format!(
-            "stage tool : delay;
-        workload {{ arrive poisson(1); turn {{ set Z = ~exp(3); }} send (Z);
+        let src = "stage tool : delay;
+        server (Z) { run tool (cost(tool, Z));
+        }
+        ";
+        let wl = format!(
+            "workload {{ arrive poisson(1); turn {{ set Z = ~exp(3); }} send (Z);
           session {{  loop {{ if ({g}) {{ turn;  }} else {{ end; }} }}
           }}
         }}
-        server (Z) {{ run tool (cost(tool, Z));
-        }}
         "
         );
-        check(&src).unwrap_or_else(|e| panic!("`if ({g})` is a test: {e}"));
+        check(src, &wl).unwrap_or_else(|e| panic!("`if ({g})` is a test: {e}"));
     }
 }
 
@@ -156,16 +163,15 @@ fn zero_and_one_are_tests() {
 fn a_context_variable_outside_its_moment_is_rejected() {
     let llm = engine("reqs (1), kv (request.input)");
     let src = format!(
-        "{llm} workload {{ {ENGINE_WORKLOAD} send (n); session {{  turn; end;
-        }} }}
+        "{llm}
     server (n) {{ set x = tokens;
           llm (n, 1);
         }}"
     );
-    let e = check(&src).expect_err("rejected");
+    let e = check(&src, &engine_workload("n", "turn; end;")).expect_err("rejected");
     // the block's role, after the statement's place in the text (#279)
     assert!(
-        e.starts_with("9:26: session: "),
+        e.starts_with("deployment.sq: 7:26: session: "),
         "names the line and the block's role: {e}"
     );
     assert!(e.contains("set x = tokens;\n"), "shows the line: {e}");
@@ -182,17 +188,17 @@ fn a_context_variable_outside_its_moment_is_rejected() {
         pool kv on gpu {{ block bs; {pool} }}
         pool reqs on llm {{ }}
         stage svc : ps (4);
-        workload {{ arrive poisson(0.3); init {{ set K = 0; }}
-          turn {{ set m = ~exp(500); set o = ~exp(200) + 1; }}
-          send (m);
-          session {{  turn; end;
-          }}
-        }}
 
         server (m) {{ {session} llm (m, 1);
         }}"
         )
     };
+    let wl = "workload { arrive poisson(0.3); init { set K = 0; }
+          turn { set m = ~exp(500); set o = ~exp(200) + 1; }
+          send (m);
+          session {  turn; end;
+          }
+        }";
     // (the prompt is `m`: a session attribute named `present` would shadow
     // the ps capacity variable)
     for (src, where_read, exists) in [
@@ -270,12 +276,12 @@ fn a_context_variable_outside_its_moment_is_rejected() {
     ] {
         if where_read.starts_with("init:") {
             // an `init` statement is named as such
-            let src = engine("", LLM, "").replace("init { set K = 0; }", "init { set K = age; }");
-            let e = check(&src).expect_err("rejected");
+            let wl = wl.replace("init { set K = 0; }", "init { set K = age; }");
+            let e = check(&engine("", LLM, ""), &wl).expect_err("rejected");
             assert!(e.contains(": init: `age`"), "{e}");
             continue;
         }
-        let e = match check(&src) {
+        let e = match check(&src, wl) {
             Err(e) => e,
             Ok(()) => panic!("linked, but should have said `{where_read}`"),
         };
@@ -300,14 +306,14 @@ fn a_context_variable_outside_its_moment_is_rejected() {
           }
           worker { forward (1e-3 * batch.tokens + batch.prefilled * 0 + batch.attention * 0 + now * 0); }
         }
-        workload { arrive poisson(0.3); turn { set n = ~exp(500); } send (n);
-          session {  turn; end;
-          }
-        }
         server (n) { set t = now; hold kv[0] (cost(kv, n)) { run svc (cost(svc, n)); } llm (1, 1);
         }
         ";
-    check(src).expect("links");
+    let wl = "workload { arrive poisson(0.3); turn { set n = ~exp(500); } send (n);
+          session {  turn; end;
+          }
+        }";
+    check(src, wl).expect("links");
 }
 
 /// A program whose engine `llm` serves its residents by `advance`, a
@@ -321,15 +327,14 @@ fn advancing(advance: &str) -> String {
           worker {{ forward (1); }}
         }}
         pool kv on gpu {{ }}
-        workload {{ arrive batch(1);
-          session {{ turn; end;
-          }}
-        }}
         server {{ llm (1, 1);
         }}
         "
     )
 }
+
+/// The workload of `advancing`'s programs: one session of one turn.
+const ONE_TURN: &str = "workload { arrive batch(1); session { turn; end; } }";
 
 /// An engine whose schedule advances its residents says their order once, on
 /// `advance running`, in one of three spellings or as `exclusive prefill`.
@@ -341,9 +346,9 @@ fn the_residents_order_is_said_on_advance_running() {
         "advance running decode first;",
         "exclusive prefill;",
     ] {
-        check(&advancing(ok)).unwrap_or_else(|e| panic!("{ok}: {e}"));
+        check(&advancing(ok), ONE_TURN).unwrap_or_else(|e| panic!("{ok}: {e}"));
     }
-    let e = check(&advancing("advance running shortest;")).expect_err("unknown");
+    let e = check(&advancing("advance running shortest;"), ONE_TURN).expect_err("unknown");
     assert!(e.contains("found `shortest`"), "{e}");
 }
 
@@ -353,17 +358,23 @@ fn the_residents_order_is_said_on_advance_running() {
 #[test]
 fn serve_admission_is_by_with_no_keys_and_a_key_does_not_draw() {
     let ir = |s: &str| {
-        serq::compile_source(&common::main_source(&advancing(s)), &common::horizon(10.0))
-            .unwrap()
-            .to_json()
+        common::compile(
+            &common::main_source(&advancing(s)),
+            ONE_TURN,
+            &common::horizon(10.0),
+        )
+        .unwrap()
+        .to_json()
     };
     assert_eq!(ir("advance running admission;"), ir("advance running;"));
     assert!(ir("advance running admission;").contains("\"By\": []"));
-    check(&advancing(
-        "advance running by (running.count > 4 ? -remaining : admission);",
-    ))
+    check(
+        &advancing("advance running by (running.count > 4 ? -remaining : admission);"),
+        ONE_TURN,
+    )
     .expect("the residents' variables are keys");
-    let e = check(&advancing("advance running by (~uniform(0, 1));")).expect_err("a draw");
+    let e =
+        check(&advancing("advance running by (~uniform(0, 1));"), ONE_TURN).expect_err("a draw");
     assert!(e.contains("engine `llm`"), "{e}");
     assert!(
         e.contains("an `advance running by (…)` key may not draw"),
@@ -393,28 +404,29 @@ fn a_hidden_attribute_is_not_read_by_the_scheduler() {
         "
         )
     };
-    let wl_workload = "arrive poisson(0.3); init { set K = 0; }
-                   turn { set n = ~exp(500); set o = ~exp(200) + 1; } send (n, o);";
+    let wl_workload = "workload { arrive poisson(0.3); init { set K = 0; }
+                   turn { set n = ~exp(500); set o = ~exp(200) + 1; } send (n, o);
+                   session {  turn; end; \n} }";
     // the request's output may be it, and its release may cache by it
     let ok = format!(
-        "{} workload {{ {wl_workload} session {{  turn; end; \n}} }}\nserver (n, hidden o) {{ llm (n, o);\n}}",
+        "{}\nserver (n, hidden o) {{ llm (n, o);\n}}",
         wl("reqs (1), kv (request.input) cache (request.input + request.output)")
     );
-    check(&ok).expect("links");
+    check(&ok, wl_workload).expect("links");
     // the admission may not: the reservation is the scheduler's
     let bad = format!(
-        "{} workload {{ {wl_workload} session {{  turn; end; \n}} }}\nserver (n, hidden o) {{ llm (n, o);\n}}",
+        "{}\nserver (n, hidden o) {{ llm (n, o);\n}}",
         wl("reqs (1), kv (request.input) reserve (n + o)")
     );
-    let e = check(&bad).expect_err("rejected");
+    let e = check(&bad, wl_workload).expect_err("rejected");
     assert!(e.contains("`o` is hidden from the scheduler"), "{e}");
     assert!(e.contains("admits the request"), "{e}");
     // nor through the request's output, which the call passes it as
     let bad = format!(
-        "{} workload {{ {wl_workload} session {{  turn; end; \n}} }}\nserver (n, hidden o) {{ llm (n, o);\n}}",
+        "{}\nserver (n, hidden o) {{ llm (n, o);\n}}",
         wl("reqs (1), kv (request.input) reserve (request.input + request.output)")
     );
-    let e = check(&bad).expect_err("rejected");
+    let e = check(&bad, wl_workload).expect_err("rejected");
     assert!(e.contains("`o` is hidden from the scheduler"), "{e}");
     // nor a pool's queue key
     let bad = "let bs = 16;
@@ -425,14 +437,10 @@ fn a_hidden_attribute_is_not_read_by_the_scheduler() {
           worker { forward (1e-3); }
         }
         pool kv on gpu { block bs; evict lru; queue by (o); }
-        workload { arrive poisson(0.3); turn { set n = ~exp(500); set o = ~exp(200) + 1; } send (n, o);
-          session {  turn; end;
-          }
-        }
 
         server (n, hidden o) { llm (n, 1);
         }";
-    let e = check(bad).expect_err("rejected");
+    let e = check(bad, wl_workload).expect_err("rejected");
     assert!(e.contains("pool `kv`"), "{e}");
     assert!(e.contains("`o` is hidden from the scheduler"), "{e}");
     // nor an engine's serve key, read for each running request
@@ -444,46 +452,41 @@ fn a_hidden_attribute_is_not_read_by_the_scheduler() {
           worker { forward (1e-3); }
         }
         pool kv on gpu { block bs; evict lru; }
-        workload { arrive poisson(0.3); turn { set n = ~exp(500); set o = ~exp(200) + 1; } send (n, o);
-          session {  turn; end;
-          }
-        }
 
         server (n, hidden o) { llm (n, 1);
         }";
-    let e = check(bad).expect_err("rejected");
+    let e = check(bad, wl_workload).expect_err("rejected");
     assert!(e.contains("engine `llm`"), "{e}");
     assert!(e.contains("`o` is hidden from the scheduler"), "{e}");
     // a name nothing sets is not an attribute
     let bad = "pool kv { cap 1e5; }
         stage svc : fifo;
-        workload { arrive poisson(0.3); send (nothing);
-          session { turn; end;
-          }
-        }
 
         server (hidden nothing) { hold kv (cost(kv, 1)) { run svc (cost(svc, 1)); }
         }";
-    let e = check(bad).expect_err("rejected");
+    let nothing = "workload { arrive poisson(0.3); send (nothing);
+          session { turn; end;
+          }
+        }";
+    let e = check(bad, nothing).expect_err("rejected");
     assert!(
         e.contains("`send (nothing)` sends the workload's `nothing`, which nothing sets"),
         "{e}"
     );
     // what the scheduler sets cannot be hidden from it, and a name is hidden once
     let one_pool = format!(
-        "{} workload {{ {wl_workload} session {{  turn; end; \n}} }}\nserver (n, hidden o) {{ llm (n, 1);\n}}",
+        "{}\nserver (n, hidden o) {{ llm (n, 1);\n}}",
         wl("kv (request.input)")
     );
-    let bad = one_pool
-        .replace("send (n, o);", "send (n, computed: 0);")
-        .replace("hidden o)", "hidden computed)");
-    let e = check(&bad).expect_err("rejected");
+    let bad = one_pool.replace("hidden o)", "hidden computed)");
+    let computed = wl_workload.replace("send (n, o);", "send (n, computed: 0);");
+    let e = check(&bad, &computed).expect_err("rejected");
     assert!(
         e.contains("hidden `computed`: the scheduler sets it"),
         "{e}"
     );
     let bad = one_pool.replace("hidden o)", "hidden o, hidden o)");
-    let e = check(&bad).expect_err("rejected");
+    let e = check(&bad, wl_workload).expect_err("rejected");
     assert!(e.contains("duplicate parameter `o`"), "{e}");
 }
 
@@ -493,9 +496,9 @@ fn a_hidden_attribute_is_not_read_by_the_scheduler() {
 #[test]
 fn a_stage_reads_no_session_attribute() {
     let ps = "stage svc : ps(1 + prompt);
-        workload { arrive poisson(0.5); init { set prompt = 2; } send (prompt); }
         server (prompt) { run svc (cost(svc, 1)); }";
-    let e = check(ps).expect_err("rejected");
+    let wl = "workload { arrive poisson(0.5); init { set prompt = 2; } send (prompt); }";
+    let e = check(ps, wl).expect_err("rejected");
     assert!(e.contains("`prompt` is a session attribute"), "{e}");
     assert!(e.contains("a ps stage's capacity"), "{e}");
     let engine = |tokens: &str, schedule: &str, execute: &str| {
@@ -507,12 +510,11 @@ fn a_stage_reads_no_session_attribute() {
               worker {{ forward ({execute}); }}
             }}
             pool kv on gpu {{ }}
-            workload {{ arrive poisson(0.5); init {{ set prompt = 2; }} send (prompt); }}
             server (prompt) {{ llm (prompt, 1); }}"
         )
     };
     let vllm = "advance running; admit waiting while (running.preempted == 0) taking kv (prompt);";
-    check(&engine("8", vllm, "1")).expect("links");
+    check(&engine("8", vllm, "1"), wl).expect("links");
     for (src, moment) in [
         (engine("8 + prompt", vllm, "1"), "an engine's `tokens cap`"),
         (engine("8", vllm, "1 + prompt"), "an engine's `worker`"),
@@ -526,7 +528,7 @@ fn a_stage_reads_no_session_attribute() {
             "an engine's `scheduler`",
         ),
     ] {
-        let e = check(&src).expect_err("rejected");
+        let e = check(&src, wl).expect_err("rejected");
         assert!(e.contains("`prompt` is a session attribute"), "{e}");
         assert!(e.contains(moment), "{e}");
     }
@@ -547,8 +549,8 @@ fn no_false_positives_on_the_corpus() {
         "vllm_replay",
     ] {
         let path = program_path(name);
-        let src = std::fs::read_to_string(&path).unwrap();
-        serq::compile_source(&common::main_source(&src), &common::horizon(500.0))
+        let workload = serq::paired_workload(&path).expect("a pair");
+        serq::load_paired(&path, &workload, &common::horizon(500.0))
             .unwrap_or_else(|e| panic!("{name} is a real program and must link: {e}"));
     }
 }
@@ -570,9 +572,9 @@ fn an_old_context_variable_name_says_the_new_one() {
             ("size", old)
         };
         let src = format!(
-            "device gpu {{ kv cap 10; }}\nengine e on gpu {{ tokens cap inf; scheduler {{ advance running; admit waiting while (running.preempted == 0); }} worker {{ forward ({cost}); }} }}\npool kv on gpu {{ evict by ({key}); }}\nworkload {{ session {{ turn; end; \n}} }}\nserver {{\n}}\n"
+            "device gpu {{ kv cap 10; }}\nengine e on gpu {{ tokens cap inf; scheduler {{ advance running; admit waiting while (running.preempted == 0); }} worker {{ forward ({cost}); }} }}\npool kv on gpu {{ evict by ({key}); }}\nserver {{\n}}\n"
         );
-        let e = compile_source(&common::main_source(&src), &common::horizon(500.0)).unwrap_err();
+        let e = check(&src, "workload { session { turn; end; \n} }").unwrap_err();
         assert!(e.contains(says), "{e}");
     }
 }
@@ -595,15 +597,16 @@ fn cache_server(taking: &str, pool: &str, server: &str) -> String {
     }}
     pool kv on gpu {{ block 16; evict lru; }}
     stage user : delay;
-    {pool} workload {{ {CACHE_ENGINE_WORKLOAD} session {{ turn;
-        }} }}
+    {pool}
         server {{ loop {{ run user (cost(user, 1));
             {server}
           }}
         }} "
     )
 }
-const CACHE_ENGINE_WORKLOAD: &str = "arrive closed(1);";
+/// `cache_server`'s workload: one closed client, a turn each time round.
+const CACHE_ENGINE_WORKLOAD: &str = "workload { arrive closed(1); session { turn;
+        } }";
 
 /// The server's hold of the device's pool, which no engine admits, around
 /// `body`, with `clause` after it; then a request of the engine, which a
@@ -622,7 +625,7 @@ fn holding(body: &str, clause: &str) -> String {
 #[test]
 fn cached_in_a_hold_without_cache_is_rejected() {
     let src = holding("observe hit = cached > 0; run user (cost(user, 1));", "");
-    let e = check(&src).expect_err("rejected");
+    let e = check(&src, CACHE_ENGINE_WORKLOAD).expect_err("rejected");
     assert!(
         e.contains("`cached` is read in a hold on `kv` that has no `cache` clause"),
         "{e}"
@@ -638,7 +641,7 @@ fn cache_zero_is_the_way_through() {
             "observe hit = cached > 0; run user (cost(user, 1));",
             clause,
         );
-        check(&src).unwrap_or_else(|e| panic!("{clause}: {e}"));
+        check(&src, CACHE_ENGINE_WORKLOAD).unwrap_or_else(|e| panic!("{clause}: {e}"));
     }
 }
 
@@ -658,10 +661,11 @@ fn cached_in_a_nested_hold_on_another_pool_is_rejected() {
         )
     };
     let src = nested("hold reqs (cost(reqs, 1)) { llm (1000 - cached, 1); }");
-    let e = check(&src).expect_err("rejected");
+    let e = check(&src, CACHE_ENGINE_WORKLOAD).expect_err("rejected");
     assert!(e.contains("hold on `reqs`"), "{e}");
     let src = nested("set c = cached; hold reqs (cost(reqs, 1)) { llm (1000 - c, 1); }");
-    check(&src).expect("read above the inner hold, as llmd_nixl_pull.sq does");
+    check(&src, CACHE_ENGINE_WORKLOAD)
+        .expect("read above the inner hold, as llmd_nixl_pull.sq does");
     // read after the inner hold, in the outer body: the inner admission set
     // it, so `c` was 0 every turn where 992 was kept (#237); in a branch
     // after it, and in a loop whose next iteration comes after it
@@ -671,7 +675,7 @@ fn cached_in_a_nested_hold_on_another_pool_is_rejected() {
         format!("{inner} if (1 > 0) {{ observe c = cached; }}"),
         format!("loop {{ observe c = cached; {inner} }}"),
     ] {
-        let e = check(&nested(&body)).expect_err("rejected");
+        let e = check(&nested(&body), CACHE_ENGINE_WORKLOAD).expect_err("rejected");
         assert!(
             e.contains("`cached` is read after the hold on `reqs` in the body of the hold on `kv`"),
             "{body}\n{e}"
@@ -687,16 +691,28 @@ fn reuse_without_cache_is_rejected() {
         "",
         "hold kv (cost(kv, 1000)) reuse (cost(kv, 512)) { run user (cost(user, 1)); }",
     );
-    let e = check(&src).expect_err("rejected");
+    let e = check(&src, CACHE_ENGINE_WORKLOAD).expect_err("rejected");
     assert!(
         e.contains("`reuse` on a hold on `kv` that has no `cache` clause"),
         "{e}"
     );
     // an engine's admission likewise
-    let e = check(&cache_engine("kv (1000) reuse (512)")).expect_err("rejected");
+    let e = check(
+        &cache_engine("kv (1000) reuse (512)"),
+        CACHE_ENGINE_WORKLOAD,
+    )
+    .expect_err("rejected");
     assert!(e.contains("`reuse`"), "{e}");
-    check(&cache_engine("kv (1000) reuse (512) cache (1000)")).expect("links");
+    check(
+        &cache_engine("kv (1000) reuse (512) cache (1000)"),
+        CACHE_ENGINE_WORKLOAD,
+    )
+    .expect("links");
 }
+
+/// Two closed clients, a turn each time round: the workload of the name
+/// tests below.
+const CLOSED: &str = "workload { arrive closed(2); session { turn; } }";
 
 /// #231: a name resolves to an attribute first, then a `let`, then a context
 /// variable, so `set present = 500;` anywhere made `ps(min(present, 16))`
@@ -707,24 +723,24 @@ fn reuse_without_cache_is_rejected() {
 fn a_context_variable_name_cannot_be_an_attribute_or_a_constant() {
     const PS: &str = "stage dec : ps(min(present, 16));
         stage user : delay;
-        workload { arrive closed(2);
-          session { turn;
-          }
-        }
         server { loop { SET run dec (cost(dec, 1)); observe r = now; run user (cost(user, 1)); }
         }
         ";
-    let e = check(&PS.replace("SET", "set present = 500;")).expect_err("rejected");
+    let e = check(&PS.replace("SET", "set present = 500;"), CLOSED).expect_err("rejected");
     assert!(
         e.contains("`present` is a name the language supplies, read in a ps stage's capacity"),
         "{e}"
     );
     assert!(e.contains("a session attribute named `present`"), "{e}");
-    let e = check(&format!("let present = 500; {}", PS.replace("SET", ""))).expect_err("rejected");
+    let e = check(
+        &format!("let present = 500; {}", PS.replace("SET", "")),
+        CLOSED,
+    )
+    .expect_err("rejected");
     assert!(e.contains("a `let` constant named `present`"), "{e}");
     // `inf` is folded at parse time, so the answer would be right, but the
     // name is the language's, as it is for a binding or an aggregate's index.
-    let e = check(&PS.replace("SET", "set inf = 500;")).expect_err("rejected");
+    let e = check(&PS.replace("SET", "set inf = 500;"), CLOSED).expect_err("rejected");
     assert!(
         e.contains("`inf` is a name the language supplies, read in every expression"),
         "{e}"
@@ -734,15 +750,15 @@ fn a_context_variable_name_cannot_be_an_attribute_or_a_constant() {
     // are present, so a unit of work takes exactly 1 s whatever the arrivals
     // (the attribute's 0.125 needs the two jobs together: 16/2 = 8).
     let src = PS.replace("SET", "set prompt = 500;");
-    check(&src).expect("links");
-    let r = serq::run_source(
+    check(&src, CLOSED).expect("links");
+    let r = common::run(
         &common::main_source(&src),
+        CLOSED,
         &Overrides {
             warmup: Some(0.0),
             seed: Some(1),
             ..common::horizon(50.0)
         },
-        None,
     )
     .unwrap();
     assert_eq!(r.stage("dec").unwrap().mean_service, 1.0, "{}", r.text());
@@ -756,7 +772,6 @@ fn a_context_variable_name_cannot_be_an_attribute_or_a_constant() {
 fn a_declaration_cannot_take_a_name_the_language_supplies() {
     const SRC: &str = "DECL
         stage svc : fifo;
-        workload { arrive closed(2); session { turn; } }
         server { run svc (cost(svc, 1)); observe response = now; }
         ";
     for (decl, refused) in [
@@ -779,7 +794,7 @@ fn a_declaration_cannot_take_a_name_the_language_supplies() {
         // the engine's lists are the language's for #231's check too
         ("let running = 1;", "a `let` constant named `running`"),
     ] {
-        let e = check(&SRC.replace("DECL", decl)).expect_err(decl);
+        let e = check(&SRC.replace("DECL", decl), CLOSED).expect_err(decl);
         assert!(
             e.contains(&format!(
                 "{refused} would make the one word mean two things"
@@ -787,10 +802,8 @@ fn a_declaration_cannot_take_a_name_the_language_supplies() {
             "{decl}: {e}"
         );
     }
-    let set = SRC
-        .replace("DECL", "")
-        .replace("session { turn; }", "session { set running = 1; turn; }");
-    let e = check(&set).expect_err("rejected");
+    let set = CLOSED.replace("session { turn; }", "session { set running = 1; turn; }");
+    let e = check(&SRC.replace("DECL", ""), &set).expect_err("rejected");
     assert!(
         e.contains("a session attribute named `running` would make the one word mean two things"),
         "{e}"
@@ -799,13 +812,17 @@ fn a_declaration_cannot_take_a_name_the_language_supplies() {
         "observe response",
         "observe admitted = now; observe response",
     );
-    let e = check(&observe).expect_err("rejected");
+    let e = check(&observe, CLOSED).expect_err("rejected");
     assert!(
         e.contains("`admitted` is a name the language supplies, read in an engine's `scheduler`"),
         "{e}"
     );
     // renamed, it links
-    check(&observe.replace("observe admitted", "observe admitted_at")).expect("links");
+    check(
+        &observe.replace("observe admitted", "observe admitted_at"),
+        CLOSED,
+    )
+    .expect("links");
 }
 
 /// A schedule's `let` is a declaration too: `let inf = 1;` in vllm.sq's
@@ -813,18 +830,19 @@ fn a_declaration_cannot_take_a_name_the_language_supplies() {
 #[test]
 fn a_schedules_let_cannot_take_a_name_the_language_supplies() {
     let src = format!(
-        "{} workload {{ {ENGINE_WORKLOAD} send (n); session {{ turn; }} }}
+        "{}
         server (n) {{ llm (n, 1); }}",
         engine("reqs (1)").replace("scheduler { ", "scheduler { let inf = 1; ")
     );
-    let e = check(&src).expect_err("rejected");
+    let wl = engine_workload("n", "turn;");
+    let e = check(&src, &wl).expect_err("rejected");
     assert!(
         e.contains(
             "a `let` of engine `llm`'s schedule named `inf` would make the one word mean two things"
         ),
         "{e}"
     );
-    check(&src.replace("let inf = 1; ", "")).expect("links");
+    check(&src.replace("let inf = 1; ", ""), &wl).expect("links");
 }
 
 /// #470: nor may a declaration share its name with an attribute, built in
@@ -836,10 +854,9 @@ fn a_schedules_let_cannot_take_a_name_the_language_supplies() {
 fn a_declaration_cannot_share_its_name_with_an_attribute() {
     const SRC: &str = "DECL
         stage svc : fifo;
-        workload { arrive closed(2); session { turn; } }
         server { run svc (cost(svc, 1)); observe response = now; }
         ";
-    let refusal = |src: &str| check(src).expect_err("refused");
+    let refusal = |src: &str, wl: &str| check(src, wl).expect_err("refused");
     let two_things = "would make the one word mean two things";
     for (decl, refused) in [
         (
@@ -855,7 +872,7 @@ fn a_declaration_cannot_share_its_name_with_an_attribute() {
             "`serial` is a built-in attribute; a gauge named `serial`",
         ),
     ] {
-        let e = refusal(&SRC.replace("DECL", decl));
+        let e = refusal(&SRC.replace("DECL", decl), CLOSED);
         assert!(
             e.contains(&format!("{refused} {two_things}")),
             "{decl}: {e}"
@@ -868,26 +885,26 @@ fn a_declaration_cannot_share_its_name_with_an_attribute() {
             &format!("observe {name} = 1; observe response"),
         )
     };
-    let set = |src: &str, name: &str| {
-        src.replace(
+    let set = |wl: &str, name: &str| {
+        wl.replace(
             "session { turn; }",
             &format!("session {{ set {name} = 1; turn; }}"),
         )
     };
-    let e = refusal(&observe("out"));
+    let e = refusal(&observe("out"), CLOSED);
     assert!(
         e.contains(&format!("an observation named `out` {two_things}")),
         "{e}"
     );
     // the `set` comes after the declaration, or before it
-    let e = refusal(&set(&src, "svc"));
+    let e = refusal(&src, &set(CLOSED, "svc"));
     assert!(
         e.contains(&format!(
-            "`svc` is an attribute the program sets at 3:52; a stage named `svc` {two_things}"
+            "`svc` is an attribute the program sets at workload.sq:1:44; a stage named `svc` {two_things}"
         )),
         "{e}"
     );
-    let e = refusal(&set(&observe("hit"), "hit"));
+    let e = refusal(&observe("hit"), &set(CLOSED, "hit"));
     assert!(
         e.contains(&format!("an observation named `hit` {two_things}")),
         "{e}"
@@ -901,12 +918,12 @@ fn a_declaration_cannot_share_its_name_with_an_attribute() {
         "run svc (cost(svc, 1));",
         "hold kv (cost(kv, 1)) at admission (k = computed + 1) { run svc (cost(svc, k)); }",
     );
-    let e = refusal(&format!("pool kv {{ cap 4; }} {bound}"));
+    let e = refusal(&format!("pool kv {{ cap 4; }} {bound}"), CLOSED);
     assert!(
         e.contains(&format!("an observation named `k` {two_things}")),
         "{e}"
     );
-    check(&set(&set(&observe("hit"), "warm"), "more")).expect("links");
+    check(&observe("hit"), &set(&set(CLOSED, "warm"), "more")).expect("links");
 }
 
 /// #484: a hold header's binding the body does not read is no attribute,
@@ -919,7 +936,6 @@ fn a_declaration_cannot_share_its_name_with_a_binding() {
     const SRC: &str = "pool kv { cap 4; }
         stage svc : fifo;
         DECL
-        workload { arrive closed(2); session { turn; } }
         server {
           hold kv (cost(kv, k)) at admission (k = computed + 1) { run svc (cost(svc, 1)); }
           observe response = now;
@@ -933,10 +949,10 @@ fn a_declaration_cannot_share_its_name_with_a_binding() {
         ("pool k { cap 1; }", "a pool"),
         ("stage k[2] : fifo;", "a stage"),
     ] {
-        let e = check(&SRC.replace("DECL", decl)).expect_err(decl);
+        let e = check(&SRC.replace("DECL", decl), CLOSED).expect_err(decl);
         assert!(
             e.contains(&format!(
-                "`k` is a hold's binding at 6:47; {kind} named `k` {two_things}"
+                "`k` is a hold's binding at 5:47; {kind} named `k` {two_things}"
             )),
             "{decl}: {e}"
         );
@@ -946,25 +962,32 @@ fn a_declaration_cannot_share_its_name_with_a_binding() {
         );
     }
     let src = SRC.replace("DECL", "");
-    let e = check(&src.replace("observe response", "observe k = 1; observe response"))
-        .expect_err("refused");
+    let e = check(
+        &src.replace("observe response", "observe k = 1; observe response"),
+        CLOSED,
+    )
+    .expect_err("refused");
     assert!(
         e.contains(&format!("an observation named `k` {two_things}")),
         "{e}"
     );
     // the binding is the hold's alone: another hold may bind the name again
-    check(&src.replace(
-        "observe response",
-        "hold kv (cost(kv, k)) at admission (k = 1) { run svc (cost(svc, 1)); } observe response",
-    ))
+    check(
+        &src.replace(
+            "observe response",
+            "hold kv (cost(kv, k)) at admission (k = 1) { run svc (cost(svc, 1)); } observe response",
+        ),
+        CLOSED,
+    )
     .expect("links");
     // a queue's own pool is a declaration of the program too
     let e = check(
         "queue gw : gateway { route { E.decode (prompt); } }
          queue E : agg { device gpu { kv cap 100; } pool kv on gpu { } engine on gpu { tokens cap inf; scheduler { advance running; admit waiting while (running.preempted == 0); } worker { forward (1); } }
            decode (prompt) { hold kv (cost(kv, prompt)) at admission (kv = prompt) { run E prefill (cost(E, 1)) growing kv; } } }
-         workload { arrive batch(1); init { set prompt = 3; } session { turn; end; } } server { gw.route(); }
+         server (prompt) { gw.route(); }
          ",
+        "workload { arrive batch(1); init { set prompt = 3; } send (prompt); session { turn; end; } }",
     )
     .expect_err("refused");
     assert!(
@@ -984,7 +1007,6 @@ fn a_declaration_cannot_share_its_name_with_a_binding() {
 fn a_declaration_cannot_share_its_name_with_another() {
     const SRC: &str = "DECL
         stage svc : fifo;
-        workload { arrive closed(2); session { turn; } }
         server { run svc (cost(svc, 1)); OBSERVE observe response = now; }
         ";
     const ENGINE: &str = "device gpu { } engine Q on gpu { tokens cap 8; scheduler { advance running; admit waiting while (running.preempted == 0); } worker { forward (1); } }";
@@ -994,7 +1016,11 @@ fn a_declaration_cannot_share_its_name_with_another() {
     let two_things = "would make the one word mean two things";
     let rename = "help: rename one of the two declarations";
     let refused = |decl: &str, observe: &str| {
-        check(&SRC.replace("DECL", decl).replace("OBSERVE", observe)).expect_err(decl)
+        check(
+            &SRC.replace("DECL", decl).replace("OBSERVE", observe),
+            CLOSED,
+        )
+        .expect_err(decl)
     };
     for (decl, observe, want) in [
         (
@@ -1116,6 +1142,7 @@ fn a_declaration_cannot_share_its_name_with_another() {
         check(
             &SRC.replace("DECL", &decl)
                 .replace("OBSERVE", &format!("{runs} observe response = 1;")),
+            CLOSED,
         )
         .expect(&decl);
     }
@@ -1130,7 +1157,6 @@ fn a_binding_has_a_name_of_its_own() {
     const SRC: &str = "PRE
         pool kv { cap 4; }
         stage svc : fifo;
-        workload { arrive closed(2); session { SET turn; } }
         server {
           hold kv (cost(kv, 1)) at admission (BIND) { run svc (cost(svc, 1)); }
           observe response = now;
@@ -1164,9 +1190,8 @@ fn a_binding_has_a_name_of_its_own() {
         ),
     ] {
         let e = check(
-            &SRC.replace("PRE", pre)
-                .replace("SET", set)
-                .replace("BIND", bind),
+            &SRC.replace("PRE", pre).replace("BIND", bind),
+            &CLOSED.replace("session { ", &format!("session {{ {set} ")),
         )
         .expect_err(bind);
         assert!(
@@ -1174,10 +1199,5 @@ fn a_binding_has_a_name_of_its_own() {
             "{bind}: {e}"
         );
     }
-    check(
-        &SRC.replace("PRE", "")
-            .replace("SET", "")
-            .replace("BIND", "k = 1"),
-    )
-    .expect("links");
+    check(&SRC.replace("PRE", "").replace("BIND", "k = 1"), CLOSED).expect("links");
 }

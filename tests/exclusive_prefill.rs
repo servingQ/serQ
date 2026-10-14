@@ -5,7 +5,7 @@
 
 mod common;
 
-use serq::{Program, compile_source, run_ir, run_source};
+use serq::{Program, run_ir};
 use std::path::Path;
 use std::process::Command;
 
@@ -29,12 +29,6 @@ fn source(schedule: &str, slot_cap: usize, kv_cap: usize) -> String {
         }}
         pool reqs on llm {{ }}
         pool kv on gpu {{ }}
-        workload {{ arrive batch(2); init {{ set prompt = serial == 0 ? 2 : 4; }} send (prompt);
-          session {{ turn;
-            end;
-
-          }}
-        }}
         server (prompt) {{
           run gate (cost(gate, serial));
           // A decodes two tokens after its prefill's; B only prefills
@@ -48,14 +42,35 @@ fn source(schedule: &str, slot_cap: usize, kv_cap: usize) -> String {
     )
 }
 
+/// `source`'s workload: A with a prompt of 2, B with 4.
+const AB: &str =
+    "workload { arrive batch(2); init { set prompt = serial == 0 ? 2 : 4; } send (prompt);
+  session { turn; end; }
+}";
+
+/// `n` requests of one turn, at once.
+fn batch(n: usize) -> String {
+    format!("workload {{ arrive batch({n}); session {{ turn; end; }} }}")
+}
+
 fn trace(name: &str, src: &str) -> Vec<String> {
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("exclusive-prefill");
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join(format!("{name}.sq"));
     std::fs::write(&path, common::main_source(src)).unwrap();
+    let wpath = dir.join(format!("{name}.workload.sq"));
+    std::fs::write(&wpath, AB).unwrap();
     let out = Command::new(env!("CARGO_BIN_EXE_serq"))
         .env("SERQ_TRACE_ITER", "1")
-        .args(["run", path.to_str().unwrap(), "--horizon", "20", "--json"])
+        .args([
+            "run",
+            path.to_str().unwrap(),
+            "--workload",
+            wpath.to_str().unwrap(),
+            "--horizon",
+            "20",
+            "--json",
+        ])
         .output()
         .unwrap();
     let stderr = String::from_utf8(out.stderr).unwrap();
@@ -85,8 +100,9 @@ fn waiting_prefill_replaces_decodes_and_gets_the_full_budget() {
             "ITER 3.0000 0:1:d1",
         ]
     );
-    let r = run_source(&common::main_source(&src), &common::horizon(20.0), None).unwrap();
-    let json = compile_source(&common::main_source(&src), &common::horizon(20.0))
+    let ov = common::horizon(20.0);
+    let r = common::run(&common::main_source(&src), AB, &ov).unwrap();
+    let json = common::compile(&common::main_source(&src), AB, &ov)
         .unwrap()
         .to_json();
     let from_ir = run_ir(&Program::from_json(&json).unwrap(), None);
@@ -157,16 +173,10 @@ fn resident_prefill_chunks_do_not_admit_another_waiting_request() {
         }
         pool reqs on llm { }
         pool kv on gpu { }
-        workload { arrive batch(3);
-          session { turn;
-            end;
-
-          }
-        }
         server { llm (6, 2); observe admitted_at = llm.admitted; }
 
 "#;
-    let r = run_source(&common::main_source(src), &common::horizon(20.0), None).unwrap();
+    let r = common::run(&common::main_source(src), &batch(3), &common::horizon(20.0)).unwrap();
     assert_eq!(r.ended, 3);
     assert_eq!(r.observe("admitted_at").unwrap().samples, [0.0, 2.0, 4.0]);
     assert_eq!(r.stage("llm").unwrap().iterations, 7);
@@ -187,12 +197,6 @@ fn an_exhausted_decode_budget_defers_waiting_prefill() {
           worker { forward (1); }
         }
         pool reqs on llm { }
-        workload { arrive batch(3);
-          session { turn;
-            end;
-
-          }
-        }
         server {
           // A and B decode two tokens with no prefill, C prefills four
           llm (serial < 2 ? 0 : 4, serial < 2 ? 2 : 1);
@@ -201,7 +205,7 @@ fn an_exhausted_decode_budget_defers_waiting_prefill() {
         }
 
 "#;
-    let r = run_source(&common::main_source(src), &common::horizon(10.0), None).unwrap();
+    let r = common::run(&common::main_source(src), &batch(3), &common::horizon(10.0)).unwrap();
     assert_eq!(r.ended, 3);
     assert_eq!(r.observe("admitted_at").unwrap().samples, [0.0, 0.0, 2.0]);
     assert_eq!(r.observe("done").unwrap().samples, [2.0, 2.0, 4.0]);
@@ -233,12 +237,6 @@ fn preemption_keeps_only_committed_progress_and_defers_readmission() {
         }
         pool reqs on llm { }
         pool kv on gpu { preempt lifo; }
-        workload { arrive batch(2);
-          session { turn;
-            end;
-
-          }
-        }
         server {
           llm (2, 4);
           if (serial == 1) { observe admitted_b = llm.admitted; }
@@ -247,7 +245,7 @@ fn preemption_keeps_only_committed_progress_and_defers_readmission() {
         }
 
 "#;
-    let r = run_source(&common::main_source(src), &common::horizon(20.0), None).unwrap();
+    let r = common::run(&common::main_source(src), &batch(2), &common::horizon(20.0)).unwrap();
     assert_eq!(r.ended, 2, "{}", r.text());
     assert_eq!(r.pool("kv").unwrap().preemptions, 1);
     // what each admission prefilled: A, B, then B again with its tokens

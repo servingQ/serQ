@@ -62,11 +62,14 @@ thresholds and the classification are written before `main`, as a `def`:
 ### The workload
 
 Six requests arrive together. Requests 1 and 5 are long, request 4 is
-immediate, and request 0 decodes four tokens. The workload comes first in
-`main` because the queue key reads the attributes it sets:
+immediate, and request 0 decodes four tokens. The workload is not in the
+program: it is a file of its own, given when the program runs (`serq run
+examples/vendors/ascend.sq --workload examples/workloads/ascend_batch.sq`).
+It sends each request its `prompt`, `immediate` and `out`, which the
+server's signature names and the queue key reads:
 
-```serq
---8<-- "examples/vendors/ascend.sq:workload"
+```serq title="examples/workloads/ascend_batch.sq"
+--8<-- "examples/workloads/ascend_batch.sq:workload"
 ```
 
 ### The engine
@@ -105,10 +108,14 @@ with `max_wait = 0` produces `0, 4, 2, 3, 1, 5`. Request slots, KV
 capacity, token budget and chunk size are explicit; prompt and output
 capacity is allocated upfront to avoid recovery in this example.
 
-??? example "The whole program"
+??? example "The whole program, and its workload"
 
     ```serq title="examples/vendors/ascend.sq"
     --8<-- "examples/vendors/ascend.sq"
+    ```
+
+    ```serq title="examples/workloads/ascend_batch.sq"
+    --8<-- "examples/workloads/ascend_batch.sq"
     ```
 
 ## Remaining gaps

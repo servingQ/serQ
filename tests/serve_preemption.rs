@@ -20,7 +20,7 @@
 
 mod common;
 
-use serq::{compile_source, program_path, run_ir};
+use serq::{paired_workload, program_path, run_ir};
 
 const RUNNING: &str = "advance running each at most (threshold);";
 
@@ -36,6 +36,8 @@ fn a_served_resident_preempted_in_its_iteration_leaves_it() {
         "advance running by (-admission) each at most (threshold);",
     );
     let mut ov = common::horizon(100000.0);
+    let workload =
+        std::fs::read_to_string(paired_workload(&path).expect("the example's workload")).unwrap();
     for (k, v) in [
         ("bs", 16.0),
         ("B", 32.0),
@@ -55,7 +57,7 @@ fn a_served_resident_preempted_in_its_iteration_leaves_it() {
         .iter()
         .map(|&(p, o, a)| vec![("prompt", p), ("o", o), ("arrive", a)])
         .collect();
-    let ir = compile_source(&common::main_source(&src), &ov)
+    let ir = common::compile(&common::main_source(&src), &workload, &ov)
         .unwrap()
         .with_sessions(&sessions)
         .unwrap();

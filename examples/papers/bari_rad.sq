@@ -1,16 +1,14 @@
 // Bari, Hegde, de Veciana (arXiv 2508.01002): one inference node running RAD.
-// docs/use-cases/bari.md explains it a part at a time.
+// docs/use-cases/bari.md explains it a part at a time; its workload is
+// examples/workloads/bari_rad.sq.
 use "std/args";
 
 // --8<-- [start:settings]
 let bcol = 128;  // b_col = b_row = b_red = b_lcm
 let tlin = 4000;  // µs per pass over a tile, 1 / c_Lin
 let tnl = 5;  // µs per token of non-linear operations, 1 / c_nLin
-let vpmax = 8;  // prompts are 1 .. vpmax tiles (Assumption 3)
-let vdmax = 512;  // the largest output
 
 fn main() {
-  let rate = args.number("rate", 0.00002);  // requests per µs (20 per second)
   // --8<-- [end:settings]
 
   // --8<-- [start:engine]
@@ -30,22 +28,12 @@ fn main() {
   }
   // --8<-- [end:worker]
 
-  // --8<-- [start:workload]
-  workload {
-    arrive poisson(rate);
-    init {
-      set t0 = now;
-      set vp = bcol * floor(~uniform(1, vpmax + 1));
-      set vd = min(floor(~exp(200)) + 1, vdmax);
-    }
-    send (vp, vd, t0);
-  }
-
+  // --8<-- [start:server]
   server (vp, vd, t0) {
     E (vp, vd + 1);   // the model's decode steps after the prefill's sampled token
     observe response = now - t0;
   }
-  // --8<-- [end:workload]
+  // --8<-- [end:server]
 
   // --8<-- [start:claims]
   claim token_rate: every iteration of E (served * (tlin + tnl * bcol) <= bcol * now);

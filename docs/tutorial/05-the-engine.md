@@ -11,6 +11,10 @@ to share an iteration.
 --8<-- "docs/tutorial/programs/05-engine.sq"
 ```
 
+```serq title="docs/tutorial/programs/workloads/05-engine.sq"
+--8<-- "docs/tutorial/programs/workloads/05-engine.sq"
+```
+
 Its deployment, drawn by [`serq draw`](../visualization/index.md):
 
 ![The engine as a queueing network](../assets/05-engine.deployment.svg)
@@ -139,64 +143,71 @@ the time per output token after it
 
 ## The workload and the server
 
-The `session` inside `workload` describes the conversation: each `turn;`
-waits for a response before the client decides whether to continue. The
-workload sends each request its prompt, the session's context and new
-tokens, and its output, `send (input: K + n, output: o);`, and the
-`server` says what a turn is:
+The workload file is chapter 4's sessions. Its `session` describes the
+conversation: each `turn;` waits for a response before the client decides
+whether to continue. The workload sends each request its prompt, the
+session's context and new tokens, its output, and whether it is the
+session's last, `send (input: K + n, output: o, final: more == 0);`, and
+the `server` says what a turn is:
 
 ```serq
-server (input, output) {
+server (input, output, final) {
   llm (input, output);
+  // a session's last turn leaves nothing worth keeping
+  if (final) { drop kv; }
 }
 ```
 
 one request to the engine, with `input` as its prompt and `output` as its
-output: `request.input` and `request.output` in `taking`. The server reads
-what the request carries, not the client's `K`; the client keeps its
-context itself, `set K = K + n + o;`. The deployment figure shows the
-server side.
+output: `request.input` and `request.output` in `taking`. After the
+session's last turn the server drops its cached KV, which is the
+deployment's, as in chapter 4. The server reads what the request carries,
+not the client's `K`; the client keeps its context itself,
+`set K = K + n + o;`. The deployment figure shows the server side.
 
 ## Running it
 
 ```bash
-serq run docs/tutorial/programs/05-engine.sq --horizon 20000 --warmup 2000 --seed 1
+serq run docs/tutorial/programs/05-engine.sq --workload docs/tutorial/programs/workloads/05-engine.sq --horizon 20000 --warmup 2000 --seed 1
 ```
 
 ```text
-run: horizon 20000 end 20000 warmup 2000 seed 1 events 9160272 arrivals 9905 ended 8905 turns 43948 mean live 6.012
+run: horizon 20000 end 20000 warmup 2000 seed 1 events 9355182 arrivals 9905 ended 8902 turns 44889 mean live 6.146
 
 observe      count       mean    95% CI    cv2         p99
 -----------  -----  ---------  --------  -----  ----------
-llm.reused   43948  3922.3508  ±87.4343  0.845  16336.0000
-llm.prefill  43948   843.9338  ±14.8493  1.195   2976.1210
+llm.reused   44890  3988.8495  ±79.5088  0.861  16640.0000
+llm.prefill  44890   876.0771  ±33.2292  1.468   3487.0891
 
 client    count       mean      95% CI    cv2        p99
 --------  -----  ---------  ----------  -----  ---------
-ttft      43948    0.01798    ±0.00045  1.329    0.07634
-tpot      43949  0.0002383  ±0.0000060  4.047  0.0006076
-response  43949    0.06272    ±0.00095  0.665    0.23843
+ttft      44889    0.01906    ±0.00112  1.879    0.09575
+tpot      44889  0.0002524  ±0.0000154  7.841  0.0007155
+response  44889    0.06472    ±0.00219  0.834    0.26135
 
 stage  number   util   done    thru    wait  service    iters
 -----  ------  -----  -----  ------  ------  -------  -------
-llm     0.151  0.136  87897  4.8832  0.0000   0.0310  9111287
-tool    5.859  0.999  35045  1.9469  0.0000   3.0093        0
+llm     0.159  0.141  89779  4.9877  0.0000   0.0318  9305275
+tool    5.985  0.998  35986  1.9992  0.0000   2.9932        0
 
 step  prefill only  decode only  mixed   idle  decodes  decode batch  decode step   itl p50   itl p99
 ----  ------------  -----------  -----  -----  -------  ------------  -----------  --------  --------
-llm          0.036        0.095  0.006  0.864    0.109         1.078     0.000223  0.000209  0.000243
+llm          0.037        0.097  0.007  0.859    0.114         1.081     0.000225  0.000209  0.000245
 
 pool   used   cached  queue  holders    wait  admits  evict(n)  evict(u)  preempt  spill  rej  stuck
 ----  -----  -------  -----  -------  ------  ------  --------  --------  -------  -----  ---  -----
-kv    723.3  28911.2  0.000    0.151     NaN   48984       198   1640352        0      0    0      0
-reqs    0.2      0.0  0.002    0.151  0.0007   48984         0         0        0      0    0      0
+kv    785.1  29642.7  0.000    0.159     NaN   49907       437   3500288        1      0    0      0
+reqs    0.2      0.0  0.003    0.159  0.0011   49907         0         0        0      0    0      0
 ```
 
-`done 87897` at `llm` against 43 948 turns — two runs per turn, prefill
+`done 89779` at `llm` against 44 889 turns — two runs per turn, prefill
 and decode.
 
-TTFT is now separately observable, and at 18 ms it is a different quantity from
-the 63 ms response. Iteration-level simulation gives both.
+TTFT is now separately observable, and at 19 ms it is a different quantity from
+the 65 ms response. Iteration-level simulation gives both.
+
+Measured 2026-10-14 on serQ 1b0a47b with the paired-workload change (the
+workload a file of its own), by the command above.
 
 !!! note "`wait NaN` on the `kv` pool"
     An admission that takes several pools joins the queue of the **first**

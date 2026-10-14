@@ -1,0 +1,8 @@
+// Requests arriving as a Poisson process, carrying nothing: the server draws
+// their work (examples/pd-disaggregation/pd_open.sq runs it).
+
+let Lambda = 1.0;
+
+workload {
+  arrive poisson(Lambda);
+}

@@ -1887,11 +1887,14 @@ impl Linker<'_> {
     }
 
     fn pool_ref(&self, r: &Ref) -> LResult<CRef> {
+        self.paired_station(&r.name, "pool")
+            .map_err(|e| e.at(r.span))?;
         self.cref(r, &self.pools, "pool")
     }
 
     fn stage_ref(&self, r: &Ref) -> LResult<CRef> {
-        self.paired_stage(&r.name).map_err(|e| e.at(r.span))?;
+        self.paired_station(&r.name, "stage")
+            .map_err(|e| e.at(r.span))?;
         self.cref(r, &self.stages, "stage")
     }
 
@@ -1916,6 +1919,13 @@ impl Linker<'_> {
                     "a cost type annotation cannot draw a member index".into(),
                 ));
             }
+            let what = if self.pools.contains_key(&r.name) {
+                "pool"
+            } else {
+                "stage"
+            };
+            self.paired_station(&r.name, what)
+                .map_err(|e| e.at(r.span))?;
             targets.push(if let Some(&(base, count)) = self.pools.get(&r.name) {
                 if r.index.is_some() {
                     self.pool_ref(r)?;
@@ -2767,21 +2777,22 @@ impl Linker<'_> {
         Ok(id)
     }
 
-    /// For a pair of files: the workload runs on its own stages (and the
-    /// `tool` it needs none for), the deployment on none of them
-    /// (`docs/design/paired-workload.md`).
-    fn paired_stage(&self, name: &str) -> LResult<()> {
+    /// For a pair of files: the workload runs on and holds its own stages
+    /// and pools (and the `tool` it needs none for), the deployment none of
+    /// them (`docs/design/paired-workload.md`). `what` is `stage` or `pool`.
+    fn paired_station(&self, name: &str, what: &str) -> LResult<()> {
         let (Some(wl), Some(side)) = (&self.prog.paired, self.reader.get()) else {
             return Ok(());
         };
         let ours = wl.iter().any(|w| w == name);
         match side {
             crate::ir::Side::Workload if !ours && name != "tool" => Err(LinkError::new(format!(
-                "stage `{name}` is the deployment file's: the workload runs on its own stages \
-                 and sends the server what it runs"
+                "{what} `{name}` is the deployment file's: the workload runs on and holds its \
+                 own stages and pools, and sends the server what it runs"
             ))),
             crate::ir::Side::Server if ours => Err(LinkError::new(format!(
-                "stage `{name}` is the workload file's: the deployment runs on its own stages"
+                "{what} `{name}` is the workload file's: the deployment runs on and holds its \
+                 own stages and pools"
             ))),
             _ => Ok(()),
         }

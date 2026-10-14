@@ -1,0 +1,38 @@
+// Multi-turn sessions for the routing model (examples/multi-turn/routing.sq
+// runs it): a new session's home is replica 0 with probability `hot`, else
+// one of the replicas at random; a tool call between turns.
+
+let replicas = 4;    // the server's J
+let rate = 0.9;      // sessions per second
+let hot = 0.5;
+let p = 0.9;
+let Z = 2.0;
+
+// the laws, by name (`--def new_tokens='~erlang(2, 500)'`)
+def initial_tokens() { ~uniform(5000, 15000) }
+def new_tokens() { ~exp(500) }
+def output_tokens() { ~exp(200) }
+def tool_time() { ~exp(Z) }
+
+workload {
+  arrive poisson(rate);
+  init {
+    set initial_home = ~bernoulli(hot) ? 0 : floor(~uniform(0, replicas));
+    set K = 0;
+    set first = 1;
+  }
+  turn {
+    set n = first ? initial_tokens() : new_tokens();
+    set o = output_tokens();
+  }
+  send (n, K, o, first, initial_home);
+  // the conversation: a request per turn, then a tool call or the end
+  session {
+    loop {
+      turn;
+      set first = 0;
+      set K = K + n + o;
+      if (~bernoulli(p)) { tool (tool_time()); } else { end; }
+    }
+  }
+}

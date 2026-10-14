@@ -33,7 +33,8 @@ time.
 Point C is CodeLlama-34B on TP1, with batch time
 $t_b = 11.28 + 35.47\lceil b/128\rceil$ ms, $k_{max} = 100$, and one request
 every 467.5 ms with 290 prefill and 990 decode tokens. The argument opens
-`main`, which holds the rest of the program:
+`main`, which holds the rest of the program; the arrivals are the
+workload's ([below](#the-workload)):
 
 ```serq title="examples/single-turn/fastertransformer.sq"
 --8<-- "examples/single-turn/fastertransformer.sq:settings"
@@ -43,7 +44,6 @@ every 467.5 ms with 290 prefill and 990 decode tokens. The argument opens
 |---|---|---|
 | `kmax` | $k_{max}$ (§6) | the batch size limit |
 | `c`, `a`, `b0` | $t_b$ | seconds per iteration, seconds per step of `b0` tokens |
-| `gap` | — | the fixed inter-arrival time (s) |
 | `vp`, `vd` | — | prefill and decode tokens per request |
 | `bmax` | $b_{max}$ | the token budget, set with `--bmax` |
 
@@ -71,23 +71,37 @@ predicate read by `only` in both halves of the schedule:
 
 ### The workload
 
-Arrivals are deterministic, one every `gap` seconds. Each request holds a
-slot of `reqs` while the engine serves it, and `pending` counts the
-requests in the system, holding a slot or waiting for one:
+Arrivals are deterministic, one every `gap = 0.4675` seconds. The workload
+is not in the program: it is a file of its own,
+`examples/workloads/periodic.sq`, given when the program runs
+(`--workload`). It sends nothing: the server knows the lengths.
 
-```serq
---8<-- "examples/single-turn/fastertransformer.sq:workload"
+```serq title="examples/workloads/periodic.sq"
+--8<-- "examples/workloads/periodic.sq:workload"
 ```
 
-??? example "The whole program"
+Each request holds a slot of `reqs` while the engine serves it, and
+`pending` counts the requests in the system, holding a slot or waiting for
+one:
+
+```serq
+--8<-- "examples/single-turn/fastertransformer.sq:server"
+```
+
+??? example "The whole program, and its workload"
 
     ```serq title="examples/single-turn/fastertransformer.sq"
     --8<-- "examples/single-turn/fastertransformer.sq"
     ```
 
+    ```serq title="examples/workloads/periodic.sq"
+    --8<-- "examples/workloads/periodic.sq"
+    ```
+
 ## Results at point C
 
-`serq run`, seed 1, horizon 500 s, 1069 arrivals. Each row writes the listed policy in the engine's `scheduler`, with `bmax` overrides shown below. `pending` is the time average of `holders(reqs) + queued(reqs)`.
+`serq run examples/single-turn/fastertransformer.sq --workload
+examples/workloads/periodic.sq`, seed 1, horizon 500 s, 1069 arrivals. Each row writes the listed policy in the engine's `scheduler`, with `bmax` overrides shown below. `pending` is the time average of `holders(reqs) + queued(reqs)`.
 
 | Scheduler | `b_max` | pending mean | pending max | decode batch | batches |
 |---|---|---|---|---|---|

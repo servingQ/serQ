@@ -1,0 +1,29 @@
+// Multi-turn chat sessions: a context that grows by each turn's prompt and
+// output, a tool call between turns (examples/multi-turn/vllm.sq and
+// vllm_lmcache.sq run it).
+use "std/args";
+
+let p = 0.9;  // continue after a turn
+let Lambda = args.number("Lambda", 0.3);  // sessions per second
+let Z = args.number("Z", 3.0);  // tool time (s)
+
+// --8<-- [start:workload]
+workload {
+  arrive poisson(Lambda);
+  init { set K = 0; }
+  turn {
+    set n = ceil(K == 0 ? ~uniform(1000, 3000) : ~exp(500));
+    set o = floor(~exp(200)) + 1;
+    set more = ~bernoulli(p);
+  }
+  send (input: K + n, output: o);
+  session {
+    turn;
+    while (more) {
+      set K = K + n + o;
+      tool (~exp(Z));
+      turn;
+    }
+  }
+}
+// --8<-- [end:workload]

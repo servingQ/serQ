@@ -5,7 +5,7 @@
 
 mod common;
 
-use serq::{Overrides, compile_source, run_source};
+use serq::Overrides;
 
 /// Two six-token prompts on a budget of eight; an iteration costs 1, and 1
 /// more per token above 6. Any amount: the first iteration serves 6 + 2
@@ -33,12 +33,6 @@ fn program(granule: &str, schedule: &str) -> String {
           worker {{ forward (1 + max(0, batch.tokens - 6)); }}
         }}
         pool reqs on llm {{ }}
-        workload {{ arrive batch(2);
-          session {{ turn;
-            end;
-
-          }}
-        }}
         server {{
           set t0 = now;
           llm (6, 1);
@@ -49,11 +43,16 @@ fn program(granule: &str, schedule: &str) -> String {
     )
 }
 
+/// `n` requests of one turn, at once.
+fn batch(n: usize) -> String {
+    format!("workload {{ arrive batch({n}); session {{ turn; end; }} }}")
+}
+
 fn ttft(granule: &str) -> Vec<f64> {
-    let r = run_source(
+    let r = common::run(
         &common::main_source(&prog(granule)),
+        &batch(2),
         &common::horizon(20.0),
-        None,
     )
     .unwrap();
     r.observe("ttft").unwrap().samples.clone()
@@ -72,7 +71,12 @@ fn a_prefill_takes_its_whole_remainder_or_a_multiple_of_the_granule() {
 #[test]
 fn a_granule_is_above_zero() {
     for g in ["granule 0;", "granule -1;"] {
-        let e = compile_source(&common::main_source(&prog(g)), &common::horizon(20.0)).unwrap_err();
+        let e = common::compile(
+            &common::main_source(&prog(g)),
+            &batch(2),
+            &common::horizon(20.0),
+        )
+        .unwrap_err();
         assert!(e.contains("above 0"), "{g}: {e}");
     }
 }
@@ -101,14 +105,20 @@ fn a_granule_that_could_never_be_given_does_not_link() {
         ),
     ] {
         let src = program(granule, schedule);
-        let e = compile_source(&common::main_source(&src), &common::horizon(20.0)).unwrap_err();
+        let e = common::compile(
+            &common::main_source(&src),
+            &batch(2),
+            &common::horizon(20.0),
+        )
+        .unwrap_err();
         assert!(e.contains(message), "{schedule} {granule}: {e}");
     }
     // above the budget is allowed: a prompt that fits the budget is run
     // whole, and a longer one is the workload's (it waits, `idle:`)
     assert!(
-        compile_source(
+        common::compile(
             &common::main_source(&prog("granule 16;")),
+            &batch(2),
             &common::horizon(20.0)
         )
         .is_ok()
@@ -138,11 +148,6 @@ fn a_granule_above_a_computed_caps_floor_does_not_link() {
           worker {{ forward (1); }}
         }}
         pool reqs on llm {{ }}
-        workload {{ arrive batch(20);
-          session {{ turn;
-            end;
-          }}
-        }}
         server {{
           set t0 = now;
           llm (1024, 1);
@@ -151,12 +156,17 @@ fn a_granule_above_a_computed_caps_floor_does_not_link() {
 "#
         )
     };
-    let e = compile_source(&common::main_source(&src(512)), &common::horizon(100.0)).unwrap_err();
-    assert!(e.contains("granule 512 with chunk max(256, …)"), "{e}");
-    let r = run_source(
-        &common::main_source(&src(256)),
+    let e = common::compile(
+        &common::main_source(&src(512)),
+        &batch(20),
         &common::horizon(100.0),
-        None,
+    )
+    .unwrap_err();
+    assert!(e.contains("granule 512 with chunk max(256, …)"), "{e}");
+    let r = common::run(
+        &common::main_source(&src(256)),
+        &batch(20),
+        &common::horizon(100.0),
     )
     .unwrap();
     assert_eq!(r.observe("ttft").unwrap().samples.len(), 20, "{}", r.text());
@@ -180,12 +190,6 @@ fn the_chunk_caps_and_the_granule_rounds() {
           worker { forward (1); }
         }
         pool reqs on llm { }
-        workload { arrive batch(1);
-          session { turn;
-            end;
-
-          }
-        }
         server {
           set t0 = now;
           llm (10, 1);
@@ -193,14 +197,14 @@ fn the_chunk_caps_and_the_granule_rounds() {
         }
 
 "#;
-    let r = run_source(
+    let r = common::run(
         &common::main_source(src),
+        &batch(1),
         &Overrides {
             warmup: Some(0.0),
             seed: Some(1),
             ..common::horizon(20.0)
         },
-        None,
     )
     .unwrap();
     // 4 at the first, 6 at the second (the whole remainder, not capped
@@ -230,23 +234,17 @@ fn a_refused_prefill_ends_the_admissions() {
         }
         pool reqs on llm { }
         pool kv on gpu { }
-        workload { arrive batch(5);
-          session { turn;
-            end;
-
-          }
-        }
         server { llm (6, 1); observe admitted_at = llm.admitted; }
 
 "#;
-    let r = run_source(
+    let r = common::run(
         &common::main_source(src),
+        &batch(5),
         &Overrides {
             warmup: Some(0.0),
             seed: Some(1),
             ..common::horizon(20.0)
         },
-        None,
     )
     .unwrap();
     let admitted = &r.observe("admitted_at").unwrap().samples;

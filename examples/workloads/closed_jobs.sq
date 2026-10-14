@@ -1,0 +1,8 @@
+// `jobs` requests circulating, carrying nothing: the server loops each one
+// through its stations (examples/pd-disaggregation/pd_tandem.sq runs it).
+
+let jobs = 320;
+
+workload {
+  arrive closed(jobs);
+}

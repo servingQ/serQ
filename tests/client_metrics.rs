@@ -6,12 +6,12 @@ mod common;
 
 use std::collections::HashMap;
 
+use serq::Overrides;
 use serq::frontend::parser::parse_expr;
-use serq::{Overrides, compile_source, program_path, run_ir, run_source};
 
-fn run(src: &str) -> serq::Report {
-    run_source(&common::main_source(src), &common::horizon(100.0), None)
-        .unwrap_or_else(|e| panic!("{e}\n{src}"))
+fn run(src: &str, workload: &str) -> serq::Report {
+    common::run(&common::main_source(src), workload, &common::horizon(100.0))
+        .unwrap_or_else(|e| panic!("{e}\n{src}\n{workload}"))
 }
 
 fn samples(r: &serq::Report, name: &str) -> Vec<f64> {
@@ -36,12 +36,14 @@ engine llm on gpu {
 /// first token at 1; the decode's two tokens come at 2 and 3.
 #[test]
 fn a_request_s_first_token_and_the_tokens_after_it() {
-    let r = run(&format!(
-        "{}
-workload {{ arrive batch(1); }}
+    let r = run(
+        &format!(
+            "{}
 server {{ llm (8, 3); }}",
-        engine()
-    ));
+            engine()
+        ),
+        "workload { arrive batch(1); }",
+    );
     assert_eq!(samples(&r, "ttft"), [1.0]);
     assert_eq!(samples(&r, "tpot"), [1.0]);
     assert_eq!(samples(&r, "response"), [3.0]);
@@ -51,13 +53,15 @@ server {{ llm (8, 3); }}",
 /// are done: the client's think time after it is not the turn's.
 #[test]
 fn a_turn_ends_where_the_server_does() {
-    let r = run(&format!(
-        "{}
-stage pause : delay;
-workload {{ arrive batch(1); session {{ turn; run pause (cost(pause, 5)); turn; }} }}
+    let r = run(
+        &format!(
+            "{}
 server {{ llm (8, 2); }}",
-        engine()
-    ));
+            engine()
+        ),
+        "stage pause : delay;
+workload { arrive batch(1); session { turn; run pause (cost(pause, 5)); turn; } }",
+    );
     assert_eq!(samples(&r, "ttft"), [1.0, 1.0]);
     assert_eq!(samples(&r, "response"), [2.0, 2.0]);
 }
@@ -65,9 +69,11 @@ server {{ llm (8, 2); }}",
 /// A station with no engine answers a turn and sends no token.
 #[test]
 fn a_turn_that_decodes_nothing_has_a_response_only() {
-    let r = run("stage svc : fifo;
-workload { arrive batch(2); }
-server { run svc (cost(svc, 2)); }");
+    let r = run(
+        "stage svc : fifo;
+server { run svc (cost(svc, 2)); }",
+        "workload { arrive batch(2); }",
+    );
     assert_eq!(samples(&r, "response"), [2.0, 4.0]);
     assert_eq!(r.client("ttft").unwrap().count, 0);
     assert_eq!(r.client("tpot").unwrap().count, 0);
@@ -77,12 +83,14 @@ server { run svc (cost(svc, 2)); }");
 /// first, at the end of the first iteration, and two tokens follow.
 #[test]
 fn a_decode_alone_samples_the_first_token() {
-    let r = run(&format!(
-        "{}
-workload {{ arrive batch(1); }}
+    let r = run(
+        &format!(
+            "{}
 server {{ llm (0, 3); }}",
-        engine()
-    ));
+            engine()
+        ),
+        "workload { arrive batch(1); }",
+    );
     assert_eq!(samples(&r, "ttft"), [1.0]);
     assert_eq!(samples(&r, "tpot"), [1.0]);
     assert_eq!(samples(&r, "response"), [3.0]);
@@ -92,14 +100,16 @@ server {{ llm (0, 3); }}",
 /// its tokens are no token of the second, which only waits for it.
 #[test]
 fn a_leg_works_for_the_turn_it_was_forked_in() {
-    let r = run(&format!(
-        "{}
-workload {{ arrive batch(1); send (turn_no); session {{ turn; turn; }} }}
+    let r = run(
+        &format!(
+            "{}
 server (turn_no) {{
   if (turn_no == 1) {{ fork {{ llm (0, 4); }} }} else {{ join; }}
 }}",
-        engine()
-    ));
+            engine()
+        ),
+        "workload { arrive batch(1); send (turn_no); session { turn; turn; } }",
+    );
     assert_eq!(samples(&r, "response"), [0.0, 4.0]);
     assert_eq!(r.client("ttft").unwrap().count, 0);
 }
@@ -108,12 +118,14 @@ server (turn_no) {{
 /// answered, so the client records nothing of it, and no turn follows.
 #[test]
 fn a_refused_turn_is_not_answered() {
-    let r = run("stage svc : fifo;
-workload { arrive batch(2); init { set big = serial == 0; } send (big); session { turn; turn; } }
+    let r = run(
+        "stage svc : fifo;
 server (big) {
   if (big) { end; }
   run svc (cost(svc, 1));
-}");
+}",
+        "workload { arrive batch(2); init { set big = serial == 0; } send (big); session { turn; turn; } }",
+    );
     // session 1 is answered twice, at 1 and 2; session 0 ends at its first turn
     assert_eq!(samples(&r, "response"), [1.0, 1.0]);
     assert_eq!(r.ended, 2);
@@ -123,12 +135,14 @@ server (big) {
 /// One output token: a first token, and no time per token after it.
 #[test]
 fn one_output_token_has_no_tpot() {
-    let r = run(&format!(
-        "{}
-workload {{ arrive batch(1); }}
+    let r = run(
+        &format!(
+            "{}
 server {{ llm (8, 1); }}",
-        engine()
-    ));
+            engine()
+        ),
+        "workload { arrive batch(1); }",
+    );
     assert_eq!(samples(&r, "ttft"), [1.0]);
     assert_eq!(r.client("tpot").unwrap().count, 0);
 }
@@ -137,7 +151,8 @@ server {{ llm (8, 1); }}",
 /// the client's, the decoder's first is (llm-d's sidecar, `max_tokens = 1`).
 #[test]
 fn the_first_token_is_the_decoder_s() {
-    let r = run("
+    let r = run(
+        "
 device g1 { }
 device g2 { }
 engine p on g1 {
@@ -150,11 +165,12 @@ engine d on g2 {
   scheduler { advance running; admit waiting while (running.preempted == 0); }
   worker { forward (1); }
 }
-workload { arrive batch(1); }
 server {
   p (8, 1);
   d (1, 3);
-}");
+}",
+        "workload { arrive batch(1); }",
+    );
     assert_eq!(samples(&r, "ttft"), [2.0]);
     assert_eq!(samples(&r, "tpot"), [1.0]);
     assert_eq!(samples(&r, "response"), [4.0]);
@@ -163,12 +179,14 @@ server {
 /// A program's own `observe ttft` keeps its name, in its own table.
 #[test]
 fn a_program_s_observe_keeps_its_name() {
-    let r = run(&format!(
-        "{}
-workload {{ arrive batch(1); }}
+    let r = run(
+        &format!(
+            "{}
 server {{ llm (8, 3); observe ttft = 42; }}",
-        engine()
-    ));
+            engine()
+        ),
+        "workload { arrive batch(1); }",
+    );
     assert_eq!(r.observe("ttft").unwrap().samples, [42.0]);
     assert_eq!(samples(&r, "ttft"), [1.0]);
     assert!(r.text().contains("\nclient "), "{}", r.text());
@@ -180,8 +198,7 @@ server {{ llm (8, 3); observe ttft = 42; }}",
 /// turn ends, the client at the first token).
 #[test]
 fn the_client_s_are_pd_batching_s_hand_written_ones() {
-    let path = program_path("pd_batching");
-    let src = std::fs::read_to_string(&path).unwrap();
+    // `examples/workloads/pd_batching.sq` is its workload (`examples/pairs.json`)
     for (seed, mode) in [(1, 0.0), (2, 1.0)] {
         let ov = Overrides {
             seed: Some(seed),
@@ -190,8 +207,7 @@ fn the_client_s_are_pd_batching_s_hand_written_ones() {
             lets: vec![("mode".into(), parse_expr(&mode.to_string()).unwrap())],
             ..Default::default()
         };
-        let p = compile_source(&src, &ov).unwrap();
-        let r = run_ir(&p, path.parent()).unwrap();
+        let r = common::run_example("examples/pd-disaggregation/pd_batching.sq", &ov).unwrap();
         for name in ["tpot", "response"] {
             let (mine, client) = (r.observe(name).unwrap(), r.client(name).unwrap());
             assert_eq!(mine.samples, client.samples, "{name}, mode {mode}");

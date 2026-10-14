@@ -10,6 +10,10 @@ request waits until the pool can supply the units it needs.
 --8<-- "docs/tutorial/programs/02-memory.sq"
 ```
 
+```serq title="docs/tutorial/programs/workloads/02-memory.sq"
+--8<-- "docs/tutorial/programs/workloads/02-memory.sq"
+```
+
 Four servers now, so compute is not the constraint. Ten memory units are.
 
 ## Reserve memory with `hold`
@@ -39,7 +43,7 @@ body. When the body finishes, the units are released automatically.
 ## Running it
 
 ```bash
-serq run docs/tutorial/programs/02-memory.sq --horizon 100000 --warmup 5000 --seed 1
+serq run docs/tutorial/programs/02-memory.sq --workload docs/tutorial/programs/workloads/02-memory.sq --horizon 100000 --warmup 5000 --seed 1
 ```
 
 ```text
@@ -69,7 +73,7 @@ has moved to the pool.
 
 ```bash
 for C in 4 6 10 20; do
-  serq run docs/tutorial/programs/02-memory.sq --horizon 100000 --warmup 5000 --seed 1 --C $C
+  serq run docs/tutorial/programs/02-memory.sq --workload docs/tutorial/programs/workloads/02-memory.sq --horizon 100000 --warmup 5000 --seed 1 --C $C
 done
 ```
 

@@ -23,12 +23,6 @@ fn main() {
   pool kv on gpu { block 16; evict lru; preempt lifo; }
   pool slots on llm { }
 
-  workload {
-    arrive batch(3);
-    init { set p = 0; set o = 0; }
-    send (p, o);
-  }
-
   // `o` tokens decoded after the one the prefill samples
   server (p, o) {
     llm (p, o + 1);

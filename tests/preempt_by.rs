@@ -5,10 +5,15 @@
 
 mod common;
 
-use serq::{Overrides, compile_source, run_source};
+use serq::Overrides;
 
-fn run(src: &str, options: &Overrides) -> serq::Report {
-    run_source(&common::main_source(src), options, None).unwrap()
+fn run(src: &str, workload: &str, options: &Overrides) -> serq::Report {
+    common::run(&common::main_source(src), workload, options).unwrap()
+}
+
+/// `n` sessions arrive at t = 0, each one turn.
+fn sessions(n: usize) -> String {
+    format!("workload {{ arrive batch({n}); session {{ turn; end; }} }}\n")
 }
 
 /// The sessions the engine `llm` admitted, in the order it admitted them:
@@ -68,12 +73,6 @@ fn three(preempt: &str) -> String {
         }}
         pool reqs on llm {{ }}
         pool kv on gpu {{ {preempt} }}
-        workload {{ arrive batch(3);
-          session {{ turn;
-            end;
-
-          }}
-        }}
         server {{
           set prompt = serial == 0 ? 4 : serial == 1 ? 10 : 6;
           llm (prompt, 13);   // twelve decode steps after the prefill's token
@@ -92,7 +91,7 @@ fn the_victim_is_the_least_key() {
         // the earliest admitted: the opposite of lifo
         ("preempt by (admission);", 0.0),
     ] {
-        let r = run(&three(preempt), &common::horizon(200.0));
+        let r = run(&three(preempt), &sessions(3), &common::horizon(200.0));
         let victims = victims(&r);
         assert_eq!(victims[0], first, "{preempt}: {victims:?}\n{}", r.text());
     }
@@ -102,8 +101,12 @@ fn the_victim_is_the_least_key() {
 #[test]
 fn lifo_is_by_minus_admission() {
     let ir = |p: &str| {
-        let prog =
-            compile_source(&common::main_source(&three(p)), &common::horizon(200.0)).unwrap();
+        let prog = common::compile(
+            &common::main_source(&three(p)),
+            &sessions(3),
+            &common::horizon(200.0),
+        )
+        .unwrap();
         serde_json::to_string(&prog.pools).unwrap()
     };
     assert_eq!(ir("preempt lifo;"), ir("preempt by (-admission);"));
@@ -138,18 +141,13 @@ fn a_victim_requeues_at_the_head_or_the_tail() {
         }}
         pool reqs on llm {{ }}
         pool kv on gpu {{ preempt by (-admission) {requeue}; }}
-        workload {{ arrive batch(3);
-          session {{ turn;
-            end;
-
-          }}
-        }}
         server {{ llm (4, 11); }}
 
 "#
         );
         let r = run(
             &src,
+            &sessions(3),
             &Overrides {
                 warmup: Some(0.0),
                 seed: Some(1),
@@ -169,7 +167,13 @@ fn a_victim_requeues_at_the_head_or_the_tail() {
 
 #[test]
 fn a_preempt_key_reads_the_candidate_and_nothing_it_cannot_see() {
-    let base = |preempt: &str, hidden: &str| {
+    // `hidden`: the server hides `o`, which the workload sends
+    let base = |preempt: &str, hidden: bool| {
+        let (signature, set_o) = if hidden {
+            ("(hidden o) ", "")
+        } else {
+            ("", "set o = 12;")
+        };
         format!(
             r#"
         device gpu {{ kv cap 40; }}
@@ -185,50 +189,47 @@ fn a_preempt_key_reads_the_candidate_and_nothing_it_cannot_see() {
         }}
         pool reqs on llm {{ }}
         pool kv on gpu {{ {preempt} }}
-        workload {{ arrive batch(3); {hidden}
-          session {{ turn;
-            end;
-
-          }}
-        }}
-        server {{
+        server {signature}{{
           set prompt = 4;
-          set o = 12;
+          {set_o}
           llm (prompt, o + 1);
         }}
 
 "#
         )
     };
-    let err = |preempt: &str, hidden: &str| {
-        compile_source(
+    let workload = |hidden: bool| {
+        if hidden {
+            "workload { arrive batch(3); init { set o = 12; } send (o);\n  session { turn; end; }\n}\n"
+                .to_string()
+        } else {
+            sessions(3)
+        }
+    };
+    let options = Overrides {
+        warmup: Some(0.0),
+        seed: Some(1),
+        ..common::horizon(200.0)
+    };
+    let err = |preempt: &str, hidden: bool| {
+        common::compile(
             &common::main_source(&base(preempt, hidden)),
-            &Overrides {
-                warmup: Some(0.0),
-                seed: Some(1),
-                ..common::horizon(200.0)
-            },
+            &workload(hidden),
+            &options,
         )
         .err()
         .unwrap_or_else(|| panic!("`{preempt}` linked"))
     };
-    assert!(err("preempt by (~exp(1));", "").contains("may not draw"));
-    assert!(err("preempt by (budget_left(llm));", "").contains("budget_left"));
-    assert!(err("preempt by (o);", "hidden o;").contains("hidden"));
-    assert!(err("preempt by (remaining);", "").contains("remaining"));
+    assert!(err("preempt by (~exp(1));", false).contains("may not draw"));
+    assert!(err("preempt by (budget_left(llm));", false).contains("budget_left"));
+    assert!(err("preempt by (o);", true).contains("hidden"));
+    assert!(err("preempt by (remaining);", false).contains("remaining"));
     // `position` is a preempt key's alone
-    let src = base("preempt lifo;", "").replace("set o = 12;", "set o = position;");
+    let src = base("preempt lifo;", false).replace("set o = 12;", "set o = position;");
     assert!(
-        compile_source(
-            &common::main_source(&src),
-            &Overrides {
-                warmup: Some(0.0),
-                seed: Some(1),
-                ..common::horizon(200.0)
-            }
-        )
-        .unwrap_err()
-        .contains("position")
+        common::compile(&common::main_source(&src), &workload(false), &options)
+            .unwrap_err()
+            .contains("position")
     );
 }
 
@@ -245,12 +246,6 @@ fn lifo_is_by_minus_admission_on_a_pool_no_engine_reads() {
         pool a {{ cap 10; {preempt} }}
         pool b {{ cap 10; }}
         stage svc : delay;
-        workload {{ arrive batch(2);
-          session {{ turn;
-            end;
-
-          }}
-        }}
         server {{
           if (serial == 0) {{
             hold a (cost(a, 4)) {{
@@ -269,6 +264,7 @@ fn lifo_is_by_minus_admission_on_a_pool_no_engine_reads() {
     let report = |p: &str| {
         let r = run(
             &prog(p),
+            &sessions(2),
             &Overrides {
                 warmup: Some(0.0),
                 seed: Some(1),
@@ -308,12 +304,6 @@ fn a_tail_victim_is_ordered_by_the_queue_keys() {
         }
         pool reqs on llm { queue by (rank); }
         pool kv on gpu { preempt by (-admission) requeue tail; }
-        workload { arrive batch(3);
-          session { turn;
-            end;
-
-          }
-        }
         server {
           set rank = serial == 2 ? 9 : serial;
           llm (4, 11);
@@ -322,6 +312,7 @@ fn a_tail_victim_is_ordered_by_the_queue_keys() {
 "#;
     let r = run(
         src,
+        &sessions(3),
         &Overrides {
             warmup: Some(0.0),
             seed: Some(1),
@@ -340,9 +331,17 @@ fn a_tail_victim_is_ordered_by_the_queue_keys() {
 #[test]
 fn a_preempt_key_reads_decoding_and_not_computed() {
     let base = three("preempt by (1 - decoding, position - prompt, -prompt);");
-    assert!(compile_source(&common::main_source(&base), &common::horizon(200.0)).is_ok());
-    let err = compile_source(
+    assert!(
+        common::compile(
+            &common::main_source(&base),
+            &sessions(3),
+            &common::horizon(200.0)
+        )
+        .is_ok()
+    );
+    let err = common::compile(
         &common::main_source(&three("preempt by (computed);")),
+        &sessions(3),
         &common::horizon(200.0),
     )
     .unwrap_err();

@@ -202,7 +202,10 @@ drop POOL;
 Discards the session's entry in `POOL`: what hangs under its serial's key, leaves
 first, and no shared segment. `end` keeps the session's
 cached prefixes (the cache does not know a session has left), so a program that
-models dropping them writes this before `end`.
+models dropping them writes this in the server on the session's last
+request, which the workload sends as a parameter
+(`send (…, final: more == 0)`, then `if (final) { drop kv; }`): the server
+holds the deployment's pools, the workload only its own.
 
 ## `release`
 
@@ -341,15 +344,12 @@ refused there inside a `hold`, inside a `fork` and in a queue's entry.
 
 ## Examples
 
-A complete program:
+A complete program, a deployment and its workload:
 
-```serq
+```serq title="model.sq"
 fn main() {
   pool reqs { cap 1; }
   stage svc : fifo;
-  workload {
-    arrive batch(2);
-  }
   server {
     set t0 = now;
     hold reqs (cost(reqs, 1)) { run svc (cost(svc, 2)); }
@@ -358,10 +358,16 @@ fn main() {
 }
 ```
 
-Save as `model.sq`, then run:
+```serq title="workload.sq"
+workload {
+  arrive batch(2);
+}
+```
+
+Save the deployment as `model.sq` and its workload as `workload.sq`, then run:
 
 ```sh
-serq run model.sq --horizon 10
+serq run model.sq --workload workload.sq --horizon 10
 ```
 
 ## See also

@@ -405,7 +405,9 @@ preemption policies other than LIFO are not translated.
 
 ### Source entry points and inputs
 
-The `.sq` frontend requires `fn main()` for an executable source program.
+The `.sq` frontend requires `fn main()` for an executable source program,
+the deployment, and a workload file given beside it (`--workload`), which
+the tool pairs with it into one program ([paired files](language.md#paired-files)).
 `std/args` resolves declared inputs before constructing this IR. Neither the
 entry-point wrapper nor the input library adds a runtime node or field;
 plain constants remain folded, and an IR program never reads host arguments.

@@ -1,0 +1,6 @@
+// The sessions of tests/lean-regress/preempt_delay.sq.
+workload {
+  arrive batch(2);
+  init { set d = 0; }
+  send (d);
+}

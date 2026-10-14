@@ -1,0 +1,15 @@
+// Kong et al.'s requests (arXiv 2606.22327 §3): N of them at once, each a
+// uniform prompt and output length (examples/papers/kong_svf.sq runs it).
+
+let N = 200;
+
+// --8<-- [start:workload]
+workload {
+  arrive batch(N);
+  init {
+    set s = floor(~uniform(100, 2000));
+    set o = floor(~uniform(10, 500));
+  }
+  send (s, o);
+}
+// --8<-- [end:workload]

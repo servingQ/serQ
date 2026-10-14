@@ -5,8 +5,24 @@ Paths below are relative to the repository root.
 
 ## Add a program
 
-Put it in the `examples/` directory of its workload (`single-turn/`, `multi-turn/`, `subagent/`, `pd-disaggregation/`, `replay/`); names are unique across them. `make check` then links it and draws it
-in both formats. Add a row to `docs/language.md` (Programs) saying what it
+A program is a deployment and a workload, two files
+([paired files](../docs/design/paired-workload.md)):
+
+1. The deployment (`fn main()`, its devices, engines, pools and `server`,
+   no `workload`) goes in the `examples/` directory of its workload
+   (`single-turn/`, `multi-turn/`, `subagent/`, `pd-disaggregation/`,
+   `replay/`, …); names are unique across them.
+2. The workload (no `fn main()`: its `use`s, `let`s, `def`s, its own stages
+   and pools, and one `workload { … }`) goes in `examples/workloads/`,
+   unless an existing one already sends what the server's signature reads:
+   reuse it then.
+3. Add the pair to `examples/pairs.json`, both paths relative to the
+   repository's root: `"examples/<dir>/<name>.sq": "examples/workloads/<w>.sq"`.
+
+`make check` then refuses a program with no line there (`scripts/pairs.py
+--check`), links it with its workload and draws it in both formats; every
+tool that runs an example (`scripts/unused.py`, the sweeps under `tools/`)
+reads its workload from `examples/pairs.json`. Add a row to `docs/language.md` (Programs) saying what it
 models and what it is checked against, and a test that checks that claim.
 A program that cites vLLM cites it as `file.py:lines`, and
 `scripts/check_citations.py` holds the citation to the pinned source:

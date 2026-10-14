@@ -6,7 +6,8 @@
 
 A construct that only tests reach is a path no reader of the examples ever
 sees (CLAUDE.md, §Keeping the frontend small). The programs are every
-example and tutorial program, compiled with `serq ir`, and the IR the
+example and tutorial program, compiled with `serq ir` with its workload
+(examples/pairs.json), and the IR the
 oracles and the Lean claims read (`tools/**/*.ir.json`); a companion
 repository's programs are not read here. The variants are those of each
 enum of `src/ir.rs` that is serialised, read from the source.
@@ -22,6 +23,8 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+
+import pairs
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "tools" / "unused.json"
@@ -46,8 +49,9 @@ def variants():
 
 
 def programs():
-    """The programs `make check` links and draws, and the tutorial's."""
-    return sorted((ROOT / "examples").glob("*/*.sq")) + sorted((ROOT / "docs" / "tutorial" / "programs").glob("*.sq"))
+    """The programs `make check` links and draws, and the tutorial's, each
+    run with its workload (examples/pairs.json)."""
+    return pairs.programs()
 
 
 def tags(x, out):
@@ -66,7 +70,7 @@ def tags(x, out):
 def unused():
     used = set()
     for p in programs():
-        ir = subprocess.run([str(SERQ), "ir", str(p), "--horizon", "10"], capture_output=True, text=True, cwd=ROOT)
+        ir = subprocess.run([str(SERQ), "ir", str(p), *pairs.workload_args(p), "--horizon", "10"], capture_output=True, text=True, cwd=ROOT)
         if ir.returncode:
             sys.exit(f"FAIL: {p.relative_to(ROOT)}: serq ir failed\n{ir.stderr}")
         tags(json.loads(ir.stdout), used)

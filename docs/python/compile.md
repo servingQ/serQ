@@ -2,13 +2,18 @@
 
 ```python
 pyserq.compile(
-    path=None, *, source=None, sets={}, defs={}, seed=None,
+    path=None, *, source=None, workload=None, workload_source=None,
+    sets={}, defs={}, seed=None,
     horizon=None, warmup=None, arrivals=None, trace=None,
 ) -> Program
 ```
 
 Compile a program file or source text into a validated [Program](program.md).
-Supply exactly one of `path` and `source`. For source models, supply `horizon=`;
+Supply exactly one of `path` and `source`, the deployment, and for program
+text exactly one of `workload` and `workload_source`, its workload: the
+workload is a file of its own, given when the program runs, as
+`serq run FILE --workload W` ([paired files](../language.md#paired-files)).
+For source models, supply `horizon=`;
 execution settings belong to this call, not to the model text. JSON IR already
 contains its execution settings.
 
@@ -23,6 +28,8 @@ contains its execution settings.
 | Parameter | Type | Default | Description |
 |---|---|---|---|
 | `source` | `str` | `None` | Source text, instead of a file. |
+| `workload` | `str` or `os.PathLike` | `None` | Path to the workload file the deployment runs. Required for program text (a server with no workload is an error); refused with a `.json` IR, which holds its workload already. |
+| `workload_source` | `str` | `None` | Workload text, instead of `workload`: give one of the two. |
 | `sets` | `dict[str, float or str]` | `{}` | Supply inputs declared with `args.number` by their external name; plain `let` constants cannot be overridden. Numbers are literal values; strings are serQ expressions. Integers are also accepted as numbers. |
 | `defs` | `dict[str, str]` | `{}` | Replace expression `def` bodies by name, as with CLI `--def`. |
 | `seed` | `int` | `None` | Set the seed (default 1); from 0 through `2**64 - 1`. |
@@ -38,7 +45,9 @@ IR serialization. Compilation does not simulate it.
 
 ## Raises
 
-- `ValueError`: both or neither input is supplied; the file cannot be read;
+- `ValueError`: both or neither input is supplied; both `workload` and
+  `workload_source`, or a workload with a `.json` IR; no workload for a
+  program's server, or a `workload { … }` in its `fn main()`; the file cannot be read;
   parsing, linking or validation fails; an override is invalid.
 - `TypeError` or `OverflowError`: an argument cannot be converted to its
   required Python/Rust type.
@@ -49,8 +58,8 @@ IR serialization. Compilation does not simulate it.
 input, `sets` and `defs` are rejected; run overrides remain available.
 
 Text supplied with `source=` can import the built-in `std/args` and `std/kvt` libraries ([std/args](../api/std/args.md), [std/kvt](../api/std/kvt.md)).
-A relative trace named in a source file is resolved beside that file.
-With `source=`, a `trace=` override, or `Program.from_json`, traces resolve
+A relative trace named in a workload file is resolved beside that file.
+With `workload_source=`, a `trace=` override, or `Program.from_json`, traces resolve
 from the current working directory. Trace contents are read when the
 program runs.
 
@@ -65,16 +74,18 @@ use "std/args";
 fn main() {
   let duration = args.number("duration", 2);
   stage svc : delay;
-  workload {
-    arrive batch(1);
-  }
   server {
     run svc (cost(svc, duration));
     observe elapsed = now;
   }
 }
 """
-program = pyserq.compile(source=source, sets={"duration": 3}, seed=10, horizon=10)
+workload = """
+workload {
+  arrive batch(1);
+}
+"""
+program = pyserq.compile(source=source, workload_source=workload, sets={"duration": 3}, seed=10, horizon=10)
 report = pyserq.run(program)
 assert report.observe("elapsed").mean == 3.0
 ```
@@ -84,6 +95,7 @@ From a repository checkout:
 ```python
 program = pyserq.compile(
     "examples/single-turn/mg1.sq",
+    workload="examples/workloads/mg1.sq",
     sets={"lam": 0.8, "law": 1},
     seed=10,
     horizon=250000, warmup=25000,

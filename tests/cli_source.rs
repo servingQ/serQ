@@ -1,5 +1,5 @@
 mod common;
-use common::{Fixture, PROGRAM, failure};
+use common::{Fixture, PROGRAM, WORKLOAD, failure};
 use serq::frontend::parser;
 use serq::{Overrides, compile_source};
 
@@ -12,13 +12,14 @@ fn unknown_references_show_the_use_and_a_declaration_of_the_right_kind() {
             &PROGRAM.replace("run svc (cost(svc, rate))", "run svcc (cost(svcc, rate))"),
         ),
     );
+    f.write("w.sq", WORKLOAD);
     failure(
-        &f.run(&["check", "model.sq"]),
+        &f.run(&["check", "model.sq", "--workload", "w.sq"]),
         1,
         &[
-            "model.sq: 4:14:",
+            "model.sq: 3:14:",
             "unknown stage `svcc`",
-            "4 | server { run svcc (cost(svcc, rate)); }",
+            "3 | server { run svcc (cost(svcc, rate)); }",
             "^^^^",
             "did you mean stage `svc`?",
             "declared at 2:7",
@@ -26,13 +27,13 @@ fn unknown_references_show_the_use_and_a_declaration_of_the_right_kind() {
     );
     // The first spelling is a valid stage, but the second is an unknown pool.
     // Searching the token stream for the first matching name would misdiagnose it.
-    let src = "stage kvv : fifo;\npool kv { cap 10; }\nworkload { session { turn; hold kvv (cost(kvv, 1)) { end; } \n} }\nserver {\n}\n";
+    let src = "stage kvv : fifo;\npool kv { cap 10; }\nserver { hold kvv (cost(kvv, 1)) { }\n}\n";
     f.write("model.sq", &common::main_source(src));
     failure(
-        &f.run(&["check", "model.sq"]),
+        &f.run(&["check", "model.sq", "--workload", "w.sq"]),
         1,
         &[
-            "3:33:",
+            "3:15:",
             "unknown pool `kvv`",
             "did you mean pool `kv`?",
             "declared at 2:6",
@@ -44,8 +45,8 @@ fn unknown_references_show_the_use_and_a_declaration_of_the_right_kind() {
 fn names_and_bare_references_keep_their_locations() {
     for (src, location, cause) in [
         (
-            "workload { session { turn; \n} }\nserver { set x = min(typo, 1);\n}\n",
-            "3:22:",
+            "server { set x = min(typo, 1);\n}\n",
+            "1:34:",
             "unknown name `typo`",
         ),
         (
@@ -54,8 +55,8 @@ fn names_and_bare_references_keep_their_locations() {
             "no device or engine `lm`",
         ),
         (
-            "// 한글 주석\nlet 용량 = 10;\nworkload { session { turn; \n} }\nserver { set x = 용랑;\n}\n",
-            "5:18:",
+            "// 한글 주석\nlet 용량 = 10;\nserver { set x = 용랑;\n}\n",
+            "3:18:",
             "unknown name `용랑`",
         ),
         (
@@ -64,7 +65,14 @@ fn names_and_bare_references_keep_their_locations() {
             "`raet` is not a constant",
         ),
     ] {
-        let err = compile_source(&common::main_source(src), &common::horizon(1.0)).unwrap_err();
+        // a deployment with a server runs a workload
+        let ov = common::horizon(1.0);
+        let err = if src.contains("server {") {
+            common::compile(&common::main_source(src), WORKLOAD, &ov)
+        } else {
+            compile_source(&common::main_source(src), &ov)
+        }
+        .unwrap_err();
         assert!(err.contains(location), "{err}");
         assert!(err.contains(cause), "{err}");
         assert!(err.contains("help:"), "{err}");
@@ -74,22 +82,24 @@ fn names_and_bare_references_keep_their_locations() {
 #[test]
 fn an_argument_its_definition_does_not_read_is_still_resolved() {
     // #431: `one(no_such_name)` expanded to `1`, and the name was never read
-    let defs = "def one(x) { 1 }\ndef take(n) { turn; }\npool kv { cap 10; }\n";
+    // the server's definitions in the deployment, the session's in the workload
+    let defs = "def one(x) { 1 }\npool kv { cap 10; }\n";
     let run = |session: &str, server: &str| {
-        let src = format!("{defs}workload {{ session {{ {session} }} }}\nserver {{ {server}\n}}\n");
-        compile_source(&common::main_source(&src), &common::horizon(1.0))
+        let src = format!("{defs}server {{ {server}\n}}\n");
+        let workload = format!("def take(n) {{ turn; }}\nworkload {{ session {{ {session} }} }}\n");
+        common::compile(&common::main_source(&src), &workload, &common::horizon(1.0))
     };
     for (session, server, location, cause) in [
         (
             "turn;",
             "set a = one(no_such_name);",
-            "5:22:",
+            "3:22:",
             "unknown name `no_such_name`",
         ),
         (
             "set b = 1; take(bb);",
             "",
-            "4:38:",
+            "workload.sq: 2:38:",
             "did you mean name `b`?",
         ),
     ] {
@@ -109,10 +119,14 @@ fn an_argument_its_definition_does_not_read_is_still_resolved() {
     let entry = |body: &str| {
         let src = format!(
             "def one(x) {{ 1 }}\ndef go(n) {{ run (cost(engine, 1)); }}\nqueue engine : prefill \
-             {{\n  serve fifo;\n  prefill (prompt) {{ {body} }}\n}}\nworkload {{ arrive \
-             batch(1); session {{ turn; end; }} }} server {{ engine.prefill(3); }}\n"
+             {{\n  serve fifo;\n  prefill (prompt) {{ {body} }}\n}}\n\
+             server {{ engine.prefill(3); }}\n"
         );
-        compile_source(&common::main_source(&src), &common::horizon(1.0))
+        common::compile(
+            &common::main_source(&src),
+            "workload { arrive batch(1); session { turn; end; } }",
+            &common::horizon(1.0),
+        )
     };
     // in a hold's body, an unread argument sees the header's binding and is
     // not a read of it: the body sets nothing for it
@@ -130,11 +144,11 @@ fn an_argument_its_definition_does_not_read_is_still_resolved() {
         };
         let src = format!(
             "def one(x) {{ 1 }}\n{svc}\n{f}\npool kv {{ cap 10; }}\n\
-             pool g[2] {{ cap 10; }}\nworkload {{ arrive batch(1); send (s); session {{ set s = 1; turn; \
-             end; }} }}\nserver (s) {{ hold kv (cost(kv, 1)) at admission (need = {need}) {{ {body} \
+             pool g[2] {{ cap 10; }}\nserver (s) {{ hold kv (cost(kv, 1)) at admission (need = {need}) {{ {body} \
              }} }}\n"
         );
-        compile_source(&common::main_source(&src), &common::horizon(1.0))
+        let workload = "workload { arrive batch(1); send (s); session { set s = 1; turn; end; } }";
+        common::compile(&common::main_source(&src), workload, &common::horizon(1.0))
             .map(|p| serde_json::to_string(&p).unwrap())
     };
     assert_eq!(
@@ -177,9 +191,13 @@ fn an_argument_its_definition_does_not_read_is_still_resolved() {
     let constant = |arg: &str, size: &str| {
         let src = format!(
             "def one(x) {{ 1 }}\npool kv {{ cap 10; }}\nlet n = one({arg});\npool g[{size}] \
-             {{ cap n; }}\nworkload {{ session {{ turn; }} }}\nserver {{ }}\n"
+             {{ cap n; }}\nserver {{ }}\n"
         );
-        compile_source(&common::main_source(&src), &common::horizon(1.0))
+        common::compile(
+            &common::main_source(&src),
+            "workload { session { turn; } }",
+            &common::horizon(1.0),
+        )
     };
     constant("kv", "one(n)").unwrap();
     let err = constant("zz", "1").unwrap_err();
@@ -205,21 +223,23 @@ fn duplicate_declarations_point_to_both_sites() {
 
 #[test]
 fn desugaring_keeps_server_and_header_binding_locations() {
-    let src = "stage svc : fifo;\nworkload { arrive batch(1); session { turn; end; } }\nserver {\n  run svcc (cost(svcc, 1));\n}\n";
-    let err = compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap_err();
-    assert!(err.contains("4:7:"), "{err}");
-    assert!(err.contains("4 |   run svcc (cost(svcc, 1));"), "{err}");
-    let src = "pool kv { cap 10; }\nworkload { arrive batch(1); session { turn; end; } }\nserver {\n  hold kv (cost(kv, amount)) at admission (amount = missing) { }\n}\n";
-    let err = compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap_err();
+    let ov = common::horizon(10.0);
+    let src = "stage svc : fifo;\nserver {\n  run svcc (cost(svcc, 1));\n}\n";
+    let err = common::compile(&common::main_source(src), WORKLOAD, &ov).unwrap_err();
+    assert!(err.contains("3:7:"), "{err}");
+    assert!(err.contains("3 |   run svcc (cost(svcc, 1));"), "{err}");
+    let src = "pool kv { cap 10; }\nserver {\n  hold kv (cost(kv, amount)) at admission (amount = missing) { }\n}\n";
+    let err = common::compile(&common::main_source(src), WORKLOAD, &ov).unwrap_err();
     // `missing`, in the binding, is where the failed expression was written.
-    assert!(err.contains("4:53:"), "{err}");
+    assert!(err.contains("3:53:"), "{err}");
     assert!(err.contains("unknown name `missing`"), "{err}");
 }
 
 #[test]
 fn queue_expansion_keeps_argument_and_stage_declaration_locations() {
-    let src = "queue engine : prefill {\n  serve fifo;\n  prefill (prompt) { run (cost(engine, prompt)); }\n}\nqueue gw : gateway { route {\n  engine.prefill (missing);\n} }\nworkload { arrive batch(1); session { turn; end; } } server { gw.route(); }\n";
-    let err = compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap_err();
+    let ov = common::horizon(10.0);
+    let src = "queue engine : prefill {\n  serve fifo;\n  prefill (prompt) { run (cost(engine, prompt)); }\n}\nqueue gw : gateway { route {\n  engine.prefill (missing);\n} }\nserver { gw.route(); }\n";
+    let err = common::compile(&common::main_source(src), WORKLOAD, &ov).unwrap_err();
     // Parameter substitution must point to the argument at the call site,
     // rather than the parameter inside the queue's entry.
     assert!(err.contains("6:19:"), "{err}");
@@ -227,8 +247,8 @@ fn queue_expansion_keeps_argument_and_stage_declaration_locations() {
     assert!(err.contains("6 |   engine.prefill (missing);"), "{err}");
 
     // the queue's engine is its stage, declared where the queue is named
-    let src = "queue llm : prefill {\n  device gpu { kv cap 10; }\n  engine on gpu { tokens cap inf; scheduler { advance running; admit waiting while (running.preempted == 0); } worker { forward (1); } }\n  pool kv on gpu { }\n  prefill (prompt) { hold kv (cost(kv, prompt)) { run lm prefill (cost(llm, prompt)) growing kv; } }\n}\nworkload { arrive batch(1); session { turn; end; } } server { llm.prefill (1); }\n";
-    let err = compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap_err();
+    let src = "queue llm : prefill {\n  device gpu { kv cap 10; }\n  engine on gpu { tokens cap inf; scheduler { advance running; admit waiting while (running.preempted == 0); } worker { forward (1); } }\n  pool kv on gpu { }\n  prefill (prompt) { hold kv (cost(kv, prompt)) { run lm prefill (cost(llm, prompt)) growing kv; } }\n}\nserver { llm.prefill (1); }\n";
+    let err = common::compile(&common::main_source(src), WORKLOAD, &ov).unwrap_err();
     assert!(err.contains("5:55:"), "{err}");
     assert!(err.contains("unknown stage `lm`"), "{err}");
     assert!(err.contains("did you mean stage `llm`?"), "{err}");
@@ -237,14 +257,15 @@ fn queue_expansion_keeps_argument_and_stage_declaration_locations() {
 
 #[test]
 fn ambiguous_suggestions_and_override_spans_are_not_misleading() {
-    let src = "stage cat : fifo; stage cut : fifo; workload { session { turn; \n} }\nserver { run cot (cost(cot, 1));\n} ";
-    let err = compile_source(&common::main_source(src), &common::horizon(1.0)).unwrap_err();
+    let src = "stage cat : fifo; stage cut : fifo;\nserver { run cot (cost(cot, 1));\n} ";
+    let err =
+        common::compile(&common::main_source(src), WORKLOAD, &common::horizon(1.0)).unwrap_err();
     assert!(!err.contains("did you mean"), "{err}");
     let ov = Overrides {
         lets: vec![("rate".into(), parser::parse_expr("missing").unwrap())],
         ..common::horizon(1.0)
     };
-    let err = compile_source(&common::main_source(PROGRAM), &ov).unwrap_err();
+    let err = common::compile(&common::main_source(PROGRAM), WORKLOAD, &ov).unwrap_err();
     assert!(err.contains("the program argument `rate`"), "{err}");
     assert!(
         !err.contains("1 |"),
@@ -265,7 +286,12 @@ fn eof_errors_keep_the_eof_location_and_never_panic() {
 #[test]
 fn ir_errors_use_ir_context_instead_of_a_fabricated_source_location() {
     let f = Fixture::new();
-    let mut p = compile_source(&common::main_source(PROGRAM), &common::horizon(10.0)).unwrap();
+    let mut p = common::compile(
+        &common::main_source(PROGRAM),
+        WORKLOAD,
+        &common::horizon(10.0),
+    )
+    .unwrap();
     p.stages.clear();
     f.write("model.json", &p.to_json());
     let out = f.run(&["check", "model.json"]);
@@ -289,10 +315,6 @@ fn ownership_checks_ignore_locations_but_keep_index_syntax() {
     let program = |target: &str| {
         format!(
             "pool q[2] {{ cap 10; }}
-         workload {{ session {{ turn;
-           end;
-
-}} }}
 server {{
            set i = 0; set j = 0;
            hold q[{index}] (cost(q, 1)) {{
@@ -303,14 +325,17 @@ server {{
          "
         )
     };
-    compile_source(
-        &common::main_source(&program(index)),
-        &common::horizon(10.0),
-    )
-    .expect("same written target");
-    let err = compile_source(
+    let ov = common::horizon(10.0);
+    let workload = "workload { session { turn;
+           end;
+
+} }";
+    common::compile(&common::main_source(&program(index)), workload, &ov)
+        .expect("same written target");
+    let err = common::compile(
         &common::main_source(&program("j == 0 ? min(j, 1) : -j")),
-        &common::horizon(10.0),
+        workload,
+        &ov,
     )
     .expect_err("different written target, even though i and j are both zero");
     assert!(err.contains("index included"), "{err}");
@@ -321,15 +346,16 @@ fn a_constant_that_is_nan_is_refused_and_an_infinity_is_not() {
     let src = "use \"std/args\"; let x = args.number(\"x\", 1);
 pool kv { cap 100; block 16; }
 stage s : fifo(1);
-workload { arrive poisson(1);
-  session { turn; end;
-  }
-}
 server { run s (cost(s, x));
 }
 ";
-    let refused = |src: &str, ov: &Overrides, what: &str| {
-        let err = compile_source(&common::main_source(src), ov).expect_err(what);
+    let workload = "workload { arrive poisson(1);
+  session { turn; end;
+  }
+}
+";
+    let refused = |src: &str, workload: &str, ov: &Overrides, what: &str| {
+        let err = common::compile(&common::main_source(src), workload, ov).expect_err(what);
         assert!(
             err.contains(&format!("{what} is NaN")) && err.contains("help:"),
             "{err}"
@@ -342,26 +368,31 @@ server { run s (cost(s, x));
         };
         refused(
             &src.replace("args.number(\"x\", 1)", &format!("args.number(\"x\", {e})")),
+            workload,
             &none,
             "`let x`",
         );
         refused(
             &src.replace("cap 100", &format!("cap {e}")),
+            workload,
             &none,
             "pool `kv`: cap",
         );
         refused(
             &src.replace("block 16", &format!("block {e}")),
+            workload,
             &none,
             "pool `kv`: block",
         );
         refused(
             &src.replace("fifo(1)", &format!("fifo({e})")),
+            workload,
             &none,
             "stage `s`: fifo server count",
         );
         refused(
-            &src.replace("poisson(1)", &format!("poisson({e})")),
+            src,
+            &workload.replace("poisson(1)", &format!("poisson({e})")),
             &none,
             "the poisson rate",
         );
@@ -370,22 +401,23 @@ server { run s (cost(s, x));
             ..common::horizon(10.0)
         };
         ov.set("x", e).unwrap();
-        refused(src, &ov, "the program argument `x`: the value");
+        refused(src, workload, &ov, "the program argument `x`: the value");
     }
     let mut ov = Overrides {
         seed: Some(1),
         ..common::horizon(10.0)
     };
     ov.set_num("x", f64::NAN).unwrap();
-    refused(src, &ov, "the program argument `x`: the value");
+    refused(src, workload, &ov, "the program argument `x`: the value");
     let mut ov = Overrides {
         seed: Some(1),
         ..common::horizon(10.0)
     };
     ov.set_num("x", f64::INFINITY).unwrap();
-    compile_source(&common::main_source(src), &ov).expect("an infinity is `inf`");
-    compile_source(
+    common::compile(&common::main_source(src), workload, &ov).expect("an infinity is `inf`");
+    common::compile(
         &common::main_source(&src.replace("cap 100", "cap inf")),
+        workload,
         &Overrides {
             seed: Some(1),
             ..common::horizon(10.0)
@@ -393,12 +425,18 @@ server { run s (cost(s, x));
     )
     .expect("an infinite cap");
     for horizon in [f64::NAN, f64::INFINITY, 0.0, -1.0] {
-        let e = compile_source(&common::main_source(src), &common::horizon(horizon)).unwrap_err();
+        let e = common::compile(
+            &common::main_source(src),
+            workload,
+            &common::horizon(horizon),
+        )
+        .unwrap_err();
         assert!(e.contains("horizon"), "{e}");
     }
     // a constant with a place (a call) keeps it in the error
-    let err = compile_source(
+    let err = common::compile(
         &common::main_source(&src.replace("cap 100", "cap sqrt(-1)")),
+        workload,
         &Overrides {
             seed: Some(1),
             ..common::horizon(10.0)
@@ -412,20 +450,21 @@ server { run s (cost(s, x));
 fn a_def_given_from_outside_is_the_program_written_with_that_body() {
     let src = |service: &str, key: &str| {
         format!(
-            "let lam = 0.5;
-def service() {{ {service} }}
+            "def service() {{ {service} }}
 def key(x) {{ {key} }}
 def twice(x) {{ set y = x * 2; }}
 stage svc : fifo;
-workload {{ arrive poisson(lam);
-  session {{ turn; end;
-  }}
-}}
 server {{ set c = 1; run svc (cost(svc, service())); observe k = key(c);
 }}
 "
         )
     };
+    let workload = "let lam = 0.5;
+workload { arrive poisson(lam);
+  session { turn; end;
+  }
+}
+";
     let base = src("~exp(1)", "x");
     let mut ov = Overrides {
         seed: Some(3),
@@ -434,9 +473,10 @@ server {{ set c = 1; run svc (cost(svc, service())); observe k = key(c);
     ov.define("service", "c == 1 ? ~erlang(4, 1) : ~det(1)")
         .unwrap();
     ov.define("key", "x + 1").unwrap();
-    let given = compile_source(&common::main_source(&base), &ov).unwrap();
-    let written = compile_source(
+    let given = common::compile(&common::main_source(&base), workload, &ov).unwrap();
+    let written = common::compile(
         &common::main_source(&src("c == 1 ? ~erlang(4, 1) : ~det(1)", "x + 1")),
+        workload,
         &Overrides {
             seed: Some(3),
             ..common::horizon(100.0)
@@ -446,8 +486,9 @@ server {{ set c = 1; run svc (cost(svc, service())); observe k = key(c);
     assert_eq!(given.to_json(), written.to_json());
     assert_ne!(
         given.to_json(),
-        compile_source(
+        common::compile(
             &common::main_source(&base),
+            workload,
             &Overrides {
                 seed: Some(3),
                 ..common::horizon(100.0)
@@ -464,7 +505,7 @@ server {{ set c = 1; run svc (cost(svc, service())); observe k = key(c);
         };
         let err = match ov.define(name, body) {
             Err(e) => e,
-            Ok(()) => compile_source(&common::main_source(&base), &ov).expect_err(want),
+            Ok(()) => common::compile(&common::main_source(&base), workload, &ov).expect_err(want),
         };
         assert!(err.contains(want), "{err}");
     };

@@ -6,8 +6,6 @@
 
 mod common;
 
-use serq::compile_source;
-
 /// The engine's admission when it takes the prompt's blocks.
 const PREFILL: &str = "kv (request.input)";
 
@@ -25,13 +23,21 @@ fn program_with(taking: &str, server: &str) -> String {
           scheduler {{ advance running; admit waiting while (running.preempted == 0) taking {taking}; }}
           worker {{ forward (1); }} }}
         pool kv on gpu {{ block 16; }}
-        workload {{ arrive batch(1);
-          init {{ set prompt = 32; set o = 4; }}
-          send (prompt, o);
-          session {{ turn; end; }} }}
         server (prompt, hidden o) {{ {server} }}
         "
     )
+}
+
+/// One request of a 32-token prompt that generates 4: the server's
+/// `prompt` and its hidden `o`.
+const WORKLOAD: &str = "workload { arrive batch(1);
+  init { set prompt = 32; set o = 4; }
+  send (prompt, o);
+  session { turn; end; } }";
+
+/// The deployment `src` paired with the workload file `workload`.
+fn compile(src: &str, workload: &str, horizon: f64) -> Result<serq::Program, String> {
+    common::compile(src, workload, &common::horizon(horizon))
 }
 
 fn refused(server: &str, fragments: &[&str]) {
@@ -39,9 +45,10 @@ fn refused(server: &str, fragments: &[&str]) {
 }
 
 fn refused_with(taking: &str, server: &str, fragments: &[&str]) {
-    let err = compile_source(
+    let err = compile(
         &common::main_source(&program_with(taking, server)),
-        &common::horizon(100.0),
+        WORKLOAD,
+        100.0,
     )
     .unwrap_err();
     for f in fragments {
@@ -56,9 +63,10 @@ fn refused_with(taking: &str, server: &str, fragments: &[&str]) {
 fn the_server_may_run_cache_and_observe_by_a_hidden_attribute() {
     let ok = "E (prompt, o);
               observe length = o;";
-    compile_source(
+    compile(
         &common::main_source(&program_with(BOTH, ok)),
-        &common::horizon(100.0),
+        WORKLOAD,
+        100.0,
     )
     .unwrap();
 }
@@ -79,18 +87,20 @@ fn the_server_may_not_decide_on_a_hidden_attribute() {
 }
 
 /// The check reads the server, not what one request runs: a session whose
-/// requests differ (one inside the workload's `live`) was let through
+/// requests differ (one after the client's own `user`; it was one inside a
+/// `hold` of a pool, which is the deployment's now) was let through
 /// unchecked when the check read the request the view drew (#265).
 #[test]
 fn the_server_is_checked_when_the_requests_differ() {
-    let src = "pool live { cap 2; } stage A : fifo; stage B : fifo;
+    let src = "stage A : fifo; stage B : fifo;
+        server (hidden o) { if (o > 5) { run A (cost(A, 1)); } else { run B (cost(B, 1)); } }
+        ";
+    let workload = "stage user : delay;
         workload { arrive poisson(1);
           turn { set o = ~exp(10); }
           send (o);
-          session { turn; hold live (cost(live, 1)) { turn; } } }
-        server (hidden o) { if (o > 5) { run A (cost(A, 1)); } else { run B (cost(B, 1)); } }
-        ";
-    let err = compile_source(&common::main_source(src), &common::horizon(100.0)).unwrap_err();
+          session { turn; run user (cost(user, 1)); turn; } }";
+    let err = compile(&common::main_source(src), workload, 100.0).unwrap_err();
     assert!(
         err.contains("`o` is hidden from the scheduler, but the server's `if` reads it"),
         "{err}"
@@ -162,10 +172,11 @@ fn a_top_level_session_cannot_bypass_the_server_check() {
                  scheduler { advance running; admit waiting while (running.preempted == 0) taking kv (request.input); }
                  worker { forward (1); } }
                pool kv on gpu { block 16; }
-               workload { arrive batch(1); init { set prompt = 32; set o = 4; } send (prompt, o); }
                session { if (o > 2) { E (prompt, 1); } else { } end; }
                ";
-    let err = compile_source(&common::main_source(src), &common::horizon(100.0)).unwrap_err();
+    let workload =
+        "workload { arrive batch(1); init { set prompt = 32; set o = 4; } send (prompt, o); }";
+    let err = compile(&common::main_source(src), workload, 100.0).unwrap_err();
     assert!(err.contains("`session` belongs inside `workload`"), "{err}");
     refused(
         "if (o > 2) { E (prompt, 1); } else { }",
@@ -182,9 +193,10 @@ fn a_run_reveals_what_its_work_reads() {
                  E (prompt, o);
                  if (long) { observe was_long = 1; } else { observe was_long = 0; }
                  if (o > 3) { observe longer = 1; } else { }";
-    compile_source(
+    compile(
         &common::main_source(&program_with(BOTH, after)),
-        &common::horizon(100.0),
+        WORKLOAD,
+        100.0,
     )
     .unwrap();
     // before the request ends it is still hidden: the server may not decide
@@ -214,13 +226,13 @@ fn a_reveal_on_one_arm_only_does_not_reveal() {
 #[test]
 fn hidden_values_propagate_through_every_loop_pass() {
     let source = "stage svc : delay;
-      workload { arrive batch(1); turn { set secret = 2; } send (secret); }
       server (hidden secret) {
         set a = 0; set b = 0;
         while (a == 0) { run svc (cost(svc, 1)); set a = b; set b = secret; }
         observe done = now;
       }";
-    let error = compile_source(&common::main_source(source), &common::horizon(10.0)).unwrap_err();
+    let workload = "workload { arrive batch(1); turn { set secret = 2; } send (secret); }";
+    let error = compile(&common::main_source(source), workload, 10.0).unwrap_err();
     assert!(
         error.contains("`a` is set from the hidden `secret`"),
         "{error}"
@@ -253,9 +265,10 @@ fn hidden_values_propagate_through_every_loop_pass() {
             "E (prompt, o);
           {init} while (x0 == 0) {{ {work} {chain} }}"
         );
-        compile_source(
+        compile(
             &common::main_source(&program_with(request, &safe)),
-            &common::horizon(100.0),
+            WORKLOAD,
+            100.0,
         )
         .unwrap();
     }
@@ -266,13 +279,13 @@ fn hidden_values_propagate_through_every_loop_pass() {
 #[test]
 fn loop_join_preserves_origins_of_reassigned_hidden_names() {
     let src = "stage svc : delay;
-      workload { arrive batch(1); init { set a = 1; set b = 2; set flag = 0; } send (a, b, flag); }
       server (hidden a, hidden b, flag) { while (1) {
         if (flag) { set a = b; }
         run svc (cost(svc, b));
         if (a > 0) {}
       } }";
-    let error = compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap_err();
+    let workload = "workload { arrive batch(1); init { set a = 1; set b = 2; set flag = 0; } send (a, b, flag); }";
+    let error = compile(&common::main_source(src), workload, 10.0).unwrap_err();
     // The else path leaves a's original hidden value. Running by b cannot
     // reveal it just because the other path assigned a from b.
     assert!(error.contains("hidden `a`"), "{error}");
@@ -284,32 +297,34 @@ fn a_run_reveals_only_origins_present_on_every_path() {
     let model = |body: &str| {
         common::main_source(&format!(
             "stage svc : delay;
-         workload {{ arrive batch(1); init {{ set a = 1; set b = 2; }} send (a, b); }}
          server (hidden a, hidden b) {{ {body} }}"
         ))
     };
+    let w = "workload { arrive batch(1); init { set a = 1; set b = 2; } send (a, b); }";
     for body in [
         "if (1) {} else { set a = b; } run svc (cost(svc, a)); if (b > 0) { observe leaked = b; }",
         "set c = 1 ? a : b; run svc (cost(svc, c)); if (b > 0) {}",
         "run svc (cost(svc, 1 || b)); if (b > 0) {}",
     ] {
-        let error = compile_source(&model(body), &common::horizon(10.0)).unwrap_err();
+        let error = compile(&model(body), w, 10.0).unwrap_err();
         assert!(error.contains("`b` is hidden"), "{error}");
     }
     // Both branch arms depend on b: reading c genuinely reveals b.
-    compile_source(
+    compile(
         &model(
             "if (1) { set c = b; } else { set c = b + 1; }
          run svc (cost(svc, c)); if (b > 0) {}",
         ),
-        &common::horizon(10.0),
+        w,
+        10.0,
     )
     .unwrap();
     // Preserve dependency information after revelation so repeated runs
     // remain evidence at every loop pass, without falsely revealing b.
-    compile_source(
+    compile(
         &model("set i = 0; while (i < 2) { run svc (cost(svc, a)); if (a > 0) {} set i = i + 1; }"),
-        &common::horizon(10.0),
+        w,
+        10.0,
     )
     .unwrap();
 }
@@ -317,10 +332,10 @@ fn a_run_reveals_only_origins_present_on_every_path() {
 #[test]
 fn a_cost_family_annotation_does_not_reveal_its_index() {
     let source = "fn main() { stage svc[2] : delay;
-      workload { arrive batch(1); turn { set secret = 0; } send (secret); }
       server (hidden secret) { run svc[0] (cost(svc[secret], 1)); if (secret > 0) {} }
     }";
-    let e = compile_source(source, &common::horizon(10.0)).unwrap_err();
+    let workload = "workload { arrive batch(1); turn { set secret = 0; } send (secret); }";
+    let e = compile(source, workload, 10.0).unwrap_err();
     assert!(e.contains("hidden"), "{e}");
 }
 
@@ -339,28 +354,32 @@ fn a_stage_passed_bare_does_not_reveal_an_attribute_of_its_name() {
           scheduler {{ advance running; admit waiting while (running.preempted == 0) taking kv (request.input); }}
           worker {{ forward (1); }} }}
         pool kv on gpu {{ block 16; }}
-        workload {{ arrive batch(1);
-          init {{ set prompt = 32; set {attribute} = 4; }}
-          send (prompt, {attribute});
-          session {{ turn; end; }} }}
         server (prompt, hidden {attribute}) {{ E (prompt, {work});
           if ({attribute} > 2) {{ observe big = 1; }} else {{ observe small = 1; }} }}
         }}"
         )
     };
-    let horizon = common::horizon(10.0);
-    let e = compile_source(&source("E", "prompt + 0 * work(E)"), &horizon).unwrap_err();
+    let horizon = |attribute: &str| {
+        let workload = format!(
+            "workload {{ arrive batch(1);
+               init {{ set prompt = 32; set {attribute} = 4; }}
+               send (prompt, {attribute});
+               session {{ turn; end; }} }}"
+        );
+        workload
+    };
+    let e = compile(&source("E", "prompt + 0 * work(E)"), &horizon("E"), 10.0).unwrap_err();
     assert!(
         e.contains("an engine named `E` would make the one word mean two things"),
         "{e}"
     );
-    let e = compile_source(&source("L", "prompt + 0 * work(E)"), &horizon).unwrap_err();
+    let e = compile(&source("L", "prompt + 0 * work(E)"), &horizon("L"), 10.0).unwrap_err();
     assert!(
         e.contains("`L` is hidden from the scheduler, but the server's `if` reads it"),
         "{e}"
     );
     // a run whose work reads the attribute reveals it
-    compile_source(&source("L", "prompt + 0 * L"), &horizon).unwrap();
+    compile(&source("L", "prompt + 0 * L"), &horizon("L"), 10.0).unwrap();
 }
 
 /// What the workload's `turn` or `init` sets from a hidden attribute runs
@@ -370,19 +389,19 @@ fn a_stage_passed_bare_does_not_reveal_an_attribute_of_its_name() {
 /// that turn's outputs, and stays visible (`examples/multi-turn/vllm.sq`).
 #[test]
 fn what_the_workload_sets_from_a_hidden_attribute_before_the_request_is_hidden() {
+    let deployment = "stage A : fifo; stage B : fifo;
+            server (x, hidden o) { if (x > 5) { run A (cost(A, o)); } else { run B (cost(B, o)); } }
+            ";
     let src = |init: &str, turn: &str, session: &str| {
         format!(
-            "stage A : fifo; stage B : fifo;
-            workload {{ arrive poisson(1);
+            "workload {{ arrive poisson(1);
               init {{ {init} }}
               turn {{ {turn} }}
               send (x, o);
-              session {{ {session} }} }}
-            server (x, hidden o) {{ if (x > 5) {{ run A (cost(A, o)); }} else {{ run B (cost(B, o)); }} }}
-            "
+              session {{ {session} }} }}"
         )
     };
-    let check = |s: String| compile_source(&common::main_source(&s), &common::horizon(100.0));
+    let check = |w: String| compile(&common::main_source(deployment), &w, 100.0);
     let err = check(src(
         "set x = 0;",
         "set o = ~exp(10); set x = o + 1;",

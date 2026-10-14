@@ -1,9 +1,9 @@
 // Chapter 2: memory is a resource.
 // Four servers, so compute is not the bottleneck — a pool of 10 memory
 // units is. A request holds the units it needs for as long as it runs.
+// Its workload: workloads/02-memory.sq.
 use "std/args";
 
-let Lambda = 0.8;
 let S = 1.0;
 
 fn main() {
@@ -11,15 +11,6 @@ fn main() {
 
   pool mem { cap C; }
   stage svc : fifo(4);
-
-  workload {
-    arrive poisson(Lambda);
-    turn {
-      Size work_size = ~exp(1);
-      Size items = ceil(~uniform(1, 5));   // request items
-    }
-    send (work_size, items);
-  }
 
   server (work_size, items) {
     Cost processing = {

@@ -1,5 +1,7 @@
 // ThunderAgent (ThunderAgent-org/ThunderAgent at 7ddc861, its router in TR
-// mode) in front of J vLLM replicas. docs/use-cases/thunderagent.md explains it.
+// mode) in front of J vLLM replicas, N agents at once
+// (examples/workloads/closed_agents.sq). docs/use-cases/thunderagent.md
+// explains it.
 use "std/args";
 
 // --8<-- [start:settings]
@@ -9,15 +11,12 @@ let max_seqs = 256;    // max_num_seqs
 let bs = 16;           // block_size
 let c0 = 0;            // fixed cost per iteration (s)
 let buffer = 100;      // BUFFER_PER_PROGRAM: decode headroom per program (tokens)
-let p = 0.9;           // the agent continues after a turn
 let system = 0;        // the key of the system prompt every program shares
 let force_resume = 1800;  // _wait_for_resume's timeout (s)
 
 fn main() {
   let tr = args.number("tr", 1);             // 1: --router tr, 0: --router default
   let blocks = args.number("blocks", 4000);  // num_gpu_blocks of a replica
-  let N = args.number("N", 32);              // agents at once
-  let Z = args.number("Z", 3.0);             // mean tool time (s)
   let a = args.number("a", 2e-4);            // compute per scheduled token (s)
   let g = args.number("g", 0);               // prefill attention per token and context token (s)
   let omega = args.number("omega", 0.02);    // weights read per iteration (s)
@@ -58,27 +57,6 @@ fn main() {
     }
   }
   // --8<-- [end:replica]
-
-  // --8<-- [start:workload]
-  workload {
-    arrive closed(N);
-    init { set K = 0; }
-    turn {
-      set n = ceil(K == 0 ? ~uniform(4000, 8000) : ~exp(1000));
-      set o = floor(~exp(300)) + 1;
-      set more = ~bernoulli(p);
-    }
-    send (K, n, o);
-    session {
-      turn;
-      while (more) {
-        set K = K + n + o;
-        tool (~exp(Z));
-        turn;
-      }
-    }
-  }
-  // --8<-- [end:workload]
 
   // --8<-- [start:waiting_queue]
   pool waiting_queue { queue by (K > 0 ? 0 : 1, charged) every (dt); }

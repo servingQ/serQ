@@ -5,11 +5,19 @@ and response times with the M/M/1 queue's closed forms.
 
 ## The program
 
+A program is the deployment: what serves a request. The workload, the
+requests that arrive at it, is a file of its own, given when the program
+runs (`serq run PROGRAM --workload WORKLOAD`):
+
 ```serq title="docs/tutorial/programs/01-queue.sq"
 --8<-- "docs/tutorial/programs/01-queue.sq"
 ```
 
-This program has four blocks:
+```serq title="docs/tutorial/programs/workloads/01-queue.sq"
+--8<-- "docs/tutorial/programs/workloads/01-queue.sq"
+```
+
+The two files have four blocks between them:
 
 ### `stage`
 
@@ -23,7 +31,7 @@ sharing — everyone at once, sharing the throughput), `delay` (everyone at once
 no waiting at all) and `step`, the LLM engine, which arrives in
 [chapter 5](05-the-engine.md).
 
-### `workload` and its `session`
+### `workload` and its `session`, in the workload file
 
 ```serq
 workload {
@@ -41,7 +49,10 @@ The other distributions are `~det`, `~uniform`, `~erlang`, `~h2` and
 With no `session` block, each arrival draws one turn, waits for the response,
 and finishes. The `server` below handles that turn. `send (work_size)` is
 what each request carries to it: the server reads what the workload sends,
-and nothing else the workload keeps.
+and nothing else the workload keeps. The workload file has no `fn main()`: it declares its
+own constants (`Lambda`, read from the command line by `args.number`) and
+its `workload { … }`. Each file reads its own names; the two meet only at
+the server's signature.
 
 ### `server`
 
@@ -70,12 +81,13 @@ its `client` section ([what the client sees](../language.md#what-the-client-sees
 The model says what each request does. The invocation says how long to
 simulate, how much warm-up to exclude, and which random seed to use.
 The command below supplies these values with `--horizon`, `--warmup` and
-`--seed`; they are not part of `fn main()`.
+`--seed`; they are part of neither file. `--workload` names the workload
+file the program runs under.
 
 ## Running it
 
 ```bash
-serq run docs/tutorial/programs/01-queue.sq --horizon 100000 --warmup 5000 --seed 1
+serq run docs/tutorial/programs/01-queue.sq --workload docs/tutorial/programs/workloads/01-queue.sq --horizon 100000 --warmup 5000 --seed 1
 ```
 
 ```text
@@ -124,7 +136,7 @@ This is M/M/1 with \(\lambda = 0.8\) and \(\mathbb{E}[S] = 1\), so
 
 ```bash
 for L in 0.5 0.8 0.9 0.95 0.99; do
-  serq run docs/tutorial/programs/01-queue.sq --horizon 100000 --warmup 5000 --seed 1 --Lambda $L --json
+  serq run docs/tutorial/programs/01-queue.sq --workload docs/tutorial/programs/workloads/01-queue.sq --horizon 100000 --warmup 5000 --seed 1 --Lambda $L --json
 done
 ```
 

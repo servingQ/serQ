@@ -1,5 +1,5 @@
 mod common;
-use common::{Fixture, PROGRAM, failure};
+use common::{Fixture, PROGRAM, WORKLOAD, failure};
 use serq::frontend::lexer::{lex, unlex};
 
 #[test]
@@ -23,15 +23,23 @@ fn every_command_rejects_incomplete_comments_without_an_artifact() {
         "bad.sq",
         &common::main_source(&format!("{PROGRAM}/* unfinished\nignored\n")),
     );
+    f.write("w.sq", WORKLOAD);
     for cmd in ["check", "run", "ir", "draw"] {
         failure(
-            &f.run(&[cmd, "bad.sq"]),
+            &f.run(&[cmd, "bad.sq", "--workload", "w.sq"]),
             1,
-            &["bad.sq", "6:1", "unterminated block comment", "`*/`"],
+            &["bad.sq", "5:1", "unterminated block comment", "`*/`"],
         );
     }
     failure(
-        &f.run(&["draw", "bad.sq", "--out", "figure.svg"]),
+        &f.run(&[
+            "draw",
+            "bad.sq",
+            "--workload",
+            "w.sq",
+            "--out",
+            "figure.svg",
+        ]),
         1,
         &["unterminated block comment"],
     );
@@ -40,5 +48,16 @@ fn every_command_rejects_incomplete_comments_without_an_artifact() {
         "good.sq",
         &common::main_source(&format!("{PROGRAM}/* finished\nignored\n*/")),
     );
-    assert!(f.run(&["check", "good.sq"]).status.success());
+    assert!(
+        f.run(&["check", "good.sq", "--workload", "w.sq"])
+            .status
+            .success()
+    );
+    // a comment left open in the workload's file is that file's error
+    f.write("open.sq", &format!("{WORKLOAD}/* unfinished\n"));
+    failure(
+        &f.run(&["check", "good.sq", "--workload", "open.sq"]),
+        1,
+        &["open.sq: 2:1", "unterminated block comment"],
+    );
 }

@@ -1,8 +1,8 @@
-// Open-arrival aggregated pool vs prefill -> KV link -> decode tandem.
+// Open-arrival aggregated pool vs prefill -> KV link -> decode tandem, fed
+// examples/workloads/open_poisson.sq.
 
 let N = 32;
 let NP = 11;
-let Lambda = 1.0;
 let sP = 1.0;
 let sD = 1.0;
 let I = 0.5;
@@ -22,10 +22,6 @@ fn main() {
   stage prefill : fifo(max(NP, 1));
   stage link : fifo;
   stage decode : fifo(max(N - NP, 1));
-
-  workload {
-    arrive poisson(Lambda);
-  }
 
   server {
     set sp = prefill_work();

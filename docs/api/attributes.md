@@ -105,15 +105,11 @@ recomputes from the prompt alone does not read it.
 
 ## Examples
 
-A complete program:
+A complete program, a deployment and its workload:
 
-```serq
+```serq title="model.sq"
 fn main() {
   stage svc : delay;
-  workload {
-    arrive batch(2);
-    send (turn_no);
-  }
   server (turn_no) {
     run svc (cost(svc, 1));
     observe request_id = serial;
@@ -122,10 +118,17 @@ fn main() {
 }
 ```
 
-Save as `model.sq`, then run:
+```serq title="workload.sq"
+workload {
+  arrive batch(2);
+  send (turn_no);
+}
+```
+
+Save the deployment as `model.sq` and its workload as `workload.sq`, then run:
 
 ```sh
-serq run model.sq --horizon 10
+serq run model.sq --workload workload.sq --horizon 10
 ```
 
 ## See also

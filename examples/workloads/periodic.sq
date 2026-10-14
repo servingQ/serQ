@@ -1,0 +1,10 @@
+// One request every `gap` seconds, carrying nothing: the server knows its
+// lengths (examples/single-turn/fastertransformer.sq runs it).
+
+let gap = 0.4675;  // fixed inter-arrival time (s)
+
+// --8<-- [start:workload]
+workload {
+  arrive renewal(gap);
+}
+// --8<-- [end:workload]

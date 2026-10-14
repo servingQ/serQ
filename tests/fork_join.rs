@@ -4,21 +4,29 @@
 
 mod common;
 
-use serq::{Overrides, check_source, run_source};
+use serq::Overrides;
 
-fn run(src: &str, options: &Overrides) -> serq::Report {
-    run_source(&common::main_source(src), options, None).unwrap_or_else(|e| panic!("{e}\n{src}"))
+/// One session of one request.
+const ONE: &str = "workload { arrive batch(1); session { turn; end; } }";
+/// Two sessions of one request each.
+const TWO: &str = "workload { arrive batch(2); session { turn; end; } }";
+
+fn run(src: &str, workload: &str, options: &Overrides) -> serq::Report {
+    common::run(&common::main_source(src), workload, options)
+        .unwrap_or_else(|e| panic!("{e}\n{src}\n{workload}"))
 }
 
-fn fails(src: &str) -> String {
-    match run_source(&common::main_source(src), &common::horizon(100.0), None) {
+fn fails(src: &str, workload: &str) -> String {
+    match common::run(&common::main_source(src), workload, &common::horizon(100.0)) {
         Err(e) => e.to_string(),
-        Ok(_) => panic!("ran:\n{src}"),
+        Ok(_) => panic!("ran:\n{src}\n{workload}"),
     }
 }
 
-fn refused(src: &str, needle: &str) {
-    let e = match check_source(&common::main_source(src), &common::horizon(100.0)) {
+fn refused(src: &str, workload: &str, needle: &str) {
+    let e = match common::compile(&common::main_source(src), workload, &common::horizon(100.0))
+        .map(|_| ())
+    {
         Err(e) => e.to_string(),
         Ok(_) => panic!("accepted:\n{src}"),
     };
@@ -36,12 +44,6 @@ fn a_leg_runs_beside_the_session_and_join_waits_for_it() {
     let r = run(
         r#"
         stage svc : delay;
-        workload { arrive batch(1);
-          session { turn;
-            end;
-
-          }
-        }
         server {
           fork { run svc (cost(svc, 5)); observe leg_done = now; }
           run svc (cost(svc, 3));
@@ -51,6 +53,7 @@ fn a_leg_runs_beside_the_session_and_join_waits_for_it() {
         }
 
 "#,
+        ONE,
         &common::horizon(100.0),
     );
     assert_eq!(samples(&r, "leg_done"), [5.0]);
@@ -64,12 +67,6 @@ fn a_join_after_the_legs_end_passes() {
     let r = run(
         r#"
         stage svc : delay;
-        workload { arrive batch(1);
-          session { turn;
-            end;
-
-          }
-        }
         server {
           fork { run svc (cost(svc, 1)); }
           run svc (cost(svc, 3));
@@ -78,6 +75,7 @@ fn a_join_after_the_legs_end_passes() {
         }
 
 "#,
+        ONE,
         &common::horizon(100.0),
     );
     assert_eq!(samples(&r, "after_join"), [3.0]);
@@ -90,12 +88,6 @@ fn a_leg_sets_its_own_copy() {
     let r = run(
         r#"
         stage svc : delay;
-        workload { arrive batch(1);
-          session { turn;
-            end;
-
-          }
-        }
         server {
           set x = 1;
           fork { observe leg_reads = x; set x = 7; run svc (cost(svc, 1)); observe leg_after = x; }
@@ -105,6 +97,7 @@ fn a_leg_sets_its_own_copy() {
         }
 
 "#,
+        ONE,
         &common::horizon(100.0),
     );
     assert_eq!(samples(&r, "leg_reads"), [1.0]);
@@ -119,12 +112,6 @@ fn a_leg_is_not_a_session() {
     let r = run(
         r#"
         stage svc : delay;
-        workload { arrive batch(2);
-          session { turn;
-            end;
-
-          }
-        }
         server {
           fork { run svc (cost(svc, 1)); }
           fork { run svc (cost(svc, 2)); }
@@ -132,6 +119,7 @@ fn a_leg_is_not_a_session() {
         }
 
 "#,
+        TWO,
         &common::horizon(100.0),
     );
     assert_eq!(r.arrivals, 2);
@@ -146,12 +134,6 @@ fn a_legs_lease_passes_to_its_session() {
         r#"
         pool kv { cap 10; }
         stage svc : delay;
-        workload { arrive batch(1);
-          session { turn;
-            end;
-
-          }
-        }
         server {
           fork { hold kv (cost(kv, 10)) { run svc (cost(svc, 1)); } lease kv (inf); }
           join;
@@ -162,6 +144,7 @@ fn a_legs_lease_passes_to_its_session() {
         }
 
 "#,
+        ONE,
         &common::horizon(100.0),
     );
     assert_eq!(samples(&r, "leased"), [0.0]);
@@ -176,12 +159,6 @@ fn a_leg_shares_the_sessions_cache() {
         r#"
         pool kv { cap 100; }
         stage svc : delay;
-        workload { arrive batch(1);
-          session { turn;
-            end;
-
-          }
-        }
         server {
           hold kv (cost(kv, 8)) { run svc (cost(svc, 1)); } cache (cost(kv, 8));
           fork { hold kv (cost(kv, 8)) { observe hit = cached; run svc (cost(svc, 1)); } cache (cost(kv, 8)); }
@@ -189,6 +166,7 @@ fn a_leg_shares_the_sessions_cache() {
         }
 
 "#,
+        ONE,
         &common::horizon(100.0),
     );
     assert_eq!(samples(&r, "hit"), [8.0]);
@@ -232,19 +210,29 @@ fn the_decode_leg_holds_its_blocks_during_the_prefill() {
           }}
         }}
         use "std/kvt"; use "std/share"; kvt.nixl_push (P, D, latency = 1, share = share.maxmin);
-        workload {{ arrive batch(1); init {{ set prompt = 10; }} send (prompt); session {{ turn; end; }} }} server (prompt) {{ gw.route(); }}
+        server (prompt) {{ gw.route(); }}
 
     "#
         )
     };
     // the prefill takes 10 s, the prefiller's wait 1 s, the copy 10 tokens at 10/s
-    let r = run(&src(1), &common::horizon(100.0));
+    let workload = "workload { arrive batch(1); init { set prompt = 10; } send (prompt); session { turn; end; } }";
+    let r = run(&src(1), workload, &common::horizon(100.0));
     assert_eq!(samples(&r, "parked_at"), [0.0]);
     assert_eq!(samples(&r, "written_at"), [12.0]);
-    let r = run(&src(0), &common::horizon(100.0));
+    let r = run(&src(0), workload, &common::horizon(100.0));
     assert_eq!(samples(&r, "parked_at"), [10.0]);
     assert_eq!(samples(&r, "written_at"), [12.0]);
 }
+
+/// The client of the crossing legs below: the second session arrives first.
+const CROSSING: &str = "stage client_gate : delay;
+        workload {
+          arrive batch(2);
+          init { set prompt = 8; }
+          send (prompt);
+          session { run client_gate (cost(client_gate, serial == 0 ? 0.5 : 0)); turn; end; }
+        }";
 
 /// Two requests whose legs wait for each other: A's decode leg holds the
 /// decoder's memory waiting for A's prefill, which waits for the
@@ -277,15 +265,10 @@ fn legs_that_wait_for_each_other_fail_the_run() {
         }
         use "std/kvt"; use "std/share"; kvt.nixl_push (P, D, share = share.maxmin);
         stage gate : delay;
-        stage client_gate : delay;
-        workload {
-          arrive batch(2);
-          init { set prompt = 8; }
-          send (prompt);
-          session { run client_gate (cost(client_gate, serial == 0 ? 0.5 : 0)); turn; end; }
-        } server (prompt) { gw.route(); }
+        server (prompt) { gw.route(); }
 
     "#,
+        CROSSING,
     );
     assert!(e.contains("wait for each other"), "{e}");
     assert!(e.contains("session 0 waits at a `join`"), "{e}");
@@ -304,12 +287,6 @@ fn a_refused_leg_or_session_ends_the_request() {
         pool a {{ cap 10; }}
         pool b {{ cap 10; }}
         stage svc : delay;
-        workload {{ arrive batch(1);
-          session {{ turn;
-            end;
-
-          }}
-        }}
         server {{
           set na = {leg};
           set nb = {session};
@@ -322,14 +299,14 @@ fn a_refused_leg_or_session_ends_the_request() {
 "#
         )
     };
-    let r = run(&src(5, 5), &common::horizon(100.0));
+    let r = run(&src(5, 5), ONE, &common::horizon(100.0));
     assert_eq!(samples(&r, "done"), [2.0]);
     // the leg refused: the session ends at the refusal
-    let r = run(&src(50, 5), &common::horizon(100.0));
+    let r = run(&src(50, 5), ONE, &common::horizon(100.0));
     assert_eq!(r.ended, 1);
     assert!(samples(&r, "done").is_empty());
     // the session refused at 1: its leg runs on and ends its lease
-    let r = run(&src(5, 50), &common::horizon(100.0));
+    let r = run(&src(5, 50), ONE, &common::horizon(100.0));
     assert_eq!(r.ended, 1);
     assert!(samples(&r, "done").is_empty());
     assert_eq!(r.pool("a").unwrap().admissions, 1);
@@ -342,14 +319,11 @@ fn a_session_may_not_end_before_its_legs() {
     let e = fails(
         r#"
         stage svc : delay;
-        workload { arrive batch(1);
-          session { turn; end;
-          }
-        }
         server { set x = 0; fork { run svc (cost(svc, 5)); } run svc (cost(svc, 1)); if (x) { join; }
         }
 
 "#,
+        ONE,
     );
     assert!(e.contains("while a leg it forked runs"), "{e}");
 }
@@ -364,13 +338,13 @@ fn a_leg_may_only_run_the_request() {
         ("join;", "`join`"),
     ] {
         refused(
+            "server {}",
+            // the client's own `svc`: a leg of the session
             &format!(
                 "stage svc : delay;
         workload {{ arrive batch(1); session {{
             fork {{ run svc (cost(svc, 1)); {stmt} }} join; turn; end;
-        }} }}
-        server {{}}
-        "
+        }} }}"
             ),
             &format!("a `fork`'s leg may not {what}"),
         );
@@ -381,13 +355,10 @@ fn a_leg_may_only_run_the_request() {
 fn a_join_needs_a_fork() {
     refused(
         "stage svc : delay;
-        workload { arrive batch(1);
-          session { turn; end;
-          }
-        }
         server { run svc (cost(svc, 1)); join;
         }
         ",
+        ONE,
         "a `join` in a program that forks no leg waits for nothing",
     );
 }
@@ -399,13 +370,10 @@ fn a_leg_does_not_act_on_the_sessions_holds() {
     refused(
         "pool kv { cap 10; }
         stage svc : delay;
-        workload { arrive batch(1);
-          session { turn; end;
-          }
-        }
         server { hold kv (cost(kv, 1)) { fork { grow kv (cost(kv, 1)); } join; }
         }
         ",
+        ONE,
         "`grow kv` outside a hold of `kv`",
     );
 }
@@ -418,12 +386,6 @@ fn a_legs_lease_caches_by_the_legs_attributes() {
         r#"
         pool kv { cap 100; }
         stage svc : delay;
-        workload { arrive batch(1);
-          session { turn;
-            end;
-
-          }
-        }
         server {
           set n = 0;
           fork { set n = 8; hold kv (cost(kv, 8)) { run svc (cost(svc, 1)); } cache (cost(kv, n)) lease kv (inf); }
@@ -433,6 +395,7 @@ fn a_legs_lease_caches_by_the_legs_attributes() {
         }
 
 "#,
+        ONE,
         &common::horizon(100.0),
     );
     assert_eq!(samples(&r, "hit"), [8.0]);
@@ -467,15 +430,10 @@ fn a_lease_that_expires_is_not_a_deadlock() {
         }
         use "std/kvt"; use "std/share"; kvt.nixl_push (P, D, share = share.maxmin);
         stage gate : delay;
-        stage client_gate : delay;
-        workload {
-          arrive batch(2);
-          init { set prompt = 8; }
-          send (prompt);
-          session { run client_gate (cost(client_gate, serial == 0 ? 0.5 : 0)); turn; end; }
-        } server (prompt) { gw.route(); }
+        server (prompt) { gw.route(); }
 
     "#,
+        CROSSING,
         &common::horizon(30.0),
     );
     assert_eq!(r.ended, 0);
@@ -488,13 +446,10 @@ fn a_fork_in_a_hold_that_may_be_preempted_is_refused() {
     refused(
         "pool kv { cap 10; preempt lifo; }
         stage svc : delay;
-        workload { arrive batch(1);
-          session { turn; end;
-          }
-        }
         server { hold kv (cost(kv, 1)) { fork { run svc (cost(svc, 1)); } join; }
         }
         ",
+        ONE,
         "`fork` inside a hold of `kv`, which may preempt it",
     );
 }
@@ -503,13 +458,10 @@ fn a_fork_in_a_hold_that_may_be_preempted_is_refused() {
 fn a_fork_needs_a_join() {
     refused(
         "stage svc : delay;
-        workload { arrive batch(1);
-          session { turn; end;
-          }
-        }
         server { fork { run svc (cost(svc, 1)); } run svc (cost(svc, 2));
         }
         ",
+        ONE,
         "a program that forks a leg and never joins",
     );
 }
@@ -531,11 +483,9 @@ fn a_queue_posts_the_copies_of_one_relation() {
           decode (p) from P { hold kv (cost(kv, p)) { transfer (p) from P to kv (p); } } }
         use \"std/kvt\"; use \"std/share\"; kvt.nixl_push (P, D, latency = 1, share = share.maxmin);
         kvt.nixl_push (P, E, latency = 1, share = share.maxmin);
-        workload { arrive batch(1);
-          session { turn; end;
-          }
-        } server {
+        server {
         } ",
+        ONE,
         "`P` waits before the copies of another relation already",
     );
 }

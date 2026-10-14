@@ -1,0 +1,28 @@
+// A closed population of N agents, each a session of turns with a tool call
+// between them (examples/multi-turn/thunderagent.sq runs it).
+use "std/args";
+
+let p = 0.9;           // the agent continues after a turn
+let N = args.number("N", 32);              // agents at once
+let Z = args.number("Z", 3.0);             // mean tool time (s)
+
+// --8<-- [start:workload]
+workload {
+  arrive closed(N);
+  init { set K = 0; }
+  turn {
+    set n = ceil(K == 0 ? ~uniform(4000, 8000) : ~exp(1000));
+    set o = floor(~exp(300)) + 1;
+    set more = ~bernoulli(p);
+  }
+  send (K, n, o);
+  session {
+    turn;
+    while (more) {
+      set K = K + n + o;
+      tool (~exp(Z));
+      turn;
+    }
+  }
+}
+// --8<-- [end:workload]

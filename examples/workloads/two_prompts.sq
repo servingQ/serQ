@@ -1,0 +1,8 @@
+// Two requests at once, A with a prompt of 2 tokens and B of 4
+// (examples/single-turn/separate_phases.sq runs it).
+
+workload {
+  arrive batch(2);
+  init { set prompt = serial == 0 ? 2 : 4; }
+  send (prompt);
+}

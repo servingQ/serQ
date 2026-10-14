@@ -46,12 +46,13 @@ import pyserq
 report = pyserq.run(pyserq.compile(source="""
 fn main() {
   stage svc[2] : fifo;
-  workload {
-    arrive batch(1);
-  }
   server {
     run svc[1] (cost(svc, 2));
   }
+}
+""", workload_source="""
+workload {
+  arrive batch(1);
 }
 """, horizon=10))
 rows = report.stages_named("svc")

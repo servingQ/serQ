@@ -26,13 +26,12 @@
 // The constants are the testbed's (~/dev/trace/202609-a6000-pd-nixl/,
 // fitted on lone requests through the pull proxy: a prefill step costs
 // aP * prefilled + bP * attention, a decode step cD, a copy x0 + tokens / Bw,
-// and the proxy's hops and the API server h per request).
+// and the proxy's hops and the API server h per request). The trace's
+// sessions: examples/workloads/short_base.sq.
 use "std/kvt";
 use "std/share";
 
 let concurrent = 1;    // 1: both requests at once (the push proxy); 0: the decode request after the prefill's answer
-let spacing = 3.0;     // seconds between session arrivals
-let N = 96;            // sessions replayed (957 requests)
 let B = 8192;          // max_num_batched_tokens
 let max_seqsP = 16;    // max_num_seqs on the prefiller
 let max_seqsD = 64;    // max_num_seqs on the decoder
@@ -140,23 +139,6 @@ fn main() {
   kvt.nixl_push (P, D, latency = x0, share = share.maxmin);
 
   stage front : delay;
-  stage gate : delay;
-
-  // The client: the trace's first N sessions, sent `spacing` apart; a turn is
-  // sent `think` seconds after the previous one completes.
-  workload {
-    arrive batch(N);
-    trace "../replay/data/short_base.csv" ordered;
-    send (new, out);
-    session {
-      run gate (cost(gate, serial * spacing));
-      turn;
-      while (more) {
-        tool think;
-        turn;
-      }
-    }
-  }
 
   // the scheduler knows max_tokens, not the length (sched/utils.py:98-119)
   server (new, hidden out) { gw.route(); }

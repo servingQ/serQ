@@ -1,16 +1,10 @@
 mod common;
-use serq::{Overrides, run_source};
+use serq::Overrides;
 
 #[test]
 fn deterministic_renewal_arrivals_follow_the_supplied_gap() {
     let src = r#"
         stage svc : fifo;
-        workload { arrive renewal(2);
-          session { turn;
-            end;
-
-          }
-        }
         server {
           set t0 = now;
           run svc (cost(svc, ~det(1)));
@@ -18,14 +12,22 @@ fn deterministic_renewal_arrivals_follow_the_supplied_gap() {
         }
 
 "#;
-    let report = run_source(
+    let workload = r#"
+        workload { arrive renewal(2);
+          session { turn;
+            end;
+
+          }
+        }
+"#;
+    let report = common::run(
         &common::main_source(src),
+        workload,
         &Overrides {
             warmup: Some(0.0),
             seed: Some(7),
             ..common::horizon(10.0)
         },
-        None,
     )
     .unwrap();
     assert_eq!(report.arrivals, 5);
@@ -37,22 +39,24 @@ fn deterministic_renewal_arrivals_follow_the_supplied_gap() {
 fn hyperexponential_renewal_arrivals_have_the_configured_mean_rate() {
     let src = r#"
         stage svc : fifo;
-        workload { arrive renewal(~h2(1, 4));
-          session { turn; end;
-          }
-        }
         server { run svc (cost(svc, 0));
         }
 
 "#;
-    let report = run_source(
+    let workload = r#"
+        workload { arrive renewal(~h2(1, 4));
+          session { turn; end;
+          }
+        }
+"#;
+    let report = common::run(
         &common::main_source(src),
+        workload,
         &Overrides {
             warmup: Some(0.0),
             seed: Some(19),
             ..common::horizon(20_000.0)
         },
-        None,
     )
     .unwrap();
     let rate = report.arrivals as f64 / 20_000.0;
@@ -63,27 +67,29 @@ fn hyperexponential_renewal_arrivals_have_the_configured_mean_rate() {
 fn open_arrival_limit_drains_within_the_horizon() {
     let src = r#"
         stage svc : fifo;
-        workload { arrive poisson(1000);
-          session { turn;
-            end;
-
-          }
-        }
         server {
           run svc (cost(svc, ~det(2)));
           observe service = 2;
         }
 
 "#;
-    let report = run_source(
+    let workload = r#"
+        workload { arrive poisson(1000);
+          session { turn;
+            end;
+
+          }
+        }
+"#;
+    let report = common::run(
         &common::main_source(src),
+        workload,
         &Overrides {
             warmup: Some(0.0),
             seed: Some(7),
             arrivals: Some(2),
             ..common::horizon(10.0)
         },
-        None,
     )
     .unwrap();
     assert_eq!(report.arrivals, 2);
@@ -122,13 +128,13 @@ fn finite_arrivals_reject_incomplete_runs_and_empty_measurement_intervals() {
             "before or at warmup",
         ),
     ] {
-        let src = format!(
-            "stage svc : fifo; workload {{ arrive renewal(2); session {{ turn; {session} }} }} server {{}}"
+        let workload = format!(
+            "stage svc : fifo; workload {{ arrive renewal(2); session {{ turn; {session} }} }}"
         );
         let error = {
             let mut options = common::horizon(10.0);
             options.instance(&format!("run {{ {run} }}")).unwrap();
-            run_source(&common::main_source(&src), &options, None).unwrap_err()
+            common::run(&common::main_source("server {}"), &workload, &options).unwrap_err()
         };
         assert!(error.contains(expected), "{error}");
     }
@@ -137,14 +143,15 @@ fn finite_arrivals_reject_incomplete_runs_and_empty_measurement_intervals() {
 #[test]
 fn finite_arrivals_can_finish_exactly_at_the_deadline() {
     // Arrivals at 2, 4, 6 and one second of service finish at 3, 5, 7.
-    let src = "stage svc : fifo; workload { arrive renewal(2); \n  session { turn; end; \n  }\n} server { run svc (cost(svc, 1));\n} ";
-    let report = run_source(
+    let src = "stage svc : fifo; server { run svc (cost(svc, 1));\n} ";
+    let workload = "workload { arrive renewal(2); \n  session { turn; end; \n  }\n}";
+    let report = common::run(
         &common::main_source(src),
+        workload,
         &Overrides {
             arrivals: Some(3),
             ..common::horizon(7.0)
         },
-        None,
     )
     .unwrap();
     assert_eq!(report.arrivals, 3);
@@ -155,11 +162,15 @@ fn finite_arrivals_can_finish_exactly_at_the_deadline() {
 #[test]
 fn poisson_retains_its_initial_arrival_and_renewal_waits_for_a_gap() {
     let run = |arrival: &str| {
-        run_source(
-            &common::main_source(
-            &format!("workload {{ arrive {arrival}; \n  session {{ turn; end; \n  }}\n}} server {{ observe arrival = now;\n}} ")),
-            &Overrides { seed: Some(1), ..common::horizon(10.0) }, None,
-        ).unwrap()
+        common::run(
+            &common::main_source("server { observe arrival = now;\n} "),
+            &format!("workload {{ arrive {arrival}; \n  session {{ turn; end; \n  }}\n}}"),
+            &Overrides {
+                seed: Some(1),
+                ..common::horizon(10.0)
+            },
+        )
+        .unwrap()
     };
     let poisson = run("poisson(2)");
     let renewal = run("renewal(~exp(0.5))");
@@ -172,11 +183,19 @@ fn poisson_retains_its_initial_arrival_and_renewal_waits_for_a_gap() {
 #[test]
 fn renewal_validation_and_ir_version_prevent_ambiguous_inputs() {
     for gap in ["now", "serial"] {
-        let src = format!("workload {{ arrive renewal({gap}); }} server {{}} ");
-        assert!(serq::compile_source(&common::main_source(&src), &common::horizon(10.0)).is_err());
+        let workload = format!("workload {{ arrive renewal({gap}); }}");
+        assert!(
+            common::compile(
+                &common::main_source("server {} "),
+                &workload,
+                &common::horizon(10.0)
+            )
+            .is_err()
+        );
     }
-    let mut program = serq::compile_source(
-        &common::main_source("workload { arrive renewal(2); } server {} "),
+    let mut program = common::compile(
+        &common::main_source("server {} "),
+        "workload { arrive renewal(2); }",
         &common::horizon(10.0),
     )
     .unwrap();
@@ -194,40 +213,36 @@ fn renewal_validation_and_ir_version_prevent_ambiguous_inputs() {
 /// interpreter (#269).
 #[test]
 fn a_renewal_gap_must_be_positive() {
-    let src = |gap: &str| {
+    let src = common::main_source(
+        "stage svc : delay;
+        server { run svc (cost(svc, 1));
+        }
+        ",
+    );
+    let workload = |gap: &str| {
         format!(
             "let g = 0.5;
-        stage svc : delay;
         workload {{ arrive renewal({gap});
           session {{ turn; end;
           }}
-        }}
-        server {{ run svc (cost(svc, 1));
-        }}
-        "
+        }}"
         )
     };
+    let ov = common::horizon(10.0);
     for gap in ["0", "-1", "g - 2 * g"] {
-        let e = serq::compile_source(&common::main_source(&src(gap)), &common::horizon(10.0))
-            .unwrap_err();
+        let e = common::compile(&src, &workload(gap), &ov).unwrap_err();
         assert!(
             e.contains("an interarrival time must be positive"),
             "{gap}: {e}"
         );
     }
-    let e = run_source(
-        &common::main_source(&src("~uniform(-1, 1)")),
-        &common::horizon(10.0),
-        None,
-    )
-    .unwrap_err();
+    let e = common::run(&src, &workload("~uniform(-1, 1)"), &ov).unwrap_err();
     assert!(
         e.contains("`arrive renewal(~uniform(-1, 1))`: the interarrival time is -"),
         "{e}"
     );
     // IR that bypasses the text: a literal gap is the IR's to refuse
-    let mut p =
-        serq::compile_source(&common::main_source(&src("2")), &common::horizon(10.0)).unwrap();
+    let mut p = common::compile(&src, &workload("2"), &ov).unwrap();
     p.arrival = serq::ir::CArrival::Renewal(serq::ir::CExpr::Num(0.0));
     let e = p.validate().unwrap_err();
     assert!(e.contains("an interarrival time must be positive"), "{e}");
@@ -244,18 +259,19 @@ fn a_poisson_rate_must_be_positive() {
         ("lam - 1", "the rate is 0;"),
         ("0/0", "the poisson rate is NaN"),
     ] {
-        let src = format!(
-            "let lam = 1; stage svc : delay;
+        let src = "stage svc : delay;
+        server { run svc (cost(svc, 1));
+        }
+        ";
+        let workload = format!(
+            "let lam = 1;
         workload {{ arrive poisson({rate});
           session {{ turn; end;
           }}
-        }}
-        server {{ run svc (cost(svc, 1));
-        }}
-        "
+        }}"
         );
-        let e =
-            serq::compile_source(&common::main_source(&src), &common::horizon(10.0)).unwrap_err();
+        let e = common::compile(&common::main_source(src), &workload, &common::horizon(10.0))
+            .unwrap_err();
         assert!(e.contains(said), "{rate}: {e}");
     }
 }
@@ -276,13 +292,10 @@ fn a_count_is_a_whole_number_in_range() {
             "the batch size is 1000000000000000000000000000000",
         ),
     ] {
-        let src = format!(
-            "stage svc : delay;
-             workload {{ arrive {workload}; session {{ turn; end; }} }}
-             server {{ run svc (cost(svc, 1)); }}"
-        );
-        let e =
-            serq::compile_source(&common::main_source(&src), &common::horizon(10.0)).unwrap_err();
+        let src = "stage svc : delay;
+             server { run svc (cost(svc, 1)); }";
+        let w = format!("workload {{ arrive {workload}; session {{ turn; end; }} }}");
+        let e = common::compile(&common::main_source(src), &w, &common::horizon(10.0)).unwrap_err();
         assert!(
             e.contains(said) && e.contains("a count is a whole number"),
             "{workload}: {e}"
@@ -303,15 +316,16 @@ fn a_count_is_a_whole_number_in_range() {
         assert!(e.contains(said), "{settings}: {e}");
     }
     // IR that bypasses the text meets the same bound
-    let mut p = serq::compile_source(
+    let mut p = common::compile(
         &common::main_source(
-            "stage svc : delay; workload { arrive batch(1);
-          session { turn; end;
-          }
-        }
+            "stage svc : delay;
         server { run svc (cost(svc, 1));
         } ",
         ),
+        "workload { arrive batch(1);
+          session { turn; end;
+          }
+        }",
         &common::horizon(10.0),
     )
     .unwrap();

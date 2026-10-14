@@ -16,13 +16,16 @@ preemption — and watched it fall off a cliff.
 | 5 | [The engine](05-the-engine.md) | prefill and decode share one iteration | `device`, `engine`, `request`, `taking`, `tokens cap`, `growing`, `preempt`, `pool … on` |
 | 6 | [The cliff](06-the-cliff.md) | the cache and the queue feed each other | — |
 
-The programs are in
-[`docs/tutorial/programs/`](https://github.com/servingQ/serQ/tree/main/docs/tutorial/programs).
-Run the examples with the listed settings to reproduce the reports.
+Each chapter is two files: the deployment, in
+[`docs/tutorial/programs/`](https://github.com/servingQ/serQ/tree/main/docs/tutorial/programs),
+and its workload, a file of its own in
+[`docs/tutorial/programs/workloads/`](https://github.com/servingQ/serQ/tree/main/docs/tutorial/programs/workloads),
+given when the program runs (`--workload`). Run them with the listed
+settings to reproduce the reports.
 
 !!! tip "Run as you read"
     ```bash
     cargo build --release
-    ./target/release/serq run docs/tutorial/programs/01-queue.sq --horizon 100000 --warmup 5000 --seed 1
+    ./target/release/serq run docs/tutorial/programs/01-queue.sq --workload docs/tutorial/programs/workloads/01-queue.sq --horizon 100000 --warmup 5000 --seed 1
     ```
     Every chapter ends with a sweep you can reproduce with `--name value`.

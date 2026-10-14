@@ -6,6 +6,17 @@ mod common;
 use serq::engine::log::{EventKind, Who};
 use serq::frontend::ast::RunMode;
 use serq::{run_ir, run_ir_logged};
+use std::path::{Path, PathBuf};
+
+/// The example at `path` with the workload `examples/pairs.json` gives it,
+/// and the directory its trace is read from: the workload's.
+fn load(path: &Path, ov: serq::Overrides) -> (serq::Program, PathBuf) {
+    let p = match serq::paired_workload(path) {
+        Some(w) => serq::load_paired(path, &w, &ov).map(|p| (p, w.parent().unwrap().to_path_buf())),
+        None => serq::load(path, &ov).map(|p| (p, path.parent().unwrap().to_path_buf())),
+    };
+    p.unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+}
 
 /// `(what, where)` of each event about `who`, the names of the IR's
 /// stages and pools in place of their indices.
@@ -58,11 +69,7 @@ fn story(log: &serq::engine::log::Log, who: Who) -> Vec<(String, String)> {
 /// its tool. Every step is one event, in order, and nothing is logged twice.
 #[test]
 fn a_session_is_logged_through_prefiller_link_and_decoder() {
-    let p = serq::load(
-        &serq::program_path("llmd_nixl_pull"),
-        &common::horizon(30.0),
-    )
-    .unwrap();
+    let (p, _) = load(&serq::program_path("llmd_nixl_pull"), common::horizon(30.0));
     let r = run_ir_logged(&p, None, usize::MAX).unwrap();
     let log = r.log.as_ref().expect("a logged run keeps its log");
     assert!(!log.truncated);
@@ -142,13 +149,17 @@ fn the_log_does_not_change_the_run() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples");
     let mut n = 0;
     for group in std::fs::read_dir(&root).unwrap().flatten() {
+        // a workload's file runs with the program it is paired with
+        if !group.path().is_dir() || group.file_name() == "workloads" {
+            continue;
+        }
         for entry in std::fs::read_dir(group.path()).unwrap().flatten() {
             let path = entry.path();
             if path.extension().is_none_or(|e| e != "sq") {
                 continue;
             }
-            let p = serq::load(&path, &common::horizon(20.0)).unwrap();
-            let base = path.parent();
+            let (p, base) = load(&path, common::horizon(20.0));
+            let base = Some(base.as_path());
             let plain = run_ir(&p, base).unwrap().json();
             let logged = run_ir_logged(&p, base, usize::MAX).unwrap();
             let mut j: serde_json::Value = serde_json::from_str(&logged.json()).unwrap();
@@ -173,9 +184,9 @@ fn the_log_does_not_change_the_run() {
 #[test]
 fn a_leg_is_told_from_its_session() {
     let path = serq::program_path("vllm_nixl_push");
-    let p = serq::load(&path, &common::horizon(5.0)).unwrap();
-    // the program replays a trace file next to it
-    let r = run_ir_logged(&p, path.parent(), usize::MAX).unwrap();
+    let (p, base) = load(&path, common::horizon(5.0));
+    // the workload replays a trace file next to it
+    let r = run_ir_logged(&p, Some(&base), usize::MAX).unwrap();
     let log = r.log.as_ref().unwrap();
     let leg = Who {
         serial: 0,
@@ -212,11 +223,7 @@ fn a_leg_is_told_from_its_session() {
 /// Past the cap the log stops and says so; the run goes on to its end.
 #[test]
 fn the_cap_bounds_the_log_not_the_run() {
-    let p = serq::load(
-        &serq::program_path("llmd_nixl_pull"),
-        &common::horizon(30.0),
-    )
-    .unwrap();
+    let (p, _) = load(&serq::program_path("llmd_nixl_pull"), common::horizon(30.0));
     let r = run_ir_logged(&p, None, 100).unwrap();
     let log = r.log.as_ref().unwrap();
     assert_eq!(log.events.len(), 100);
@@ -231,9 +238,12 @@ fn the_cap_bounds_the_log_not_the_run() {
 fn the_cli_writes_the_log_to_a_file() {
     let fx = common::Fixture::new();
     fx.write("p.sq", &common::main_source(common::PROGRAM));
+    fx.write("w.sq", common::WORKLOAD);
     let out = fx.run(&[
         "run",
         "p.sq",
+        "--workload",
+        "w.sq",
         "--horizon",
         "10",
         "--log",

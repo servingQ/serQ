@@ -6,17 +6,20 @@
 
 mod common;
 
-use serq::{Overrides, compile_source, run_source};
+use serq::Overrides;
+
+/// Every program here serves one request of one turn.
+const WORKLOAD: &str = "workload { arrive batch(1); session { turn; end; } }";
 
 fn run(src: &str) -> serq::Report {
-    run_source(
+    common::run(
         &common::main_source(src),
+        WORKLOAD,
         &Overrides {
             warmup: Some(0.0),
             seed: Some(1),
             ..common::horizon(100.0)
         },
-        None,
     )
     .unwrap_or_else(|e| panic!("{e}\n{src}"))
 }
@@ -51,7 +54,6 @@ fn a_waiting_job_takes_no_share_until_its_wait_is_over() {
     ] {
         let src = format!(
             "{stages}
-            workload {{ arrive batch(1); session {{ turn; end; }} }}
             server {{
               fork {{ {run_b} observe b_done = now; }}
               {run_a}
@@ -79,7 +81,6 @@ fn a_waiting_job_takes_no_share_until_its_wait_is_over() {
 #[test]
 fn a_fifo_job_queues_after_its_wait() {
     let r = run("stage f : fifo;
-        workload { arrive batch(1); session { turn; end; } }
         server {
           fork { run f (cost(f, 1)); observe b_done = now; }
           run f (cost(f, 1), latency = 0.5);
@@ -114,7 +115,6 @@ fn a_run_of_nothing_after_a_wait_is_a_wait_not_a_service() {
     ] {
         let src = format!(
             "{stages}
-            workload {{ arrive batch(1); session {{ turn; end; }} }}
             server {{ {stmt} observe done = now; }}"
         );
         let r = run(&src);
@@ -137,7 +137,6 @@ fn a_transfer_latency_is_the_links_or_its_own_not_both() {
         format!(
             "pool kvP {{ cap 100; }} pool kvD {{ cap 100; }}
             queue L : link {{ serve ps(100){serve}; }}
-            workload {{ arrive batch(1); session {{ turn; end; }} }}
             server {{
               hold kvP (cost(kvP, 10)) {{ }} lease kvP (inf);
               hold kvD (cost(kvD, 10)) {{ transfer on L (10{clause}) from kvP to kvD (10); }}
@@ -145,9 +144,18 @@ fn a_transfer_latency_is_the_links_or_its_own_not_both() {
         )
     };
     let ov = common::horizon(10.0);
-    let on_link = compile_source(&common::main_source(&program(" latency 0.5", "")), &ov).unwrap();
-    let on_run =
-        compile_source(&common::main_source(&program("", ", latency = 0.5")), &ov).unwrap();
+    let on_link = common::compile(
+        &common::main_source(&program(" latency 0.5", "")),
+        WORKLOAD,
+        &ov,
+    )
+    .unwrap();
+    let on_run = common::compile(
+        &common::main_source(&program("", ", latency = 0.5")),
+        WORKLOAD,
+        &ov,
+    )
+    .unwrap();
     assert_eq!(on_link.to_json(), on_run.to_json());
     assert!(on_link.blocks.iter().flatten().any(|st| matches!(
         st,
@@ -156,8 +164,9 @@ fn a_transfer_latency_is_the_links_or_its_own_not_both() {
             ..
         } if *x == 0.5
     )));
-    let e = compile_source(
+    let e = common::compile(
         &common::main_source(&program(" latency 0.5", ", latency = 0.5")),
+        WORKLOAD,
         &ov,
     )
     .expect_err("refused");

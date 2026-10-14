@@ -1,0 +1,7 @@
+// `requests` requests at once, carrying nothing
+// (examples/single-turn/arguments.sq runs it).
+use "std/args";
+
+let requests = args.number("requests", 2);
+
+workload { arrive batch(requests); }

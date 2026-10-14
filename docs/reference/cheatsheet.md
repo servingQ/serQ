@@ -5,6 +5,9 @@ argument rules and [The language](../language.md) for complete semantics.
 
 ## Shape of a program
 
+A program is the deployment; its workload is a file of its own
+([below](#workload)).
+
 ```serq
 let NAME = expr;                    // fixed constants
 def NAME(x, …) { expr }              // a name for an expression, expanded where it is used
@@ -17,7 +20,6 @@ fn main() {
   pool NAME [ '[' N ']' ] { … }       // a counted resource
   stage NAME [ '[' N ']' ] : kind;    // where time passes
 
-  workload { …  }  // arrivals, turns and client actions
   server { … }                       // what one request runs
   gauge NAME = expr;                  // a time average of the state: max k in N (used(kv[k]))
   claim NAME: every iteration of E (demand < B || tokens == B);   // checked on the run; also `some iteration of`, `at end`
@@ -133,15 +135,23 @@ preempted hold had computed; 0 initially and after the hold completes), and with
 
 ## Workload
 
+A file of its own (no `fn main()`), given when the program runs:
+`serq run model.sq --workload workload.sq`.
+
 ```serq
+// workload.sq: use, let (args.number at the top level), def, its own stages and pools
+let rate = args.number("rate", 0.3);
+pool live { cap 24; }       // its own: a cap on live sessions, no `on`
+
 workload {
-  arrive poisson(λ);        // renewal(~h2(mean, cv2)), closed(n), batch(n), none
+  arrive poisson(rate);     // renewal(~h2(mean, cv2)), closed(n), batch(n), none
   trace "file.csv" [ordered];
   init { … }                // once, at arrival
   turn { … }                // at every `turn` statement
   send (input: K + n, output: o);   // what each request carries
 }
 
+// model.sq, in fn main()
 server (input, hidden output) reply (done) {   // hidden: the scheduler may not read it
   …                         // reads the parameters; sets `done`, read as `reply.done`
 }
@@ -156,5 +166,6 @@ server (input, hidden output) reply (done) {   // hidden: the scheduler may not 
    admitted only when every pool has room.
 4. **Only the head of a queue can be admitted** — head-of-line blocking.
 5. **Cached units never block an admission**; they are evicted to make room.
-6. **`end` keeps the session's cached prefixes.** Write `drop P;` first if you
-   want them gone.
+6. **`end` keeps the session's cached prefixes.** To have them gone, the
+   workload sends `final` on the last request and the server writes
+   `if (final) { drop P; }`.

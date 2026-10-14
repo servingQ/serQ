@@ -1,6 +1,6 @@
 # The run log
 
-`serq run FILE --log LOG.json` keeps what each session did, when, and writes
+`serq run FILE --workload W --log LOG.json` keeps what each session did, when, and writes
 it to `LOG.json`; with `--json`, the report carries the same object as
 `log`. The report is a summary of the run; the log is the run itself, as a
 replay would need it: a session arriving, waiting in a pool's queue,
@@ -15,7 +15,7 @@ interpreter checks one flag per event. In the API it is
 iterations.
 
 ```bash
-serq run examples/pd-disaggregation/llmd_nixl_pull.sq --horizon 30 --log log.json
+serq run examples/pd-disaggregation/llmd_nixl_pull.sq --workload examples/workloads/chat_reply.sq --horizon 30 --log log.json
 jq '.events[] | select(.s == 0)' log.json
 ```
 

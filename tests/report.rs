@@ -5,7 +5,33 @@
 mod common;
 
 use serq::engine::report::REPORT_VERSION;
-use serq::{Overrides, compile_source, run_ir};
+use serq::{Overrides, run_ir};
+
+/// One single-turn session at a time, arriving at rate 1.
+const POISSON: &str = "workload { arrive poisson(1);
+          session { turn; end;
+          }
+        }
+";
+
+/// Two sessions at t = 0: serial 0 (A) with a prompt of 2, serial 1 (B) of 4.
+const TWO: &str =
+    "workload { arrive batch(2); init { set prompt = serial == 0 ? 2 : 4; } send (prompt);
+          session { turn;
+            end;
+
+          }
+        }
+";
+
+/// One single-turn session.
+const ONE: &str = "workload { arrive batch(1);
+          session { turn;
+            end;
+
+          }
+        }
+";
 
 fn keys(v: &serde_json::Value) -> Vec<String> {
     let mut k: Vec<String> = v.as_object().unwrap().keys().cloned().collect();
@@ -16,15 +42,11 @@ fn keys(v: &serde_json::Value) -> Vec<String> {
 #[test]
 fn the_report_has_the_shape_its_version_names() {
     let src = "pool kv { cap 10; } stage svc : fifo;
-        workload { arrive poisson(1);
-          session { turn; end;
-          }
-        }
         server { hold kv (cost(kv, 1)) { run svc (cost(svc, ~exp(0.5))); } observe x = now;
         }
         gauge g = used(kv);
         ";
-    let p = compile_source(&common::main_source(src), &common::horizon(100.0)).unwrap();
+    let p = common::compile(&common::main_source(src), POISSON, &common::horizon(100.0)).unwrap();
     let j: serde_json::Value = serde_json::from_str(&run_ir(&p, None).unwrap().json()).unwrap();
     // the client's metrics, each shaped as an observation
     assert_eq!(keys(&j["client"]), vec!["response", "tpot", "ttft"]);
@@ -116,14 +138,10 @@ fn the_report_has_the_shape_its_version_names() {
 #[test]
 fn an_array_member_is_reported_with_its_index() {
     let src = "pool kv[2] { cap 10; } pool reqs { cap 4; } stage svc[2] : fifo;
-        workload { arrive poisson(1);
-          session { turn; end;
-          }
-        }
         server { set j = ~bernoulli(0.5); hold reqs (cost(reqs, 1)) { hold kv[j] (cost(kv, 1)) { run svc[j] (cost(svc, ~exp(0.5))); } }
         }
         ";
-    let p = compile_source(&common::main_source(src), &common::horizon(100.0)).unwrap();
+    let p = common::compile(&common::main_source(src), POISSON, &common::horizon(100.0)).unwrap();
     let r = run_ir(&p, None).unwrap();
     let j: serde_json::Value = serde_json::from_str(&r.json()).unwrap();
     let rows = |k: &str| -> Vec<(String, serde_json::Value)> {
@@ -181,20 +199,15 @@ fn the_gaps_between_tokens_count_a_prefill_that_cuts_in() {
         }}
         pool reqs on llm {{ }}
         pool kv on gpu {{ }}
-        workload {{ arrive batch(2); init {{ set prompt = serial == 0 ? 2 : 4; }} send (prompt);
-          session {{ turn;
-            end;
-
-          }}
-        }}
         server (prompt) {{
           run gate (cost(gate, 2 * serial));
           llm (prompt, serial == 0 ? 4 : 1);   // A decodes three after its prefill's token
         }}
         "
         );
-        let p = compile_source(
+        let p = common::compile(
             &common::main_source(&src),
+            TWO,
             &Overrides {
                 warmup: Some(0.0),
                 seed: Some(1),
@@ -240,12 +253,6 @@ fn a_gap_holds_the_transfer_between_two_engines() {
           worker {{ forward (1); }}
         }}
         stage link : delay;
-        workload {{ arrive batch(1);
-          session {{ turn;
-            end;
-
-          }}
-        }}
         server {{
           p (2, 1);
           run link (cost(link, 5));
@@ -253,8 +260,9 @@ fn a_gap_holds_the_transfer_between_two_engines() {
         }}
         "
         );
-        let p = compile_source(
+        let p = common::compile(
             &common::main_source(&src),
+            ONE,
             &Overrides {
                 warmup: Some(0.0),
                 seed: Some(1),
@@ -291,7 +299,15 @@ fn the_gaps_add_up_to_the_decode_time_through_preemptions() {
         }
         pool reqs on llm { }
         pool kv on gpu { block 16; preempt lifo; }
-        workload {
+        server (prompt, hidden o) {
+          llm (prompt, o);
+          observe span = now - llm.first;
+          observe gaps = o - 1;
+        }
+        ";
+    let p = common::compile(
+        &common::main_source(src),
+        "workload {
           arrive poisson(40);
           init { set prompt = floor(~uniform(500, 1500)); set o = floor(~exp(100)) + 2; }
           send (prompt, o);
@@ -301,14 +317,7 @@ fn the_gaps_add_up_to_the_decode_time_through_preemptions() {
 
           }
         }
-        server (prompt, hidden o) {
-          llm (prompt, o);
-          observe span = now - llm.first;
-          observe gaps = o - 1;
-        }
-        ";
-    let p = compile_source(
-        &common::main_source(src),
+",
         &Overrides {
             warmup: Some(0.0),
             seed: Some(1),
@@ -338,14 +347,10 @@ fn the_gaps_add_up_to_the_decode_time_through_preemptions() {
 #[test]
 fn a_one_member_array_keeps_its_index() {
     let src = "pool kv[1] { cap 10; } pool reqs { cap 4; } stage svc[1] : fifo;
-        workload { arrive poisson(1);
-          session { turn; end;
-          }
-        }
         server { hold reqs (cost(reqs, 1)) { hold kv[0] (cost(kv, 1)) { run svc[0] (cost(svc, ~exp(2))); } }
         }
         ";
-    let p = compile_source(&common::main_source(src), &common::horizon(100.0)).unwrap();
+    let p = common::compile(&common::main_source(src), POISSON, &common::horizon(100.0)).unwrap();
     let r = run_ir(&p, None).unwrap();
     assert_eq!(r.pools_named("kv")[0].index, Some(0));
     assert_eq!(r.pools_named("reqs")[0].index, None);
@@ -367,9 +372,10 @@ fn a_queue_family_of_one_is_reported_by_index() {
           pool kv on gpu { }
           decode (p) { hold kv (cost(kv, p)) { run D prefill (cost(D, p)) growing kv; } }
         }
-        workload { arrive batch(1); init { set prompt = 4; } send (prompt); session { turn; end; } } server (prompt) { gw.route(); }
+        server (prompt) { gw.route(); }
         ";
-    let p = compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap();
+    let p = common::compile(&common::main_source(src), "workload { arrive batch(1); init { set prompt = 4; } send (prompt); session { turn; end; } }", &common::horizon(10.0))
+    .unwrap();
     let r = run_ir(&p, None).unwrap();
     assert_eq!(r.pools_named("D.kv")[0].index, Some(0));
     assert_eq!(r.stages_named("D")[0].index, Some(0));
@@ -392,12 +398,6 @@ fn a_step_stage_reports_what_its_iterations_carried() {
         }}
         pool reqs on llm {{ }}
         pool kv on gpu {{ }}
-        workload {{ arrive batch(2); init {{ set prompt = serial == 0 ? 2 : 4; }} send (prompt);
-          session {{ turn;
-            end;
-
-          }}
-        }}
         server (prompt) {{
           run gate (cost(gate, serial));
           llm (prompt, serial == 0 ? 3 : 1);   // A decodes two after its prefill's token
@@ -406,8 +406,9 @@ fn a_step_stage_reports_what_its_iterations_carried() {
         )
     };
     let stage = |schedule: &str| {
-        let p = compile_source(
+        let p = common::compile(
             &common::main_source(&src(schedule)),
+            TWO,
             &Overrides {
                 warmup: Some(0.0),
                 seed: Some(1),
@@ -443,8 +444,9 @@ fn a_step_stage_reports_what_its_iterations_carried() {
 /// #232: the report says which serq produced it.
 #[test]
 fn the_report_records_the_serq_version() {
-    let p = compile_source(&common::main_source(
-        "stage svc : delay; workload { arrive batch(1); \n  session { turn; end; \n  }\n} server { run svc (cost(svc, 1));\n} "),
+    let p = common::compile(
+        &common::main_source("stage svc : delay; server { run svc (cost(svc, 1));\n} "),
+        "workload { arrive batch(1); \n  session { turn; end; \n  }\n}",
         &common::horizon(2.0),
     )
     .unwrap();
@@ -474,9 +476,7 @@ fn a_decoders_gaps_add_up_through_its_preemptions() {
         arrivals: Some(4000),
         ..common::horizon(300.0)
     };
-    let src = include_str!("../examples/pd-disaggregation/pd_batching.sq");
-    let p = compile_source(&common::main_source(src), &ov).unwrap();
-    let r = run_ir(&p, None).unwrap();
+    let r = common::run_example("examples/pd-disaggregation/pd_batching.sq", &ov).unwrap();
     assert!(
         r.pool("D.kv").unwrap().preemptions > 0,
         "no preemption to test"
@@ -511,12 +511,7 @@ fn a_decoders_gaps_add_up_through_its_preemptions() {
 #[test]
 fn a_test_observe_that_never_held_is_noted() {
     let src = "def below(x) { x < 0 }
-        stage svc : delay; workload { arrive batch(40);
-          session { turn;
-            end;
-
-          }
-        }
+        stage svc : delay;
         server {
           run svc (cost(svc, serial));
           observe never = serial < 0;
@@ -532,7 +527,18 @@ fn a_test_observe_that_never_held_is_noted() {
         }
         ";
     let r = run_ir(
-        &compile_source(&common::main_source(src), &common::horizon(100.0)).unwrap(),
+        &common::compile(
+            &common::main_source(src),
+            "workload { arrive batch(40);
+          session { turn;
+            end;
+
+          }
+        }
+",
+            &common::horizon(100.0),
+        )
+        .unwrap(),
         None,
     )
     .unwrap();
@@ -572,13 +578,17 @@ fn a_growth_left_waiting_is_noted() {
           worker { forward (1e-4 + 1e-5 * batch.tokens); }
         }
         pool kv on gpu { block 16; evict lru; }
-        workload { arrive batch(1); session { loop { turn; } } }
         server {
           hold kv (cost(kv, 1000)) { llm (1000, 1); }
         }
         ";
     let r = run_ir(
-        &compile_source(&common::main_source(src), &common::horizon(20.0)).unwrap(),
+        &common::compile(
+            &common::main_source(src),
+            "workload { arrive batch(1); session { loop { turn; } } }",
+            &common::horizon(20.0),
+        )
+        .unwrap(),
         None,
     )
     .unwrap();
@@ -605,7 +615,11 @@ fn the_corpus_earns_one_note() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut programs = vec![];
     for dir in std::fs::read_dir(root.join("examples")).unwrap().flatten() {
-        for f in std::fs::read_dir(dir.path()).unwrap().flatten() {
+        // (`examples/pairs.json` is a file beside the groups)
+        let Ok(files) = std::fs::read_dir(dir.path()) else {
+            continue;
+        };
+        for f in files.flatten() {
             programs.push(f.path());
         }
     }
@@ -615,7 +629,12 @@ fn the_corpus_earns_one_note() {
     {
         programs.push(f.path());
     }
-    programs.retain(|p| p.extension().is_some_and(|e| e == "sq"));
+    // a workload's file is not a program: it runs beside the one it is paired with
+    let workloads: Vec<_> = programs
+        .iter()
+        .filter_map(|p| serq::paired_workload(p))
+        .collect();
+    programs.retain(|p| p.extension().is_some_and(|e| e == "sq") && !workloads.contains(p));
     programs.sort();
     assert!(programs.len() >= 25, "{programs:?}");
     let mut noted = vec![];
@@ -623,7 +642,9 @@ fn the_corpus_earns_one_note() {
     // engine idle with work (the `idle:` note, #355)
     let mut rejected = vec![];
     for p in &programs {
-        let r = serq::run_file(p, &common::horizon(100.0))
+        let w = serq::paired_workload(p).unwrap_or_else(|| panic!("{}: no workload", p.display()));
+        let r = serq::load_paired(p, &w, &common::horizon(100.0))
+            .and_then(|ir| run_ir(&ir, w.parent()))
             .unwrap_or_else(|e| panic!("{}: {e}", p.display()));
         let name = p.strip_prefix(root).unwrap().to_string_lossy().into_owned();
         for o in r.observes.iter().filter(|o| o.never_held()) {

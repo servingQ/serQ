@@ -1,5 +1,6 @@
 // vllm-rbln's RBLNScheduler (v0.11.3a21) on one NPU, approximated.
-// docs/use-cases/rbln.md explains it a part at a time.
+// docs/use-cases/rbln.md explains it a part at a time; its workload is
+// examples/workloads/rbln_batch.sq.
 fn main() {
   // --8<-- [start:engine]
   device npu { kv cap 8192; }
@@ -25,14 +26,9 @@ fn main() {
   pool kv on npu { block 16; evict lru; preempt lifo; }
   pool reqs on llm { queue fifo; }
   // --8<-- [end:pools]
-  // --8<-- [start:workload]
-  workload {
-    arrive batch(6);
-    init { set prompt = 256; set out = 16; }
-    send (prompt, out);
-  }
+  // --8<-- [start:server]
   server (prompt, out) {
     llm (prompt, out + 1);   // the model's `out` decode steps after the prefill's token
   }
-  // --8<-- [end:workload]
+  // --8<-- [end:server]
 }

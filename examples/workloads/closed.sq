@@ -1,0 +1,22 @@
+// Closed loop of N sessions, each sending exponential work (mean 1/mu) and
+// then thinking for an exponential time (mean Z) at its user station
+// (examples/multi-turn/closed.sq runs it).
+
+let N = 8;
+let mu = 1.0;
+let Z = 4.0;
+
+stage user : delay;
+
+workload {
+  arrive closed(N);
+  send (s, t0);
+  session {
+    loop {
+      set t0 = now;
+      set s = ~exp(1 / mu);
+      turn;
+      run user (cost(user, ~exp(Z)));
+    }
+  }
+}

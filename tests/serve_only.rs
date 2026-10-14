@@ -5,7 +5,7 @@
 
 mod common;
 
-use serq::{Program, compile_source, run_ir, run_source};
+use serq::{Program, run_ir};
 use std::path::Path;
 use std::process::Command;
 
@@ -13,6 +13,11 @@ const FT: &str = "running.decoding > 0 ? decoding : !decoding";
 
 /// The schedule that advances and admits only the requests `p` reads as
 /// nonzero: the stage's `serve only (p)`.
+/// Two requests of one turn, at once: `source`'s and the others'.
+const TWO: &str = "workload { arrive batch(2); session { turn; end; } }";
+/// Three, for `admitted`.
+const THREE: &str = "workload { arrive batch(3); session { turn; end; } }";
+
 fn only(p: &str) -> String {
     format!("advance running only ({p}); admit waiting only ({p}) while (running.preempted == 0);")
 }
@@ -30,12 +35,6 @@ fn source(schedule: &str) -> String {
           scheduler {{ {schedule} }}
           worker {{ forward (1); }}
         }}
-        workload {{ arrive batch(2);
-          session {{ turn;
-            end;
-
-          }}
-        }}
         server {{
           run gate (cost(gate, serial));
           hold reqs (cost(reqs, 1)) {{ llm (3, 3); }}   // two decode steps after the prefill's token
@@ -46,14 +45,24 @@ fn source(schedule: &str) -> String {
     )
 }
 
-fn trace(name: &str, src: &str) -> Vec<String> {
+fn trace(name: &str, src: &str, workload: &str) -> Vec<String> {
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("serve-only");
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join(format!("{name}.sq"));
     std::fs::write(&path, common::main_source(src)).unwrap();
+    let wpath = dir.join(format!("{name}.workload.sq"));
+    std::fs::write(&wpath, workload).unwrap();
     let out = Command::new(env!("CARGO_BIN_EXE_serq"))
         .env("SERQ_TRACE_ITER", "1")
-        .args(["run", path.to_str().unwrap(), "--horizon", "20", "--json"])
+        .args([
+            "run",
+            path.to_str().unwrap(),
+            "--workload",
+            wpath.to_str().unwrap(),
+            "--horizon",
+            "20",
+            "--json",
+        ])
         .output()
         .unwrap();
     let stderr = String::from_utf8(out.stderr).unwrap();
@@ -71,7 +80,8 @@ fn decode_first_mixes_and_fastertransformer_does_not() {
     assert_eq!(
         trace(
             "sarathi",
-            &source("advance running decode first; admit waiting while (running.preempted == 0);")
+            &source("advance running decode first; admit waiting while (running.preempted == 0);"),
+            TWO
         ),
         [
             "ITER 0.0000 0:1:p3",
@@ -83,7 +93,7 @@ fn decode_first_mixes_and_fastertransformer_does_not() {
     // FasterTransformer: B is resident from t=1 and waits until A has
     // decoded its last token; no iteration mixes the two.
     assert_eq!(
-        trace("ft", &source(&only(FT))),
+        trace("ft", &source(&only(FT)), TWO),
         [
             "ITER 0.0000 0:1:p3",
             "ITER 1.0000 0:1:d1",
@@ -103,7 +113,7 @@ fn the_opposite_is_written_with_the_same_construct() {
         "running.decoding < running.count ? !decoding : decoding",
     ));
     assert_eq!(
-        trace("prefill-alone", &src),
+        trace("prefill-alone", &src, TWO),
         [
             "ITER 0.0000 0:1:p3",
             "ITER 1.0000 1:1:p3",
@@ -129,19 +139,19 @@ fn only_selects_and_by_orders() {
           }
           worker { forward (1); }
         }
-        workload { arrive batch(2); init { set prompt = serial == 0 ? 4 : 2; } send (prompt);
-          session { turn;
-            end;
-
-          }
-        }
         server (prompt) {
           hold reqs (cost(reqs, 1)) { llm (prompt, 2); }
         }
 
 "#;
     assert_eq!(
-        trace("by", src),
+        trace(
+            "by",
+            src,
+            "workload { arrive batch(2); init { set prompt = serial == 0 ? 4 : 2; } send (prompt);
+               session { turn; end; }
+             }"
+        ),
         [
             "ITER 0.0000 1:1:p2",
             "ITER 1.0000 1:1:d1",
@@ -171,12 +181,6 @@ fn admitted(schedule: &str) -> String {
           worker {{ forward (1); }}
         }}
         pool reqs on llm {{ }}
-        workload {{ arrive batch(3);
-          session {{ turn;
-            end;
-
-          }}
-        }}
         server {{
           run gate (cost(gate, serial > 0 ? 1 : 0));
           llm (1, 3);
@@ -194,7 +198,7 @@ fn an_excluded_admission_waits_as_a_resident() {
     // How many are admitted is the pool's `cap`, not `only`'s.
     let src = admitted(&only(FT));
     assert_eq!(
-        trace("admitted", &src),
+        trace("admitted", &src, THREE),
         [
             "ITER 0.0000 0:1:p1",
             "ITER 1.0000 0:1:d1",
@@ -204,7 +208,7 @@ fn an_excluded_admission_waits_as_a_resident() {
             "ITER 5.0000 1:1:d1 2:1:d1",
         ]
     );
-    let r = run_source(&common::main_source(&src), &common::horizon(20.0), None).unwrap();
+    let r = common::run(&common::main_source(&src), THREE, &common::horizon(20.0)).unwrap();
     assert_eq!(r.ended, 3);
     assert_eq!(r.observe("admitted_at").unwrap().samples, [0.0, 1.0, 1.0]);
 }
@@ -222,7 +226,7 @@ fn a_session_admitted_in_the_iteration_counts_among_the_residents() {
     .replace("run gate (cost(gate, serial > 0 ? 1 : 0));", "")
     .replace("stage gate : delay;", "");
     assert_eq!(
-        trace("admitted-opposite", &src),
+        trace("admitted-opposite", &src, THREE),
         [
             "ITER 0.0000 0:1:p1 1:1:p1 2:1:p1",
             "ITER 1.0000 0:1:d1 1:1:d1 2:1:d1",
@@ -237,7 +241,7 @@ fn a_session_admitted_in_the_iteration_counts_among_the_residents() {
         "running.decoding < running.count ? !decoding : decoding",
     ));
     assert_eq!(
-        trace("admitted-joins", &src)[1],
+        trace("admitted-joins", &src, THREE)[1],
         "ITER 1.0000 0:1:d1 1:1:p1 2:1:p1"
     );
 }
@@ -245,17 +249,18 @@ fn a_session_admitted_in_the_iteration_counts_among_the_residents() {
 #[test]
 fn the_ir_runs_as_the_text_and_omits_an_absent_only() {
     let src = source(&only(FT));
-    let p = compile_source(&common::main_source(&src), &common::horizon(20.0)).unwrap();
+    let p = common::compile(&common::main_source(&src), TWO, &common::horizon(20.0)).unwrap();
     let json = p.to_json();
     assert!(json.contains("\"only\""));
     let from_ir = run_ir(&Program::from_json(&json).unwrap(), None).unwrap();
-    let from_text = run_source(&common::main_source(&src), &common::horizon(20.0), None).unwrap();
+    let from_text = common::run(&common::main_source(&src), TWO, &common::horizon(20.0)).unwrap();
     assert_eq!(from_text.json(), from_ir.json());
     assert_eq!(from_text.observe("done").unwrap().samples, [3.0, 6.0]);
-    let plain = compile_source(
+    let plain = common::compile(
         &common::main_source(&source(
             "advance running decode first; admit waiting while (running.preempted == 0);",
         )),
+        TWO,
         &common::horizon(20.0),
     )
     .unwrap();
@@ -278,12 +283,6 @@ fn an_engine_that_excludes_every_resident_waits_for_the_residents_to_change() {
           }
           worker { forward (1); }
         }
-        workload { arrive batch(2);
-          session { turn;
-            end;
-
-          }
-        }
         server {
           run gate (cost(gate, 2 * serial));
           hold reqs (cost(reqs, 1)) { llm (1, 2); }
@@ -291,7 +290,7 @@ fn an_engine_that_excludes_every_resident_waits_for_the_residents_to_change() {
 
 "#;
     assert_eq!(
-        trace("waits", src),
+        trace("waits", src, TWO),
         ["ITER 2.0000 0:1:p1 1:1:p1", "ITER 3.0000 0:1:d1 1:1:d1"]
     );
 }
@@ -310,8 +309,9 @@ fn a_key_is_checked_alike_in_either_form_of_schedule() {
             )
         };
         let compiled = |key: &str| {
-            compile_source(
+            common::compile(
                 &common::main_source(&source(&schedule(key))),
+                TWO,
                 &common::horizon(20.0),
             )
         };
@@ -331,12 +331,9 @@ fn a_key_is_checked_alike_in_either_form_of_schedule() {
 fn only_is_refused_where_it_is_ambiguous_or_unreadable() {
     // `only` beside `exclusive prefill`: a schedule with `only` is a body,
     // and the exclusive rule takes back decodes a body cannot
-    let error = compile_source(
-        &common::main_source(&source(
+    let error = common::compile(&common::main_source(&source(
             "advance running only (decoding); exclusive prefill; admit waiting while (running.preempted == 0);",
-        )),
-        &common::horizon(20.0),
-    )
+        )), TWO, &common::horizon(20.0))
     .unwrap_err();
     assert!(
         error.contains("`exclusive prefill` takes back decodes already chosen"),
@@ -350,8 +347,9 @@ fn only_is_refused_where_it_is_ambiguous_or_unreadable() {
         ),
         ("now >= 5 || decoding", "may not read `now`"),
     ] {
-        let error = compile_source(
+        let error = common::compile(
             &common::main_source(&source(&only(p))),
+            TWO,
             &common::horizon(20.0),
         )
         .unwrap_err()
@@ -360,8 +358,9 @@ fn only_is_refused_where_it_is_ambiguous_or_unreadable() {
     }
     // the IR refuses what the parser does: `only` is a body, which the
     // exclusive rule cannot sit beside
-    let mut p = compile_source(
+    let mut p = common::compile(
         &common::main_source(&source(&only(FT))),
+        TWO,
         &common::horizon(20.0),
     )
     .unwrap();
@@ -376,8 +375,9 @@ fn only_is_refused_where_it_is_ambiguous_or_unreadable() {
     );
     // and an `only` that reads the batch, which no program can spell: it is
     // read for each resident before the batch is formed
-    let mut p = compile_source(
+    let mut p = common::compile(
         &common::main_source(&source(&only(FT))),
+        TWO,
         &common::horizon(20.0),
     )
     .unwrap();

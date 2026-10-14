@@ -8,20 +8,35 @@
 mod common;
 
 use serq::ir::{CExpr, CStageKind, Program};
-use serq::{compile_source, run_source};
+
+/// Three requests of a 6-token prompt that generate 3: the workload of
+/// most tests here, the server's `n` and its hidden `o`.
+const WORKLOAD: &str = "workload { arrive batch(3); turn { set n = 6; set o = 3; } send (n, o); }";
 
 fn compiled(src: &str) -> Program {
-    compile_source(&common::main_source(src), &common::horizon(10.0))
+    compiled_with(src, WORKLOAD)
+}
+
+fn compiled_with(src: &str, workload: &str) -> Program {
+    common::compile(&common::main_source(src), workload, &common::horizon(10.0))
         .unwrap_or_else(|e| panic!("{e}\n{src}"))
 }
 
 fn run(src: &str) -> serq::Report {
-    run_source(&common::main_source(src), &common::horizon(100.0), None)
+    run_with(src, WORKLOAD)
+}
+
+fn run_with(src: &str, workload: &str) -> serq::Report {
+    common::run(&common::main_source(src), workload, &common::horizon(100.0))
         .unwrap_or_else(|e| panic!("{e}\n{src}"))
 }
 
 fn refused(src: &str, fragment: &str) {
-    match compile_source(&common::main_source(src), &common::horizon(10.0)) {
+    refused_with(src, WORKLOAD, fragment)
+}
+
+fn refused_with(src: &str, workload: &str, fragment: &str) {
+    match common::compile(&common::main_source(src), workload, &common::horizon(10.0)) {
         Ok(_) => panic!("links:\n{src}"),
         Err(e) => assert!(e.contains(fragment), "missing {fragment:?}:\n{e}"),
     }
@@ -44,7 +59,6 @@ device gpu { kv cap 64; }
 const POOLS: &str = "
 pool kv on gpu { block bs; evict lru; preempt lifo; }
 pool reqs on llm { queue fifo; }
-workload { arrive batch(3); turn { set n = 6; set o = 3; } send (n, o); }
 ";
 
 /// The engine admits a request with a slot and the blocks of the chunk the
@@ -97,7 +111,6 @@ queue llm : prefill {
     } cache (cost(reqs, kv, prompt + o));
   }
 }
-workload { arrive batch(3); turn { set n = 6; set o = 3; } send (n, o); }
 server (n, hidden o) {
   set t0 = now;
   llm.prefill (n);
@@ -173,16 +186,16 @@ engine llm on gpu {{
   worker {{ forward (1); }}
 }}
 pool kv on gpu {{ block bs; }}
-workload {{ arrive batch(1); turn {{ set n = 6; }} send (n); }}
 server (n) {{ llm (n, 1); }}
 "
     );
-    let p = compiled(&src);
+    let workload = "workload { arrive batch(1); turn { set n = 6; } send (n); }";
+    let p = compiled_with(&src, workload);
     let CStageKind::Step(st) = &p.stages[0].kind else {
         panic!("the engine")
     };
     assert!(st.request.as_ref().unwrap().pools.is_empty());
-    assert_eq!(run(&src).pool("kv").unwrap().admissions, 0);
+    assert_eq!(run_with(&src, workload).pool("kv").unwrap().admissions, 0);
 }
 
 /// The cache may read whether the request has finished: a retracted one
@@ -209,12 +222,11 @@ fn the_cache_reads_whether_the_request_finished() {
                }}
                worker {{ forward (1); }}
              }}
-             workload {{ arrive batch(2); }}
              server {{ e (16, 24); observe after = cachedin(kv); }}"
         )
     };
     let reused = |cache: &str| {
-        let r = run(&with(cache));
+        let r = run_with(&with(cache), "workload { arrive batch(2); }");
         assert_eq!(r.pool("kv").unwrap().preemptions, 1, "{}", r.text());
         (
             r.observe("e.reused").unwrap().samples.clone(),
@@ -303,8 +315,12 @@ fn a_request_generates_a_token() {
         &program(),
         &[("  llm (n, o);", "  set z = 0;\n  llm (n, z);")],
     );
-    let e = run_source(&common::main_source(&src), &common::horizon(100.0), None)
-        .expect_err("a request of no token runs");
+    let e = common::run(
+        &common::main_source(&src),
+        WORKLOAD,
+        &common::horizon(100.0),
+    )
+    .expect_err("a request of no token runs");
     assert!(e.contains("a request generates at least one token"), "{e}");
 }
 
@@ -455,14 +471,18 @@ fn the_server_runs_an_engine_only_through_its_request() {
 
 #[test]
 fn a_session_does_not_call_an_engine() {
-    let src = replaced(
-        &program(),
+    let workload = replaced(
+        WORKLOAD,
         &[(
-            "workload { arrive batch(3); turn { set n = 6; set o = 3; } send (n, o); }",
-            "workload { arrive batch(3); turn { set n = 6; set o = 3; } send (n, o); session { turn; llm (n, o); } }",
+            "send (n, o); }",
+            "send (n, o); session { turn; llm (n, o); } }",
         )],
     );
-    refused(&src, "is a request to engine `llm`, which a `server` makes");
+    refused_with(
+        &program(),
+        &workload,
+        "is a request to engine `llm`, which a `server` makes",
+    );
     // a queue's entry runs its own engine, and no other
     refused(
         &replaced(
@@ -499,21 +519,25 @@ queue P[2] : prefill {{
   pool kv on gpu {{ }}
   prefill (prompt) {{ {entry} }}
 }}
-workload {{ arrive batch(2); turn {{ set n = 6; }} send (n); }}
 server (n) {{ {server} }}
 "
         )
     };
-    let r = run(&queue(
-        "P (prompt, 1); observe read = P.prefill;",
-        "P[serial].prefill (n);",
-    ));
+    let workload = "workload { arrive batch(2); turn { set n = 6; } send (n); }";
+    let r = run_with(
+        &queue(
+            "P (prompt, 1); observe read = P.prefill;",
+            "P[serial].prefill (n);",
+        ),
+        workload,
+    );
     assert_eq!(r.observe("read").unwrap().samples, [6.0, 6.0]);
     // each member admitted into its own pool
     let members: Vec<u64> = r.pools_named("P.kv").iter().map(|p| p.admissions).collect();
     assert_eq!(members, [1, 1], "{}", r.text());
-    refused(
+    refused_with(
         &queue("P (prompt, 1);", "P (n, 1);"),
+        workload,
         "`P (…)` is a request to queue `P`'s engine, which its entries make",
     );
 }
@@ -529,11 +553,11 @@ engine llm[2] on gpu {
   scheduler { advance running; admit waiting while (running.preempted == 0); }
   worker { forward (1); }
 }
-workload { arrive batch(1); turn { set n = 6; } send (n); }
 server (n) { run llm[0] prefill (cost(llm, n)); }
 ";
-    refused(
+    refused_with(
         src,
+        "workload { arrive batch(1); turn { set n = 6; } send (n); }",
         "engine family `llm[2]`: a family of engines is a queue family",
     );
 }

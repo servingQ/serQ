@@ -1,5 +1,7 @@
 //! `serq::outline`: where each declaration of program text is written.
 
+mod common;
+
 use serq::frontend::outline::{Outline, Range};
 
 fn read(path: &str) -> String {
@@ -117,7 +119,8 @@ fn a_pull_relation_its_queues_and_its_calls_are_found_in_the_text() {
         .collect();
     assert_eq!(params, [("input", false), ("output", true)]);
     assert_eq!(sig.reply, ["produced"]);
-    assert!(text(&src, o.workload.unwrap()).starts_with("workload {"));
+    // the workload is a file of its own: the deployment has none
+    assert!(o.workload.is_none());
 }
 
 #[test]
@@ -170,8 +173,11 @@ fn a_routers_chooses_their_counts_and_keys_are_found_in_the_text() {
 
 #[test]
 fn a_workloads_statements_are_found_in_the_text() {
-    let src = read("examples/pd-disaggregation/llmd_nixl_pull.sq");
-    let o = outline(&src);
+    // the workload's statements are its file's, outlined beside the
+    // deployment it runs against
+    let deployment = read("examples/pd-disaggregation/llmd_nixl_pull.sq");
+    let src = read("examples/workloads/chat_reply.sq");
+    let (_, o) = serq::outline_paired(&deployment, &src).unwrap();
     let items: Vec<_> = o
         .workload_items
         .iter()
@@ -246,7 +252,17 @@ fn a_push_relation_says_push() {
         .filter(|d| d.kind == "stage")
         .map(|d| text(&src, d.range))
         .collect();
-    assert_eq!(stages, ["stage front : delay;", "stage gate : delay;"]);
+    assert_eq!(stages, ["stage front : delay;"]);
+    // the stage its sessions wait at is the workload file's, in its outline
+    let workload = read("examples/workloads/short_base.sq");
+    let (_, w) = serq::outline_paired(&src, &workload).unwrap();
+    let stages: Vec<_> = w
+        .decls
+        .iter()
+        .filter(|d| d.kind == "stage")
+        .map(|d| text(&workload, d.range))
+        .collect();
+    assert_eq!(stages, ["stage gate : delay;"]);
     // a call inside `fork { … }` is a call of the route
     assert!(
         o.calls
@@ -287,7 +303,7 @@ fn an_engine_outside_a_queue_is_a_declaration() {
 #[test]
 fn ranges_are_bytes_after_a_wide_character() {
     // `é` is two bytes and one column
-    let src = "// é\nfn main() {\n  let é_ = 1; stage s : delay;\n  workload { arrive poisson(1); turn { set n = 1; } }\n  server { run s (1); }\n}\n";
+    let src = "// é\nfn main() {\n  let é_ = 1; stage s : delay;\n  server { run s (1); }\n}\n";
     let o = outline(src);
     let s = o.decls.iter().find(|d| d.kind == "stage").unwrap();
     assert_eq!(text(src, s.range), "stage s : delay;");
@@ -297,12 +313,43 @@ fn ranges_are_bytes_after_a_wide_character() {
 fn a_program_that_does_not_link_has_an_outline() {
     let src = read("examples/multi-turn/vllm.sq")
         .replace("vllm (input, output);", "vllm (input, nowhere);");
-    let ov = serq::Overrides::default();
-    assert!(serq::compile_inspected(&src, &ov).is_err());
+    let err = common::inspected(
+        &src,
+        &read("examples/workloads/chat.sq"),
+        &serq::Overrides::default(),
+    )
+    .unwrap_err();
+    assert!(err.contains("nowhere"), "{err}");
     let o = outline(&src);
     assert_eq!(
         text(&src, o.server.unwrap().body).trim(),
         "vllm (input, nowhere);"
+    );
+}
+
+/// The outline reads the deployment alone: a server with no workload's file
+/// beside it, which a run refuses, still has its outline.
+#[test]
+fn a_deployment_alone_has_an_outline() {
+    let src =
+        "fn main() {\n  stage s : delay;\n  server (n) reply (m) { run s (n); set m = 1; }\n}\n";
+    assert!(
+        serq::compile_inspected(src, &serq::Overrides::default())
+            .unwrap_err()
+            .contains("the server needs a workload to run")
+    );
+    let o = outline(src);
+    assert!(o.workload.is_none());
+    let server = o.server.unwrap();
+    assert!(text(src, server.range).starts_with("server (n) reply (m) {"));
+    let sig = o.signature.unwrap();
+    assert_eq!(sig.params.len(), 1);
+    assert_eq!(sig.reply, ["m"]);
+    // a workload written in `fn main` is still an error to report
+    assert!(
+        serq::outline("fn main() { workload { session { turn; end; } } }")
+            .unwrap_err()
+            .contains("a workload is a file of its own")
     );
 }
 

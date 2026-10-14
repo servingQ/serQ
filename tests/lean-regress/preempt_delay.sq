@@ -35,12 +35,6 @@ fn main() {
   }
   stage tool : delay;
 
-  workload {
-    arrive batch(2);
-    init { set d = 0; }
-    send (d);
-  }
-
   server (d) {
     llm.decode (d);
   }

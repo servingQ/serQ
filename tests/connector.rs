@@ -5,14 +5,20 @@
 
 mod common;
 
-use serq::{Overrides, check_source, run_source};
-
-fn run(src: &str, options: &Overrides) -> serq::Report {
-    run_source(&common::main_source(src), options, None).unwrap_or_else(|e| panic!("{e}\n{src}"))
+fn run(src: &str, workload: &str, horizon: f64) -> serq::Report {
+    common::run(
+        &common::main_source(src),
+        workload,
+        &common::horizon(horizon),
+    )
+    .unwrap_or_else(|e| panic!("{e}\n{src}\n{workload}"))
 }
 
+/// One request, one turn: the workload of the tests that refuse a program.
+const ONE: &str = "workload { arrive batch(1); }";
+
 fn refused(src: &str, needle: &str) {
-    let e = match check_source(&common::main_source(src), &common::horizon(100.0)) {
+    let e = match common::compile(&common::main_source(src), ONE, &common::horizon(100.0)) {
         Err(e) => e.to_string(),
         Ok(_) => panic!("accepted:\n{src}"),
     };
@@ -51,7 +57,6 @@ fn a_connector_saves_at_the_end_and_loads_at_the_admission() {
     let r = run(
         &format!(
             "{}
-             workload {{ arrive batch(1); turn {{ }} session {{ turn; tool (50); turn; end; }} }}
              server {{
                e (100, 1);
                observe loaded = e.loaded;
@@ -68,7 +73,8 @@ fn a_connector_saves_at_the_end_and_loads_at_the_admission() {
                 "kv (request.known)"
             )
         ),
-        &common::horizon(1000.0),
+        "workload { arrive batch(1); turn { } session { turn; tool (50); turn; end; } }",
+        1000.0,
     );
     assert_eq!(samples(&r, "loaded"), [0.0, 50.0]);
     assert_eq!(samples(&r, "e.loaded"), [0.0, 50.0]);
@@ -95,10 +101,10 @@ fn a_connector_reads_whether_the_request_was_preempted() {
                scheduler {{ advance running; admit waiting while (running.preempted == 0) taking kv (request.known); }}
                worker {{ forward (1); }}
              }}
-             workload {{ arrive batch(2); }}
              server {{ e (16, 20); }}"
         ),
-        &common::horizon(1000.0),
+        "workload { arrive batch(2); }",
+        1000.0,
     );
     assert_eq!(r.pool("kv").unwrap().preemptions, 1, "{}", r.text());
     assert_eq!(samples(&r, "e.loaded"), [8.0, 8.0, 0.0]);
@@ -113,10 +119,13 @@ fn a_connector_reads_whether_the_request_was_preempted() {
 /// `ps` stages after them.
 #[test]
 fn an_l2_load_at_a_low_rate_is_not_left_waiting() {
-    let src = std::fs::read_to_string("examples/multi-turn/vllm_lmcache.sq").unwrap();
+    let path = serq::program_path("vllm_lmcache");
     let mut o = common::horizon(6000.0);
     o.set("Lambda", "0.005").unwrap();
-    let r = run_source(&src, &o, None).unwrap_or_else(|e| panic!("{e}"));
+    let workload = serq::paired_workload(&path).expect("vllm_lmcache's workload");
+    let r = serq::load_paired(&path, &workload, &o)
+        .and_then(|p| serq::run_ir(&p, workload.parent()))
+        .unwrap_or_else(|e| panic!("{e}"));
     let ttft = &r.client("ttft").unwrap().samples;
     let worst = ttft.iter().cloned().fold(0.0, f64::max);
     assert!(worst < 1.0, "the slowest first token took {worst} s");
@@ -128,7 +137,7 @@ fn an_l2_load_at_a_low_rate_is_not_left_waiting() {
 #[test]
 fn a_connector_says_what_it_copies() {
     let taking = "kv (request.known)";
-    let with = |c: &str| engine(c, taking) + " workload { arrive batch(1); } server { e (10, 1); }";
+    let with = |c: &str| engine(c, taking) + " server { e (10, 1); }";
     refused(
         &with("connector kv { per_token (1); load (1); }"),
         "`connector kv`: `kv` is not a queue that plays `l2` declared above",
@@ -158,20 +167,19 @@ fn a_connector_says_what_it_copies() {
     refused(
         &(engine("connector lmc { per_token (1); load (1); }", "reqs (1)")
             .replace("tokens cap inf;", "tokens cap inf; reqs cap 4;")
-            + " pool reqs on e { } workload { arrive batch(1); } server { e (10, 1); }"),
+            + " pool reqs on e { } server { e (10, 1); }"),
         "loads into the engine's memory",
     );
     // `request.loaded` and `request.preempted` are the admission's
     refused(
         &(engine("connector lmc { per_token (1); load (1); }", taking)
             .replace("forward (1);", "forward (1 + request.loaded);")
-            + " workload { arrive batch(1); } server { e (10, 1); }"),
+            + " server { e (10, 1); }"),
         "`request.loaded`",
     );
     // the caller reads `e.loaded` of an engine that has a connector
     refused(
-        &(engine("", taking)
-            + " workload { arrive batch(1); } server { e (10, 1); observe l = e.loaded; }"),
+        &(engine("", taking) + " server { e (10, 1); observe l = e.loaded; }"),
         "e.loaded",
     );
 }
@@ -186,7 +194,7 @@ fn an_l2_is_one_pool_and_a_serve() {
             "kv (request.known)",
         )
         .replace(CACHE, cache)
-            + " workload { arrive batch(1); } server { e (10, 1); }"
+            + " server { e (10, 1); }"
     };
     refused(
         &with("queue lmc : l2 { pool kv { cap 10; } }"),
@@ -204,7 +212,6 @@ fn an_l2_is_one_pool_and_a_serve() {
         refused(
             &format!(
                 "use \"std/kvt\"; {CACHE} pool kv {{ cap 1000; }}
-                 workload {{ arrive batch(1); }}
                  server {{ hold kv (cost(kv, 50)) {{ kvt.{f} (lmc, kv, 20, per_token = 0.5); }} }}"
             ),
             &format!("`kvt.{f}` is an engine's connector now"),
@@ -237,7 +244,6 @@ fn a_connector_reads_its_own_engine_s_registers() {
            worker {{ forward (1); }}
          }}
          pool reqs on e {{ }}
-         workload {{ arrive batch(1); }}
          server {{ a (2, 1); e (40, 2); }}"
     );
     refused(
@@ -273,14 +279,14 @@ fn cachedin_reads_each_pool_by_the_chain_it_was_cached_along() {
                    }}
                    worker {{ forward (1); }}
                  }}
-                 workload {{ arrive batch(1); turn {{ }} session {{ turn; turn; end; }} }}
                  server {{
                    observe l2_outside = cachedin(lmc.kv);
                    observe kv_outside = cachedin(kv);
                    e (200, 1);
                  }}"
             ),
-            &common::horizon(100.0),
+            "workload { arrive batch(1); turn { } session { turn; turn; end; } }",
+            100.0,
         );
         assert_eq!(
             samples(&r, "l2_outside"),

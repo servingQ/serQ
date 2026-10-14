@@ -7,21 +7,24 @@
 
 mod common;
 
-use serq::{check_source, run_source};
-
 /// Two programs take 4 of 10 units each and lease them. Serial 1 comes
 /// back first, at t = 2, and grows its lease by 4, which does not fit
 /// beside serial 0's. Serial 0, at its tool until t = 11, then finds its
 /// lease gone and is let in again at once: serial 1 ended at t = 3.
+/// One request, one turn: the workload of the tests that only link.
+const ONE: &str = "workload { arrive batch(1); session { turn; } }\n";
+
+const TWO: &str = "workload { arrive batch(2);
+  send (turn_no);
+  session { turn; tool (serial == 0 ? 10 : 1); turn; }
+}
+";
+
 fn two(preempt: &str) -> String {
     format!(
         r#"
         stage svc : fifo(2);
         pool prog {{ cap 10; {preempt} }}
-        workload {{ arrive batch(2);
-          send (turn_no);
-          session {{ turn; tool (serial == 0 ? 10 : 1); turn; }}
-        }}
         server (turn_no) {{
           if (allocated(prog) > 0) {{
             grow prog (cost(prog, 4));
@@ -38,10 +41,10 @@ fn two(preempt: &str) -> String {
 
 #[test]
 fn a_growth_takes_back_another_sessions_lease() {
-    let r = run_source(
+    let r = common::run(
         &common::main_source(&two("preempt leases by (serial);")),
+        TWO,
         &common::horizon(100.0),
-        None,
     )
     .unwrap();
     assert_eq!(
@@ -63,10 +66,10 @@ fn a_growth_takes_back_another_sessions_lease() {
 
 #[test]
 fn the_grower_may_be_its_own_victim_and_goes_on_without_its_lease() {
-    let r = run_source(
+    let r = common::run(
         &common::main_source(&two("preempt leases by (-serial);")),
+        TWO,
         &common::horizon(100.0),
-        None,
     )
     .unwrap();
     // serial 1's own lease is the least key: the growth ends it and nothing
@@ -85,12 +88,7 @@ fn the_grower_may_be_its_own_victim_and_goes_on_without_its_lease() {
 /// holds: the run says so rather than ending quietly.
 #[test]
 fn without_preempt_two_growing_leases_wait_for_each_other_loudly() {
-    let r = run_source(
-        &common::main_source(&two("")),
-        &common::horizon(100.0),
-        None,
-    )
-    .unwrap();
+    let r = common::run(&common::main_source(&two("")), TWO, &common::horizon(100.0)).unwrap();
     assert!(r.observe("grown").unwrap().samples.is_empty());
     assert_eq!(r.ended, 0);
     assert!(
@@ -105,10 +103,9 @@ fn a_grow_outside_every_hold_and_lease_does_not_link() {
     let src = r#"
         stage svc : fifo;
         pool prog { cap 10; }
-        workload { arrive batch(1); session { turn; } }
         server { grow prog (cost(prog, 4)); run svc (cost(svc, 1)); }
 "#;
-    let e = check_source(&common::main_source(src), &common::horizon(10.0)).unwrap_err();
+    let e = common::compile(&common::main_source(src), ONE, &common::horizon(10.0)).unwrap_err();
     assert!(e.contains("outside a hold of `prog`"), "{e}");
 }
 
@@ -116,10 +113,10 @@ fn a_grow_outside_every_hold_and_lease_does_not_link() {
 /// 1's growth finds no hold to preempt and waits, as without it.
 #[test]
 fn preempt_by_does_not_take_a_lease() {
-    let r = run_source(
+    let r = common::run(
         &common::main_source(&two("preempt by (serial);")),
+        TWO,
         &common::horizon(100.0),
-        None,
     )
     .unwrap();
     assert!(r.observe("grown").unwrap().samples.is_empty());
@@ -129,8 +126,9 @@ fn preempt_by_does_not_take_a_lease() {
 /// The keys are a preempt key's: they may not draw.
 #[test]
 fn a_lease_key_may_not_draw() {
-    let e = check_source(
+    let e = common::compile(
         &common::main_source(&two("preempt leases by (~exp(1));")),
+        TWO,
         &common::horizon(10.0),
     )
     .unwrap_err();
@@ -145,7 +143,7 @@ fn a_growth_of_a_lease_past_the_cap_fails_the_run() {
         "cost(prog, 4));\n            observe grown",
         "cost(prog, 20));\n            observe grown",
     );
-    let e = run_source(&common::main_source(&src), &common::horizon(100.0), None).unwrap_err();
+    let e = common::run(&common::main_source(&src), TWO, &common::horizon(100.0)).unwrap_err();
     assert!(e.contains("no preemption makes room"), "{e}");
 }
 
@@ -155,14 +153,18 @@ fn a_grow_after_the_lease_ended_says_why() {
     let src = r#"
         stage svc : fifo;
         pool prog { cap 10; }
-        workload { arrive batch(1); send (turn_no); session { turn; turn; } }
         server (turn_no) {
           if (turn_no > 1) { grow prog (cost(prog, 1)); }
           hold prog (cost(prog, 4)) { } lease prog (0.5);
           run svc (cost(svc, 1));
         }
 "#;
-    let e = run_source(&common::main_source(src), &common::horizon(10.0), None).unwrap_err();
+    let e = common::run(
+        &common::main_source(src),
+        "workload { arrive batch(1); send (turn_no); session { turn; turn; } }\n",
+        &common::horizon(10.0),
+    )
+    .unwrap_err();
     assert!(e.contains("holds no `prog` and leases none"), "{e}");
 }
 
@@ -179,18 +181,17 @@ fn preempt_leases_by_is_refused_on_an_engines_memory_and_on_a_pool_nobody_leases
             hold kv (cost(kv, prompt)), reqs (cost(reqs, 1)) { run E prefill (cost(E, prompt)) growing kv; } lease kv (inf);
           }
         }
-        workload { arrive batch(1); session { turn; } }
         server { E.decode (4); }
 "#;
-    let e = check_source(&common::main_source(engine), &common::horizon(10.0)).unwrap_err();
+    let e = common::compile(&common::main_source(engine), ONE, &common::horizon(10.0)).unwrap_err();
     assert!(e.contains("on an engine's memory"), "{e}");
     let unleased = r#"
         stage svc : fifo;
         pool prog { cap 10; preempt leases by (serial); }
-        workload { arrive batch(1); session { turn; } }
         server { hold prog (cost(prog, 4)) { run svc (cost(svc, 1)); } }
 "#;
-    let e = check_source(&common::main_source(unleased), &common::horizon(10.0)).unwrap_err();
+    let e =
+        common::compile(&common::main_source(unleased), ONE, &common::horizon(10.0)).unwrap_err();
     assert!(e.contains("on a pool no hold leases"), "{e}");
 }
 
@@ -201,14 +202,18 @@ fn a_lease_taken_while_its_session_runs_leaves_the_run_alone() {
     let src = r#"
         stage svc : fifo(2);
         pool prog { cap 10; preempt leases by (serial); }
-        workload { arrive batch(2); session { turn; } }
         server {
           hold prog (cost(prog, 4)) { } lease prog (inf);
           if (serial == 1) { run svc (cost(svc, 1)); grow prog (cost(prog, 4)); }
           else { run svc (cost(svc, 10)); observe left = allocated(prog); observe done = now; }
         }
 "#;
-    let r = run_source(&common::main_source(src), &common::horizon(100.0), None).unwrap();
+    let r = common::run(
+        &common::main_source(src),
+        "workload { arrive batch(2); session { turn; } }\n",
+        &common::horizon(100.0),
+    )
+    .unwrap();
     assert_eq!(
         r.observe("done").unwrap().samples,
         vec![10.0],
@@ -225,7 +230,6 @@ fn a_lease_passed_from_a_leg_can_be_taken() {
     let src = r#"
         stage svc : fifo(2);
         pool prog { cap 10; preempt leases by (serial); }
-        workload { arrive batch(2); session { turn; } }
         server {
           if (serial == 0) {
             fork { hold prog (cost(prog, 4)) { } lease prog (inf); }
@@ -240,7 +244,12 @@ fn a_lease_passed_from_a_leg_can_be_taken() {
           }
         }
 "#;
-    let r = run_source(&common::main_source(src), &common::horizon(100.0), None).unwrap();
+    let r = common::run(
+        &common::main_source(src),
+        "workload { arrive batch(2); session { turn; } }\n",
+        &common::horizon(100.0),
+    )
+    .unwrap();
     assert_eq!(
         r.observe("grown").unwrap().samples,
         vec![8.0],

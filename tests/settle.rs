@@ -12,27 +12,30 @@ mod common;
 
 use std::collections::BTreeMap;
 
-use serq::{Overrides, compile_source, run_source};
+use serq::Overrides;
 
-fn check(src: &str) -> Result<(), String> {
-    compile_source(&common::main_source(src), &common::horizon(10.0)).map(|_| ())
+fn check(src: &str, workload: &str) -> Result<(), String> {
+    common::compile(&common::main_source(src), workload, &common::horizon(10.0)).map(|_| ())
 }
 
-fn run(src: &str, options: &Overrides) -> Result<serq::Report, String> {
-    run_source(&common::main_source(src), options, None)
+fn run(src: &str, workload: &str, options: &Overrides) -> Result<serq::Report, String> {
+    common::run(&common::main_source(src), workload, options)
 }
 
 const TOOL: &str = "stage tool : delay;";
-const CLIENT: &str = "arrive batch(1); init { set w = 0; } send (w);";
+/// One session of one turn, sending `w = 0`.
+const CLIENT: &str =
+    "workload { arrive batch(1); init { set w = 0; } send (w); session { turn; } }";
 
 // --------------------------------------------------------- the linker ----
 
 /// A loop whose body never runs, waits or ends is refused at link time.
 #[test]
 fn a_loop_that_never_lets_time_pass_is_a_link_error() {
-    let e = check(&format!(
-        "{TOOL} workload {{ {CLIENT} session {{ turn; \n}} }}\nserver (w) {{ loop {{ set w = w + 1; }}\n}} "
-    ))
+    let e = check(
+        &format!("{TOOL}\nserver (w) {{ loop {{ set w = w + 1; }}\n}} "),
+        CLIENT,
+    )
     .expect_err("refused");
     assert!(e.contains("let time pass"), "{e}");
 }
@@ -40,13 +43,15 @@ fn a_loop_that_never_lets_time_pass_is_a_link_error() {
 /// A `run` on one arm of an `if` does not cover the other arm.
 #[test]
 fn a_run_on_one_arm_only_is_a_link_error() {
-    let e = check(&format!(
-        "{TOOL} workload {{ {CLIENT} session {{ turn;
-        }} }}
+    let e = check(
+        &format!(
+            "{TOOL}
         server (w) {{ loop {{ if (w > 0) {{ run tool (cost(tool, w)); }} else {{ set w = w; }} }}
         }}
         "
-    ))
+        ),
+        CLIENT,
+    )
     .expect_err("refused");
     assert!(e.contains("let time pass"), "{e}");
 }
@@ -54,9 +59,10 @@ fn a_run_on_one_arm_only_is_a_link_error() {
 /// A `run` of constant zero work does not count: it completes at once.
 #[test]
 fn a_run_of_constant_zero_work_does_not_count() {
-    let e = check(&format!(
-        "{TOOL} workload {{ {CLIENT} session {{ turn; \n}} }}\nserver (w) {{ loop {{ run tool (cost(tool, 0)); }}\n}} "
-    ))
+    let e = check(
+        &format!("{TOOL}\nserver (w) {{ loop {{ run tool (cost(tool, 0)); }}\n}} "),
+        CLIENT,
+    )
     .expect_err("refused");
     assert!(e.contains("let time pass"), "{e}");
 }
@@ -66,13 +72,19 @@ fn a_run_of_constant_zero_work_does_not_count() {
 #[test]
 fn a_hold_counts_only_through_its_body() {
     let pool = "pool kv { cap 100; }";
-    check(&format!(
-        "{pool} {TOOL} workload {{ {CLIENT} session {{ turn; \n}} }}\nserver (w) {{ loop {{ hold kv (cost(kv, 1)) {{ run tool (cost(tool, 1)); }} }}\n}} "
-    ))
+    check(
+        &format!(
+            "{pool} {TOOL}\nserver (w) {{ loop {{ hold kv (cost(kv, 1)) {{ run tool (cost(tool, 1)); }} }}\n}} "
+        ),
+        CLIENT,
+    )
     .expect("the body runs");
-    let e = check(&format!(
-        "{pool} {TOOL} workload {{ {CLIENT} session {{ turn; \n}} }}\nserver (w) {{ loop {{ hold kv (cost(kv, 1)) {{ set w = 1; }} }}\n}} "
-    ))
+    let e = check(
+        &format!(
+            "{pool} {TOOL}\nserver (w) {{ loop {{ hold kv (cost(kv, 1)) {{ set w = 1; }} }}\n}} "
+        ),
+        CLIENT,
+    )
     .expect_err("refused");
     assert!(e.contains("let time pass"), "{e}");
 }
@@ -80,17 +92,21 @@ fn a_hold_counts_only_through_its_body() {
 /// `end` on both arms, or after the branch, covers the loop.
 #[test]
 fn end_and_a_later_run_cover_the_loop() {
-    check(&format!(
-        "workload {{ {CLIENT} session {{ turn; loop {{ if (w > 0) {{ end; }} else {{ end; }} }} \n}} }}\nserver (w) {{\n}} "
-    ))
+    check(
+        "server (w) {\n} ",
+        "workload { arrive batch(1); init { set w = 0; } send (w);
+          session { turn; loop { if (w > 0) { end; } else { end; } } } }",
+    )
     .expect("ends");
-    check(&format!(
-        "{TOOL} workload {{ {CLIENT} session {{ turn;
-        }} }}
+    check(
+        &format!(
+            "{TOOL}
         server (w) {{ loop {{ if (w > 0) {{ set flag = 0; }} else {{ set flag = 1; }} run tool (cost(tool, 1)); }}
         }}
         "
-    ))
+        ),
+        CLIENT,
+    )
     .expect("runs after the branch");
 }
 
@@ -100,9 +116,11 @@ fn end_and_a_later_run_cover_the_loop() {
 /// settle, instead of hanging.
 #[test]
 fn a_computed_zero_work_in_a_loop_is_a_run_time_error() {
-    let e = run(&format!(
-        "{TOOL} workload {{ {CLIENT} session {{ turn; \n}} }}\nserver (w) {{ loop {{ run tool (cost(tool, w)); }}\n}} "
-    ), &common::horizon(10.0))
+    let e = run(
+        &format!("{TOOL}\nserver (w) {{ loop {{ run tool (cost(tool, w)); }}\n}} "),
+        CLIENT,
+        &common::horizon(10.0),
+    )
     .expect_err("does not settle");
     assert!(e.contains("does not settle"), "{e}");
 }
@@ -114,13 +132,13 @@ fn a_self_preempting_grow_is_a_run_time_error() {
     let e = run(
         "pool kv { cap 100; preempt lifo; }
         stage tool : delay;
-        workload { arrive batch(1);
-          session { turn; end;
-          }
-        }
         server { hold kv (cost(kv, 10)) { grow kv (cost(kv, 1000)); run tool (cost(tool, 1)); }
         }
         ",
+        "workload { arrive batch(1);
+          session { turn; end;
+          }
+        }",
         &common::horizon(10.0),
     )
     .expect_err("does not settle");
@@ -138,13 +156,13 @@ fn an_iteration_with_tokens_and_zero_cost_is_an_error() {
           worker { forward (0); }
         }
         pool kv on gpu { block 16; evict lru; }
-        workload { arrive batch(1);
-          session { turn; end;
-          }
-        }
         server { llm (100, 1);
         }
         ",
+        "workload { arrive batch(1);
+          session { turn; end;
+          }
+        }",
         &common::horizon(10.0),
     )
     .expect_err("zero cost");
@@ -168,14 +186,14 @@ fn a_preempt_only_step_may_cost_zero() {
         }
         pool reqs on llm { }
         pool kv on gpu { block 16; evict lru; preempt lifo; }
-        workload { arrive batch(1);
+        server { llm (100, 101); }
+        ",
+        "workload { arrive batch(1);
           session { turn;
             end;
 
           }
-        }
-        server { llm (100, 101); }
-        ",
+        }",
         &common::horizon(400.0),
     )
     .expect("runs to the horizon");
@@ -204,23 +222,6 @@ fn the_marks_of_a_session_turn_do_not_depend_on_the_machine() {
         }}
         pool kv on gpu {{ block 16; evict lru; preempt lifo; }}
         pool reqs on llm {{ }}
-        stage tool : delay;
-        workload {{
-          arrive poisson(0.3);
-          init {{ set K = 0; set u0 = ~exp(1); }}
-          turn {{ set n = K == 0 ? ~uniform(1000, 3000) : ~exp(500);
-            set o = ~exp(200) + 1; set more = ~bernoulli(0.9); }}
-          send (K, n, o);
-          session {{
-
-            loop {{
-              observe nn = n; observe oo = o; observe uu = u0;
-              turn;
-              set K = K + n + o;
-              if (more) {{ tool (~exp(3));  }} else {{ end; }}
-            }}
-          }}
-        }}
         server (K, n, o) {{
           set prompt = K + n;
           llm (prompt, o);
@@ -228,6 +229,24 @@ fn the_marks_of_a_session_turn_do_not_depend_on_the_machine() {
         "
         )
     };
+    // the client's own `tool`, a stage of the workload's
+    let workload = "stage tool : delay;
+        workload {
+          arrive poisson(0.3);
+          init { set K = 0; set u0 = ~exp(1); }
+          turn { set n = K == 0 ? ~uniform(1000, 3000) : ~exp(500);
+            set o = ~exp(200) + 1; set more = ~bernoulli(0.9); }
+          send (K, n, o);
+          session {
+
+            loop {
+              observe nn = n; observe oo = o; observe uu = u0;
+              turn;
+              set K = K + n + o;
+              if (more) { tool (~exp(3));  } else { end; }
+            }
+          }
+        }";
     let marks = |r: &serq::Report, name: &str| -> BTreeMap<(u64, u32), f64> {
         let o = r.observe(name).unwrap();
         o.records
@@ -238,6 +257,7 @@ fn the_marks_of_a_session_turn_do_not_depend_on_the_machine() {
     };
     let wide = run(
         &prog(8192),
+        workload,
         &Overrides {
             warmup: Some(0.0),
             seed: Some(1),
@@ -247,6 +267,7 @@ fn the_marks_of_a_session_turn_do_not_depend_on_the_machine() {
     .expect("runs");
     let narrow = run(
         &prog(512),
+        workload,
         &Overrides {
             warmup: Some(0.0),
             seed: Some(1),
@@ -287,19 +308,20 @@ fn the_machine_still_matters() {
           worker {{ forward (1e-4 + 1e-5 * batch.tokens); }}
         }}
         pool kv on gpu {{ block 16; evict lru; }}
-        workload {{ arrive poisson(0.5); turn {{ set n = ~uniform(1000, 3000); }}
-          send (n);
-          session {{  turn; end;
-          }}
-        }}
         server (n) {{ set t0 = now; llm (n, 1);
           observe ttft = now - t0;
         }}
         "
         )
     };
+    let workload = "workload { arrive poisson(0.5); turn { set n = ~uniform(1000, 3000); }
+          send (n);
+          session {  turn; end;
+          }
+        }";
     let a = run(
         &src(8192),
+        workload,
         &Overrides {
             warmup: Some(0.0),
             seed: Some(1),
@@ -312,6 +334,7 @@ fn the_machine_still_matters() {
     .mean;
     let b = run(
         &src(512),
+        workload,
         &Overrides {
             warmup: Some(0.0),
             seed: Some(1),
@@ -333,14 +356,15 @@ fn the_machine_still_matters() {
 #[test]
 fn consecutive_seeds_do_not_replay_each_others_sessions() {
     let src = "stage svc : fifo;
-        workload { arrive batch(40); session { set x = ~exp(1); turn; observe drawn = x; end; } }
         server { run svc (cost(svc, 1)); }";
+    let workload =
+        "workload { arrive batch(40); session { set x = ~exp(1); turn; observe drawn = x; end; } }";
     let draws = |seed: u64| -> std::collections::BTreeMap<u64, f64> {
         let overrides = Overrides {
             seed: Some(seed),
             ..common::horizon(1e3)
         };
-        let r = run(src, &overrides).unwrap();
+        let r = run(src, workload, &overrides).unwrap();
         let o = r.observe("drawn").unwrap();
         o.records
             .iter()
@@ -365,14 +389,14 @@ fn consecutive_seeds_do_not_replay_each_others_sessions() {
 #[test]
 fn a_large_batch_that_ends_at_once_settles() {
     let r = run(
+        "server (w) { observe drawn = w;
+        }
+        ",
         "let N = 2000;
         workload { arrive batch(N); init { set w = ~uniform(0, 1); } send (w);
           session { turn; end;
           }
-        }
-        server (w) { observe drawn = w;
-        }
-        ",
+        }",
         &common::horizon(10.0),
     )
     .expect("settles");
@@ -389,14 +413,17 @@ fn a_hold_header_may_not_draw() {
         ("`reserve`", "kv (10) reserve (~uniform(1, 100))"),
         ("`reuse`", "kv (10) reuse (~uniform(0, 10))"),
     ] {
-        let e = check(&format!(
-            "pool kv {{ cap 1000; }} stage tool : delay; workload {{ arrive batch(1);
-          session {{ turn; end;
-          }}
-        }}
+        let e = check(
+            &format!(
+                "pool kv {{ cap 1000; }} stage tool : delay;
         server {{ hold {header} {{ run tool (cost(tool, 1)); }} cache (5);
         }} "
-        ))
+            ),
+            "workload { arrive batch(1);
+          session { turn; end;
+          }
+        }",
+        )
         .expect_err(what);
         assert!(
             e.contains(&format!("a hold's {what} may not draw")),
@@ -412,13 +439,13 @@ fn a_hold_header_may_not_draw() {
 fn overwriting_turn_no_does_not_repeat_the_marks() {
     let r = run(
         "stage tool : delay;
-        workload { arrive batch(1); turn { set n = ~uniform(0, 1); } send (n);
-          session { loop { set turn_no = 0; turn; }
-          }
-        }
         server (n) { observe nn = n; run tool (cost(tool, 1));
         }
         ",
+        "workload { arrive batch(1); turn { set n = ~uniform(0, 1); } send (n);
+          session { loop { set turn_no = 0; turn; }
+          }
+        }",
         &common::horizon(5.0),
     )
     .expect("runs");

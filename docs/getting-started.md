@@ -26,8 +26,13 @@ serq = { git = "https://github.com/servingQ/serQ", tag = "v0.1.5" }
 
 ## Run your first program
 
+A program is the deployment; the workload, how sessions arrive and what
+each turn sends, is a file of its own, given when the program runs. The
+examples' workloads are in `examples/workloads/`, and `examples/pairs.json`
+names the one each program runs.
+
 ```bash
-serq run examples/single-turn/mg1.sq --horizon 250000 --warmup 25000 --seed 1
+serq run examples/single-turn/mg1.sq --workload examples/workloads/mg1.sq --horizon 250000 --warmup 25000 --seed 1
 ```
 
 ```text
@@ -99,12 +104,13 @@ replay rather than a summary.
 ## Checking without running
 
 ```bash
-serq check examples/multi-turn/replica.sq
-# OK: 3 pool(s), 2 stage(s), 20 attribute(s), 12 block(s)
+serq check examples/multi-turn/replica.sq --workload examples/workloads/replica.sq
+# OK: 3 pool(s), 2 stage(s), 24 attribute(s), 14 block(s)
 ```
 
-`check` parses the program, resolves names and validates it without running
-the simulation.
+`check` parses the program and its workload, resolves names and validates
+them without running the simulation. Without `--workload` it stops at the
+server: "the server needs a workload to run".
 
 For JSON input and output, see the [CLI reference](reference/cli.md).
 The [IR reference](ir.md) describes the compiled program format.

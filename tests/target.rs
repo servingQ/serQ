@@ -13,10 +13,33 @@ fn root() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).to_path_buf()
 }
 
-fn target(path: &str) -> Result<Value, String> {
-    let p = serq::load(&root().join(path), &common::horizon(10.0))?;
-    serq::target::vllm(&p)
+/// The program at `path`, with the workload `examples/pairs.json` runs it
+/// with (none for IR, which holds its own).
+fn load(path: &str) -> Result<serq::Program, String> {
+    let ov = common::horizon(10.0);
+    match serq::paired_workload(&root().join(path)) {
+        Some(_) => common::example(path, &ov),
+        None => serq::load(&root().join(path), &ov),
+    }
 }
+
+fn target(path: &str) -> Result<Value, String> {
+    serq::target::vllm(&load(path)?)
+}
+
+/// `VLLM`'s text, edited, with `VLLM`'s workload.
+fn compile_vllm(src: &str, ov: &serq::Overrides) -> Result<serq::Program, String> {
+    let workload = serq::paired_workload(&root().join(VLLM)).unwrap();
+    common::compile(src, &std::fs::read_to_string(workload).unwrap(), ov)
+}
+
+/// The workload of the engines written out below: one request of 8 tokens.
+const WORKLOAD: &str = "workload { arrive batch(1); init { set n = 8; } send (n);
+          session { turn; end;
+          }
+        }";
+
+const VLLM: &str = "examples/multi-turn/vllm.sq";
 
 #[test]
 fn each_oracle_program_synthesises_to_the_configuration_its_scenario_ran() {
@@ -98,13 +121,9 @@ fn another_policy_is_refused_with_its_construct() {
           worker { forward (1); }
         }
         pool reqs on llm { }
-        workload { arrive batch(1); init { set n = 8; } send (n);
-          session { turn; end;
-          }
-        }
         server (n) { llm (n, 1);
         } ";
-    let p = serq::compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap();
+    let p = common::compile(&common::main_source(src), WORKLOAD, &common::horizon(10.0)).unwrap();
     let e = serq::target::vllm(&p).unwrap_err();
     assert!(
         e.contains("advances running by `remaining`")
@@ -128,27 +147,16 @@ fn observable_serve_keys_name_the_programmable_scheduler() {
           worker { forward (1); }
         }
         pool reqs on llm { }
-        workload { arrive batch(1); init { set n = 8; } send (n);
-          session { turn; end;
-          }
-        }
         server (n) { llm (n, 1);
         } ";
-    let p = serq::compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap();
+    let p = common::compile(&common::main_source(src), WORKLOAD, &common::horizon(10.0)).unwrap();
     let t = serq::target::vllm(&p).unwrap();
     assert_eq!(t["config"]["scheduler_cls"], "serq_vllm.SerqScheduler");
     assert_eq!(
         t["serve_by"][1],
         serde_json::json!({"Unary": ["Neg", {"Ctx": "Admission"}]})
     );
-    let fcfs = serq::target::vllm(
-        &serq::load(
-            &root().join("examples/multi-turn/vllm.sq"),
-            &common::horizon(10.0),
-        )
-        .unwrap(),
-    )
-    .unwrap();
+    let fcfs = serq::target::vllm(&load(VLLM).unwrap()).unwrap();
     assert!(fcfs["config"].get("scheduler_cls").is_none() && fcfs.get("serve_by").is_none());
 }
 
@@ -157,22 +165,22 @@ fn observable_serve_keys_name_the_programmable_scheduler() {
 /// another request eligible, or none.
 #[test]
 fn a_constant_chunk_cap_is_refused_and_the_rule_taken() {
-    let src = std::fs::read_to_string(root().join("examples/multi-turn/vllm.sq")).unwrap();
+    let src = std::fs::read_to_string(root().join(VLLM)).unwrap();
     let rule = "let threshold = running.count + waiting.count > 1 ? chunk_cap : inf;";
     assert!(src.contains(rule), "the program's chunk moved");
-    let p = serq::compile_source(&common::main_source(&src), &common::horizon(10.0)).unwrap();
+    let p = compile_vllm(&common::main_source(&src), &common::horizon(10.0)).unwrap();
     assert_eq!(
         serq::target::vllm(&p).unwrap()["config"]["long_prefill_token_threshold"],
         0
     );
     let mut ov = common::horizon(10.0);
     ov.set("chunk_cap", "512").unwrap();
-    let p = serq::compile_source(&common::main_source(&src), &ov).unwrap();
+    let p = compile_vllm(&common::main_source(&src), &ov).unwrap();
     assert_eq!(
         serq::target::vllm(&p).unwrap()["config"]["long_prefill_token_threshold"],
         512
     );
-    let p = serq::compile_source(
+    let p = compile_vllm(
         &common::main_source(&src.replace(rule, "let threshold = 512;")),
         &common::horizon(10.0),
     )
@@ -191,7 +199,7 @@ fn a_constant_chunk_cap_is_refused_and_the_rule_taken() {
 /// cap`, and refuses another share with the reason (#451).
 #[test]
 fn the_adaptive_chunk_cap_is_taken_and_another_share_refused() {
-    let src = std::fs::read_to_string(root().join("examples/multi-turn/vllm.sq")).unwrap();
+    let src = std::fs::read_to_string(root().join(VLLM)).unwrap();
     let rule = "let threshold = running.count + waiting.count > 1 ? chunk_cap : inf;";
     assert!(src.contains(rule), "the program's chunk moved");
     let target_as = |count: &str, threshold: &str| {
@@ -199,7 +207,7 @@ fn the_adaptive_chunk_cap_is_taken_and_another_share_refused() {
             rule,
             &format!("let r = {count}; let threshold = {threshold};"),
         );
-        let p = serq::compile_source(&common::main_source(&src), &common::horizon(10.0)).unwrap();
+        let p = compile_vllm(&common::main_source(&src), &common::horizon(10.0)).unwrap();
         serq::target::vllm(&p)
     };
     let target = |cap: &str| {
@@ -265,10 +273,6 @@ fn the_newer_constructs_are_refused_and_vllms_schedule_taken() {
         }
         pool kv on gpu { block 16; evict lru; preempt lifo; }
         pool reqs on llm { RESERVE }
-        workload { arrive batch(1); init { set n = 8; } send (n);
-          session { turn; end;
-          }
-        }
         server (n) { HOLD
         } ";
     let hold = "llm (n, 1);";
@@ -280,7 +284,7 @@ fn the_newer_constructs_are_refused_and_vllms_schedule_taken() {
             .replace("STATE", state)
             .replace("SCHEDULE", schedule)
             .replace("HOLD", h);
-        serq::compile_source(&common::main_source(&src), &common::horizon(10.0)).unwrap()
+        common::compile(&common::main_source(&src), WORKLOAD, &common::horizon(10.0)).unwrap()
     };
     serq::target::vllm(&compile("", "", vllm, hold)).unwrap();
     let legs = "fork { llm (n, 1); } join;";
@@ -313,11 +317,7 @@ fn the_newer_constructs_are_refused_and_vllms_schedule_taken() {
 #[test]
 fn vllms_schedule_written_out_as_a_body_is_vllm() {
     use serq::ir::{CExpr, CIter, CStageKind, CtxVar, UnOp};
-    let mut p = serq::load(
-        &root().join("examples/multi-turn/vllm.sq"),
-        &common::horizon(10.0),
-    )
-    .unwrap();
+    let mut p = load(VLLM).unwrap();
     let want = serq::target::vllm(&p).unwrap();
     let st = p
         .stages

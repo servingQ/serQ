@@ -1,0 +1,13 @@
+// Chapter 2's workload: Poisson arrivals, each request with an exponential
+// amount of work and one to five items of memory (02-memory.sq runs it).
+
+let Lambda = 0.8;
+
+workload {
+  arrive poisson(Lambda);
+  turn {
+    Size work_size = ~exp(1);
+    Size items = ceil(~uniform(1, 5));   // request items
+  }
+  send (work_size, items);
+}

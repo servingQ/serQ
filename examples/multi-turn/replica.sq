@@ -6,15 +6,17 @@
 // goes to the oldest prefill (prefill = FIFO in the leftover budget). The
 // `tokens cap` fills each iteration exactly to its memory time, which is the
 // fluid `TwoStage` server of `libqueuingsim::models::batch` at iteration
-// granularity. Sessions: two classes (agents, one-shot documents); at most
-// `cap` live sessions (the rest wait to enter), batch cap `B`, a KV pool of
-// `C` tokens with shortest-first eviction (tool calls before waiting turns).
+// granularity. Batch cap `B`, a KV pool of `C` tokens with shortest-first
+// eviction (tool calls before waiting turns). The sessions, and their cap
+// on live sessions: examples/workloads/replica.sq. One difference from
+// `open_session_cfg`: a session's KV is dropped by the server after its last
+// request, so before a last tool call, where libqueuingsim drops it after.
+// An ended session's prefix then evicts no live one: fewer evictions and a
+// higher hit rate, within the seeds' spread but always that way
+// (docs/design/paired-workload.md, Validation).
 
-let Lambda = 0.28;   // sessions per second
-let cap = 24;        // live sessions (entry queue beyond)
 let B = 8;           // batch cap (prefilling and decoding turns)
 let C = 6e5;         // KV pool, tokens
-let maxctx = C / 2;
 let s0 = 0.005;      // per-turn overhead (s)
 let a = 2e-5;        // prefill compute per token (s)
 let b = 2e-9;        // prefill attention per token per context token (s)
@@ -22,7 +24,6 @@ let omega = 2e-4;    // weights read per iteration (s)
 let beta = 2e-9;     // KV read per iteration per context token (s)
 
 fn main() {
-  pool live { cap cap; }
   pool reqs { cap B; }
   device gpu { compute (t) = t * a; hbm (k) = omega + beta * k; kv cap C; }
   engine llm on gpu {
@@ -37,43 +38,8 @@ fn main() {
   }
   pool kv on gpu { evict by (waiting, size); }
 
-  workload {
-    arrive poisson(Lambda);
-    init {
-      set doc = ~bernoulli(0.5);          // class: 0 agent, 1 document
-      set K = 0;
-      set cold = 1;
-      set p = doc ? 0.3 : 0.95;
-      set Z = doc ? 2 : 6;
-    }
-    turn {
-      set n = cold ? (doc ? ~uniform(15000, 30000) : ~uniform(4000, 8000))
-                   : (doc ? ~exp(500) : ~exp(800));
-      set o = ~exp(300);
-    }
-    send (K, n, o, cold);
-    // A session waits to enter and then holds a live slot for its whole
-    // conversation. libqueuingsim frees a finished session's KV: `drop kv;`
-    // before every `end;`
-    session {
-      set t_arr = now;
-      hold live (cost(live, 1)) {
-        observe entry_wait = now - t_arr;
-        loop {
-          turn;
-          set K = K + n + o;
-          set cold = 0;
-          if (K > maxctx) { drop kv; end; }
-          // whether the session continues is decided when the tool returns
-          tool (~exp(Z));
-          if (~bernoulli(p)) { } else { drop kv; end; }
-        }
-      }
-    }
-  }
-
   // the replica: one turn's prefill and decode
-  server (K, n, o, cold) {
+  server (K, n, o, cold, final) {
     hold reqs (cost(reqs, 1)), kv (cost(kv, K + n + o)) {
       set warm = !cold && cached >= K;
       // prefill work in tokens: the overhead and the attention term are
@@ -83,5 +49,7 @@ fn main() {
       llm (P, o + 1);   // the model's o decode steps after the prefill's sampled token
     } cache (cost(reqs, kv, K + n + o));
     if (!cold) { observe hit = warm; }
+    // the session's last request: nothing of its prefix is read again
+    if (final) { drop kv; }
   }
 }

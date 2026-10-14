@@ -24,8 +24,8 @@ writes it.
 ### Settings
 
 The paper's tiles are $b_{col} = b_{row} = b_{red} = 128$, so
-$b_{lcm} = 128$, and one constant stands for all four. Time is in µs. The argument opens
-`main`, which holds the rest of the program:
+$b_{lcm} = 128$, and one constant stands for all four. Time is in µs. The
+constants come before `main`, which holds the rest of the program:
 
 ```serq title="examples/papers/bari_rad.sq"
 --8<-- "examples/papers/bari_rad.sq:settings"
@@ -36,9 +36,6 @@ $b_{lcm} = 128$, and one constant stands for all four. Time is in µs. The argum
 | `bcol` | $b_{col} = b_{row} = b_{red} = b_{lcm}$ | the tile, 128 tokens |
 | `tlin` | $1/c_{Lin}$ | µs per pass over an output tile |
 | `tnl` | $1/c_{nLin}$ | µs per token of non-linear operations |
-| `vpmax` | Assumption 3 | prompts are 1 to `vpmax` tiles |
-| `vdmax` | — | the largest output |
-| `rate` | — | requests per µs (0.00002 is 20 per second) |
 
 ### RAD's two modes
 
@@ -78,18 +75,38 @@ plus the non-linear operations per token. It closes the engine block:
 
 Requests arrive as a Poisson process. Assumption 3 makes every prompt a
 whole number of tiles, from 1 to `vpmax`; outputs are exponential, capped
-at `vdmax`. `response` is measured from arrival to the last token:
+at `vdmax`. The workload is not in the program: it is a file of its own,
+`examples/workloads/bari_rad.sq`, given when the program runs
+(`--workload`), with its own settings:
+
+| serQ | Paper | Meaning |
+|---|---|---|
+| `tile` | $b_{col}$ | the tile, 128 tokens (the deployment's `bcol`; each file reads its own names) |
+| `vpmax` | Assumption 3 | prompts are 1 to `vpmax` tiles |
+| `vdmax` | — | the largest output |
+| `rate` | — | requests per µs (0.00002 is 20 per second) |
+
+```serq title="examples/workloads/bari_rad.sq"
+--8<-- "examples/workloads/bari_rad.sq:workload"
+```
+
+The server takes each request's prompt and output to the engine.
+`response` is measured from arrival to the last token:
 
 ```serq
---8<-- "examples/papers/bari_rad.sq:workload"
+--8<-- "examples/papers/bari_rad.sq:server"
 ```
 
 $N = \infty$ needs nothing: the program has no cycle counter.
 
-??? example "The whole program"
+??? example "The whole program, and its workload"
 
     ```serq title="examples/papers/bari_rad.sq"
     --8<-- "examples/papers/bari_rad.sq"
+    ```
+
+    ```serq title="examples/workloads/bari_rad.sq"
+    --8<-- "examples/workloads/bari_rad.sq"
     ```
 
 ## The key propositions
@@ -196,8 +213,8 @@ machine chain, not recurrence of every state of a Poisson job-list chain.
 Run for 100 s with seed 1, at 20 and 30 requests per second:
 
 ```bash
-serq run examples/papers/bari_rad.sq --horizon 100000000 --warmup 0 --seed 1
-serq run examples/papers/bari_rad.sq --horizon 100000000 --warmup 0 --seed 1 --rate 0.00003
+serq run examples/papers/bari_rad.sq --workload examples/workloads/bari_rad.sq --horizon 100000000 --warmup 0 --seed 1
+serq run examples/papers/bari_rad.sq --workload examples/workloads/bari_rad.sq --horizon 100000000 --warmup 0 --seed 1 --rate 0.00003
 ```
 
 Claim-table excerpts, 20 requests/s first:

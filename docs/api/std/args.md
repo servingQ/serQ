@@ -1,21 +1,30 @@
 # std/args
 
-```serq
+```serq title="model.sq"
 use "std/args";
 
 fn main() {
-  let rate = args.number("arrival_rate", 0.3);
+  let cost_per = args.number("service", 1);
   stage svc : delay;
-  workload {
-    arrive poisson(rate);  }
   server {
-    run svc (cost(svc, 1));
-    }
+    run svc (cost(svc, cost_per));
+  }
+}
+```
+
+```serq title="workload.sq"
+use "std/args";
+
+let rate = args.number("arrival_rate", 0.3);
+
+workload {
+  arrive poisson(rate);
 }
 ```
 
 `args.number("name", default)` declares a numeric input as the entire
-initializer of a `let` inside `main`. Its external name is an identifier;
+initializer of a `let` inside `main`, or of a top-level `let` in a workload
+file, which has no `main`. The inputs of both files are the program's. Its external name is an identifier;
 its local binding may have a different name. Read each input once and reuse
 that binding. The default is a constant expression and may read earlier
 constants. Values are numbers (including `inf`), never NaN. Strings,
@@ -27,7 +36,7 @@ part of this numeric library.
 | `"name"` | string, an identifier | The input's external name. |
 | `default` | `const` | The value when no input is supplied. |
 
-`serq run model.sq --horizon 10 --arrival_rate 0.5` supplies the value.
+`serq run model.sq --workload workload.sq --horizon 10 --arrival_rate 0.5 --service 2` supplies the values.
 Inputs stand among the interpreter's own options (`--seed`, `--horizon`, …)
 in any order, so an input may not take one of their names.
 `--arrival_rate=0.5` works too; repeated options use the last value.

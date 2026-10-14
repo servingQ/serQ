@@ -23,12 +23,6 @@ fn main() {
   pool slots on llm { }
   stage gate : delay;
 
-  workload {
-    arrive batch(2);
-    init { set n = 0; set o = 0; set t0 = 0; }
-    send (n, o, t0);
-  }
-
   server (n, o, t0) {
     run gate (cost(gate, t0));
     llm (n, o + 1);                     // `o` tokens decoded after the prefill's
