@@ -45,13 +45,14 @@ import pyserq
 program = pyserq.compile(source="""
 fn main() {
   stage svc : delay;
-  workload {
-    arrive batch(1);
-  }
   server {
     run svc (cost(svc, 2));
     observe elapsed = now;
   }
+}
+""", workload_source="""
+workload {
+  arrive batch(1);
 }
 """, horizon=10)
 restored = pyserq.Program.from_json(program.to_json())

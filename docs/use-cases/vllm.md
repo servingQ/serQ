@@ -30,9 +30,11 @@ has the line-by-line correspondence with citations.
 
 vLLM's engine is configured by a handful of numbers. The program names
 each once and takes the ones a run varies from the command line
-(`serq run examples/multi-turn/vllm.sq --max_seqs 32`). The constants come
-before `main` and the arguments open it; the rest of the program is inside
-`main`:
+(`serq run examples/multi-turn/vllm.sq --workload examples/workloads/chat.sq
+--max_seqs 32`). The constants come before `main` and the arguments open it;
+the rest of the program is inside `main`. The program is the deployment: the
+client is a file of its own, `examples/workloads/chat.sq`, given when the
+program runs ([the client](#the-client)).
 
 ```serq title="examples/multi-turn/vllm.sq"
 --8<-- "examples/multi-turn/vllm.sq:settings"
@@ -46,7 +48,6 @@ before `main` and the arguments open it; the rest of the program is inside
 | `blocks` | `num_gpu_blocks`, less the null block | KV capacity in blocks |
 | `chunk_cap` | `long_prefill_token_threshold` | the most one prefill takes per step; `inf` for none |
 | `a`, `omega`, `beta`, `c0` | — | the cost model in seconds: `a` per scheduled token; `omega` per step, to read the weights; `beta` per step per resident context token, to read its KV; `c0` fixed per step |
-| `Lambda`, `Z`, `p` | — | the workload: sessions per second, mean tool time, the chance a session continues |
 
 ### KV memory: a block pool with a prefix cache
 
@@ -164,7 +165,10 @@ arrival order:
 
 ### The client
 
-Nothing in the workload is vLLM. Sessions arrive, each turn brings a prompt
+Nothing in the workload is vLLM, and it is not in the program: it is
+`examples/workloads/chat.sq`, a file of its own, given when the program runs
+(`--workload`). It declares its own settings: `Lambda` sessions per second,
+`Z` the mean tool time, `p` the chance a session continues. Sessions arrive, each turn brings a prompt
 of `n` new tokens on a context of `K` and wants `o` back, and after a turn
 the session calls a tool and returns with probability `p`. The workload
 sends each request its prompt and its output, `send (input: K + n, output:
@@ -172,8 +176,8 @@ o)`, and the server takes the output `hidden`, `server (input, hidden
 output)`: the scheduler cannot read the output length: it knows `max_tokens`, not
 when EOS comes (`sched/utils.py:98-119`).
 
-```serq
---8<-- "examples/multi-turn/vllm.sq:workload"
+```serq title="examples/workloads/chat.sq"
+--8<-- "examples/workloads/chat.sq:workload"
 ```
 
 A turn is one request to the engine, on the whole context:
@@ -184,10 +188,14 @@ A turn is one request to the engine, on the whole context:
 
 [Different workloads](workloads.md) runs this engine under other clients.
 
-??? example "The whole program"
+??? example "The whole program, and its workload"
 
     ```serq title="examples/multi-turn/vllm.sq"
     --8<-- "examples/multi-turn/vllm.sq"
+    ```
+
+    ```serq title="examples/workloads/chat.sq"
+    --8<-- "examples/workloads/chat.sq"
     ```
 
 ### What the model leaves out
@@ -209,7 +217,8 @@ See [vendor plugins](index.md#vendor-plugins) for the reference versions, execut
 
 ## Measured replay
 
-`examples/replay/vllm_replay.sq` models the A100/Qwen3-8B testbed using
+`examples/replay/vllm_replay.sq` models the A100/Qwen3-8B testbed; its
+workload, `examples/workloads/vllm_replay.sq`, replays
 `examples/replay/data/short_base.csv` (333 sessions). It uses block size 16,
 token budget 512, 64 request slots and 128 160 tokens of KV capacity.
 Session `i` starts at `i * spacing`; later turns follow their recorded

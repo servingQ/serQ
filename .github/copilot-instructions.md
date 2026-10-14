@@ -39,3 +39,5 @@ Ask them in this order and write down the answer to each, including "no finding"
 ## Not worth a comment
 
 Formatting and lint — `make check` runs `cargo fmt`, `clippy`, and `serq fmt --check` on the `.sq` examples in CI.
+
+Programs and their workloads — an example is a deployment and a workload file given when it runs (`serq run D --workload W`); `examples/pairs.json` pairs each example and tutorial program with its workload (`examples/workloads/`, `docs/tutorial/programs/workloads/`). A `workload` in a program's `fn main()` is a compile error. A new example without its line in `examples/pairs.json`, or a tool that runs an example without its workload, is a finding.

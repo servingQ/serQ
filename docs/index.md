@@ -8,8 +8,8 @@ hide:
 *pronounced "ser-Q": **se**rving + **Q**ueue*
 
 **serQ describes an LLM serving deployment as a program:** its memory
-pools, engines, workload and scheduling policy. Use the same program to
-simulate performance, state claims for Lean proofs and draw the deployment.
+pools, engines and scheduling policy, run under a workload written as a
+file of its own. Use the same program to simulate performance, state claims for Lean proofs and draw the deployment.
 Programs supported by the [vLLM target](reference/cli.md#the-vllm-target)
 also compile to a scheduler configuration.
 

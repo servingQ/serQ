@@ -29,8 +29,8 @@ paper's model says, what the program needs for it, and how serQ writes it.
 The batch time is $t_b = c + a\lceil b/b_0\rceil$ with $b_0$ dividing
 $b_{\max}$ (Assumption 1), and at point C it is $11.28 + 35.47\lceil
 b/128\rceil$ ms. Time is in units of 10 µs, so that every number of the
-model is an integer: $c = 1128$, $a = 3547$, and one arrival every 467.5 ms
-is `gap = 46750`. Each request brings 290 prefill and 990 decode tokens:
+model is an integer: $c = 1128$, $a = 3547$. Each request brings 290
+prefill and 990 decode tokens:
 
 ```serq title="examples/papers/dai_sarathi.sq"
 --8<-- "examples/papers/dai_sarathi.sq:settings"
@@ -52,10 +52,19 @@ order, and without a chunk cap that order is decodes first
 
 ### Deterministic arrivals
 
-Requests arrive one per gap, and each is one call to the engine:
+Requests arrive one every 467.5 ms, `gap = 46750`. The workload is not in
+the program: it is a file of its own, `examples/workloads/dai_periodic.sq`,
+given when the program runs (`--workload`); both programs of this page run
+it:
+
+```serq title="examples/workloads/dai_periodic.sq"
+--8<-- "examples/workloads/dai_periodic.sq:workload"
+```
+
+Each request is one call to the engine:
 
 ```serq
---8<-- "examples/papers/dai_sarathi.sq:workload"
+--8<-- "examples/papers/dai_sarathi.sq:server"
 ```
 
 | Paper | serQ |
@@ -66,10 +75,14 @@ Requests arrive one per gap, and each is one call to the engine:
 | deterministic arrivals | `arrive renewal(gap);` |
 | Sarathi-Serve: decodes first, then the oldest prefills | `advance running admission;` |
 
-??? example "The whole program"
+??? example "The whole program, and its workload"
 
     ```serq title="examples/papers/dai_sarathi.sq"
     --8<-- "examples/papers/dai_sarathi.sq"
+    ```
+
+    ```serq title="examples/workloads/dai_periodic.sq"
+    --8<-- "examples/workloads/dai_periodic.sq"
     ```
 
 ### FasterTransformer
@@ -203,8 +216,8 @@ Run both programs with their default seed and 50 s horizon (5 000 000
 units of 10 µs):
 
 ```bash
-serq run examples/papers/dai_sarathi.sq --horizon 5000000 --warmup 0 --seed 1
-serq run examples/papers/dai_fastertransformer.sq --horizon 5000000 --warmup 0 --seed 1
+serq run examples/papers/dai_sarathi.sq --workload examples/workloads/dai_periodic.sq --horizon 5000000 --warmup 0 --seed 1
+serq run examples/papers/dai_fastertransformer.sq --workload examples/workloads/dai_periodic.sq --horizon 5000000 --warmup 0 --seed 1
 ```
 
 Claim-table excerpts, Sarathi first:

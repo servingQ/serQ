@@ -77,7 +77,6 @@ program is inside `main`.
 | `BwP`, `BwD` | — | NIXL bandwidth out of a prefiller and into a decoder, tokens/s (128 KB per token at 25 GB/s); one NIC each, so the tensor-parallel fan-out of the read is not modelled |
 | `x0` | — | per-read latency: posting the READ and the step that polls its completion (`nixl/pull_worker.py:545-558`) |
 | `thr`, `minp` | prefix-based-pd-decider `nonCachedTokens`, `promptTokens` | when to prefill remotely; `thr = 1` is the guide's always-disagg-pd-decider |
-| `Lambda`, `Z`, `p` | — | sessions per second, mean tool time, the chance a session continues |
 
 ### The router
 
@@ -210,16 +209,21 @@ sharing](https://github.com/servingQ/serQ/blob/main/docs/design/bandwidth-sharin
 
 ### The client and the server
 
-Sessions arrive, each turn brings a prompt of `n` new tokens on a context
-of `K` and wants `o` back, and after a turn the session calls a tool and
-comes back with probability `p`. `server (input, hidden output)` says the
+The workload is not in the program: it is a file of its own,
+`examples/workloads/chat_reply.sq`, given when the program runs
+(`--workload`), with its own settings: `Lambda` sessions per second, `Z`
+the mean tool time, `p` the chance a session continues. Sessions arrive,
+each turn brings a prompt of `n` new tokens on a context of `K` and wants
+`o` back, and after a turn the session calls a tool and comes back with
+probability `p`; the context grows by what the server reports it produced
+(`reply.produced`). `server (input, hidden output)` says the
 scheduler knows `max_tokens`, not the length (`sched/utils.py:98-119`). Lengths are whole
 tokens, as vLLM counts them: a fractional length can leave a request less
 than the one token its prefill samples (near `max_model_len`, or preempted
 in its last fraction of a token).
 
-```serq
---8<-- "examples/pd-disaggregation/llmd_nixl_pull.sq:workload"
+```serq title="examples/workloads/chat_reply.sq"
+--8<-- "examples/workloads/chat_reply.sq:workload"
 ```
 
 vLLM refuses a prompt of `max_model_len` tokens or more before it is
@@ -242,10 +246,14 @@ scorer's.
 --8<-- "examples/pd-disaggregation/llmd_nixl_pull.sq:gauges"
 ```
 
-??? example "The whole program"
+??? example "The whole program, and its workload"
 
     ```serq title="examples/pd-disaggregation/llmd_nixl_pull.sq"
     --8<-- "examples/pd-disaggregation/llmd_nixl_pull.sq"
+    ```
+
+    ```serq title="examples/workloads/chat_reply.sq"
+    --8<-- "examples/workloads/chat_reply.sq"
     ```
 
 ### Scheduler correspondence
@@ -338,7 +346,7 @@ memory is available.
 ## Run the example
 
 ```bash
-serq run examples/pd-disaggregation/llmd_nixl_pull.sq --horizon 2000 --warmup 200 --seed 1 --json
+serq run examples/pd-disaggregation/llmd_nixl_pull.sq --workload examples/workloads/chat_reply.sq --horizon 2000 --warmup 200 --seed 1 --json
 ```
 
 At the defaults (seed 1, horizon 2 000 s, warm-up 200 s), the run gives:

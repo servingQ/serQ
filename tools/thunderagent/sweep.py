@@ -27,6 +27,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 SERQ = os.environ.get("SERQ", str(ROOT / "target/release/serq"))
 PROGRAM = ROOT / "examples/multi-turn/thunderagent.sq"
+sys.path.insert(0, str(ROOT / "scripts"))
+import pairs  # noqa: E402  (each program's workload: examples/pairs.json)
+
+WORKLOAD = pairs.workload(PROGRAM)
 # long enough that the contexts' distribution has settled (a shorter run
 # reads it before the longest agents have grown)
 HORIZON, WARMUP = 25000, 5000
@@ -51,7 +55,7 @@ PRESETS = {
 
 
 def run(n, tr, seed, sets):
-    args = [SERQ, "run", str(PROGRAM), "--horizon", str(HORIZON), "--warmup", str(WARMUP),
+    args = [SERQ, "run", str(PROGRAM), "--workload", str(WORKLOAD), "--horizon", str(HORIZON), "--warmup", str(WARMUP),
             "--seed", str(seed), "--json", "--tr", str(tr), "--N", str(n)]
     for k, v in sets.items():
         args += [f"--{k}", str(v)]

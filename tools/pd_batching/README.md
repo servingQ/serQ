@@ -104,7 +104,7 @@ the report's: the gaps between a request's successive tokens.
   158, 161, 158, 166, 158 ms colocated (mean 160; the summary's 182 is
   high) and 878, 1023, 860, 915, 885 ms split (mean 912; the summary's
   1339 is high too), response 451–505 against 904–1067 ms. To repeat:
-  `serq run examples/pd-disaggregation/pd_batching.sq --mode 1 --Lambda 70 --def 'prompt_len=max(1, floor(~h2(2000, 9)))' --horizon 8000 --warmup 500 --seed 1`.
+  `serq run examples/pd-disaggregation/pd_batching.sq --workload examples/workloads/pd_batching.sq --mode 1 --Lambda 70 --def 'prompt_len=max(1, floor(~h2(2000, 9)))' --horizon 8000 --warmup 500 --seed 1`.
 
 ## The variations
 

@@ -403,15 +403,12 @@ prefix_total(o: observe) -> number
 
 ## Examples
 
-A complete program using arithmetic, live state and end-of-run aggregates:
+A complete program using arithmetic, live state and end-of-run aggregates, a deployment and its workload:
 
-```serq
+```serq title="model.sq"
 fn main() {
   pool reqs { cap 2; }
   stage svc : fifo;
-  workload {
-    arrive batch(3);
-  }
   server {
     set t0 = now;
     hold reqs (cost(reqs, 1)) {
@@ -425,10 +422,16 @@ fn main() {
 }
 ```
 
-Save as `model.sq`, then run:
+```serq title="workload.sq"
+workload {
+  arrive batch(3);
+}
+```
+
+Save the deployment as `model.sq` and its workload as `workload.sq`, then run:
 
 ```sh
-serq run model.sq --horizon 10
+serq run model.sq --workload workload.sq --horizon 10
 ```
 
 ## Where an observable may be read

@@ -2,8 +2,10 @@
 
 These examples keep the same engine and vary the client: single requests,
 chat, tool-using agents and an approximation of delegated subagent traffic.
-The deployment uses a device, the engine `vllm` on it, its pools and `server`; `workload` supplies
-arrivals and turns. Client delays (`tool`, `user`, `delegate`) represent time
+The program is the deployment: a device, the engine `vllm` on it, its pools
+and `server`. The workload, which supplies arrivals and turns, is a file of
+its own given when the program runs (`serq run DEPLOYMENT --workload
+WORKLOAD`); `examples/pairs.json` names each program's. Client delays (`tool`, `user`, `delegate`) represent time
 outside the engine.
 
 All four programs share the engine constants, resource declarations and
@@ -14,6 +16,7 @@ They hide output length `o` from scheduling expressions. See the
 | | single turn | multi-turn chat | multi-turn agent | agent with subagents |
 |---|---|---|---|---|
 | program | `vllm_single_turn.sq` | `vllm_chat.sq` | `vllm.sq` | `vllm_subagents.sq` |
+| workload (`examples/workloads/`) | `single_turn.sq` | `human_chat.sq` | `chat.sq` | `subagents.sq` |
 | a session is | one request | a conversation | a task | a task and the subtasks it hands out |
 | carried to the next turn | nothing | the conversation, `K = K + n + o` | the same | the same |
 | between turns | — | a person, `run user (cost(user, ~exp(Z)))` | a tool, `tool (~exp(Z))` | a tool, or waiting for the subagents |
@@ -22,8 +25,8 @@ They hide output length `o` from scheduling expressions. See the
 
 ## Single turn
 
-```serq title="examples/single-turn/vllm_single_turn.sq"
---8<-- "examples/single-turn/vllm_single_turn.sq:workload"
+```serq title="examples/workloads/single_turn.sq"
+--8<-- "examples/workloads/single_turn.sq:workload"
 ```
 
 No `session` declaration is needed: each arrival makes one turn and then
@@ -41,8 +44,8 @@ prefix from another request. serQ's cache is per session; see
 
 ## Multi-turn chat
 
-```serq title="examples/multi-turn/vllm_chat.sq"
---8<-- "examples/multi-turn/vllm_chat.sq:workload"
+```serq title="examples/workloads/human_chat.sq"
+--8<-- "examples/workloads/human_chat.sq:workload"
 ```
 
 Each turn sends the conversation `K` plus a new message of mean 100 tokens.
@@ -52,8 +55,8 @@ stage, with mean `Z = 20` seconds.
 
 ## Multi-turn agent
 
-```serq title="examples/multi-turn/vllm.sq"
---8<-- "examples/multi-turn/vllm.sq:workload"
+```serq title="examples/workloads/chat.sq"
+--8<-- "examples/workloads/chat.sq:workload"
 ```
 
 The agent has the same turn structure as chat, with a 3-second mean tool
@@ -66,8 +69,8 @@ This example approximates subagents as independent sessions. It does not
 create child sessions in response to a parent's delegation or join their
 actual completion times.
 
-```serq title="examples/subagent/vllm_subagents.sq"
---8<-- "examples/subagent/vllm_subagents.sq:workload"
+```serq title="examples/workloads/subagents.sq"
+--8<-- "examples/workloads/subagents.sq:workload"
 ```
 
 The approximation has three parts:

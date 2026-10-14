@@ -9,20 +9,22 @@ parameters and repeatable workloads. For formal verification, see
 ### Write, check, look
 
 ```bash
-serq check examples/multi-turn/vllm.sq  # validate without running
-serq draw  examples/multi-turn/vllm.sq --format svg --out my.svg
-serq run   examples/multi-turn/vllm.sq --horizon 2000 --warmup 200 --seed 1
+serq check examples/multi-turn/vllm.sq --workload examples/workloads/chat.sq  # validate without running
+serq draw  examples/multi-turn/vllm.sq --workload examples/workloads/chat.sq --format svg --out my.svg
+serq run   examples/multi-turn/vllm.sq --workload examples/workloads/chat.sq --horizon 2000 --warmup 200 --seed 1
 ```
 
 `check` validates the program without simulating it. The deployment view
 shows which stages each hold spans, helping you check resource lifetimes
 before running an experiment ([visualization](visualization/index.md)).
 
-Keep the engine and the client apart, as the programs in `examples/` do: the
-pools, the stages and a `server` block for the deployment, and `workload` for
-the traffic ([the two sides](language.md#the-two-sides)). Then a question
-about traffic is an edit of `workload` alone, and a test can hold the engine
-fixed ([different workloads](use-cases/workloads.md)).
+The engine and the client are two files: the program is the deployment,
+its pools, stages and `server` block, and the workload file, given with
+`--workload`, is the traffic ([paired files](language.md#paired-files)).
+A question about traffic is another workload file run on the same
+deployment, and a test holds the engine fixed
+([different workloads](use-cases/workloads.md)); `examples/pairs.json`
+names the workload each example runs.
 
 ### Read the report
 
@@ -30,7 +32,7 @@ The report lists observations and resource statistics. This excerpt shows
 the run settings, observations and pools:
 
 ```
-$ serq run examples/multi-turn/vllm.sq --horizon 300 --warmup 30
+$ serq run examples/multi-turn/vllm.sq --workload examples/workloads/chat.sq --horizon 300 --warmup 30
 run: horizon 300 end 300 warmup 30 seed 1 events 150579 arrivals 95 ended 86 turns 779 mean live 7.387
 
 observe       count       mean     95% CI    cv2         p99
@@ -78,7 +80,7 @@ sweep is a loop over `--name value`, with a few seeds per point:
 ```bash
 for lam in 0.3 0.6 0.9; do
   for seed in 1 2 3; do
-    serq run examples/multi-turn/vllm.sq --horizon 2000 --warmup 200 --Lambda $lam --seed $seed --json \
+    serq run examples/multi-turn/vllm.sq --workload examples/workloads/chat.sq --horizon 2000 --warmup 200 --Lambda $lam --seed $seed --json \
       | jq -r --arg l $lam --arg s $seed \
           '[$l, $s, .client.ttft.mean, (.pools[] | select(.name=="kv") | .preemptions)] | @tsv'
   done
@@ -110,12 +112,14 @@ one comes from:
 - **An engine cost model.** Fit `cost` to measured iterations, as
   `examples/replay/vllm_replay.sq` does for the A100: an expression in `tokens`,
   `decoders`, `prefilled`, `kv_decode`, `kv_prefill`, `attention`.
-- **Traffic from a trace.** `trace "file.csv"` in the `workload` replays
-  sessions turn by turn. The columns are `session,turn,new,out,think,forced`
-  (`examples/replay/data/`), and `--trace F` swaps the file without editing the
-  program.
+- **Traffic from a trace.** `trace "file.csv"` in the workload file's
+  `workload` replays sessions turn by turn, the path read beside that file
+  (`examples/workloads/vllm_replay.sq`). The columns are
+  `session,turn,new,out,think,forced` (`examples/replay/data/`), and
+  `--trace F` swaps the file without editing the workload.
 - **A quantity the program cannot compute itself.** For example, the subagent
-  wait `W` of `examples/subagent/vllm_subagents.sq` is taken from the program's own
+  wait `W` of `examples/subagent/vllm_subagents.sq` (an input of its workload,
+  `examples/workloads/subagents.sq`) is taken from the program's own
   output. Run the program, compute the statistic from `--dump`, set it with
   `--W …` (the example exposes `W` through `args.number`), and repeat
   until it stops moving. Write the fixed point into that input's default

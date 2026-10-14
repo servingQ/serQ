@@ -7,11 +7,12 @@ For individual constructs and examples, use the [API reference](api/index.md).
 ## Overview {#1-what-serq-is-for}
 
 A serving deployment is a program. The program names the resources of the
-deployment (memory pools, stages), says how sessions arrive and how a
-session's turns evolve (the workload), and gives the path every session
-runs. One program is simulated (`serq run`), stated about and proved
-about in Lean (a fragment of the IR, `docs/lean.md`), and drawn
-(`serq draw`).
+deployment (memory pools, stages) and gives the path every request runs
+(the `server`). How sessions arrive and how a session's turns evolve (the
+workload) is a file of its own, given when the program runs
+(`serq run DEPLOYMENT --workload WORKLOAD`, [paired files](#paired-files)).
+The pair is simulated (`serq run`), stated about and proved about in Lean
+(a fragment of the IR, `docs/lean.md`), and drawn (`serq draw`).
 
 The organising idea: a deployment does four things to a request. It makes
 it **wait for a resource**, **runs** it on a stage, **frees** the resource
@@ -24,10 +25,15 @@ prefills in the compute its decode step leaves is a stage kind of its own
 ## Syntax {#2-syntax}
 
 ```
-program  := (constant | definition | import)* fn main ( ) { item* }
+program  := (constant | definition | import)* fn main ( ) { item* }   -- the deployment: no workload item
+workloadfile := (import | constant | input | definition | wstage | wpool)* workload { wlitem* } (import | constant | input | definition | wstage | wpool)*
+                                             -- the workload, a file of its own: no fn main, exactly one workload
+input    := let NAME = args.number ( "argument_name" , expr ) ;   -- in a workload file, at the top level
+wstage   := stage NAME [ '[' N ']' ] : kind ;   -- a stage the workload runs on itself
+wpool    := pool NAME { poolopt* }           -- a pool the workload holds itself (no `on`): a session cap
 constant := let NAME = expr ;
 definition := def NAME ( NAME , ... ) ( { expr } | block )
-import   := use "std/args" ; | use "std/kvt" ; | use "std/share" ;   -- a program is one file
+import   := use "std/args" ; | use "std/kvt" ; | use "std/share" ;   -- a program is one file (the deployment), run with one workload file
 item     := let NAME = expr ;
           | let NAME = args.number ( "argument_name" , expr ) ;
           | def NAME ( NAME , ... ) { expr }   -- a name for an expression: NAME ( arg , ... )
@@ -38,8 +44,7 @@ item     := let NAME = expr ;
           | engine NAME [ '[' N ']' ] on DEVICE { eitem* }   -- a stage that runs iterations (the IR's step stage)
           | pool NAME on OWNER { poolopt* }    -- a capacity of a device or an engine, as a pool
           | pool NAME on ENGINE.DEVICE { poolopt* }   -- the device's capacity, whose queue the engine admits: the name before the dot is that engine
-          | workload { wlitem* }
-          | server [ ( [hidden] NAME , … ) ] [ reply ( NAME , … ) ] block   -- request handling, and what a request and its reply carry; the session lives inside workload
+          | server [ ( [hidden] NAME , … ) ] [ reply ( NAME , … ) ] block   -- request handling, and what a request and its reply carry; the session lives inside the workload file's workload
           | queue NAME [ '[' expr ']' ] [ : ROLE [, ROLE]* ] { qitem* }   -- a station: its pools, stage and entries (below, *Queues*)
           | kvt.nixl_pull ( QUEUE , QUEUE [, latency = expr ] , share = POLICY ) ;   -- the source, its reader, the read (below, *Queues*)
           | kvt.nixl_push ( QUEUE , QUEUE [, latency = expr ] , share = POLICY ) ;   -- the source, its reader, the write
@@ -138,7 +143,7 @@ POLICY   := share.maxmin | share.bottleneck   -- std/share: how the flows of a f
 
 ### Arrivals and the run
 
-A model defines the deployment and workload. Execution settings are supplied by
+A model is a deployment and a workload, two files. Execution settings are supplied by
 the CLI flags, an explicit instance file, or the host API; `run { ... }` is
 not a model declaration. The resolved IR includes the execution settings.
 
@@ -218,9 +223,12 @@ contract applies to direct JSON IR as well as source. See
 ### Entry point and external inputs
 
 Source programs declare exactly one `fn main()`. It constructs the deployment
-once; each arriving session executes its session body. Execution settings are supplied externally.
+once; each arriving session executes the session body of the workload file
+the program runs with. Execution settings are supplied externally.
 Only imports, definitions and fixed constants may precede `main`. Declarations
-after it and nested or duplicate entry points are refused.
+after it and nested or duplicate entry points are refused. A workload file
+has no `fn main()`; its `args.number` inputs are top-level `let`s
+([paired files](#paired-files)).
 
 A plain `let` cannot be replaced externally. With `use "std/args";`, a
 `let` inside `main` may declare an input using
@@ -287,11 +295,13 @@ delay;` after the declared stages, and the call runs on that delay of the
 workload's own, an infinite server where no call waits for another. The IR
 is the one the declaration gives, and the report shows the stage `tool`.
 A tool server with capacity, which sessions share (a sandbox pool, a
-rate-limited API), is the deployment's: declare it, `stage sandbox[4] :
-fifo;`, and name it, `tool on sandbox[j] (Z);`. A declared stage `tool` of
-any kind is still the one `tool Z;` uses; one declared below the
-workload's `tool Z;` is refused, since the call has found no stage above it
-and the program would have two. A `tool` in the server, or indexed,
+rate-limited API), is declared in the workload file, which runs on its own
+stages only: `stage sandbox[4] : fifo;` there, and name it,
+`tool on sandbox[j] (Z);`; the workload naming a stage of the deployment's is
+refused ("stage `sandbox` is the deployment file's"). A declared stage
+`tool` of any kind, the deployment's included, is still the one `tool Z;`
+uses; one declared below the workload's `tool Z;` is refused, since the
+call has found no stage above it and the program would have two. A `tool` in the server, or indexed,
 `tool[j] Z;`, finds a declared stage as above. The run is
 plain: `transfer` and `tool` on a step engine are rejected by the linker as
 `run E (cost(E, X))` would be. A linker error inside a form (an unknown name
@@ -330,9 +340,12 @@ per arriving session; there is no call or termination statement to write.
 
 For a conversation, `turn;` draws the next turn's attributes, submits it
 to the server, and waits for its response. Statements after it see the
-completed turn. From `examples/multi-turn/vllm.sq`:
+completed turn. The workload is a file of its own
+([paired files](#paired-files)); from `examples/workloads/chat.sq` and the
+deployment it runs on, `examples/multi-turn/vllm.sq`:
 
 ```serq
+// examples/workloads/chat.sq
 workload {
   arrive poisson(Lambda);
   init { set K = 0; }
@@ -348,6 +361,7 @@ workload {
   }
 }
 
+// examples/multi-turn/vllm.sq, in fn main()
 server (input, hidden output) {
   vllm (input, output);
 }
@@ -387,8 +401,8 @@ request. What the server sets stays the session's
 from one request to the next (a sticky `home` in
 `examples/multi-turn/routing.sq`); the parameters are bound anew at each.
 `examples/pd-disaggregation/llmd_nixl_pull.sq` replies with the tokens the
-decoder produced, which `max_model_len` can cut short, and its client adds
-them to its context:
+decoder produced, which `max_model_len` can cut short, and its client
+(`examples/workloads/chat_reply.sq`) adds them to its context:
 
 ```serq
 send (input: K + n, output: o);
@@ -406,21 +420,26 @@ attribute of the workload ([the design](design/request-interface.md)).
 
 #### Paired files
 
-Since the signature is all the two sides share, a workload and a
-deployment can be written apart and paired by the tool:
-`serq run DEPLOYMENT --workload WORKLOAD` ([the design](design/paired-workload.md)).
-The deployment file is a program without its `workload`. The workload file
-has no `fn main()`: its `use`s, its constants and inputs (`let`, an
+Since the signature is all the two sides share, the program is the
+deployment and the workload is a file of its own, given when the program
+runs: `serq run DEPLOYMENT --workload WORKLOAD`, likewise `check`, `ir`,
+`draw` and `target`, and pyserq's `compile(path, workload=…)`
+([the design](design/paired-workload.md)). The deployment file is a
+program with no `workload`: a `workload { … }` in its `fn main()` is a
+compile error ("a workload is a file of its own, given when the program
+runs"), and so is running its server with no workload given. The workload
+file has no `fn main()`: its `use`s, its constants and inputs (`let`, an
 `args.number` among them), its definitions (`def`), the stages it runs on
-itself (`stage user : delay;`) and `workload { … }`.
-`examples/paired/` has vLLM's engine as a deployment and four workloads for
-it, each the workload of a single-file example, with the same report:
+itself (`stage user : delay;`), the pools it holds itself (`pool live { cap
+24; }`, no `on`: a cap on live sessions is the client's) and one
+`workload { … }`. An `engine`, a `server` or a `device` in it is the
+deployment file's and refused.
 
 ```serq
-// examples/paired/workloads/chat.sq
-let Lambda = 0.3;  // conversations per second
-let p = 0.8;  // the person asks again
-let Z = 20.0;  // reading and typing time (s)
+// examples/workloads/human_chat.sq (examples/multi-turn/vllm_chat.sq runs it)
+let Lambda = 0.3;      // conversations per second
+let p = 0.8;           // the person asks again
+let Z = 20.0;          // reading and typing time (s)
 
 stage user : delay;
 
@@ -434,10 +453,19 @@ workload {
 
 Each file reads its own names: no constant or definition of the workload
 file is read by the deployment, none of the deployment's by the workload, and
-both may declare `p`, each meaning its own. The workload runs on its own
-stages, the server on none of them. The inputs of both are the program's
-(`--Lambda 0.5 --max_seqs 32`). A single-file program is the same program
-written in one file.
+both may declare `p`, each meaning its own. The workload runs on and holds
+its own stages and pools, the server none of them; what the server does
+to the session's memory it does on what the workload sends (a session's
+last request sends `final`, and the server `if (final) { drop kv; }`,
+`examples/multi-turn/replica.sq`). The inputs of both are the program's
+(`--Lambda 0.5 --max_seqs 32`). A message names its file, at its own line.
+
+The examples' deployments keep their paths; their workloads are in
+`examples/workloads/` (the tutorial's in `docs/tutorial/programs/workloads/`),
+and `examples/pairs.json` maps each program to its workload. One workload
+can run on several deployments (`chat.sq` on `vllm.sq` and
+`vllm_lmcache.sq`), and `examples/paired/` has vLLM's engine once under
+four workloads.
 
 The parser puts what `send` binds at the end of the `turn` block, a
 hidden parameter in the IR's `hidden`; it expands
@@ -799,7 +827,11 @@ names each pool once: the same reference twice does not link, and two
 indices that name one member at run time fail the run. `end` releases every
 hold but *keeps* the session's cached prefixes:
 cached entries persist until explicitly dropped or evicted. A program that models dropping
-them writes `drop POOL;` before `end;`. Eviction takes leaves of the cache's
+them drops them in the server on the session's last request, which the
+workload says it is (`send (…, final: more == 0)` and
+`if (final) { drop kv; }`, `examples/multi-turn/replica.sq`): the KV pool is
+the deployment's, which the workload does not hold. A pool of the
+workload's own is dropped by `drop POOL;` before `end;`. Eviction takes leaves of the cache's
 trie of segments, so no cached suffix outlives its prefix, and never one a
 live hold reads; it is per leaf, or per block from the tail of the leaf when
 the pool has `block b`; `evict lru` orders by release time and then release
@@ -1602,10 +1634,14 @@ that program's paths ([use cases](use-cases/index.md), `docs/lean.md`).
 
 ## Programs {#5-programs}
 
+Each program under `examples/` is a deployment; it runs with the workload
+file `examples/pairs.json` gives it, from `examples/workloads/`
+(`serq run examples/multi-turn/vllm.sq --workload examples/workloads/chat.sq`).
+
 | Program | Deployment | Checked by |
 |---|---|---|
 | `single-turn/mg1.sq`, `single-turn/ps.sq`, `multi-turn/closed.sq` | M/G/1 FIFO, M/G/1-PS, M/M/1//N | a run against the closed form, by hand, in [getting started](getting-started.md) and the [tutorial](tutorial/01-a-queue.md); no test |
-| `multi-turn/replica.sq` | the paper's two-resource replica on the open-session scenario (`advance running decode first`, `drop kv` before `end`) | — |
+| `multi-turn/replica.sq` | the paper's two-resource replica on the open-session scenario (`advance running decode first`; the server drops a session's KV after the request its workload sends as `final`) | — |
 | `multi-turn/routing.sq` | four replicas, five routing policies | — |
 | `multi-turn/thunderagent.sq` | ThunderAgent's router in TR mode in front of two vLLM replicas, a fixed number of agents at once ([use case](use-cases/thunderagent.md)) | the source (ThunderAgent at 7ddc861), read; `tests/thunderagent.rs` against the router's default mode; no oracle |
 | `multi-turn/vllm.sq` | vLLM v1's engine under a multi-turn agent workload | its engine is the other vLLM workloads' (`tests/workloads.rs`) |

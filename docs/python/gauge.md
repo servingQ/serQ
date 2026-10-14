@@ -29,9 +29,6 @@ source = """
 fn main() {
   pool reqs { cap 2; }
   stage svc : fifo;
-  workload {
-    arrive batch(4);
-  }
   server {
     set t0 = now;
     hold reqs (cost(reqs, 1)) { run svc (cost(svc, 2)); }
@@ -40,7 +37,12 @@ fn main() {
   gauge occupied = used(reqs);
 }
 """
-report = pyserq.run(pyserq.compile(source=source, horizon=10))
+workload = """
+workload {
+  arrive batch(4);
+}
+"""
+report = pyserq.run(pyserq.compile(source=source, workload_source=workload, horizon=10))
 gauge = report.gauge("occupied")
 assert gauge is not None
 points = list(zip(gauge.times, gauge.values))

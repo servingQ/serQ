@@ -41,8 +41,10 @@ declared above it: the stage named for the role (`link` or `transfer`,
 at the form. In the workload, a `tool` with none declared runs on a delay
 of the workload's own: the parser supplies `stage tool : delay;` after the
 declared stages, so a client's tool call declares nothing. A tool server
-with capacity is the deployment's: declare it and name it,
-`tool on sandbox[j] (Z);`. The run is plain: `transfer` and `tool` on a step engine are
+with capacity, which sessions share, is declared in the workload file,
+which runs on its own stages only (`stage sandbox[4] : fifo;`), and named,
+`tool on sandbox[j] (Z);`; a stage of the deployment's is refused there
+("stage `sandbox` is the deployment file's"). The run is plain: `transfer` and `tool` on a step engine are
 link errors, so they take no `growing`, which needs one. `transfer` finds its stage by the same rule and
 always says where the KV goes ([below](#transfer-from-to)); a link that only
 takes time is `run link (cost(link, X));`.
@@ -92,9 +94,9 @@ decode (prompt) from P {
 
 ## Examples
 
-A complete program:
+A complete program, a deployment and its workload:
 
-```serq
+```serq title="model.sq"
 fn main() {
   device gpu { }
   engine llm on gpu {
@@ -105,9 +107,6 @@ fn main() {
     }
   }
   stage tool : delay;
-  workload {
-    arrive batch(1);
-  }
   server {
     llm (8, 3);
     tool (3);
@@ -116,10 +115,16 @@ fn main() {
 }
 ```
 
-Save as `model.sq`, then run:
+```serq title="workload.sq"
+workload {
+  arrive batch(1);
+}
+```
+
+Save the deployment as `model.sq` and its workload as `workload.sq`, then run:
 
 ```sh
-serq run model.sq --horizon 10
+serq run model.sq --workload workload.sq --horizon 10
 ```
 
 ## See also

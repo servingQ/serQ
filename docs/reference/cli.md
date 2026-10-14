@@ -16,16 +16,23 @@ serq --version
 `--name value` supplies a numeric input the program declares with
 [`args.number("name", default)`](../api/std/args.md). Any option that is not one of the
 interpreter's below is such an input, in any order among them:
-`serq run examples/multi-turn/vllm.sq --seed 2 --horizon 3000 --Lambda 0.3`.
+`serq run examples/multi-turn/vllm.sq --workload examples/workloads/chat.sq --seed 2 --horizon 3000 --Lambda 0.3`
+(`Lambda` is the workload file's input; the inputs of both files are the program's).
 An input may not be named like an interpreter option (`seed`, `horizon`, …).
 
 `FILE` is program text (`.sq`) or IR (`.json`, as written by `serq ir`).
-With `--workload W`, `FILE` is a deployment file and `W` a workload file,
-which the tool pairs ([paired files](../language.md#paired-files)):
-`serq run examples/paired/deployments/vllm.sq --workload examples/paired/workloads/chat.sq --horizon 3000`.
-A message names the file it is about; a trace the workload reads is read
-next to `W`. `--workload` pairs program text: an IR (`.json`) is a whole
-program already.
+Program text is the deployment; its workload is a file of its own, `W`,
+which `--workload W` gives and the tool pairs with it
+([paired files](../language.md#paired-files)). `run`, `check`, `ir`, `draw`
+and `target` need it for a `.sq` file: a server with no workload given is an
+error, and so is a `workload { … }` in the program's `fn main()`. The
+examples' workloads are in `examples/workloads/`, and `examples/pairs.json`
+names each program's:
+`serq run examples/multi-turn/vllm.sq --workload examples/workloads/chat.sq --horizon 3000`.
+A message names the file it is about, at its own line; a trace the
+workload reads is read next to `W`. An IR (`.json`) is a whole program
+already, workload included, and refuses `--workload`. `fmt` formats either
+file alone.
 
 Source models contain no execution settings. `run` and `ir` require
 `--horizon T` or an explicit `--instance F` that supplies it. `warmup` defaults
@@ -48,6 +55,7 @@ to 0 and `seed` to 1. JSON IR contains all resolved settings already.
 
 | Flag | Applies to | Meaning |
 |---|---|---|
+| `--workload W` | run, check, ir, draw, target | the workload file the `.sq` deployment `FILE` runs ([paired files](../language.md#paired-files)); required for a `.sq` file, refused on `.json` |
 | `--seed N` | run, ir | RNG seed (default 1) |
 | `--horizon T` | run, ir | simulated seconds |
 | `--warmup T` | run, ir | exclude the first `T` seconds from measured statistics; claims and whole-run counters still include them |
@@ -69,8 +77,8 @@ to 0 and `seed` to 1. JSON IR contains all resolved settings already.
 `observes`, `client` and `gauges` are objects keyed by name; `stages` and `pools` are arrays.
 
 ```bash
-serq run examples/multi-turn/vllm.sq --horizon 2000 --warmup 200 --seed 1 --json | jq '.client.ttft.mean'
-serq run examples/multi-turn/vllm.sq --horizon 2000 --warmup 200 --seed 1 --json | jq '.pools[] | select(.name=="kv") | .preemptions'
+serq run examples/multi-turn/vllm.sq --workload examples/workloads/chat.sq --horizon 2000 --warmup 200 --seed 1 --json | jq '.client.ttft.mean'
+serq run examples/multi-turn/vllm.sq --workload examples/workloads/chat.sq --horizon 2000 --warmup 200 --seed 1 --json | jq '.pools[] | select(.name=="kv") | .preemptions'
 ```
 
 | Path | |
@@ -148,7 +156,7 @@ number, and `--arrivals` a positive integer. Program loading, validation, and ru
 do not write a report to stdout.
 
 Trace CSV errors identify the actual trace path, row, and column name, followed
-by a correction hint. Paths declared in the program are relative to its directory;
+by a correction hint. Paths declared in the workload file are relative to its directory;
 `--trace` paths are relative to the current directory. `run` and
 `ir --inline-trace` use the same trace diagnostics.
 
@@ -168,7 +176,7 @@ admission is first come, first served. A program on that architecture
 compiles to the configuration that makes vLLM run it:
 
 ```bash
-serq target examples/multi-turn/vllm.sq
+serq target examples/multi-turn/vllm.sq --workload examples/workloads/chat.sq
 ```
 
 ```json

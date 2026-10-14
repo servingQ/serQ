@@ -1,12 +1,17 @@
 # Program
 
 ```
-program := (let | def | use)* fn main() { item* }
-item    := let | def | use | pool | stage | queue | workload | server | kvt.CALL | gauge | claim
+program      := (let | def | use)* fn main() { item* }
+item         := let | def | use | pool | stage | queue | server | kvt.CALL | gauge | claim
+workloadfile := (use | let | def | stage | pool)* workload { … } (use | let | def | stage | pool)*
 ```
 
-`fn main()` is the single execution entry point: it constructs the deployment and
-workload. The session body then runs for each arrival.
+`fn main()` is the single execution entry point: it constructs the deployment.
+The workload is a file of its own, with no `fn main()`, given when the
+program runs (`serq run model.sq --workload workload.sq`; pyserq
+`workload=`); a `workload` in `main` is an error
+([paired files](../language.md#paired-files)). The workload's session body
+then runs for each arrival.
 Top-level constants and definitions do not execute a simulation.
 There are no arguments or return value on `main`; use `std/args` for inputs.
 
@@ -15,14 +20,14 @@ finds its stage among the stages declared above it.
 
 | Declaration | Description |
 |---|---|
-| `fn main()` | Construct the deployment and workload. |
+| `fn main()` | Construct the deployment. |
 | [`let`](#let) | Declare a constant. |
 | [`args.number`](std/args.md) | Declare a numeric program input. |
 | [`def`](#def) | Define a reusable expression or statement body. |
 | [`use`](#use) | Import `std/args`, the program's inputs, `std/kvt`, the KV-transfer vocabulary, or `std/share`, the sharing policies. |
 | [`pool`](#pool) | Declare resource capacity, cache and admission policy. |
 | [`stage`](#stage) | Declare a server or step engine. |
-| [`workload`](#workload) | Define arrivals and request attributes. |
+| [`workload`](#workload) | Define arrivals and request attributes, in the workload file. |
 | [`session`](#session) | Define the request's sequence of actions. |
 | [`server`](#server) | Define the scheduler side of a two-sided program. |
 | [`gauge`](#gauge) | Measure a function of deployment state over time. |
@@ -57,11 +62,12 @@ run { horizon 6000; warmup 0; seed 2; }
 ```
 
 ```sh
-serq run examples/replay/vllm_replay.sq --instance experiment.sq
+serq run examples/replay/vllm_replay.sq --workload examples/workloads/vllm_replay.sq --instance experiment.sq
 ```
 
 This supplies the same inputs and execution conditions as
-`--spacing 3.0 --horizon 6000 --warmup 0 --seed 2`. Flags and instances
+`--spacing 3.0 --horizon 6000 --warmup 0 --seed 2` (`spacing` is an input
+of the workload file; the inputs of both files are the program's). Flags and instances
 apply in command-line order; later values win.
 
 Example commands state their execution conditions directly. An instance is
@@ -137,8 +143,9 @@ Imports one of the three standard libraries: [`std/args`](std/args.md),
 the program's inputs, [`std/kvt`](std/kvt.md), the KV-transfer
 vocabulary, or [`std/share`](std/share.md), the sharing policies. The
 frontend provides them on every installation; no file and no other path
-is read. A program is one file: what several programs
-share, each writes, so a reader of one program reads all of it.
+is read. A program is one file, the deployment, and its workload another,
+given when it runs; neither imports a file: what several programs share,
+each writes, so a reader of a program and its workload reads all of it.
 
 A library is a namespace the parser defines: its calls are rewritten
 into the language's own constructs before the IR is produced, and the IR
@@ -187,7 +194,11 @@ workload { item* }
 ```
 
 How sessions arrive and how their turns evolve. See [Workload](workload.md).
-At most one per program (a second is `duplicate workload`).
+Exactly one, in the workload file: the file declares it beside its own
+`use`s, `let`s (`args.number` among them), `def`s, the stages it runs on
+and the pools it holds itself (`pool live { cap 24; }`, no `on`). In a
+program's `fn main()` it is an error: "a workload is a file of its own,
+given when the program runs".
 
 ## `session`
 
@@ -215,7 +226,9 @@ Use `end;` only to exit early. Queue entry calls belong in the server.
 server [( [hidden] NAME [, …]* )] [reply ( NAME [, …]* )] block
 ```
 
-The deployment's handling of each turn. Every workload uses one server;
+The deployment's handling of each turn. Every workload uses one server,
+and a server runs only with a workload given (with none, "the server needs
+a workload to run");
 the server may route to queues, for example `server (input, hidden output) {
 gw.route(); }`. It completes a turn when its block finishes. It cannot draw
 another turn or end the client's session (`turn;` and `end;` are refused).
@@ -283,7 +296,7 @@ They are not declarations inside `fn main()`. In a model, `run STAGE (cost(STAGE
 performs work on a stage.
 
 ```sh
-serq run model.sq --horizon 10 --warmup 0 --seed 1
+serq run model.sq --workload workload.sq --horizon 10 --warmup 0 --seed 1
 ```
 
 | Field | Type | Default | Description |
@@ -299,7 +312,7 @@ A serialized IR already contains them; flags can replace them when loading it.
 
 ### A finite run
 
-For example: `serq run model.sq --horizon 1e5 --arrivals 1000`.
+For example: `serq run model.sq --workload workload.sq --horizon 1e5 --arrivals 1000`.
 
 Without `arrivals` the run ends at `horizon`. With it, the run ends when the
 `N`-th session has arrived and every session has ended, and `horizon` is the
@@ -315,15 +328,12 @@ workload {
 
 ## Examples
 
-A complete program:
+A complete program, a deployment and its workload:
 
-```serq
+```serq title="model.sq"
 fn main() {
   let duration = 2;
   stage svc : fifo;
-  workload {
-    arrive batch(2);
-  }
   server {
     set t0 = now;
     run svc (cost(svc, duration));
@@ -334,10 +344,16 @@ fn main() {
 }
 ```
 
-Save as `model.sq`, then run:
+```serq title="workload.sq"
+workload {
+  arrive batch(2);
+}
+```
+
+Save the deployment as `model.sq` and its workload as `workload.sq`, then run:
 
 ```sh
-serq run model.sq --horizon 10 --seed 1
+serq run model.sq --workload workload.sq --horizon 10 --seed 1
 ```
 
 ## See also

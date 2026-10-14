@@ -39,6 +39,12 @@ with an explicit `max_wait > 0` guard, as in the executable example.
 --8<-- "examples/vendors/ascend.sq"
 ```
 
+Its workload, given when it runs (`--workload`):
+
+```serq title="examples/workloads/ascend_batch.sq"
+--8<-- "examples/workloads/ascend_batch.sq"
+```
+
 ## Selection and admission
 
 One selection examines a snapshot of the waiting holds and their current

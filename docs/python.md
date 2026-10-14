@@ -21,17 +21,19 @@ source = """
 fn main() {
   pool reqs { cap 2; }
   stage svc : fifo;
-  workload {
-    arrive batch(4);
-    session { turn; end; }
-  }
   server {
     hold reqs (cost(reqs, 1)) { run svc (cost(svc, 2)); }
   }
   gauge occupied = used(reqs);
 }
 """
-report = pyserq.run(pyserq.compile(source=source, horizon=10))
+workload = """
+workload {
+  arrive batch(4);
+  session { turn; end; }
+}
+"""
+report = pyserq.run(pyserq.compile(source=source, workload_source=workload, horizon=10))
 response = report.client["response"]   # what each turn's client saw
 print(response.mean)
 ```

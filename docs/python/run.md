@@ -37,16 +37,18 @@ source = """
 fn main() {
   pool reqs { cap 2; }
   stage svc : fifo;
-  workload {
-    arrive batch(4);
-  }
   server {
     hold reqs (cost(reqs, 1)) { run svc (cost(svc, 2)); }
   }
   gauge occupied = used(reqs);
 }
 """
-report = pyserq.run(pyserq.compile(source=source, horizon=10))
+workload = """
+workload {
+  arrive batch(4);
+}
+"""
+report = pyserq.run(pyserq.compile(source=source, workload_source=workload, horizon=10))
 assert report.ended == 4
 assert report.client["response"].samples == [2.0, 4.0, 6.0, 8.0]
 ```

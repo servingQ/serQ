@@ -53,6 +53,10 @@ known whether the work would survive a waiting-prefill takeover.
 --8<-- "examples/single-turn/separate_phases.sq"
 ```
 
+```serq title="examples/workloads/two_prompts.sq"
+--8<-- "examples/workloads/two_prompts.sq"
+```
+
 The same IR selection is now interpreted as a whole-batch policy. A resident
 prefill has priority. Otherwise decodes remain tentative while waiting
 admission is possible; a selected prefill clears them and receives the full

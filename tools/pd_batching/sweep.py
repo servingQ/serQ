@@ -26,6 +26,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 HERE = Path(__file__).resolve().parent
 SERQ = os.environ.get("SERQ", str(ROOT / "target/release/serq"))
+sys.path.insert(0, str(ROOT / "scripts"))
+import pairs  # noqa: E402  (each program's workload: examples/pairs.json)
+
 PS = ROOT / "examples/pd-disaggregation/pd_ps.sq"
 STEP = ROOT / "examples/pd-disaggregation/pd_batching.sq"
 SEEDS = [1, 2, 3, 4, 5]
@@ -67,6 +70,8 @@ VARIATIONS = {
 
 
 def run(program, sets, defs, seed, edits=()):
+    # the workload of the committed program; the edits are the deployment's
+    workload = pairs.workload_args(program)
     with tempfile.TemporaryDirectory() as dump:
         if edits:
             text = program.read_text()
@@ -75,7 +80,7 @@ def run(program, sets, defs, seed, edits=()):
                 text = text.replace(old, new)
             program = Path(dump) / program.name
             program.write_text(text)
-        cmd = [SERQ, "run", str(program), "--horizon", "300", "--warmup", "30", "--json", "--seed", str(seed), "--dump", dump]
+        cmd = [SERQ, "run", str(program), *workload, "--horizon", "300", "--warmup", "30", "--json", "--seed", str(seed), "--dump", dump]
         for k, v in sets.items():
             cmd += [f"--{k}", str(v)]
         for k, v in defs.items():

@@ -229,15 +229,12 @@ spill TIER via LINK (work) when (pred);
 
 ## Examples
 
-A complete program:
+A complete program, a deployment and its workload:
 
-```serq
+```serq title="model.sq"
 fn main() {
   pool reqs { cap 2; }
   stage svc : delay;
-  workload {
-    arrive batch(3);
-  }
   server {
     set t0 = now;
     hold reqs (cost(reqs, 1)) { run svc (cost(svc, 2)); }
@@ -246,10 +243,16 @@ fn main() {
 }
 ```
 
-Save as `model.sq`, then run:
+```serq title="workload.sq"
+workload {
+  arrive batch(3);
+}
+```
+
+Save the deployment as `model.sq` and its workload as `workload.sq`, then run:
 
 ```sh
-serq run model.sq --horizon 10
+serq run model.sq --workload workload.sq --horizon 10
 ```
 
 ## See also

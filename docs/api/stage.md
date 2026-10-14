@@ -57,14 +57,11 @@ drawing and the Lean model read the two spellings alike.
 
 ## Examples
 
-A complete program:
+A complete program, a deployment and its workload:
 
-```serq
+```serq title="model.sq"
 fn main() {
   stage svc : fifo;
-  workload {
-    arrive poisson(0.5);
-  }
   server {
     set t0 = now;
     run svc (cost(svc, ~exp(1)));
@@ -73,10 +70,16 @@ fn main() {
 }
 ```
 
-Save as `model.sq`, then run:
+```serq title="workload.sq"
+workload {
+  arrive poisson(0.5);
+}
+```
+
+Save the deployment as `model.sq` and its workload as `workload.sq`, then run:
 
 ```sh
-serq run model.sq --horizon 10
+serq run model.sq --workload workload.sq --horizon 10
 ```
 
 ## See also

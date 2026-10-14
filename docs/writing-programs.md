@@ -24,18 +24,24 @@ Inside `main`, group inputs and derived settings, resource declarations,
 and request behavior in that order where dependencies allow. Supply execution
 conditions with CLI flags, Python arguments or an explicit instance file;
 `run STAGE (cost(STAGE, work));` in the model performs stage work.
-Keep workload behavior separate from serving policy: put the client's
-`session` inside `workload`, and request handling in `server` or a named gateway.
+Keep workload behavior separate from serving policy: the program is the
+deployment, and the client's `workload` and its `session` are a file of
+their own, given when the program runs (`serq run model.sq --workload
+workload.sq`, [paired files](language.md#paired-files)); request handling
+is in `server` or a named gateway. A `workload` inside `main` is an error.
 Omit `session` for one turn. A multi-turn session uses `turn;` and states how
 the next turn follows its response. Route to a gateway in the server with
 `gw.route();`.
 
 Current syntax requires `pool`, `stage`, and other deployment declarations
 inside `main`, even when their settings are fixed. Group them together before
-the workload where dependencies allow: a declaration that reads a request
-attribute, such as a `queue by` key, follows the workload that sets it.
-Do not enforce a rule that `main` contains only `workload`
-and `server`; input-dependent configuration belongs there too.
+the server where dependencies allow. Do not enforce a rule that `main`
+contains only the `server`; input-dependent configuration belongs there
+too. The workload file declares what only the client needs: its inputs
+(`let rate = args.number("rate", 0.3);` at the top level), its `def`s, the
+stages it runs on and the pools it holds itself (a cap on live sessions).
+An example's workload goes in `examples/workloads/`, possibly shared with
+other programs, and a line of `examples/pairs.json` names it.
 
 ## Name the policy and keep its evidence nearby
 
@@ -82,10 +88,11 @@ the page with the whole program in a collapsed `??? example` block.
 
 See [`examples/vendors/ascend.sq`](https://github.com/servingQ/serQ/blob/main/examples/vendors/ascend.sq):
 its fixed thresholds and `waiting_class` definition precede `main`, while
-the workload, resources and request handler form the model inside it. The
-workload comes first because the queue key reads the attributes it sets.
-Its execution conditions are supplied by the caller, for example
-`serq run examples/vendors/ascend.sq --horizon 1`.
+the resources and request handler form the model inside it; the queue key
+reads the server's parameters, which its workload
+(`examples/workloads/ascend_batch.sq`) sends. Its workload and execution
+conditions are supplied by the caller, for example
+`serq run examples/vendors/ascend.sq --workload examples/workloads/ascend_batch.sq --horizon 1`.
 When reorganizing a program, preserve its linked IR and observed behavior.
 Run `serq check` and inspect `serq draw`, then compare a repeatable run before
 and after. Use the repository's `make check` gate for committed changes.

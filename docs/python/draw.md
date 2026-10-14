@@ -1,11 +1,14 @@
 # pyserq.draw
 
 ```python
-pyserq.draw(path=None, *, source=None, sets={}, defs={}, format="tikz") -> str
+pyserq.draw(path=None, *, source=None, workload=None, workload_source=None,
+            sets={}, defs={}, format="tikz") -> str
 ```
 
 Render the [deployment view](../visualization/index.md). Supply exactly one
-of `path` and `source`.
+of `path` and `source`, and for program text one of `workload` and
+`workload_source`, as for [`compile`](compile.md): the figure starts at the
+arrival.
 
 ## Parameters
 
@@ -18,6 +21,8 @@ of `path` and `source`.
 | Parameter | Type | Default | Description |
 |---|---|---|---|
 | `source` | `str` | `None` | Source text, instead of `path`: give exactly one. It may import the built-in [`std/args`](../api/std/args.md) and [`std/kvt`](../api/std/kvt.md). |
+| `workload` | `str` or `os.PathLike` | `None` | The workload file the deployment runs, as in [`compile`](compile.md); refused with a `.json` IR or a `Program`. |
+| `workload_source` | `str` | `None` | Workload text, instead of `workload`. |
 | `sets` | `dict[str, float or str]` | `{}` | Declared program inputs, as in [`compile`](compile.md). |
 | `defs` | `dict[str, str]` | `{}` | Expression-definition overrides. |
 | `format` | `str` | `"tikz"` | `"tikz"` or `"svg"`. |
@@ -27,11 +32,12 @@ of `path` and `source`.
 `str` — a TikZ `tikzpicture` or a standalone SVG document. It does not write
 a file. In a notebook, pass SVG output to `IPython.display.SVG`.
 
-For a program split into a workload and a server, the diagram shows one
-request's route, from source, from its JSON IR or from a compiled
-`Program` alike: the IR marks each statement as the workload's or the
-server's. JSON IR and a `Program` reject `sets` and `defs`: their
-constants are already folded and their definitions expanded.
+The diagram shows one request's route, from the deployment and its
+workload, from their JSON IR or from a compiled `Program` alike: the IR
+marks each statement as the workload's or the server's. JSON IR and a
+`Program` hold their workload already and reject `workload`,
+`workload_source`, `sets` and `defs`: their constants are already folded
+and their definitions expanded.
 
 ## Raises
 
@@ -48,12 +54,13 @@ import pyserq
 svg = pyserq.draw(source="""
 fn main() {
   stage svc : fifo;
-  workload {
-    arrive batch(1);
-  }
   server {
     run svc (cost(svc, 2));
   }
+}
+""", workload_source="""
+workload {
+  arrive batch(1);
 }
 """, format="svg")
 Path("deployment.svg").write_text(svg, encoding="utf-8")
@@ -64,8 +71,9 @@ the same `sets` and `defs`; the run settings (`horizon`, `warmup`, `seed`,
 `arrivals`, `trace`) do not enter the figure:
 
 ```python
-prog = pyserq.compile("examples/single-turn/mg1.sq", sets={"lam": 0.3}, horizon=100)
-assert pyserq.draw(prog) == pyserq.draw("examples/single-turn/mg1.sq", sets={"lam": 0.3})
+mg1 = dict(workload="examples/workloads/mg1.sq", sets={"lam": 0.3})
+prog = pyserq.compile("examples/single-turn/mg1.sq", horizon=100, **mg1)
+assert pyserq.draw(prog) == pyserq.draw("examples/single-turn/mg1.sq", **mg1)
 ```
 
 ## See also

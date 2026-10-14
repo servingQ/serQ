@@ -2,15 +2,18 @@
 
 serQ in Python. serQ is a language in which an LLM serving deployment is a
 program; pyserq compiles a program to its IR and runs it, in process, and
-gives what the `serq` CLI gives.
+gives what the `serq` CLI gives. A program is the deployment; the workload
+it serves is a file of its own, given when it runs (`workload=` a path, or
+`workload_source=` its text), as `serq run mg1.sq --workload workloads/mg1.sq`.
 
 ```python
 import pyserq
-p = pyserq.compile("mg1.sq", sets={"lam": 0.8}, seed=10, horizon=250000, warmup=25000)
+p = pyserq.compile("mg1.sq", workload="workloads/mg1.sq",
+                   sets={"lam": 0.8}, seed=10, horizon=250000, warmup=25000)
 r = pyserq.run(p)            # the GIL is released while it runs
 r.json()                     # what `serq run --json` prints
 o = r.client["response"]      # o.mean, o.ci, o.samples, o.times
-pyserq.draw("mg1.sq", format="svg")  # what `serq draw --format svg` prints
+pyserq.draw("mg1.sq", workload="workloads/mg1.sq", format="svg")  # what `serq draw --format svg` prints
 ```
 
 ```bash

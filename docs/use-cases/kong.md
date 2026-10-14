@@ -24,7 +24,8 @@ program needs for it, and how serQ writes it. Time is in steps.
 ### Settings
 
 The paper's instance is $N$ requests, memory $M$ in tokens, and a bound $P$
-on the largest peak $s_i + o_i$, so that $\alpha = P/M$:
+on the largest peak $s_i + o_i$, so that $\alpha = P/M$. The deployment
+declares $M$ and $P$; $N$ is the workload's:
 
 ```serq title="examples/papers/kong_svf.sq"
 --8<-- "examples/papers/kong_svf.sq:settings"
@@ -33,10 +34,12 @@ on the largest peak $s_i + o_i$, so that $\alpha = P/M$:
 ### Burst arrivals
 
 For Theorem 3.2 all $N$ requests arrive at once, each with its own prompt
-length $s_i$ and output length $o_i$:
+length $s_i$ and output length $o_i$. The workload is not in the program:
+it is a file of its own, `examples/workloads/kong_batch.sq`, given when the
+program runs (`--workload`), and it sends each request its `s` and `o`:
 
-```serq
---8<-- "examples/papers/kong_svf.sq:workload"
+```serq title="examples/workloads/kong_batch.sq"
+--8<-- "examples/workloads/kong_batch.sq:workload"
 ```
 
 ### Memory and Smallest Volume First
@@ -87,10 +90,14 @@ arrived at 0:
 
 The program admits a request when its peak fits next to the active requests' *peaks*. The paper's forward-looking check admits it when the active requests' future memory leaves room for its peak, which never refuses more. The proof of Theorem 3.2 uses one fact about admission: while request $j$ waits, the active peaks exceed $(1-\alpha)M$. Both rules give it. With the peak held from admission, the memory the program reports is the peaks' sum, not the trapezoid's.
 
-??? example "The whole program"
+??? example "The whole program, and its workload"
 
     ```serq title="examples/papers/kong_svf.sq"
     --8<-- "examples/papers/kong_svf.sq"
+    ```
+
+    ```serq title="examples/workloads/kong_batch.sq"
+    --8<-- "examples/workloads/kong_batch.sq"
     ```
 
 ## The key propositions
@@ -193,7 +200,7 @@ program above does not establish either Poisson result.
 Run the default 200-request burst with seed 1:
 
 ```bash
-serq run examples/papers/kong_svf.sq --horizon 100000 --warmup 0 --seed 1
+serq run examples/papers/kong_svf.sq --workload examples/workloads/kong_batch.sq --horizon 100000 --warmup 0 --seed 1
 ```
 
 Selected report columns ($M=20\,000$, $P=2\,500$):

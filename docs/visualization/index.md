@@ -1,9 +1,9 @@
 # Visualization
 
-Generate a deployment diagram from a program or its IR:
+Generate a deployment diagram from a program and its workload, or from its IR:
 
 ```bash
-serq draw examples/multi-turn/vllm.sq --format svg --out vllm.svg
+serq draw examples/multi-turn/vllm.sq --workload examples/workloads/chat.sq --format svg --out vllm.svg
 ```
 
 ![vLLM deployment](../assets/vllm.deployment.svg)

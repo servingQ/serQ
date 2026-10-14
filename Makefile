@@ -2,7 +2,7 @@ SHELL := /bin/bash
 export PATH := $(HOME)/.cargo/bin:$(PATH)
 
 .PHONY: check lean drt oracle-ir claims-ir draw-golden citations citation-drift metrics unused
-check:   ## fmt, clippy, tests, every program links, the oracles agree
+check:   ## fmt, clippy, tests, every program links with its workload (examples/pairs.json), the oracles agree
 	scripts/check_rust.sh
 lean:              ## the Lean model (lean/, docs/lean.md): oracle theorems current, lake build, no sorry, axiom audit
 	PATH=$(HOME)/.elan/bin:$$PATH scripts/check_lean.sh
@@ -10,11 +10,11 @@ drt:               ## differential random testing: the Lean semantics against th
 	python3 scripts/lean_drt.py 200
 	python3 scripts/lean_bench.py full
 	python3 scripts/lean_bench.py fullcost
-oracle-ir:         ## regenerate tools/oracle/*.ir.json (vllm_request.sq per scenario; vllm_replay.sq with cache_trace.csv inlined)
+oracle-ir:         ## regenerate tools/oracle/*.ir.json (vllm_request.sq per scenario; vllm_replay.sq with cache_trace.csv inlined; each with its workload, examples/pairs.json)
 	SERQ_BLESS=1 cargo test --release --test vllm_oracle oracle_ir_files_are_current
 	SERQ_BLESS=1 cargo test --release --test vllm_cache cache_ir_file_is_current
 	python3 scripts/gen_lean_oracle.py
-claims-ir:         ## regenerate tools/claims/*.ir.json (examples/papers/*.sq) and the Lean statements of their claims
+claims-ir:         ## regenerate tools/claims/*.ir.json (examples/papers/*.sq, each with its workload) and the Lean statements of their claims
 	SERQ_BLESS=1 cargo test --release --test claims claim_ir_files_are_current
 	python3 scripts/gen_lean_claims.py
 draw-golden:       ## regenerate docs/assets/*.deployment.svg (serq draw)

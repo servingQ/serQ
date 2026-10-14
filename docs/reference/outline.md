@@ -7,7 +7,11 @@ the compiler: the outline says where `queue D` is written, not what `D`
 does.
 
 In the API it is `serq::outline(&src)`, a `serq::frontend::outline::Outline`,
-and `Outline::to_json()`. It parses and does not link, so a program with a
+and `Outline::to_json()`. It reads a deployment alone: the program's text
+without the workload it runs with, which is a file of its own
+([paired files](../language.md#paired-files)). For the two files,
+`serq::outline_paired(&deployment, &workload)` gives each file's outline,
+its ranges in that file's own bytes. It parses and does not link, so a program with a
 link error has an outline; a parse error is the diagnostic `serq check`
 prints. Nothing in it is part of the program: it adds no syntax and no IR,
 and the parser records it only when asked.

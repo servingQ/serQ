@@ -5,7 +5,10 @@ Examples of serving deployments, workloads and scheduling policies, with simulat
 ## Simulation
 
 A real serving system or workload as a program that runs: the source next to
-the program, what the runs show, and what the program leaves out.
+the program, what the runs show, and what the program leaves out. Each
+program is a deployment; its workload is a file of its own in
+`examples/workloads/`, given when it runs (`serq run DEPLOYMENT --workload
+WORKLOAD`), and `examples/pairs.json` names each program's.
 
 | Page | What it shows |
 |---|---|
@@ -51,8 +54,8 @@ The individual pages describe each model's rules and limitations.
 From the repository root:
 
 ```bash
-cargo run --release -- check examples/vendors/rbln.sq
-cargo run --release -- run examples/vendors/rbln.sq --json
+cargo run --release -- check examples/vendors/rbln.sq --workload examples/workloads/rbln_batch.sq
+cargo run --release -- run examples/vendors/rbln.sq --workload examples/workloads/rbln_batch.sq --horizon 1 --json
 ```
 
-Replace `rbln` with `ascend`. Both use a finite batch of six requests and observe completed responses. The pages include these files directly, and the regular check gate links and draws them.
+Replace `rbln` with `ascend` (and `rbln_batch` with `ascend_batch`). Both use a finite batch of six requests and observe completed responses. The pages include these files directly, and the regular check gate links and draws them.

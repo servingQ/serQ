@@ -44,7 +44,8 @@ jobs:
       - run: pip install -r docs/requirements.txt
       # A character the serQ lexer has no rule for is drawn boxed in red
       - run: python scripts/check_docs_lexer.py
-      # The pages include programs/*.sq and docs/tutorial/programs/*.sq with
+      # The pages include examples/*/*.sq (their workloads in
+      # examples/workloads/) and docs/tutorial/programs/**/*.sq with
       # pymdownx.snippets, so --strict fails if one is renamed or removed.
       - run: mkdocs build --strict
       # A reviewer of a docs pull request can download this and open it.

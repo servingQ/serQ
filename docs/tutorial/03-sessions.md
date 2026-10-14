@@ -9,6 +9,10 @@ turns. This chapter models the conversation and the context it accumulates.
 --8<-- "docs/tutorial/programs/03-sessions.sq"
 ```
 
+```serq title="docs/tutorial/programs/workloads/03-sessions.sq"
+--8<-- "docs/tutorial/programs/workloads/03-sessions.sq"
+```
+
 ## What is new
 
 ### `while` and `turn`
@@ -54,7 +58,7 @@ tool (~exp(Z));
 ```
 
 `tool (Z)` is the client's time between turns: a tool call, a human
-reading, a downstream API. It is outside your system, so the program
+reading, a downstream API. It is outside your system, so the deployment
 declares nothing for it. It runs on a `delay`, an infinite-server station
 the workload owns and the report calls `tool`: every call runs immediately
 at rate 1, nobody waits. It is the same as declaring `stage tool : delay;`
@@ -65,7 +69,7 @@ capacity, is part of the deployment: declare it as a stage
 ## Running it
 
 ```bash
-serq run docs/tutorial/programs/03-sessions.sq --horizon 20000 --warmup 2000 --seed 1
+serq run docs/tutorial/programs/03-sessions.sq --workload docs/tutorial/programs/workloads/03-sessions.sq --horizon 20000 --warmup 2000 --seed 1
 ```
 
 ```text
@@ -99,7 +103,7 @@ Turn the thinking time down and watch the sessions pile back in:
 
 ```bash
 for Z in 0.5 1 3 10; do
-  serq run docs/tutorial/programs/03-sessions.sq --horizon 20000 --warmup 2000 --seed 1 --Z $Z
+  serq run docs/tutorial/programs/03-sessions.sq --workload docs/tutorial/programs/workloads/03-sessions.sq --horizon 20000 --warmup 2000 --seed 1 --Z $Z
 done
 ```
 

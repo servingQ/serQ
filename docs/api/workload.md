@@ -14,6 +14,16 @@ workload {
 How sessions arrive and what each turn brings. `init` and `turn` blocks may
 only `set` and `observe`. Random draws in the workload use their own stream.
 
+The workload is a file of its own, given when the program runs:
+`serq run model.sq --workload workload.sq` (pyserq:
+`compile("model.sq", workload="workload.sq")`). The file has no `fn main()`;
+it declares its `use`s, constants and inputs (`let`, `args.number` among
+them), definitions (`def`), the stages it runs on itself, the pools it
+holds itself (`pool live { cap 24; }`, no `on`) and one `workload { … }`.
+A `workload` inside a program's `fn main()` is an error
+([paired files](../language.md#paired-files)). A `trace` is read beside
+the workload file.
+
 | Clause | Description |
 |---|---|
 | [`arrive`](#arrive) | Choose the arrival process. Default: `none`. |
@@ -179,24 +189,11 @@ client's and are not subject to the server statement check.
 
 ## Examples
 
-A complete program:
+A complete program, a deployment and its workload:
 
-```serq
+```serq title="model.sq"
 fn main() {
   stage svc : delay;
-  workload {
-    arrive batch(2);
-    init { set rounds = 2; }
-    turn { set duration = ~uniform(1, 2); }
-    send (duration);
-    session {
-      loop {
-        turn;
-        set rounds = rounds - 1;
-        if (rounds == 0) { end; }
-      }
-    }
-  }
   server (duration) {
     run svc (cost(svc, duration));
     observe elapsed = now;
@@ -204,10 +201,26 @@ fn main() {
 }
 ```
 
-Save as `model.sq`, then run:
+```serq title="workload.sq"
+workload {
+  arrive batch(2);
+  init { set rounds = 2; }
+  turn { set duration = ~uniform(1, 2); }
+  send (duration);
+  session {
+    loop {
+      turn;
+      set rounds = rounds - 1;
+      if (rounds == 0) { end; }
+    }
+  }
+}
+```
+
+Save the deployment as `model.sq` and its workload as `workload.sq`, then run:
 
 ```sh
-serq run model.sq --horizon 10 --seed 10
+serq run model.sq --workload workload.sq --horizon 10 --seed 10
 ```
 
 ## See also

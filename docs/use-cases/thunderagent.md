@@ -112,11 +112,15 @@ read it has ended, and keeps the second per program
 ### The agents
 
 The agent is a task's first prompt, then a tool call and a short
-observation per step. Nothing here is ThunderAgent's. `server (K, n, hidden
-o)` says the router knows the prompt, not the length of the answer.
+observation per step. Nothing here is ThunderAgent's, and it is not in the
+program: the workload is a file of its own,
+`examples/workloads/closed_agents.sq`, given when the program runs
+(`--workload`), with its own settings (`N` agents at once, `Z` the mean
+tool time, `p` the chance an agent continues). `server (K, n, hidden o)`
+says the router knows the prompt, not the length of the answer.
 
-```serq
---8<-- "examples/multi-turn/thunderagent.sq:workload"
+```serq title="examples/workloads/closed_agents.sq"
+--8<-- "examples/workloads/closed_agents.sq:workload"
 ```
 
 ### The router's waiting queue
@@ -220,10 +224,14 @@ grows it back. The program is released when the session ends
 `--tr 0` is the router's `default` mode: the replica with the fewest
 programs, no capacity.
 
-??? example "The whole program"
+??? example "The whole program, and its workload"
 
     ```serq title="examples/multi-turn/thunderagent.sq"
     --8<-- "examples/multi-turn/thunderagent.sq"
+    ```
+
+    ```serq title="examples/workloads/closed_agents.sq"
+    --8<-- "examples/workloads/closed_agents.sq"
     ```
 
 ### The correspondence
@@ -253,8 +261,8 @@ it stays 0, and the program leaves it out.
 ## Run it
 
 ```bash
-cargo run --release -- run examples/multi-turn/thunderagent.sq --horizon 25000 --warmup 5000
-cargo run --release -- run examples/multi-turn/thunderagent.sq --horizon 25000 --warmup 5000 --tr 0
+cargo run --release -- run examples/multi-turn/thunderagent.sq --workload examples/workloads/closed_agents.sq --horizon 25000 --warmup 5000
+cargo run --release -- run examples/multi-turn/thunderagent.sq --workload examples/workloads/closed_agents.sq --horizon 25000 --warmup 5000 --tr 0
 ```
 
 The report's `E.reused` and `E.prefill`, what the replicas' engine records
@@ -273,9 +281,9 @@ measurement.
 | Argument | Default | Meaning |
 |---|---|---|
 | `tr` | 1 | 1 for TR mode, 0 for `default` mode |
-| `N` | 32 | agents at once |
+| `N` | 32 | agents at once (the workload's) |
 | `blocks` | 4 000 | KV blocks of 16 tokens per replica |
-| `Z` | 3 | mean tool time, seconds |
+| `Z` | 3 | mean tool time, seconds (the workload's) |
 | `a`, `omega`, `beta` | 2e-4, 0.02, 2e-7 | compute per token, weights read per iteration, KV read per context token per iteration (s) |
 | `g` | 0 | a prefill's attention per token and context token (s): with it, recomputing a context costs its square |
 | `S` | 0 | tokens of a system prompt every program starts with, which vLLM caches once |
