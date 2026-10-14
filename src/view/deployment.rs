@@ -2653,6 +2653,25 @@ pub fn figure(p: &Program) -> Figure {
     layout(p, &net)
 }
 
+/// `figure`, refused when a station has no arrow in or no arrow out: every
+/// engine, NIC and stage a request reaches has a way in and a way out
+/// (#624). A program that links cannot have such a station (a stage
+/// nothing runs does not link, and a request goes on from every station
+/// it reaches), so this is the view failing the program, which `serq
+/// check` and `serq draw` say rather than draw a station cut off.
+pub fn checked_figure(p: &Program) -> Result<Figure, String> {
+    let f = figure(p);
+    match f.unjoined() {
+        None => Ok(f),
+        Some((node, which)) => Err(format!(
+            "the deployment view draws station `{node}` with no arrow {which}, and every station \
+             has an arrow in and one out\n\
+             help: this is the view's fault, not the program's: report it with the program \
+             (https://github.com/servingQ/serQ/issues)"
+        )),
+    }
+}
+
 /// `e` with `request.loaded` a positive number: what an admission takes
 /// while its connector loads.
 fn with_loaded(e: &CExpr) -> CExpr {
