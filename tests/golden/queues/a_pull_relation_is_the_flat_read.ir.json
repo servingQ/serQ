@@ -1,5 +1,5 @@
 {
-  "version": 13,
+  "version": 14,
   "attrs": [
     "cached",
     "serial",
@@ -48,7 +48,6 @@
       "Server"
     ],
     [
-      "Server",
       "Server",
       "Server",
       "Server",
@@ -192,24 +191,6 @@
       "kind": {
         "Ps": {
           "Num": 200.0
-        }
-      }
-    },
-    {
-      "name": "wait",
-      "index": 0,
-      "kind": {
-        "Ps": {
-          "Ctx": "N"
-        }
-      }
-    },
-    {
-      "name": "wait",
-      "index": 1,
-      "kind": {
-        "Ps": {
-          "Ctx": "N"
         }
       }
     }
@@ -383,32 +364,6 @@
       {
         "Run": {
           "stage": {
-            "base": 8,
-            "count": 2,
-            "index": {
-              "Attr": 12
-            }
-          },
-          "mode": "Plain",
-          "work": {
-            "Cost": [
-              {
-                "Stage": {
-                  "base": 8,
-                  "count": 2
-                }
-              },
-              {
-                "Num": 0.5
-              }
-            ]
-          },
-          "growing": null
-        }
-      },
-      {
-        "Run": {
-          "stage": {
             "base": 2,
             "count": 2,
             "index": {
@@ -449,7 +404,10 @@
               }
             }
           ],
-          "share": "MaxMin"
+          "share": "MaxMin",
+          "latency": {
+            "Num": 0.5
+          }
         }
       },
       {

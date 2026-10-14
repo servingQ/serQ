@@ -698,7 +698,7 @@ fn a_transfer_between_instances_is_drawn_between_their_boxes() {
     let note = &net.flow_notes[0];
     assert_eq!(note.from.as_deref(), Some("P.kv[i]"));
     assert_eq!(note.to.as_deref(), Some("D.kv[j]"));
-    assert_eq!(note.latency, ["D.nic latency (2e-3)"]);
+    assert_eq!(note.latency, ["latency (2e-3)"]);
     assert_eq!(net.instances.len(), 2);
     assert_eq!(net.instances[0].nodes, [pf, eg]);
     assert_eq!(net.instances[1].nodes, [ing, d]);
@@ -766,7 +766,7 @@ fn a_release_takes_the_innermost_hold_even_of_no_units() {
 
 /// `examples/pd-disaggregation/llmd_nixl_pull.sq`'s router sends a request either
 /// to a prefiller and over the two NICs (remote), after the read's fixed
-/// wait (`ingress`'s `latency`, written on the read and not a station), or
+/// wait (the relation's `latency`, the read's own, written on it), or
 /// straight to the decoder (local); a request whose KV is already there
 /// skips both. The router decides before any station, so it is the
 /// decision a request starts from. The figure is what a request runs: the
@@ -778,7 +778,6 @@ fn the_router_branches_to_a_remote_or_a_local_prefill() {
     let net = deployment::project(&p);
     let at = |name: &str| End::Node(net.node_of(stage(&p, name)).unwrap());
     let (pf, eg, ing, d) = (at("P"), at("P.nic"), at("D.nic"), at("D"));
-    assert!(net.node_of(stage(&p, "D.nic.latency")).is_none());
     assert!(net.node_of(stage(&p, "tool")).is_none());
     let route = decision(&net).expect("the router");
     assert!(net.has_edge(End::Arrival, route));
@@ -1479,10 +1478,10 @@ fn a_run_over_several_stages_is_one_bracketed_job() {
     }
 }
 
-/// A delay before a transfer is a station unless it is a link's latency:
-/// only `serve … latency` says the wait is the link's.
+/// A delay before a transfer is a station: only a run's own `latency` (a
+/// link's `serve … latency`, a relation's) is written on the transfer.
 #[test]
-fn only_a_links_latency_folds_into_the_transfer() {
+fn a_delay_before_a_transfer_is_a_station() {
     let src = "pool kvP { cap 100; } pool kvD { cap 100; }
         stage P : delay; stage wait : delay; stage egress : ps(1); stage ingress : ps(1); stage D : delay;
         use \"std/share\";
@@ -1536,11 +1535,11 @@ fn a_run_from_an_unboxed_choice_does_not_span() {
 }
 
 /// One link's latency waited before transfers with two different partners,
-/// down two arms, is one node of the projection: folded into both it would
-/// draw each arm's way in into the other's transfer, so it stays a station
-/// (#197 review).
+/// down two arms, is written on each transfer: the wait is each run's own,
+/// not a station the two arms would share (#197 review drew it as one
+/// station, folding it into neither).
 #[test]
-fn a_latency_before_two_transfers_stays_a_station() {
+fn a_links_latency_is_on_each_transfer_over_it() {
     let src = "pool kvP { cap 100; } pool kvD { cap 100; }
         stage P : delay; stage a : ps(1); stage b : ps(1);
         queue L : link { serve ps(1) latency 0.5; }
@@ -1562,10 +1561,10 @@ fn a_latency_before_two_transfers_stays_a_station() {
         ";
     let p = compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap();
     let net = deployment::project(&p);
-    assert!(net.node_of(stage(&p, "L.latency")).is_some());
+    assert!(p.stages.iter().all(|s| !s.name.ends_with(".latency")));
     assert_eq!(net.flows.len(), 2);
     for n in &net.flow_notes {
-        assert!(n.latency.is_empty());
+        assert_eq!(n.latency, ["latency (0.5)"]);
     }
 }
 
@@ -1617,10 +1616,8 @@ fn a_transfers_note_is_what_every_run_over_it_moves() {
         ";
     let p = compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap();
     let net = deployment::project(&p);
-    assert_eq!(
-        net.flow_notes[0].latency,
-        ["A latency (0.25)", "B latency (0.5)"]
-    );
+    // the two links' waits are the one run's, summed in the order named
+    assert_eq!(net.flow_notes[0].latency, ["latency (0.25 + 0.5)"]);
 
     let src = "pool kv[2] { cap 9; } stage a[2] : ps(1); stage b[2] : ps(1); stage c[2] : ps(1);
         stage A[2] : delay; stage B[2] : delay;

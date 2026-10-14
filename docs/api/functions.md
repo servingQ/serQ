@@ -31,7 +31,7 @@ See [types](index.md#types) and [evaluation moments](context.md).
 | [`work(s: stage)`](#work) | Unfinished work at `s`, in the stage's work unit. |
 | [`est_lambda(s: stage)`](#est_lambda) | Measured arrival rate at `s`, per clock unit. |
 | [`est_rho(s: stage)`](#est_rho) | Measured utilization at `s`, capped below 1. |
-| [`est_wait(s: stage)`](#est_wait) | Measured mean queue wait at `s`, in clock units. |
+| [`est_wait(s: stage)`](#est_wait) | Measured mean wait at `s` from a run's arrival to its start (a run's `latency` included), in clock units. |
 | [`price(s: stage, s_hit: expr, ds: expr)`](#price) | An online estimate of the added cost of a cache miss, in clock units. |
 
 **[Pool](#pool)**
@@ -253,7 +253,7 @@ est_rho(s: stage) -> number
 est_wait(s: stage) -> number
 ```
 
-**Returns:** Measured mean queue wait at `s`, in clock units.
+**Returns:** Measured mean wait at `s` from a run's arrival to its start, a run's `latency` included, in clock units.
 
 #### `price` {#price}
 

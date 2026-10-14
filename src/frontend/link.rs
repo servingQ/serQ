@@ -1114,7 +1114,7 @@ fn stmt_names(s: &Stmt) -> Vec<(String, Span)> {
             .collect(),
         Stmt::Grow(_, e) | Stmt::Load(_, e) | Stmt::Set(_, e) | Stmt::Observe(_, e) => vec![e],
         Stmt::Branch(e, _, _) | Stmt::While(e, _) => vec![e],
-        Stmt::Run { work, .. } => vec![work],
+        Stmt::Run { work, latency, .. } => std::iter::once(work).chain(latency).collect(),
         Stmt::Choose { count, key, .. } => std::iter::once(count).chain(key).collect(),
         _ => vec![],
     };
@@ -1382,6 +1382,7 @@ fn hidden_in_server(
                     work,
                     growing,
                     also,
+                    latency,
                     ..
                 } => {
                     for r in std::iter::once(stage).chain(growing).chain(also) {
@@ -1389,8 +1390,12 @@ fn hidden_in_server(
                             check(i, "choice of a stage or pool", t)?;
                         }
                     }
-                    // the run's end reveals the hidden attributes its work reads
+                    // the run's end reveals the hidden attributes its work
+                    // and its wait read
                     t.revealed.extend(origins(work, t, "the server").certain);
+                    if let Some(l) = latency {
+                        t.revealed.extend(origins(l, t, "the server").certain);
+                    }
                 }
                 Stmt::Hold {
                     pools,
@@ -2392,6 +2397,7 @@ impl Linker<'_> {
                         growing: None,
                         also: vec![],
                         share: None,
+                        latency: None,
                     }],
                     ConnectorKind::Relation(None) => {
                         return Err(LinkError::new(format!(
@@ -2413,22 +2419,8 @@ impl Linker<'_> {
                         if rel.push {
                             out.push(Stmt::Join);
                         }
-                        if let Some(l) = &rel.latency {
-                            // the side that posts the copy waits
-                            let stage = if rel.push {
-                                src(format!("{}.nic.latency", rel.source))
-                            } else {
-                                own(&format!("{}.nic.latency", rel.reader))
-                            };
-                            out.push(Stmt::Run {
-                                stage: stage.clone(),
-                                mode: RunMode::Plain,
-                                work: Expr::cost(one(&stage), l.clone()),
-                                growing: None,
-                                also: vec![],
-                                share: None,
-                            });
-                        }
+                        // the side that posts the copy waits before it: the
+                        // copy's run's `latency`
                         let nic = own(&format!("{}.nic", rel.reader));
                         out.push(Stmt::Run {
                             stage: src(format!("{}.nic", rel.source)),
@@ -2447,6 +2439,7 @@ impl Linker<'_> {
                             growing: None,
                             also: vec![nic],
                             share: Some(rel.share),
+                            latency: rel.latency.clone(),
                         });
                         out.push(Stmt::Release(src(rel.leased.clone())));
                         out
@@ -2512,6 +2505,7 @@ impl Linker<'_> {
                             growing: None,
                             also: vec![],
                             share: None,
+                            latency: None,
                         },
                         Stmt::Load(kv.clone(), Expr::cost(one(kv), new)),
                     ],
@@ -2705,6 +2699,7 @@ impl Linker<'_> {
                     growing,
                     also,
                     share,
+                    latency,
                 } => {
                     let stage = self.stage_ref(stage)?;
                     let also = also
@@ -2718,6 +2713,7 @@ impl Linker<'_> {
                         growing: growing.as_ref().map(|g| self.pool_ref(g)).transpose()?,
                         also,
                         share: *share,
+                        latency: latency.as_ref().map(|l| self.expr(l)).transpose()?,
                     }
                 }
                 Stmt::Branch(p, a, b) => {

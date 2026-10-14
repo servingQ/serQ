@@ -30,8 +30,12 @@ fn same_ir(queues: &str, flat: &str, renames: &[(&str, &str)]) {
 /// program's. The flat program, `tests/golden/queues/NAME.sq`, ran an engine
 /// family from the server, which #539 refused for the queue family, so it
 /// no longer links: `NAME.ir.json` is the IR it compiled to on 3d23f4a
-/// (`main_source`, horizon 100), kept as the reference. Nothing regenerates
-/// it from the queue side, which would compare the sugar with itself.
+/// (`main_source`, horizon 100), kept as the reference. A kernel change
+/// that moves what the flat program would compile to (IR 14 put a link's
+/// and a relation's latency on the transfer's run, `(…, latency = x)`)
+/// rewrites it with `SERQ_BLESS=1`, whose diff is reviewed against the
+/// change: from then on it is the sugar's own output, kept beside the flat
+/// program that spells it.
 fn same_ir_as_flat(queues: &str, name: &str, renames: &[(&str, &str)]) {
     let mut q = compile_source(&common::main_source(queues), &common::horizon(100.0))
         .unwrap_or_else(|e| panic!("queues: {e}\n{queues}"))
@@ -42,6 +46,9 @@ fn same_ir_as_flat(queues: &str, name: &str, renames: &[(&str, &str)]) {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/golden/queues")
         .join(format!("{name}.ir.json"));
+    if std::env::var_os("SERQ_BLESS").is_some() {
+        std::fs::write(&path, &q).unwrap();
+    }
     let flat = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     assert_eq!(q, flat);
 }
@@ -194,8 +201,8 @@ fn a_read_over_both_links_is_the_flat_read() {
     );
 }
 
-/// A link's `latency` is a wait before every transfer over it: a delay
-/// stage of its own, run first, one per link named, in the order named.
+/// A link's `latency` is a wait before every transfer over it: the run's
+/// own `latency`, the links' summed in the order named.
 #[test]
 fn a_link_latency_is_a_wait_before_the_read() {
     let queues = "
@@ -227,12 +234,7 @@ fn a_link_latency_is_a_wait_before_the_read() {
     same_ir_as_flat(
         queues,
         "a_link_latency_is_a_wait_before_the_read",
-        &[
-            ("P.kv", "kvP"),
-            ("D.kv", "kvD"),
-            ("egress.latency", "egressL"),
-            ("ingress.latency", "ingressL"),
-        ],
+        &[("P.kv", "kvP"), ("D.kv", "kvD")],
     );
 }
 
@@ -267,7 +269,16 @@ fn a_latency_is_the_links_constant() {
     let wait = |src: &str, ov: &Overrides| -> String {
         let p =
             compile_source(&common::main_source(src), ov).unwrap_or_else(|e| panic!("{e}\n{src}"));
-        assert!(p.stages.iter().any(|s| s.kind.is_delay()), "a delay stage");
+        let waits = p.blocks.iter().flatten().any(|st| {
+            matches!(
+                st,
+                serq::ir::CStmt::Run {
+                    latency: Some(_),
+                    ..
+                }
+            )
+        });
+        assert!(waits, "the transfer's run waits (`latency`)");
         p.to_json()
     };
     // the entry's parameter `x` is not the constant `x`
@@ -1352,8 +1363,8 @@ fn the_contract_holds_at_four_more_edges() {
 
 /// `kvt.nixl_pull (P, D, latency = x, share = share.maxmin);`: the queues own their NICs, and a
 /// `transfer` without `on` in `D`'s entry is the read over `P`'s NIC and
-/// `D`'s at once, after `D`'s wait - the flat program with the stages and
-/// the policy written out (#200).
+/// `D`'s at once, after `D`'s wait (the run's `latency`) - the flat program
+/// with the stages and the policy written out (#200).
 #[test]
 fn a_pull_relation_is_the_flat_read() {
     let queues = "
@@ -1391,7 +1402,6 @@ fn a_pull_relation_is_the_flat_read() {
             ("D.kv", "kvD"),
             ("P.nic", "nicP"),
             ("D.nic", "nicD"),
-            ("D.nic.latency", "wait"),
         ],
     );
 }

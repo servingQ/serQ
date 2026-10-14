@@ -511,8 +511,8 @@ fn a_fork_needs_a_join() {
     );
 }
 
-/// The queue that posts the copies waits before each at its own delay
-/// stage: one relation per poster gives it a `latency`.
+/// The queue that posts the copies waits before each (the copy's run's
+/// `latency`): one relation per poster gives it a `latency`.
 #[test]
 fn a_queue_posts_the_copies_of_one_relation() {
     refused(

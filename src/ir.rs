@@ -31,8 +31,10 @@ use serde::{Deserialize, Serialize};
 /// `Shrink`, and `Grow` of a lease outside every hold of its pool
 /// (`docs/design/thunderagent.md`), and moves
 /// `share` from the program to each `Run` over several stages, one policy
-/// per fabric.
-pub const IR_VERSION: u32 = 13;
+/// per fabric. 14 adds `Run.latency`, a fixed wait before the run's work
+/// at its stages, which was a delay stage of its own (`D.nic.latency`,
+/// `L.latency`) run before the transfer.
+pub const IR_VERSION: u32 = 14;
 
 /// A reason `Program::validate` refuses a program, and the statement it is
 /// about (block, index in it) when it is about one.
@@ -742,6 +744,15 @@ pub enum CStmt {
         /// some run joins to these (`Program::stage_shares`).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         share: Option<Share>,
+        /// A fixed wait before the work starts, in seconds: the job is at
+        /// its stages from the run's start and takes none of their capacity
+        /// until the wait ends (posting a NIXL READ and the step that polls
+        /// its completion: `kvt.nixl_pull`'s `latency`, a link's `serve …
+        /// latency`, a run's `(w, latency = x)`). The stage report counts it
+        /// as the run's wait; a run of zero work with one completes when it
+        /// ends. Read at the run's start, like `work`; absent: no wait.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        latency: Option<CExpr>,
     },
     Branch(CExpr, BlockId, BlockId),
     Loop(BlockId),
@@ -2915,8 +2926,9 @@ impl Validator<'_> {
         for s in &self.p.blocks[b] {
             match s {
                 CStmt::End => return true,
-                CStmt::Run { work, .. } => {
-                    if !constant(work).is_some_and(|w| w <= 0.0) {
+                CStmt::Run { work, latency, .. } => {
+                    let none = |e: &CExpr| constant(e).is_some_and(|w| w <= 0.0);
+                    if !(none(work) && latency.as_ref().is_none_or(none)) {
                         return true;
                     }
                 }
@@ -3340,6 +3352,7 @@ impl Validator<'_> {
                 work,
                 growing,
                 also,
+                latency,
                 ..
             } => {
                 self.cref(stage, ns, "stage", m)?;
@@ -3362,6 +3375,16 @@ impl Validator<'_> {
                 }
                 self.expr(work, m)?;
                 amount(work, &format!("run {}", self.p.stages[stage.base].name))?;
+                if let Some(l) = latency {
+                    if members.clone().any(step) {
+                        return Err("a run's `latency` is a wait before a transfer, not before an engine's iteration".into());
+                    }
+                    self.expr(l, m)?;
+                    amount(
+                        l,
+                        &format!("run {} latency", self.p.stages[stage.base].name),
+                    )?;
+                }
                 if let Some(g) = growing {
                     self.cref(g, np, "pool", m)?;
                 }

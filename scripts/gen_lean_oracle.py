@@ -44,8 +44,11 @@ OUT = os.path.join(ROOT, "lean", "Serq", "Oracle.lean")
 # 13 removes the `Delay` stage kind: a delay is `Ps` of `present`, every job
 # at rate 1, and `is_delay` reads either spelling. It also reseeds the
 # session streams (serQ #297), which the fragment never reads, as for 11.
-IR_VERSION = 13
-SUPPORTED_IR_VERSIONS = (7, 8, 9, 10, 11, 12, IR_VERSION)
+# 14 adds `Run.latency`, a wait before a run's work at its stages, which was
+# a delay stage of its own run before it; outside the fragment (below, with
+# `also`), and no oracle program has one.
+IR_VERSION = 14
+SUPPORTED_IR_VERSIONS = (7, 8, 9, 10, 11, 12, 13, IR_VERSION)
 
 
 def is_delay(kind):
@@ -494,6 +497,8 @@ class Lean:
             elif kind == "Run":
                 if v.get("also"):
                     raise Fragment("a run over several stages (`also`)")
+                if v.get("latency") is not None:
+                    raise Fragment("a run with a wait before its work (`latency`)")
                 s = one_ref(v["stage"], "run")
                 mode = {"Plain": "", "Prefill": " prefill", "Decode": " decode"}[v["mode"]]
                 if (s == 0) == (mode == ""):

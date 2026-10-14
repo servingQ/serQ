@@ -99,8 +99,8 @@ pub struct Instance {
 }
 
 /// What a run over several stages moves and waits for, when it is a
-/// transfer: the pool it releases and the one it loads, and the delays the
-/// session passes just before it (folded in: `setup (x0)`).
+/// transfer: the pool it releases and the one it loads, and the run's
+/// `latency`, written on it (`latency (x0)`).
 #[derive(Clone, Debug, Default)]
 pub struct FlowNote {
     pub from: Option<String>,
@@ -600,6 +600,7 @@ impl Walker<'_> {
                     also,
                     mode,
                     work,
+                    latency,
                     ..
                 } => {
                     self.last_flow = None;
@@ -648,6 +649,14 @@ impl Walker<'_> {
                                 self.net.flows.len() - 1
                             }
                         };
+                        // the run's wait is written on the transfer, not a
+                        // station of its own
+                        if let Some(l) = &latency {
+                            let wait = format!("latency ({})", self.p.show_expr(l));
+                            if !self.net.flow_notes[k].latency.contains(&wait) {
+                                self.net.flow_notes[k].latency.push(wait);
+                            }
+                        }
                         self.last_flow = Some(k);
                     }
                 }
@@ -1444,7 +1453,6 @@ pub fn project(p: &Program) -> Net {
     }
     w.net.cached = cached;
     let mut net = w.net;
-    fold_latencies(p, &mut net);
     decisions_first(&mut net);
     keep_instances(&mut net);
     adjacent_flows(&mut net);
@@ -1452,82 +1460,6 @@ pub fn project(p: &Program) -> Net {
     // grouping may have moved a decision after the stations it sends to
     decisions_first(&mut net);
     net
-}
-
-/// A link's latency (`serve ps(BwD) latency x0;`, which the parser writes
-/// as a delay stage `ingress.latency` run before every transfer over
-/// `ingress`) is the transfer's wait, not a station of the deployment. It
-/// is written on the transfer (`ingress latency (x0)`) and its station
-/// goes; the arrows into it go to the transfer's first station. Only the
-/// name says so: any other delay before a transfer is a station.
-fn fold_latencies(p: &Program, net: &mut Net) {
-    loop {
-        // a link's latency station, and the transfer over that link it
-        // leads into
-        let found = (0..net.nodes.len()).find_map(|k| {
-            if net.nodes[k].kind != StationKind::Delay || net.flows.iter().any(|g| g.contains(&k)) {
-                return None;
-            }
-            let link = p.stages[net.nodes[k].stage?]
-                .name
-                .strip_suffix(".latency")?;
-            let outs: Vec<End> = net
-                .edges
-                .iter()
-                .filter(|e| e.from == End::Node(k))
-                .map(|e| e.to)
-                .collect();
-            let mut into: Vec<(usize, usize)> = vec![];
-            for to in &outs {
-                let End::Node(to) = *to else {
-                    return None;
-                };
-                let flow = net.flows.iter().position(|g| {
-                    g[0] == to
-                        && g.iter().any(|&i| {
-                            net.nodes[i]
-                                .stage
-                                .is_some_and(|st| p.stages[st].name == link)
-                        })
-                })?;
-                into.push((to, flow));
-            }
-            // one transfer only: a latency waited before transfers down two
-            // arms is one node of the projection, and folding it into both
-            // would join each arm's way in to the other's transfer
-            (into.len() == 1).then(|| (k, link.to_string(), into))
-        });
-        let Some((k, link, into)) = found else {
-            return;
-        };
-        let wait = format!("{link} latency ({})", net.nodes[k].work);
-        for &(_, flow) in &into {
-            if !net.flow_notes[flow].latency.contains(&wait) {
-                // folded from the transfer back: the one named first is
-                // folded last and goes first
-                net.flow_notes[flow].latency.insert(0, wait.clone());
-            }
-        }
-        // the arrows into the delay go on to each transfer it leads into
-        let mut edges = std::mem::take(&mut net.edges);
-        edges.retain(|e| e.from != End::Node(k));
-        let mut kept: Vec<Edge> = vec![];
-        for e in edges {
-            let targets: Vec<End> = if e.to == End::Node(k) {
-                into.iter().map(|&(to, _)| End::Node(to)).collect()
-            } else {
-                vec![e.to]
-            };
-            for to in targets {
-                match kept.iter_mut().find(|x| x.from == e.from && x.to == to) {
-                    Some(x) => x.back &= e.back,
-                    None => kept.push(Edge { to, ..e.clone() }),
-                }
-            }
-        }
-        net.edges = kept;
-        remove_node(net, k);
-    }
 }
 
 /// A decision stands before the stations it sends sessions to.
@@ -1564,36 +1496,6 @@ fn decisions_first(net: &mut Net) {
         let at = order.iter().position(|&k| k == first).unwrap();
         order.insert(at, d);
         reorder(net, &order);
-    }
-}
-
-/// Take a station out of the net, renumbering the ones after it.
-fn remove_node(net: &mut Net, k: usize) {
-    net.nodes.remove(k);
-    let at = |i: usize| if i > k { i - 1 } else { i };
-    for e in &mut net.edges {
-        for end in [&mut e.from, &mut e.to] {
-            if let End::Node(i) = *end {
-                *end = End::Node(at(i));
-            }
-        }
-    }
-    for g in &mut net.flows {
-        for i in g.iter_mut() {
-            *i = at(*i);
-        }
-    }
-    for g in &mut net.instances {
-        g.nodes.retain(|&i| i != k);
-        for i in g.nodes.iter_mut() {
-            *i = at(*i);
-        }
-    }
-    for h in &mut net.holds {
-        h.visits.retain(|&(_, i)| i != k);
-        for (_, i) in h.visits.iter_mut() {
-            *i = at(*i);
-        }
     }
 }
 
