@@ -8,6 +8,7 @@ prints.
 
 import csv
 import importlib.metadata
+import importlib.util
 import json
 import math
 import os
@@ -375,8 +376,12 @@ def test_execution_settings_belong_to_the_invocation():
 
 
 def test_one_version():
-    # the wheel's version is the crate's (scripts/version.py), as pip writes it
-    assert importlib.metadata.version("pyserq") == pyserq.__version__.replace("-dev.", ".dev")
+    # the wheel's version is the crate's, as pip writes it: scripts/version.py
+    # maps one to the other (0.1.6-alpha.6 to 0.1.6a6, -dev.3 to .dev3)
+    spec = importlib.util.spec_from_file_location("version", ROOT / "scripts" / "version.py")
+    version = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(version)
+    assert importlib.metadata.version("pyserq") == version.pep440(pyserq.__version__)
 
 
 def test_the_wheel_carries_its_license():
