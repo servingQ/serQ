@@ -696,11 +696,13 @@ pub(crate) fn assigned_in(stmts: &[Stmt], out: &mut Vec<String>) {
     }
 }
 
-/// The built-in attributes a turn draws from a trace, the workload's: a
-/// server reads one only as a parameter. `serial`, the session's number,
-/// every request carries (a queue keys its prefix by it); `cached` and
-/// `computed` the scheduler sets.
-const TURN_ATTRS: [&str; 6] = ["turn_no", "new", "out", "think", "more", "forced"];
+/// Whether `name` is a built-in attribute the workload keeps (a turn draws
+/// it from a trace): a server reads one only as a parameter. Of the
+/// others, the `KEY_ATTRS` (`serial`, the session's number) every request
+/// carries, and the scheduler sets the `SCHEDULER_ATTRS`.
+fn turn_attr(name: &str) -> bool {
+    BUILTIN_ATTRS.contains(&name) && !SCHEDULER_ATTRS.contains(&name) && !KEY_ATTRS.contains(&name)
+}
 
 /// Whether every way through `stmts` that does not `end;` sets `name`.
 fn sets_always(stmts: &[Stmt], name: &str) -> bool {
@@ -2533,7 +2535,7 @@ impl Parser {
         }
         let lets: Vec<&str> = prog.lets.iter().map(|(n, _)| n.as_str()).collect();
         for p in &sig.params {
-            let set = sets.contains(&p.name) || TURN_ATTRS.contains(&p.name.as_str());
+            let set = sets.contains(&p.name) || turn_attr(&p.name);
             match binds.iter().find(|(_, n, _)| *n == p.name) {
                 Some((at, _, e)) => {
                     let mut read = e;
@@ -2678,7 +2680,12 @@ impl Parser {
         if let Some((_, s)) = &self.wl_session {
             assigned_in(s, &mut client);
         }
-        client.extend(TURN_ATTRS.iter().map(|a| a.to_string()));
+        client.extend(
+            BUILTIN_ATTRS
+                .iter()
+                .filter(|a| turn_attr(a))
+                .map(|a| a.to_string()),
+        );
         let mut server: Vec<String> = served.server.clone();
         server.extend(served.shared.iter().cloned());
         server.retain(|n| !client.contains(n));
