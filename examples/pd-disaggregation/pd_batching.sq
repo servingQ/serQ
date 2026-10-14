@@ -178,12 +178,13 @@ fn main() {
 
   workload {
     arrive poisson(Lambda);
-    hidden o;              // the scheduler knows max_tokens, not the length
     turn {
       set n = prompt_len();
       set o = output();
     }
+    send (n, o);
   }
 
-  server { gw.route(); }
+  // the scheduler knows max_tokens, not the length
+  server (n, hidden o) { gw.route(); }
 }

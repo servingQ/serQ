@@ -29,8 +29,9 @@ fn main() {
   workload {
     arrive batch(6);
     init { set prompt = 256; set out = 16; }
+    send (prompt, out);
   }
-  server {
+  server (prompt, out) {
     llm (prompt, out + 1);   // the model's `out` decode steps after the prefill's token
   }
   // --8<-- [end:workload]

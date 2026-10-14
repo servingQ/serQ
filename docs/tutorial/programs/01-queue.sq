@@ -13,9 +13,10 @@ fn main() {
   workload {
     arrive poisson(Lambda);
     turn { Size work_size = ~exp(1); }
+    send (work_size);
   }
 
-  server {
+  server (work_size) {
     Cost s = cost(svc, S * work_size);
     set t0 = now;
     run svc (s);

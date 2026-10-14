@@ -30,7 +30,7 @@ fn engine(name: &str) -> Vec<String> {
     out.extend(span("device gpu ", &|l| {
         l.starts_with("pool reqs on vllm ")
     }));
-    out.extend(span("server {", &|l| l == "}"));
+    out.extend(span("server (", &|l| l == "}"));
     out
 }
 

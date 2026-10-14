@@ -147,7 +147,7 @@ fn main() {
   workload {
     arrive batch(N);
     trace "../replay/data/short_base.csv" ordered;
-    hidden out;            // the scheduler knows max_tokens, not the length (sched/utils.py:98-119)
+    send (new, out);
     session {
       run gate (cost(gate, serial * spacing));
       turn;
@@ -158,5 +158,6 @@ fn main() {
     }
   }
 
-  server { gw.route(); }
+  // the scheduler knows max_tokens, not the length (sched/utils.py:98-119)
+  server (new, hidden out) { gw.route(); }
 }

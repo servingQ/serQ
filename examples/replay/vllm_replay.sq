@@ -63,7 +63,7 @@ fn main() {
   workload {
     arrive batch(N);
     trace "data/short_base.csv" ordered;
-    hidden out;            // the scheduler knows max_tokens, not the length (sched/utils.py:98-119)
+    send (new, forced, prev, prevout, out);
     session {
       run gate (cost(gate, serial * spacing));
       set prev = 0;
@@ -79,7 +79,8 @@ fn main() {
   }
 
   // The served path: the front end, then the engine.
-  server {
+  // the scheduler knows max_tokens, not the length (sched/utils.py:98-119)
+  server (new, forced, prev, prevout, hidden out) {
     set t0 = now;
     set prompt = new;
     run front (cost(front, c0 + f * prompt));

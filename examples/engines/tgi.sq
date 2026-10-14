@@ -51,25 +51,24 @@ fn main() {
 
   workload {
     arrive poisson(Lambda);
-    hidden o;
     init { set K = 0; }
     turn {
       set n = ceil(K == 0 ? ~uniform(1000, 3000) : ~exp(500));
       set o = min(floor(~exp(300)) + 1, mnt);
       set more = ~bernoulli(p);
     }
+    send (input: K + n, output: o);
     session {
       loop {
         turn;
-        set K = prompt + o;
+        set K = K + n + o;
         if (more) { tool (~exp(Z)); } else { end; }
       }
     }
   }
 
   // A turn is one request to the engine.
-  server {
-    set prompt = K + n;
-    tgi (prompt, o);
+  server (input, hidden output) {
+    tgi (input, output);
   }
 }

@@ -20,6 +20,7 @@ fn main() {
       set n = K == 0 ? ~uniform(1000, 3000) : ~exp(500);  // new tokens
       set o = ~exp(200);                                  // output tokens
     }
+    send (input: K + n, output: o);
 
     session {
       turn;
@@ -33,7 +34,7 @@ fn main() {
     }
   }
 
-  server {
-    run engine (cost(engine, a * (K + n) + d * o));
+  server (input, output) {
+    run engine (cost(engine, a * input + d * output));
   }
 }

@@ -47,16 +47,17 @@ fn main() {
   // are per session, docs/language.md §9).
   workload {
     arrive poisson(Lambda);
-    hidden o;              // the scheduler knows max_tokens, not the length (sched/utils.py:98-119)
     init { set K = 0; }
     turn {
       set n = ceil(~uniform(1000, 3000));
       set o = floor(~exp(200)) + 1;
     }
+    send (input: K + n, output: o);
   }
   // --8<-- [end:workload]
 
-  server {
-    vllm (K + n, o);
+  // the scheduler knows max_tokens, not the length (sched/utils.py:98-119)
+  server (input, hidden output) {
+    vllm (input, output);
   }
 }

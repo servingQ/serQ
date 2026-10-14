@@ -145,7 +145,7 @@ pub const STATEMENTS: [&str; 42] = [
 /// engine is written instead. `queue`, `admit` and `while` are options too,
 /// but a list above takes them first; they stay so that the list is the
 /// docs lexer's word for word.
-pub const OPTIONS: [&str; 61] = [
+pub const OPTIONS: [&str; 63] = [
     "cap",
     "per_token",
     "save",
@@ -186,6 +186,8 @@ pub const OPTIONS: [&str; 61] = [
     "renewal",
     "closed",
     "hidden",
+    "send",
+    "reply",
     "batch",
     "trace",
     "ordered",

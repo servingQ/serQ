@@ -141,18 +141,21 @@ the time per output token after it
 
 The `session` inside `workload` describes the conversation: each `turn;`
 waits for a response before the client decides whether to continue. The
+workload sends each request its prompt, the session's context and new
+tokens, and its output, `send (input: K + n, output: o);`, and the
 `server` says what a turn is:
 
 ```serq
-server {
-  set prompt = K + n;
-  llm (prompt, o);
+server (input, output) {
+  llm (input, output);
 }
 ```
 
-one request to the engine, with the session's context and new tokens as
-its prompt and `o` as its output: `request.input` and `request.output` in
-`taking`. The deployment figure shows the server side.
+one request to the engine, with `input` as its prompt and `output` as its
+output: `request.input` and `request.output` in `taking`. The server reads
+what the request carries, not the client's `K`; the client keeps its
+context itself, `set K = K + n + o;`. The deployment figure shows the
+server side.
 
 ## Running it
 

@@ -29,6 +29,7 @@ no waiting at all) and `step`, the LLM engine, which arrives in
 workload {
   arrive poisson(Lambda);
   turn { Size work_size = ~exp(1); }
+  send (work_size);
 }
 ```
 
@@ -38,12 +39,14 @@ The other distributions are `~det`, `~uniform`, `~erlang`, `~h2` and
 `~bernoulli`.
 
 With no `session` block, each arrival draws one turn, waits for the response,
-and finishes. The `server` below handles that turn.
+and finishes. The `server` below handles that turn. `send (work_size)` is
+what each request carries to it: the server reads what the workload sends,
+and nothing else the workload keeps.
 
 ### `server`
 
 ```serq
-server {
+server (work_size) {
   Cost s = cost(svc, S * work_size);
   set t0 = now;
   run svc (s);
@@ -52,7 +55,9 @@ server {
 ```
 
 The `server` block converts the requested work into a `svc` cost: `S` seconds
-per unit. The workload owns `work_size`; the server cannot overwrite it.
+per unit. `server (work_size)` names what a request carries, its
+parameters: the workload sends `work_size`, and the server reads it but
+cannot overwrite it.
 The `server` block handles one request. `run svc (cost(svc, s))` is `s` seconds of work
 at the FIFO stage named `svc`. `now` is the clock. `observe name = expr`
 records a sample — the program says what it measures: here `wait`, the

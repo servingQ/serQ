@@ -212,13 +212,27 @@ Use `end;` only to exit early. Queue entry calls belong in the server.
 ## `server`
 
 ```serq
-server block
+server [( [hidden] NAME [, …]* )] [reply ( NAME [, …]* )] block
 ```
 
 The deployment's handling of each turn. Every workload uses one server;
-the server may route to queues, for example `server { gw.route(); }`.
-It completes a turn when its block finishes. It cannot draw another turn
-or end the client's session (`turn;` and `end;` are refused).
+the server may route to queues, for example `server (input, hidden output) {
+gw.route(); }`. It completes a turn when its block finishes. It cannot draw
+another turn or end the client's session (`turn;` and `end;` are refused).
+
+Its signature is the deployment's interface:
+
+| Part | Description |
+|---|---|
+| `NAME` | A parameter: what each request carries, bound by the workload's [`send`](workload.md#send). The server, its gateways' routes and the scheduler's expressions read it, and no attribute the workload keeps; a queue's entry reads what it is passed. |
+| `hidden NAME` | A parameter the scheduler may not read until a run reveals it ([`hidden`](workload.md#hidden)); a queue's entry reads it without being passed it. |
+| `reply (NAME, …)` | What the reply carries. The server sets each on every path that completes the request; the workload's session reads it after `turn;` as `reply.NAME`, and no other attribute the server, the scheduler or an engine sets. |
+
+What the server sets stays the session's from one request to the next;
+the parameters are bound anew at each. `serial`, the session's number,
+every request carries. A bare `server block` has no signature: its two
+sides share every attribute, as they did before signatures, until every
+program has one ([the design](../design/request-interface.md)).
 
 An explicit session must contain a turn. A top-level `session` is an error.
 The default session is `session { turn; }`.

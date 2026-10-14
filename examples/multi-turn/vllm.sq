@@ -58,13 +58,13 @@ fn main() {
   // --8<-- [start:workload]
   workload {
     arrive poisson(Lambda);
-    hidden o;
     init { set K = 0; }
     turn {
       set n = ceil(K == 0 ? ~uniform(1000, 3000) : ~exp(500));
       set o = floor(~exp(200)) + 1;
       set more = ~bernoulli(p);
     }
+    send (input: K + n, output: o);
     session {
       turn;
       while (more) {
@@ -77,8 +77,9 @@ fn main() {
   // --8<-- [end:workload]
 
   // --8<-- [start:server]
-  server {
-    vllm (K + n, o);
+  // the scheduler knows max_tokens, not the length (sched/utils.py:98-119)
+  server (input, hidden output) {
+    vllm (input, output);
   }
   // --8<-- [end:server]
 }

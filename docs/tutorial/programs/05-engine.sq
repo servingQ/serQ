@@ -56,20 +56,20 @@ fn main() {
       set n = K == 0 ? ~uniform(1000, 3000) : ~exp(500);
       set o = ~exp(200) + 1;
     }
+    send (input: K + n, output: o);
     // the conversation: a request per turn, then a tool call and the next
     // turn, or the end
     session {
       loop {
         turn;
-        set K = prompt + o;
+        set K = K + n + o;
         if (~bernoulli(p)) { tool (~exp(Z)); } else { drop kv; end; }
       }
     }
   }
 
   // a turn is one request to the engine
-  server {
-    set prompt = K + n;
-    llm (prompt, o);
+  server (input, output) {
+    llm (input, output);
   }
 }

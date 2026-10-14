@@ -48,8 +48,8 @@ fn main() {
   workload {
     arrive batch(N);
     trace "../../tools/oracle/shared_trace.csv" ordered;
-    hidden out;            // the scheduler knows max_tokens, not the length (sched/utils.py:98-119)
     init { set system = 1; }
+    send (system, new, prev, out);
     session {
       run gate (cost(gate, serial * spacing));
       set prev = 0;
@@ -62,7 +62,8 @@ fn main() {
     }
   }
 
-  server {
+  // the scheduler knows max_tokens, not the length (sched/utils.py:98-119)
+  server (system, new, prev, hidden out) {
     set t0 = now;
     set prompt = new;
     // reusable: the previous prompt, or at least the system prompt (the

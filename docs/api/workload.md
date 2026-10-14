@@ -6,8 +6,8 @@ workload {
   trace "file.csv" [ordered];
   init block
   turn block
+  send (NAME [: expr] [, NAME [: expr]]*);
   [session block]
-  hidden NAME [, NAME]*;
 }
 ```
 
@@ -20,11 +20,13 @@ only `set` and `observe`. Random draws in the workload use their own stream.
 | [`trace`](#trace) | Supply session turns from a CSV corpus. |
 | [`init`](#init) | Initialize a session once at arrival. |
 | [`turn`](#turn) | Set attributes whenever the session executes `turn;`. |
+| [`send`](#send) | Bind what each request carries: the server's parameters. |
 | [`session`](#session) | Describe how completed turns lead to the next; default: one turn. |
-| [`hidden`](#hidden) | Restrict scheduler access to future attributes. |
+| [`hidden`](#hidden) | Restrict scheduler access to future attributes: a parameter's, `server (hidden o)`. |
 
 Workload assignments produce [`Size`](attributes.md#sizes-values-and-costs)
-attributes that a server can read but cannot overwrite. `init` and `turn`
+attributes. A server with a signature reads only what the workload sends
+it; a bare `server { … }` reads them all, and overwrites none. `init` and `turn`
 produce no resource costs. The server interprets request quantities with
 [`cost`](functions.md#cost); the session may use costs of client resources.
 
@@ -88,6 +90,33 @@ turn { set x = expr; … }
 Runs at every [`turn;`](statements.md#turn) statement of the session.
 Moment `Session`.
 
+## `send`
+
+```serq
+send (input: K + n, output: o);
+send (s);
+```
+
+| Argument | Type | Description |
+|---|---|---|
+| `NAME: expr` | a parameter of the [server](program.md#server), `expr` | The value a request carries for the parameter. |
+| `NAME` | a parameter named as a workload attribute | The attribute, as it is. |
+
+What each request carries, for a server with a signature, `server (input,
+hidden output) { … }`: its parameters, which the server, its gateways'
+routes and the scheduler's expressions read instead of
+the workload's attributes. Each `turn;` evaluates the binding after the
+`turn` block's draws, at moment `Session`, with the attributes as they are
+then.
+
+Each parameter is named, once; a name the server does not
+take is an error. A parameter named as an attribute the workload sets is
+that attribute, sent as it is, `send (s)`, and `s: s` is refused as a
+second spelling of it. The workload reads the reply after `turn;` as
+`reply.R` ([Program](program.md#server)), and no other attribute the server,
+the scheduler or an engine sets; a parameter bound to an expression is the
+server's name, which the workload does not read. `send` without a signature is an error.
+
 ## `session`
 
 Optional: describes the sequence of turns and the time between them.
@@ -100,13 +129,16 @@ declared, it runs on a delay the workload owns (an infinite server, named
 ## `hidden`
 
 ```serq
-hidden o;
-hidden o, think;
+server (input, hidden output) { … }
 ```
 
 | Argument | Type | Description |
 |---|---|---|
-| `NAME` | session attribute | The scheduler may not read it. |
+| `NAME` | a parameter of the server | The scheduler may not read it. |
+
+Under a signature hiding is a parameter's, and a `hidden` clause in the
+workload is refused. A workload whose server is a bare `server { … }`
+still writes `hidden o;` (or `hidden o, think;`) in `workload`.
 
 Hidden attributes may be read in session expressions and a claim's `given`
 condition. They are forbidden in scheduler expressions, including hold
@@ -115,7 +147,7 @@ headers, queue and eviction keys, and stage scheduling rules. See
 
 An attribute the scheduler sets (`cached`, `computed`) cannot be hidden,
 and a name nothing sets is an error. The [vLLM program](../use-cases/vllm.md)
-hides output length `o`, preventing admission from reserving memory using
+hides the output length, `server (input, hidden output)`, preventing admission from reserving memory using
 future output length.
 
 The engine's request and the `server` are the rest of the scheduler, and
@@ -157,6 +189,7 @@ fn main() {
     arrive batch(2);
     init { set rounds = 2; }
     turn { set duration = ~uniform(1, 2); }
+    send (duration);
     session {
       loop {
         turn;
@@ -165,7 +198,7 @@ fn main() {
       }
     }
   }
-  server {
+  server (duration) {
     run svc (cost(svc, duration));
     observe elapsed = now;
   }

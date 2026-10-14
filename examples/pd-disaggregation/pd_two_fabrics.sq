@@ -49,9 +49,10 @@ fn main() {
       set n = floor(~uniform(1000, 3000));
       set o = floor(~exp(200)) + 1;
     }
+    send (n, o);
   }
 
-  server {
+  server (n, o) {
     set t0 = now;
     choose i in NP by (work(P[i]));
     hold kvP[i] (cost(kvP, n)) { run P[i] (cost(P, n * a)); } lease kvP[i] (inf);

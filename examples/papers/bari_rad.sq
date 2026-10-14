@@ -38,9 +38,10 @@ fn main() {
       set vp = bcol * floor(~uniform(1, vpmax + 1));
       set vd = min(floor(~exp(200)) + 1, vdmax);
     }
+    send (vp, vd, t0);
   }
 
-  server {
+  server (vp, vd, t0) {
     E (vp, vd + 1);   // the model's decode steps after the prefill's sampled token
     observe response = now - t0;
   }

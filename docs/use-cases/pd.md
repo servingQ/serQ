@@ -211,8 +211,8 @@ sharing](https://github.com/servingQ/serQ/blob/main/docs/design/bandwidth-sharin
 
 Sessions arrive, each turn brings a prompt of `n` new tokens on a context
 of `K` and wants `o` back, and after a turn the session calls a tool and
-comes back with probability `p`. `hidden o` says the scheduler knows
-`max_tokens`, not the length (`sched/utils.py:98-119`). Lengths are whole
+comes back with probability `p`. `server (input, hidden output)` says the
+scheduler knows `max_tokens`, not the length (`sched/utils.py:98-119`). Lengths are whole
 tokens, as vLLM counts them: a fractional length can leave a request less
 than the one token its prefill samples (near `max_model_len`, or preempted
 in its last fraction of a token).
@@ -251,7 +251,7 @@ scorer's.
 
 | vLLM | serQ | Where |
 |---|---|---|
-| a prompt of `max_model_len` tokens or more is refused before it is scheduled; a generation stops at `max_model_len` tokens; no KV cache smaller than one request of `max_model_len` is started | `if (K + n >= max_model_len) { end; }` in `server`; `set produced = min(o, max_model_len - prompt)` in each decode entry; `max_model_len = 16384` below every pool | `input_processor.py:512-536`; `sched/utils.py:114-120`; `kv_cache_utils.py:864-900`, called at `kv_cache_utils.py:2742` |
+| a prompt of `max_model_len` tokens or more is refused before it is scheduled; a generation stops at `max_model_len` tokens; no KV cache smaller than one request of `max_model_len` is started | `if (input >= max_model_len) { end; }` in `server`; `set produced = min(output, max_model_len - prompt)` in each decode entry; `max_model_len = 16384` below every pool | `input_processor.py:512-536`; `sched/utils.py:114-120`; `kv_cache_utils.py:864-900`, called at `kv_cache_utils.py:2742` |
 | the prefiller admits like any vLLM engine: a slot, the blocks of the first chunk, room for the whole prompt, the prefix hit looked up when the scheduler takes the request | `hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, hit + budget_left(P)))) reserve (cost(kv, prompt)) at admission (hit = …)` in `P`'s `prefill` entry | the waiting loop, `scheduler.py:868-1128`; [the vLLM use case](vllm.md) |
 | the prefiller computes the prompt in chunks and samples one token, which the sidecar discards | `run P prefill (cost(P, prompt - c)) growing kv` | `scheduler.py:624-823`; the truncation for Mamba and MTP only, `nixl/base_scheduler.py:409-436` |
 | the request finishes on the prefiller: its slot is freed, its blocks are not — `request_finished` returns `delay_free_blocks` and a lease of `kv_lease_duration` (30 s), renewed by the decoder's heartbeats while the request waits | `} cache (prompt) lease kv (inf);` — the scope ends, the slot goes, the blocks stay the session's | `nixl/pull_scheduler.py:191-292`; `_free_request`, `scheduler.py:2628-2657`; the renewal, `nixl/base_scheduler.py:199-238`, `nixl/base_worker.py:3010-3030` |

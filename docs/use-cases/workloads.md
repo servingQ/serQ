@@ -27,9 +27,9 @@ They hide output length `o` from scheduling expressions. See the
 ```
 
 No `session` declaration is needed: each arrival makes one turn and then
-leaves. `K` stays 0 because nothing carries over, so the server's
-`prompt = K + n` is just the new tokens. The `cache (prompt + o)` in the
-server still caches the prefix when the request finishes, but no later
+leaves. `K` stays 0 because nothing carries over, so the `input: K + n`
+the workload sends is just the new tokens. The engine's `cache
+(request.input + request.output)` still caches the prefix when the request finishes, but no later
 request of that session will read it, so here the cache only takes up space
 until LRU evicts it. The hit rate is 0.
 

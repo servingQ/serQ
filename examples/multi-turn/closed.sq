@@ -12,6 +12,7 @@ fn main() {
 
   workload {
     arrive closed(N);
+    send (s, t0);
     session {
       loop {
         set t0 = now;
@@ -22,7 +23,7 @@ fn main() {
     }
   }
 
-  server {
+  server (s, t0) {
     run svc (cost(svc, s));
     observe wait = now - t0 - s;
   }

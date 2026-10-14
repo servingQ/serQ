@@ -17,9 +17,10 @@ fn main() {
             : law == 2 ? ~erlang(4, mean_s)
             : ~h2(mean_s, cv2);
     }
+    send (s);
   }
 
-  server {
+  server (s) {
     run svc (cost(svc, s));
   }
 }
