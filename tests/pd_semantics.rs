@@ -369,13 +369,13 @@ fn a_transfer_overlaps_the_two_pools_for_the_link_run() {
         stage link : delay;
         stage decode : delay;
         stage gate : delay;
-        workload { arrive batch(3); init { set kind = serial; }
+        workload { arrive batch(3); init { set kind = serial; } send (kind);
           session { turn;
             end;
 
           }
         }
-        server {
+        server (kind) {
           if (kind == 0) {
             hold memP (cost(memP, 10)) { run prefill (cost(prefill, 1)); } lease memP (inf);
             hold memD (cost(memD, 10)) {
@@ -658,11 +658,11 @@ fn release_and_load_name_the_pool_as_the_hold_does() {
     let program = |body: &str| {
         format!(
             "pool q[2] {{ cap 10; }} stage svc : delay;
-        workload {{ arrive batch(1); init {{ set j = 0; }}
+        workload {{ arrive batch(1); init {{ set j = 0; }} send (j);
           session {{ turn; end;
           }}
         }}
-        server {{ {body}
+        server (j) {{ {body}
         }} "
         )
     };

@@ -129,13 +129,13 @@ fn only_selects_and_by_orders() {
           }
           worker { forward (1); }
         }
-        workload { arrive batch(2); init { set prompt = serial == 0 ? 4 : 2; }
+        workload { arrive batch(2); init { set prompt = serial == 0 ? 4 : 2; } send (prompt);
           session { turn;
             end;
 
           }
         }
-        server {
+        server (prompt) {
           hold reqs (cost(reqs, 1)) { llm (prompt, 2); }
         }
 

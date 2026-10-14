@@ -94,8 +94,8 @@ server {{ llm (0, 3); }}",
 fn a_leg_works_for_the_turn_it_was_forked_in() {
     let r = run(&format!(
         "{}
-workload {{ arrive batch(1); session {{ turn; turn; }} }}
-server {{
+workload {{ arrive batch(1); send (turn_no); session {{ turn; turn; }} }}
+server (turn_no) {{
   if (turn_no == 1) {{ fork {{ llm (0, 4); }} }} else {{ join; }}
 }}",
         engine()
@@ -109,8 +109,8 @@ server {{
 #[test]
 fn a_refused_turn_is_not_answered() {
     let r = run("stage svc : fifo;
-workload { arrive batch(2); init { set big = serial == 0; } session { turn; turn; } }
-server {
+workload { arrive batch(2); init { set big = serial == 0; } send (big); session { turn; turn; } }
+server (big) {
   if (big) { end; }
   run svc (cost(svc, 1));
 }");

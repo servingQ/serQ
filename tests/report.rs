@@ -181,13 +181,13 @@ fn the_gaps_between_tokens_count_a_prefill_that_cuts_in() {
         }}
         pool reqs on llm {{ }}
         pool kv on gpu {{ }}
-        workload {{ arrive batch(2); init {{ set prompt = serial == 0 ? 2 : 4; }}
+        workload {{ arrive batch(2); init {{ set prompt = serial == 0 ? 2 : 4; }} send (prompt);
           session {{ turn;
             end;
 
           }}
         }}
-        server {{
+        server (prompt) {{
           run gate (cost(gate, 2 * serial));
           llm (prompt, serial == 0 ? 4 : 1);   // A decodes three after its prefill's token
         }}
@@ -293,15 +293,15 @@ fn the_gaps_add_up_to_the_decode_time_through_preemptions() {
         pool kv on gpu { block 16; preempt lifo; }
         workload {
           arrive poisson(40);
-          hidden o;
           init { set prompt = floor(~uniform(500, 1500)); set o = floor(~exp(100)) + 2; }
+          send (prompt, o);
 
           session { turn;
             end;
 
           }
         }
-        server {
+        server (prompt, hidden o) {
           llm (prompt, o);
           observe span = now - llm.first;
           observe gaps = o - 1;
@@ -367,7 +367,7 @@ fn a_queue_family_of_one_is_reported_by_index() {
           pool kv on gpu { }
           decode (p) { hold kv (cost(kv, p)) { run D prefill (cost(D, p)) growing kv; } }
         }
-        workload { arrive batch(1); init { set prompt = 4; } session { turn; end; } } server { gw.route(); }
+        workload { arrive batch(1); init { set prompt = 4; } send (prompt); session { turn; end; } } server (prompt) { gw.route(); }
         ";
     let p = compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap();
     let r = run_ir(&p, None).unwrap();
@@ -392,13 +392,13 @@ fn a_step_stage_reports_what_its_iterations_carried() {
         }}
         pool reqs on llm {{ }}
         pool kv on gpu {{ }}
-        workload {{ arrive batch(2); init {{ set prompt = serial == 0 ? 2 : 4; }}
+        workload {{ arrive batch(2); init {{ set prompt = serial == 0 ? 2 : 4; }} send (prompt);
           session {{ turn;
             end;
 
           }}
         }}
-        server {{
+        server (prompt) {{
           run gate (cost(gate, serial));
           llm (prompt, serial == 0 ? 3 : 1);   // A decodes two after its prefill's token
         }}

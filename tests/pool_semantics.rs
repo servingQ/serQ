@@ -48,13 +48,13 @@ fn eviction_order_is_the_declared_key() {
         pool kv {{ cap 55; {order} }}
         stage svc : fifo;
         stage gate : delay;
-        workload {{ arrive batch(3); init {{ set c = 10 * (serial + 1); }}
+        workload {{ arrive batch(3); init {{ set c = 10 * (serial + 1); }} send (c);
           session {{ turn;
             end;
 
           }}
         }}
-        server {{
+        server (c) {{
           run gate (cost(gate, serial));                 // 0, 1, 2: sequential first turns
           hold kv (cost(kv, c)) {{ run svc (cost(svc, 0.1)); }} cache (cost(kv, c));
           run gate (cost(gate, 10));
@@ -181,13 +181,13 @@ fn spill_to_a_tier_and_fetch_back() {
         stage svc : fifo;
         stage link : fifo;
         stage gate : delay;
-        workload { arrive batch(2); init { set c = serial == 0 ? 20 : 25; }
+        workload { arrive batch(2); init { set c = serial == 0 ? 20 : 25; } send (c);
           session { turn;
             end;
 
           }
         }
-        server {
+        server (c) {
           run gate (cost(gate, serial));
           hold kv (cost(kv, c)) { run svc (cost(svc, 1)); } cache (cost(kv, c));
           run gate (cost(gate, 5));
@@ -226,13 +226,13 @@ fn a_spill_predicate_sees_whether_the_session_is_queued() {
         stage svc : fifo(3);
         stage link : fifo;
         stage gate : delay;
-        workload {{ arrive batch(3); init {{ set pri = serial == 2 ? 0 : 1; }}
+        workload {{ arrive batch(3); init {{ set pri = serial == 2 ? 0 : 1; }} send (pri);
           session {{ turn;
             end;
 
           }}
         }}
-        server {{
+        server (pri) {{
           if (serial == 0) {{
             hold kv (cost(kv, 6)) {{ run svc (cost(svc, 0.5)); }} cache (cost(kv, 6));
             run gate (cost(gate, 0.6));
@@ -346,13 +346,13 @@ fn priority_queue_orders_admissions() {
     let src = r#"
         pool kv { cap 10; queue by (prio); }
         stage svc : fifo;
-        workload { arrive batch(3); init { set prio = 2 - serial; }
+        workload { arrive batch(3); init { set prio = 2 - serial; } send (prio);
           session { turn;
             end;
 
           }
         }
-        server {
+        server (prio) {
           hold kv (cost(kv, 10)) { observe order = serial; run svc (cost(svc, 1)); }
         }
 
@@ -464,11 +464,11 @@ fn a_hold_larger_than_the_cap_is_refused_or_reported() {
     // in `rej`, and the report says so
     let r = run(
         "pool kv { cap 10; } stage d : delay;
-        workload { arrive batch(2); init { set u = 5 + 10 * serial; }
+        workload { arrive batch(2); init { set u = 5 + 10 * serial; } send (u);
           session { turn; end;
           }
         }
-        server { hold kv (cost(kv, u)) { run d (cost(d, 1)); }
+        server (u) { hold kv (cost(kv, u)) { run d (cost(d, 1)); }
         }
         ",
         &common::horizon(10.0),
@@ -496,8 +496,8 @@ fn admit_via_names_a_step_stage() {
         let src = format!(
             "pool reqs {{ cap 4; }}
   {stage}
-  workload {{ arrive poisson(1); init {{ set t0 = now; }} }}
-  server {{
+  workload {{ arrive poisson(1); init {{ set t0 = now; }} send (t0); }}
+  server (t0) {{
     hold reqs (cost(reqs, 1)) {{ run F (cost(F, 1)); }}
     observe response = now - t0;
   }}"
@@ -611,11 +611,11 @@ fn a_zero_cost_preempting_step_does_not_hang() {
 /// when evaluated (a constant one is a link error, `tests/lints.rs`).
 const GUARD: &str = "
         stage svc : delay;
-        workload { arrive batch(1); init { set c = 5; set K = 10; }
+        workload { arrive batch(1); init { set c = 5; set K = 10; } send (c, K);
           session { turn; end;
           }
         }
-        server { if (GUARD) { run svc (cost(svc, 1)); }
+        server (c, K) { if (GUARD) { run svc (cost(svc, 1)); }
         }
         ";
 
@@ -757,11 +757,11 @@ fn bad_amounts_and_indices_fail_the_run() {
         };
         let src = format!(
             "pool kv {{ cap 64; }} pool q[2] {{ cap 64; }} {d} {a}
-        workload {{ arrive batch(1); init {{ set z = 0; set i = 0; }}
+        workload {{ arrive batch(1); init {{ set z = 0; set i = 0; }} send (z, i);
           session {{ turn; end;
           }}
         }}
-        server {{ {stmt}
+        server (z, i) {{ {stmt}
         }}
         "
         );
@@ -875,11 +875,11 @@ fn bad_amounts_and_indices_fail_the_run() {
           worker { forward (1); }
         }
         pool kv on gpu { }
-        workload { arrive batch(1); init { set z = 0; }
+        workload { arrive batch(1); init { set z = 0; } send (z);
           session { turn; end;
           }
         }
-        server { hold kv (cost(kv, 8)) { eng (0, z - 1); }
+        server (z) { hold kv (cost(kv, 8)) { eng (0, z - 1); }
         }
         ",
         ),
@@ -891,11 +891,11 @@ fn bad_amounts_and_indices_fail_the_run() {
     // zero is an amount: a run of no work, a hold of nothing
     let r = run(
         "pool kv { cap 64; } stage d : delay;
-        workload { arrive batch(1); init { set z = 0; }
+        workload { arrive batch(1); init { set z = 0; } send (z);
           session { turn; end;
           }
         }
-        server { run d (cost(d, z)); hold kv (cost(kv, z)) { run d (cost(d, 1)); }
+        server (z) { run d (cost(d, z)); hold kv (cost(kv, z)) { run d (cost(d, 1)); }
         }
         ",
         &common::horizon(10.0),
@@ -954,11 +954,11 @@ fn a_hold_takes_a_pool_once() {
     let e = run_source(
         &common::main_source(
             "pool kv[2] { cap 64; } stage d : delay;
-        workload { arrive batch(1); init { set i = 1; set j = 1; }
+        workload { arrive batch(1); init { set i = 1; set j = 1; } send (i, j);
           session { turn; end;
           }
         }
-        server { hold kv[i] (cost(kv, 1)), kv[j] (cost(kv, 1)) { run d (cost(d, 1)); }
+        server (i, j) { hold kv[i] (cost(kv, 1)), kv[j] (cost(kv, 1)) { run d (cost(d, 1)); }
         }
         ",
         ),

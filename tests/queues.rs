@@ -64,7 +64,7 @@ fn refused(src: &str, needle: &str) {
     assert!(e.contains(needle), "{src}\n  {e}");
 }
 
-const WORKLOAD: &str = "workload { arrive batch(1); hidden o; init { set prompt = 32; set o = 4; set j = 0; } session { turn; end; } } server { gw.route(); } ";
+const WORKLOAD: &str = "workload { arrive batch(1); init { set prompt = 32; set o = 4; set j = 0; } send (prompt, o, j); session { turn; end; } } server (prompt, hidden o, j) { gw.route(); } ";
 
 /// The engine's admission, allocation and service inside the queue; the
 /// named request selects the gateway's `route`; the family's size is a constant.
@@ -146,7 +146,7 @@ fn a_transfer_between_queues_is_the_flat_transfer() {
         }
       }
       queue nic[ND] : link { serve ps(1); transfer (n) { run (cost(nic, n / Bw)); } }
-      workload { arrive batch(1); hidden o; init { set prompt = 32; set o = 4; set j = 0; } session { turn; end; } } server { gw.route(); }
+      workload { arrive batch(1); init { set prompt = 32; set o = 4; set j = 0; } send (prompt, o, j); session { turn; end; } } server (prompt, hidden o, j) { gw.route(); }
       ";
     same_ir_as_flat(
         queues,
@@ -192,7 +192,7 @@ fn a_read_over_both_links_is_the_flat_read() {
           }
         }
       }
-      workload { arrive batch(1); hidden o; init { set prompt = 32; set o = 4; set i = 1; set j = 0; } session { turn; end; } } server { gw.route(); }
+      workload { arrive batch(1); init { set prompt = 32; set o = 4; set i = 1; set j = 0; } send (prompt, o, i, j); session { turn; end; } } server (prompt, hidden o, i, j) { gw.route(); }
       ";
     same_ir_as_flat(
         queues,
@@ -229,7 +229,7 @@ fn a_link_latency_is_a_wait_before_the_read() {
           }
         }
       }
-      workload { arrive batch(1); hidden o; init { set prompt = 32; set o = 4; set i = 1; set j = 0; } session { turn; end; } } server { gw.route(); }
+      workload { arrive batch(1); init { set prompt = 32; set o = 4; set i = 1; set j = 0; } send (prompt, o, i, j); session { turn; end; } } server (prompt, hidden o, i, j) { gw.route(); }
       ";
     same_ir_as_flat(
         queues,
@@ -265,7 +265,7 @@ fn a_latency_is_the_links_constant() {
           }}
         }}
       }}
-      workload {{ arrive batch(1); init {{ set prompt = 32; }} session {{ turn; end; }} }} server {{ gw.route(); }}
+      workload {{ arrive batch(1); init {{ set prompt = 32; }} send (prompt); session {{ turn; end; }} }} server (prompt) {{ gw.route(); }}
       "
         )
     };
@@ -341,8 +341,8 @@ fn an_argument_reading_a_queue_attribute_is_checked() {
               serve fifo;
               decode (prompt) {{ hold kv (cost(kv, prompt)) {{ run E (cost(E, prompt)); mark first; }} }}
             }}
-            workload {{ arrive batch(1); init {{ set prompt = 4; }} }}
-            server {{ E.decode (prompt); {call} }}"
+            workload {{ arrive batch(1); init {{ set prompt = 4; }} send (prompt); }}
+            server (prompt) {{ E.decode (prompt); {call} }}"
         )
     };
     let direct = "def go(x) { E.decode (prompt); observe b = x; }";
@@ -401,7 +401,7 @@ fn a_link_has_a_cost() {
       queue D : decode { device gpu { kv cap 100; } pool kv on gpu { } engine on gpu { tokens cap inf; scheduler { advance running; admit waiting while (running.preempted == 0); } worker { forward (1); } }
         decode (p) { hold kv (cost(kv, p)) { run D prefill (cost(D, p)) growing kv; } }
         decode (p) from P { hold kv (cost(kv, p)) { BODY } } }
-      workload { arrive batch(1); hidden o; init { set prompt = 32; set o = 4; } session { turn; end; } } server { gw.route(); }
+      workload { arrive batch(1); init { set prompt = 32; set o = 4; } send (prompt, o); session { turn; end; } } server (prompt, hidden o) { gw.route(); }
       ";
     refused(
         &calls.replace("BODY", "nic.transfer (p) from P to kv (p);"),
@@ -429,7 +429,7 @@ fn an_admission_binding_sees_the_entry_only() {
         "queue gw : gateway { route { set t0 = now; E.decode (prompt); } }
          queue E : decode { device gpu { kv cap 100; } pool kv on gpu { } engine on gpu { tokens cap inf; scheduler { advance running; admit waiting while (running.preempted == 0); } worker { forward (1); } }
            decode (prompt) { hold kv (cost(kv, x)) at admission (x = prompt + t0) { run E prefill (cost(E, 1)) growing kv; } } }
-         workload { arrive batch(1); init { set prompt = 3; } session { turn; end; } } server { gw.route(); }
+         workload { arrive batch(1); init { set prompt = 3; } send (prompt); session { turn; end; } } server (prompt) { gw.route(); }
          ",
         "the header reads `t0`",
     );
@@ -748,7 +748,7 @@ fn an_entry_sees_its_parameters_and_its_queue() {
 
 #[test]
 fn roles_and_entries_agree() {
-    let rest = "workload { arrive batch(1); init { set prompt = 1; } session { turn; end; } } server { gw.route(); } ";
+    let rest = "workload { arrive batch(1); init { set prompt = 1; } send (prompt); session { turn; end; } } server (prompt) { gw.route(); } ";
     refused(
         &format!("queue gw : gateway {{ route {{ }} }} queue P : prefill {{ serve fifo; }} {rest}"),
         "plays `prefill` and has no `prefill` entry",
@@ -793,7 +793,7 @@ fn a_call_is_checked_against_the_entry() {
     let program = |route: &str| {
         format!(
             "queue gw : gateway {{ route {{ {route} }} }} {decls}
-             workload {{ arrive batch(1); init {{ set prompt = 1; set j = 0; }} session {{ turn; end; }} }} server {{ gw.route(); }} "
+             workload {{ arrive batch(1); init {{ set prompt = 1; set j = 0; }} send (prompt, j); session {{ turn; end; }} }} server (prompt, j) {{ gw.route(); }} "
         )
     };
     refused(&program("D.decode (prompt);"), "is a family of 2; index it");
@@ -851,7 +851,7 @@ fn a_decode_queue_needs_one_of_its_entries() {
             "queue gw : gateway {{ route {{ {route} }} }}
              queue P : prefill {{ pool kv {{ cap 10; }} serve fifo; prefill (p) {{ hold kv (cost(kv, p)) {{ run (cost(P, p)); }} lease kv (inf); }} }}
              queue D : decode {{ {engine} {entries} }}
-             workload {{ arrive batch(1); init {{ set prompt = 1; }} session {{ turn; end; }} }} server {{ gw.route(); }} "
+             workload {{ arrive batch(1); init {{ set prompt = 1; }} send (prompt); session {{ turn; end; }} }} server (prompt) {{ gw.route(); }} "
         )
     };
     let remote_call = "P.prefill (prompt); D.decode (prompt) from P;";
@@ -878,7 +878,7 @@ fn a_decode_queue_needs_one_of_its_entries() {
 
 #[test]
 fn a_family_size_is_a_constant() {
-    let rest = "queue gw : gateway { route { E[j].decode (1); } } workload { arrive batch(1); init { set j = 0; } session { turn; end; } } server { gw.route(); } ";
+    let rest = "queue gw : gateway { route { E[j].decode (1); } } workload { arrive batch(1); init { set j = 0; } send (j); session { turn; end; } } server (j) { gw.route(); } ";
     let decl = |n: &str| {
         format!(
             "use \"std/args\"; let N = args.number(\"N\", 2); queue E[{n}] : decode {{ device gpu {{ kv cap 10; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; scheduler {{ advance running; admit waiting while (running.preempted == 0); }} worker {{ forward (1); }} }} decode (p) {{ hold kv (cost(kv, p)) {{ run E prefill (cost(E, p)) growing kv; }} }} }} {rest}"
@@ -942,7 +942,7 @@ fn call_indices_obey_entry_read_boundaries() {
             "queue gw : gateway {{ route {{ E.prefill (1); }} }}
          queue E : prefill {{ serve fifo; prefill (p) {{ {call} }} }}
          queue F[2] : prefill {{ serve fifo; prefill (p) {{ }} }}
-         workload {{ arrive batch(1); init {{ set j = 0; }} session {{ turn; end; }} }} server {{ gw.route(); }}
+         workload {{ arrive batch(1); init {{ set j = 0; }} send (j); session {{ turn; end; }} }} server (j) {{ gw.route(); }}
          "
         )
     };
@@ -988,7 +988,7 @@ fn an_expansion_is_bounded() {
     refused(
         &format!(
             "queue gw : gateway {{ route {{ Q0.prefill (prompt); }} }} {decls}
-             workload {{ arrive batch(1); init {{ set prompt = 1; }} session {{ turn; end; }} }} server {{ gw.route(); }} "
+             workload {{ arrive batch(1); init {{ set prompt = 1; }} send (prompt); session {{ turn; end; }} }} server (prompt) {{ gw.route(); }} "
         ),
         "the queue calls expand to more than",
     );
@@ -999,39 +999,39 @@ fn an_expansion_is_bounded() {
 /// has computed, not the length the session wants.
 #[test]
 fn a_session_attribute_reaches_an_entry_only_if_hidden() {
-    let program = |hidden: &str| {
+    let program = |out: &str| {
         format!(
             "queue gw : gateway {{ route {{ E.decode (prompt); }} }}
              queue E : decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; scheduler {{ advance running; admit waiting while (running.preempted == 0); }} worker {{ forward (1); }} }}
                decode (p) {{ hold kv (cost(kv, p)) {{ run E prefill (cost(E, p)) growing kv; run E decode (cost(E, out)) growing kv; }} }} }}
-             workload {{ arrive batch(1); {hidden} init {{ set prompt = 3; set out = 2; }} session {{ turn; end; }} }} server {{ gw.route(); }}
+             workload {{ arrive batch(1); init {{ set prompt = 3; set out = 2; }} send (prompt, out); session {{ turn; end; }} }} server (prompt, {out}) {{ gw.route(); }}
              "
         )
     };
     refused(
-        &program(""),
+        &program("out"),
         "reads `out`, a session attribute set outside the queue",
     );
     compile_source(
-        &common::main_source(&program("hidden out;")),
+        &common::main_source(&program("hidden out")),
         &common::horizon(10.0),
     )
     .unwrap();
     // a name nothing sets is unknown, not an attribute set outside (#444);
     // the language's own attributes are set
     refused(
-        &program("").replace("cost(E, out)", "cost(E, ot)"),
+        &program("out").replace("cost(E, out)", "cost(E, ot)"),
         "reads `ot`, which nothing sets: an unknown name\nhelp: did you mean `out`?",
     );
     // a role fixes the entry's parameters, so the help does not offer one;
     // the session's number a `prefix` key reads, and nothing else
     // (tests/shared_prefix.rs)
     refused(
-        &program("").replace("cost(E, out)", "cost(E, serial)"),
+        &program("out").replace("cost(E, out)", "cost(E, serial)"),
         "reads `serial`, a session attribute set outside the queue: an entry sees its \
          parameters, the queue's pools, the context and the request's `hidden` attributes; \
-         `decode`'s parameters are its role's: mark `serial` `hidden` or `mark` a moment for \
-         the caller to read. A `prefix` key reads `serial` as it is",
+         a `prefix` key reads `serial` as it is; anywhere else `decode` reads what it is \
+         passed",
     );
 }
 
@@ -1057,7 +1057,7 @@ fn self_names_nothing_a_program_declares() {
             "queue gw : gateway {{ route {{ {call} }} }}
              queue E[2] : decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; scheduler {{ advance running; admit waiting while (running.preempted == 0); }} worker {{ forward (1); }} }}
                {entry} }}
-             workload {{ arrive batch(1); init {{ set prompt = 3; set j = 0; }} session {{ turn; end; }} }} server {{ gw.route(); }}
+             workload {{ arrive batch(1); init {{ set prompt = 3; set j = 0; }} send (prompt, j); session {{ turn; end; }} }} server (prompt, j) {{ gw.route(); }}
              "
         )
     };
@@ -1102,7 +1102,7 @@ fn self_names_nothing_a_program_declares() {
 /// the text, so the test holds however the program is laid out.
 #[test]
 fn a_refused_read_points_at_the_name() {
-    let program = |units: &str, hidden: &str| {
+    let program = |units: &str, prompt: &str| {
         format!(
             "fn main() {{
   queue gw : gateway {{ route {{ E.decode (prompt); }} }}
@@ -1112,8 +1112,8 @@ fn a_refused_read_points_at_the_name() {
     engine on gpu {{ tokens cap inf; scheduler {{ advance running; admit waiting while (running.preempted == 0); }} worker {{ forward (1); }} }}
     decode (p) {{ hold kv (cost(kv, {units})) {{ run E prefill (cost(E, 1)) growing kv; }} }}
   }}
-  workload {{ arrive batch(1); {hidden} init {{ set prompt = 3; }} session {{ turn; end; }} }}
-  server {{ gw.route(); }}
+  workload {{ arrive batch(1); init {{ set prompt = 3; }} send (prompt); session {{ turn; end; }} }}
+  server ({prompt}) {{ gw.route(); }}
 }}
 "
         )
@@ -1125,7 +1125,7 @@ fn a_refused_read_points_at_the_name() {
         let col = at - src[..at].rfind('\n').map_or(0, |i| i + 1) + 1;
         format!("{line}:{col}")
     };
-    let src = program("p + position", "");
+    let src = program("p + position", "prompt");
     let e = compile_source(&src, &common::horizon(100.0)).expect_err("refused");
     let want = at(&src, "cost(kv, p + position)", "position");
     assert!(
@@ -1134,7 +1134,7 @@ fn a_refused_read_points_at_the_name() {
         )),
         "{e}"
     );
-    let src = program("p", "hidden prompt;");
+    let src = program("p", "hidden prompt");
     let e = compile_source(&src, &common::horizon(100.0)).expect_err("refused");
     let want = at(&src, "cost(kv, p)", "p)");
     assert!(
@@ -1156,7 +1156,7 @@ fn an_entry_reads_every_context_variable_as_the_languages() {
             "queue gw : gateway {{ route {{ E.decode (prompt); }} }}
              queue E : decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; scheduler {{ advance running; admit waiting while (running.preempted == 0); }} worker {{ forward (1); }} }}
                decode (p) {{ {body} hold kv (cost(kv, p{header})) {{ run E prefill (cost(E, p)) growing kv; run E decode (cost(E, 1)) growing kv; }} }} }}
-             workload {{ arrive batch(1); init {{ set prompt = 3; }} session {{ turn; end; }} }} server {{ gw.route(); }}
+             workload {{ arrive batch(1); init {{ set prompt = 3; }} send (prompt); session {{ turn; end; }} }} server (prompt) {{ gw.route(); }}
              "
         )
     };
@@ -1230,7 +1230,7 @@ fn a_def_captures_what_its_turns_server_assigns() {
 fn the_contract_holds_at_every_edge() {
     let wl = |session: &str| {
         format!(
-            "workload {{ arrive batch(1); hidden o; init {{ set prompt = 3; set o = 2; }} session {{ {session} }} }} server {{ gw.route(); }} "
+            "workload {{ arrive batch(1); init {{ set prompt = 3; set o = 2; }} send (prompt, o); session {{ {session} }} }} server (prompt, hidden o) {{ gw.route(); }} "
         )
     };
     let engine = "queue E : decode { device gpu { kv cap 100; } pool kv on gpu { } engine on gpu { tokens cap inf; scheduler { advance running; admit waiting while (running.preempted == 0); } worker { forward (1); } }
@@ -1309,7 +1309,7 @@ fn the_contract_holds_at_every_edge() {
 /// The fourth review of #87.
 #[test]
 fn the_contract_holds_at_four_more_edges() {
-    let wl = "workload { arrive batch(1); hidden o; init { set prompt = 3; set o = 2; } session { turn; end; } } server { gw.route(); } ";
+    let wl = "workload { arrive batch(1); init { set prompt = 3; set o = 2; } send (prompt, o); session { turn; end; } } server (prompt, hidden o) { gw.route(); } ";
     let engine = |body: &str| {
         format!(
             "queue E[2] : decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; scheduler {{ advance running; admit waiting while (running.preempted == 0); }} worker {{ forward (1); }} }}
@@ -1398,7 +1398,7 @@ fn a_pull_relation_is_the_flat_read() {
         }
       }
       use \"std/kvt\"; use \"std/share\"; kvt.nixl_pull (P, D, latency = x0, share = share.maxmin);
-      workload { arrive batch(1); hidden o; init { set prompt = 32; set o = 4; set i = 1; set j = 0; } session { turn; end; } } server { gw.route(); }
+      workload { arrive batch(1); init { set prompt = 32; set o = 4; set i = 1; set j = 0; } send (prompt, o, i, j); session { turn; end; } } server (prompt, hidden o, i, j) { gw.route(); }
       ";
     same_ir_as_flat(
         queues,
@@ -1428,7 +1428,7 @@ fn a_pull_relation_says_what_it_couples() {
                decode (p) {{ hold kv (cost(kv, p)) {{ run D prefill (cost(D, p)) growing kv; }} }}
                decode (p) from P {{ hold kv (cost(kv, p)) {{ transfer (p) from P to kv (p); run D prefill (cost(D, 1)) growing kv; }} }} }}
              {rel}
-             workload {{ arrive batch(1); init {{ set prompt = 3; }} session {{ turn; end; }} }} server {{ gw.route(); }} "
+             workload {{ arrive batch(1); init {{ set prompt = 3; }} send (prompt); session {{ turn; end; }} }} server (prompt) {{ gw.route(); }} "
         )
     };
     compile_source(
@@ -1531,7 +1531,7 @@ fn std_kvt_names_the_relation() {
              queue D : decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; scheduler {{ advance running; admit waiting while (running.preempted == 0); }} worker {{ forward (1); }} }} nic ps(1);
                decode (p) from P {{ hold kv (cost(kv, p)) {{ transfer (p) from P to kv (p); }} }} }}
              {rel}
-             workload {{ arrive batch(1); init {{ set prompt = 3; }} session {{ turn; end; }} }} server {{ gw.route(); }} "
+             workload {{ arrive batch(1); init {{ set prompt = 3; }} send (prompt); session {{ turn; end; }} }} server (prompt) {{ gw.route(); }} "
         )
     };
     refused(
@@ -1580,7 +1580,7 @@ fn std_kvt_names_the_relation() {
 /// What the review of the rebased #87 found an entry could still reach.
 #[test]
 fn an_entry_reaches_only_its_own() {
-    let wl = "workload { arrive batch(1); hidden o, P; init { set prompt = 3; set o = 2; set P = 7; } session { turn; end; } } server { gw.route(); } ";
+    let wl = "workload { arrive batch(1); init { set prompt = 3; set o = 2; set P = 7; } send (prompt, o, P); session { turn; end; } } server (prompt, hidden o, hidden P) { gw.route(); } ";
     // the `from` queue is the request's lease there, not a number, whatever
     // `hidden` says
     refused(
@@ -1671,15 +1671,15 @@ fn each_overload_substitutes_only_its_own_locals() {
            decode (p) { run (cost(D, p)); observe seen = x; }
            decode (p) from P { set x = 1; }
          }
-         workload { arrive batch(1); hidden x; init { set x = 3; }
-           session { turn; end; } } server { gw.route(); }
+         workload { arrive batch(1); init { set x = 3; } send (x);
+           session { turn; end; } } server (hidden x) { gw.route(); }
          ",
         "pool kvP { cap 1; } stage P : fifo; stage D : fifo;
-        workload { arrive batch(1); hidden x; init { set x = 3; }
+        workload { arrive batch(1); init { set x = 3; } send (x);
           session { turn; end;
           }
         }
-        server { hold kvP (cost(kvP, 1)) { run P (cost(P, 1)); } lease kvP (inf);
+        server (hidden x) { hold kvP (cost(kvP, 1)) { run P (cost(P, 1)); } lease kvP (inf);
           run D (cost(D, 1)); observe seen = x;
         } ",
         &[("P.kv", "kvP")],
@@ -1751,8 +1751,8 @@ fn a_family_of_one_is_indexed() {
               serve fifo;
               decode (n) {{ hold kv (cost(kv, n)) {{ run E (cost(E, 1)); }} }}
             }}
-            workload {{ arrive batch(2); init {{ set n = 1; }} }}
-            server {{
+            workload {{ arrive batch(2); init {{ set n = 1; }} send (n); }}
+            server (n) {{
               choose j in N by (holders({kv}));
               E[j].decode (n);
             }}"

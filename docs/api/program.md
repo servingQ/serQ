@@ -230,9 +230,8 @@ Its signature is the deployment's interface:
 
 What the server sets stays the session's from one request to the next;
 the parameters are bound anew at each. `serial`, the session's number,
-every request carries. A bare `server block` has no signature: its two
-sides share every attribute, as they did before signatures, until every
-program has one ([the design](../design/request-interface.md)).
+every request carries. A bare `server block` takes nothing and replies
+nothing ([the design](../design/request-interface.md)).
 
 An explicit session must contain a turn. A top-level `session` is an error.
 The default session is `session { turn; }`.

@@ -94,7 +94,6 @@ wlitem   := arrive poisson ( rate ) ; | arrive renewal ( expr ) ; | arrive close
           | init block | turn block          -- Size / set / observe
           | send ( NAME [: expr] , … ) ;      -- what each request carries: the server's parameters
           | session block                    -- optional: the sequence of completed turns; reads the reply as reply.NAME
-          | hidden NAME [, NAME]* ;           -- the scheduler may not read these (a bare server's; else `server (hidden NAME)`)
 stmt     := turn ;                           -- draw attributes, submit, wait for the response (session only)
           | Size NAME = expr ;                -- workload request quantity
           | Cost NAME = expr ;                -- expression must have a resource Cost type
@@ -402,9 +401,8 @@ server (input, hidden output) reply (produced) {
 }
 ```
 
-A bare `server { … }` has no signature, and its two sides share every
-attribute, as before the signature; it is refused once every program has
-one ([the design](design/request-interface.md)).
+A bare `server { … }` takes nothing and replies nothing: it reads no
+attribute of the workload ([the design](design/request-interface.md)).
 
 The parser puts what `send` binds at the end of the `turn` block, a
 hidden parameter in the IR's `hidden`; it expands
@@ -1347,7 +1345,7 @@ known after the branch. See [the full rule](api/workload.md#hidden).
 
 A `hidden` parameter, `server (input, hidden output)`, prevents scheduler
 expressions, such as a hold's header, queue keys or a budget, from reading
-`output` (`hidden o;` in the workload, under a bare `server`). Session statements,
+`output`. Session statements,
 run work, a hold's `cache` and a claim's `given` may read it. Attributes
 set by the scheduler (`cached`, `computed`) cannot be hidden.
 See [Workload](api/workload.md#hidden) for the permitted positions.

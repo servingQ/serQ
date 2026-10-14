@@ -1403,16 +1403,20 @@ fn collect_entry(
 /// How an entry that reads `n` from outside it gets it: as a parameter, or,
 /// when the entry is its role's and the role fixes the parameters, from a
 /// `hidden` attribute; a `prefix` key reads the `KEY_ATTRS` as they are.
-fn pass_help(q: &QueueDecl, e: &queue::Entry, n: &str, header: bool, signed: bool) -> String {
-    // under a server's signature, hiding is a parameter's
-    let hide = if signed {
-        format!("take `{n}` `hidden` in `server (…, hidden {n})`")
-    } else {
-        format!("mark `{n}` `hidden`")
-    };
+fn pass_help(q: &QueueDecl, e: &queue::Entry, n: &str, header: bool) -> String {
+    // the session's number is no parameter: a `prefix` key reads it as it is
+    if KEY_ATTRS.contains(&n) {
+        let a = if header { "A" } else { "a" };
+        return format!(
+            "{a} `prefix` key reads `{n}` as it is; anywhere else `{}` reads what it is passed",
+            e.verb
+        );
+    }
+    // hiding is a parameter's
+    let hide = format!("take `{n}` `hidden` in `server (…, hidden {n})`");
     let fixed = queue::role_of_verb(&e.verb, e.from.is_some())
         .is_some_and(|r| q.roles.iter().any(|x| x == r.name));
-    let mut help = match (fixed, header) {
+    match (fixed, header) {
         (false, true) => format!("Pass `{n}` as a parameter"),
         (false, false) => {
             format!("pass `{n}` as a parameter or `mark` a moment for the caller to read")
@@ -1425,11 +1429,7 @@ fn pass_help(q: &QueueDecl, e: &queue::Entry, n: &str, header: bool, signed: boo
             "`{}`'s parameters are its role's: {hide} or `mark` a moment for the caller to read",
             e.verb
         ),
-    };
-    if KEY_ATTRS.contains(&n) {
-        help.push_str(&format!(". A `prefix` key reads `{n}` as it is"));
     }
-    help
 }
 
 /// The expressions of an entry's body, the holds' headers apart from the
@@ -2323,7 +2323,7 @@ impl Parser {
                                      parameters and the queue's pools and stage. {}",
                                     q.name,
                                     e.verb,
-                                    pass_help(q, e, n, true, self.signature.is_some())
+                                    pass_help(q, e, n, true)
                                 )
                             });
                         return self.err_at(e.at, message);
@@ -2371,7 +2371,7 @@ impl Parser {
                                  request's `hidden` attributes; {}",
                                 q.name,
                                 e.verb,
-                                pass_help(q, e, n, false, self.signature.is_some())
+                                pass_help(q, e, n, false)
                             ),
                         );
                     }
@@ -2503,8 +2503,8 @@ impl Parser {
             return self.err_at(
                 at,
                 format!(
-                    "`hidden {hidden};` in `workload`: under a server's signature, hiding is a \
-                     parameter's\nhelp: `server (…, hidden {hidden}, …)`"
+                    "`hidden {hidden};` in `workload`: hiding is the server's parameter's\n\
+                     help: `server (…, hidden {hidden}, …)`"
                 ),
             );
         }
@@ -2659,7 +2659,9 @@ impl Parser {
                 .filter(|a| turn_attr(a))
                 .map(|a| a.to_string()),
         );
-        client.retain(|n| !params.contains(n));
+        // `serial` every request carries: a workload that sets it is refused
+        // for that (`Program::validate`), not for a read across
+        client.retain(|n| !params.contains(n) && !KEY_ATTRS.contains(&n.as_str()));
         client.sort();
         client.dedup();
         // what the workload reads: its own, what it sends as it is, and

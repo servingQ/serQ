@@ -94,11 +94,11 @@ fn a_runtime_guard_error_exits_1_without_a_panic() {
     std::fs::write(
         &file,
         common::main_source(
-            "stage svc : delay; workload { arrive batch(1); init { set c = 5; set K = 10; }
+            "stage svc : delay; workload { arrive batch(1); init { set c = 5; set K = 10; } send (c, K);
           session { turn; end;
           }
         }
-        server { if (c / K) { run svc (cost(svc, 1)); }
+        server (c, K) { if (c / K) { run svc (cost(svc, 1)); }
         }
 ",
         ),

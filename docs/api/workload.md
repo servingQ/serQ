@@ -25,8 +25,8 @@ only `set` and `observe`. Random draws in the workload use their own stream.
 | [`hidden`](#hidden) | Restrict scheduler access to future attributes: a parameter's, `server (hidden o)`. |
 
 Workload assignments produce [`Size`](attributes.md#sizes-values-and-costs)
-attributes. A server with a signature reads only what the workload sends
-it; a bare `server { … }` reads them all, and overwrites none. `init` and `turn`
+attributes. The server reads only what the workload sends it, and
+overwrites none. `init` and `turn`
 produce no resource costs. The server interprets request quantities with
 [`cost`](functions.md#cost); the session may use costs of client resources.
 
@@ -136,9 +136,7 @@ server (input, hidden output) { … }
 |---|---|---|
 | `NAME` | a parameter of the server | The scheduler may not read it. |
 
-Under a signature hiding is a parameter's, and a `hidden` clause in the
-workload is refused. A workload whose server is a bare `server { … }`
-still writes `hidden o;` (or `hidden o, think;`) in `workload`.
+Hiding is a parameter's: a `hidden` clause in the workload is refused.
 
 Hidden attributes may be read in session expressions and a claim's `given`
 condition. They are forbidden in scheduler expressions, including hold

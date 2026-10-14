@@ -38,9 +38,10 @@ fn main() {
   workload {
     arrive batch(2);
     init { set d = 0; }
+    send (d);
   }
 
-  server {
+  server (d) {
     llm.decode (d);
   }
 }

@@ -122,18 +122,19 @@ IR of a program migrated that way is the IR it had.
 
 ## Transition
 
-A bare `server { … }` has no signature and keeps the shared namespace. This
-change gives every example and tutorial a signature where its server reads
-the workload, and leaves the four whose server reads nothing bare. A second
-change gives the test programs, the reference pages' and the Python
-pages' inline examples (`docs/api/`, `docs/python/`) and the companion
-programs (`serving-queue-theory`) their signatures, then makes a bare
-`server { … }` a server with no parameters and refuses the workload's
-`hidden`. Until then `server () { … }` (no parameters, nothing crosses)
-and `server { … }` (everything shared) differ by two characters; no
-program writes the first. Until then
-the language has two forms; this document is where the second one is
-scheduled to go.
+Two changes. The first (#631) added the signature beside the bare
+`server { … }`, which kept the shared namespace, and gave every example and
+tutorial whose server reads the workload a signature. The second makes a
+bare `server { … }` a server that takes nothing and replies nothing, and
+refuses the workload's `hidden`: the test programs and the reference
+pages' examples were given their signatures in it, every one by sending
+attributes as they are (`send (s)`), which keeps each test's IR. There is
+one form again; `server () { … }` and `server { … }` mean the same.
+
+`serving-queue-theory` pins a released serQ (pyserq and `.serq/`,
+`research/serq.md` there): its 24 programs take their signatures in the
+change that moves the pin to a release with this one, since the pinned
+serQ parses neither `send` nor a signature.
 
 ## Self-critique
 
@@ -163,8 +164,8 @@ scheduled to go.
 - **Names.** The vLLM family's twelve servers take `input`/`output`; the
   others take the workload's names as they are (`routing.sq`'s `first`,
   `thunderagent.sq`'s `K`, the oracle programs' `prompt`, `o`, whose IR the
-  oracle files fix). A common spelling for them is the second change's,
-  with the tests.
+  oracle files fix). A common spelling for them would move their IR and
+  their numbers' provenance; it is left to the program that needs it.
 - **`reply.` as a dotted name.** The parser hands the linker
   `reply.S`, which it resolves to `S`; the side and the turn before it are
   the parser's to check, which it does where it reads the name.

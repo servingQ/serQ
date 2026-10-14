@@ -39,12 +39,13 @@ fn engine(
         pool kv on gpu {{ block bs; evict lru; preempt lifo; }}
         pool reqs on llm {{ }}
         workload {{ arrive batch({n}); init {{ set prompt = {prompt}; set o = {out}; }}
+          send (prompt, o);
           session {{ turn;
             end;
 
           }}
         }}
-        server {{
+        server (prompt, o) {{
           set t0 = now;
           llm (prompt, o);
           observe admitted_at = llm.admitted - t0;
@@ -136,12 +137,13 @@ fn a_request_preempted_during_decode_resumes_from_its_outputs() {
         pool kv on gpu { block bs; evict lru; preempt lifo; }
         pool reqs on llm { }
         workload { arrive batch(2); init { set prompt = serial == 0 ? 64 : 48; set o = serial == 0 ? 20 : 40; }
+          send (prompt, o);
           session { turn;
             end;
 
           }
         }
-        server {
+        server (prompt, o) {
           llm (prompt, o);
           observe first = llm.first;
           observe done = now;
@@ -190,12 +192,13 @@ fn preempted_twice() -> String {
         pool reqs on llm { }
         workload { arrive batch(3);
           init { set prompt = serial == 2 ? 32 : 16; set o = serial == 0 ? 30 : (serial == 1 ? 60 : 10); }
+          send (prompt, o);
           session { turn;
             end;
 
           }
         }
-        server {
+        server (prompt, o) {
           llm (prompt, o);
           observe done = now;
         }
@@ -281,14 +284,15 @@ fn preempted_twice_in_a_queue(set_kept: &str, known_is: &str) -> String {
             }}
           }}
         }}
-        workload {{ arrive batch(3); hidden o;
+        workload {{ arrive batch(3);
           init {{ set prompt = serial == 2 ? 32 : 16; set o = serial == 0 ? 30 : (serial == 1 ? 60 : 10); }}
+          send (prompt, o);
           session {{ turn;
             end;
 
           }}
         }}
-        server {{
+        server (prompt, hidden o) {{
           D.decode (prompt);
           observe done = now;
         }}
@@ -377,13 +381,14 @@ fn a_holder_preempted_before_its_first_step_has_computed_nothing() {
             }
           }
         }
-        workload { arrive batch(2); hidden o; init { set prompt = serial == 0 ? 64 : 32; set o = 20; }
+        workload { arrive batch(2); init { set prompt = serial == 0 ? 64 : 32; set o = 20; }
+          send (prompt, o);
           session { turn;
             end;
 
           }
         }
-        server {
+        server (prompt, hidden o) {
           llm.decode (prompt);
           observe done = now;
         }
@@ -429,12 +434,13 @@ fn serve_by_orders_residents_by_the_declared_keys() {
         }}
         pool kv on gpu {{ }}
         workload {{ arrive batch(2); init {{ set o = serial == 0 ? 10 : 3; }}
+          send (o);
           session {{ turn;
             end;
 
           }}
         }}
-        server {{
+        server (o) {{
           llm (1, o);
           observe done = now;
           observe order = serial;
@@ -518,12 +524,13 @@ fn a_resident_admitted_mid_iteration_is_served_once_under_serve_by() {
         pool kv on gpu { }
         stage gate : delay;
         workload { arrive batch(2); init { set arrive = serial; set o = serial == 0 ? 4 : 1; }
+          send (arrive, o);
           session { turn;
             end;
 
           }
         }
-        server {
+        server (arrive, o) {
           run gate (cost(gate, arrive));
           llm (1, o);
           observe done = now;
@@ -665,14 +672,15 @@ fn next_turn_reuses_full_blocks_of_the_cached_prefix() {
         pool kv on gpu { block bs; evict lru; preempt lifo; }
         pool reqs on llm { }
         workload { arrive batch(1); init { set K = 0; set turns = 0; }
+          send (K);
           session {
-            loop { turn; set K = prompt + 10; set turns = turns + 1;
+            loop { turn; set K = reply.prompt + 10; set turns = turns + 1;
               if (turns >= 3) { end; }
             }
 
           }
         }
-        server {
+        server (K) reply (prompt) {
           set prompt = K + 100;
           llm (prompt, 10);
         }
@@ -712,19 +720,20 @@ fn lru_eviction_drops_tail_blocks_first() {
         pool reqs on llm { }
         stage gate : delay;
         workload { arrive batch(2); init { set K = 0; set turns = 0; }
+          send (K);
           session {
             // session 0 runs first (160 tokens -> 10 blocks cached), then session 1
             // takes 12 blocks, evicting 2 of session 0's from its tail; session 0's
             // second turn then reuses 8 blocks.
             run gate (cost(gate, serial * 2));
-            loop { turn; set K = prompt; set turns = turns + 1;
+            loop { turn; set K = reply.prompt; set turns = turns + 1;
               if (turns >= 2 || serial == 1) { end; }
               run gate (cost(gate, 10));
             }
 
           }
         }
-        server {
+        server (K) reply (prompt) {
           set prompt = serial == 0 ? K + 160 : 192;
           llm (prompt, 1);
         }

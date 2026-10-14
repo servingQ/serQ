@@ -13,8 +13,8 @@ fn run(s: &str) -> serq::Report {
 #[test]
 fn an_omitted_session_is_one_complete_turn() {
     let base = "stage svc : delay;
-      workload { arrive batch(1); turn { set s = 3; } SESSION }
-      server { run svc (cost(svc, s)); observe finished = now; observe ordinal = turn_no; }
+      workload { arrive batch(1); turn { set s = 3; } send (s, turn_no); SESSION }
+      server (s, turn_no) { run svc (cost(svc, s)); observe finished = now; observe ordinal = turn_no; }
       ";
     let implicit = base.replace("SESSION", "");
     let explicit = base.replace("SESSION", "session { turn; }");
@@ -34,6 +34,7 @@ fn turns_wait_for_responses_and_accumulate_the_next_input() {
       workload {
         arrive batch(1); init { set k = 1; }
         turn { set s = k; }
+        send (s);
         session {
           turn;
           while (turn_no < 3) { set k = k + s; run user (cost(user, 2)); turn; }
@@ -41,7 +42,7 @@ fn turns_wait_for_responses_and_accumulate_the_next_input() {
           observe history = k;
         }
       }
-      server { run svc (cost(svc, s)); observe service = s; }
+      server (s) { run svc (cost(svc, s)); observe service = s; }
       ");
     // Requests cost 1, 2, 4; two think intervals cost 2 each: 11 total.
     assert_eq!(rep.observe("finished").unwrap().mean, 11.0);

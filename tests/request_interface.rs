@@ -249,7 +249,7 @@ fn hiding_is_a_parameters_under_a_signature() {
             "server (s) { run svc (cost(svc, s)); }",
         ),
         &[
-            "`hidden s;` in `workload`: under a server's signature, hiding is a parameter's",
+            "`hidden s;` in `workload`: hiding is the server's parameter's",
             "`server (…, hidden s, …)`",
         ],
     );

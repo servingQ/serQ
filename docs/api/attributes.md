@@ -29,9 +29,10 @@ require pool costs. For example:
 workload {
   arrive batch(1);
   turn { Size items = 3; }
+  send (items);
   session { turn; }
 }
-server {
+server (items) {
   Cost processing = { mem: items, svc: 2 * items };
   hold mem (processing.mem) { run svc (processing.svc); }
 }
@@ -111,8 +112,9 @@ fn main() {
   stage svc : delay;
   workload {
     arrive batch(2);
+    send (turn_no);
   }
-  server {
+  server (turn_no) {
     run svc (cost(svc, 1));
     observe request_id = serial;
     observe current_turn = turn_no;

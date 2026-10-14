@@ -26,10 +26,11 @@ fn main() {
   workload {
     arrive batch(3);
     init { set p = 0; set o = 0; }
+    send (p, o);
   }
 
   // `o` tokens decoded after the one the prefill samples
-  server {
+  server (p, o) {
     llm (p, o + 1);
     observe first = llm.first;
     observe done = now;

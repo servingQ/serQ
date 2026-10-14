@@ -29,13 +29,13 @@ fn source(schedule: &str, slot_cap: usize, kv_cap: usize) -> String {
         }}
         pool reqs on llm {{ }}
         pool kv on gpu {{ }}
-        workload {{ arrive batch(2); init {{ set prompt = serial == 0 ? 2 : 4; }}
+        workload {{ arrive batch(2); init {{ set prompt = serial == 0 ? 2 : 4; }} send (prompt);
           session {{ turn;
             end;
 
           }}
         }}
-        server {{
+        server (prompt) {{
           run gate (cost(gate, serial));
           // A decodes two tokens after its prefill's; B only prefills
           llm (prompt, serial == 0 ? 3 : 1);

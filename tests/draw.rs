@@ -261,12 +261,12 @@ fn growing_is_found_through_nested_holds() {
             } cache (cost(kv, reqs, n + o));
           }
         }
-        workload { arrive poisson(0.2); hidden o; turn { set n = 100; set o = 2; }
+        workload { arrive poisson(0.2); turn { set n = 100; set o = 2; } send (n, o);
           session {  turn;
             end;
           }
         }
-        server { llm.prefill (n); }
+        server (n, hidden o) { llm.prefill (n); }
 
 "#,
     );
@@ -347,11 +347,11 @@ fn a_session_that_decides_first_starts_at_a_decision() {
     let p = compile(
         r#"
         stage s1 : fifo; stage s2 : fifo;
-        workload { arrive poisson(1); init { set a = 1; }
+        workload { arrive poisson(1); init { set a = 1; } send (a);
           session { turn; end;
           }
         }
-        server { if (a) { run s1 (cost(s1, 1)); } else { run s2 (cost(s2, 1)); }
+        server (a) { if (a) { run s1 (cost(s1, 1)); } else { run s2 (cost(s2, 1)); }
         }
 
 "#,
@@ -386,11 +386,11 @@ fn negative_constants_reparse() {
         r#"
         let k = 0 - 2;
         stage s : fifo;
-        workload { arrive batch(1); turn { set a = 2; }
+        workload { arrive batch(1); turn { set a = 2; } send (a);
           session {  turn; end;
           }
         }
-        server { observe o = k ^ a; run s (cost(s, 1));
+        server (a) { observe o = k ^ a; run s (cost(s, 1));
         }
 
 "#,
@@ -592,11 +592,11 @@ fn no_overlapping_enclosures(f: &Figure, name: &str) {
 fn a_release_in_one_arm_does_not_reach_the_other() {
     let p = compile(
         "pool p { cap 10; } stage s1 : delay; stage s2 : delay; stage s3 : delay;
-        workload { arrive batch(1); init { set c = 1; }
+        workload { arrive batch(1); init { set c = 1; } send (c);
           session { turn; end;
           }
         }
-        server { hold p (cost(p, 1)) { if (c) { release p; run s1 (cost(s1, 1)); } else { run s2 (cost(s2, 1)); } run s3 (cost(s3, 1)); }
+        server (c) { hold p (cost(p, 1)) { if (c) { release p; run s1 (cost(s1, 1)); } else { run s2 (cost(s2, 1)); } run s3 (cost(s3, 1)); }
         }
         ",
     );
@@ -647,8 +647,8 @@ fn a_pool_both_arms_hold_stays_held_whichever_hold_took_it() {
         };
         let p = compile(&format!(
             "pool p {{ cap 10; }} stage s1 : delay; stage s2 : delay; {s3}
-            workload {{ arrive batch(1); session {{ turn; turn; }} }}
-            server {{ {shape} run s2 (cost(s2, 1)); }}
+            workload {{ arrive batch(1); send (turn_no); session {{ turn; turn; }} }}
+            server (turn_no) {{ {shape} run s2 (cost(s2, 1)); }}
             "
         ));
         let net = deployment::project(&p);
@@ -682,8 +682,8 @@ fn a_pool_leased_anew_in_a_loop_stays_held_after_it() {
 fn a_lease_grown_in_one_arm_and_shrunk_in_the_other_stays_held() {
     let p = compile(
         "pool p { cap 10; } stage s1 : delay; stage s2 : delay;
-        workload { arrive batch(1); init { set m = 1; } session { turn; } }
-        server {
+        workload { arrive batch(1); init { set m = 1; } send (m); session { turn; } }
+        server (m) {
           hold p (cost(p, 2)) { run s1 (cost(s1, 1)); } lease p (inf);
           if (m > 0) { grow p (cost(p, 1)); } else { shrink p (cost(p, 1)); }
           run s2 (cost(s2, 1));
@@ -983,10 +983,11 @@ fn a_server_guard_on_the_workload_draws_both_arms() {
           arrive poisson(1);
           init { set first = 1; }
           turn { set n = ~exp(10); }
+          send (first, n);
           session { loop {  turn; set first = 0;
               if (~bernoulli(0.5)) { run tool (cost(tool, 1)); } else { end; } } }
         }
-        server { if (first) { run big (cost(big, n)); } else { run small (cost(small, n)); } }
+        server (first, n) { if (first) { run big (cost(big, n)); } else { run small (cost(small, n)); } }
         ";
     let p = compile_source(&common::main_source(src), &common::horizon(100.0)).unwrap();
     let net = deployment::project(&p);
@@ -999,11 +1000,11 @@ fn a_server_guard_on_the_workload_draws_both_arms() {
 fn a_turn_forgets_what_the_path_set() {
     let p = compile(
         "stage A : fifo; stage B : fifo;
-        workload { arrive poisson(1); turn { set n = ~exp(10); }
+        workload { arrive poisson(1); turn { set n = ~exp(10); } send (n);
           session { set n = 0;  turn;
           }
         }
-        server { if (n > 0) { run A (cost(A, n)); } else { run B (cost(B, 1)); }
+        server (n) { if (n > 0) { run A (cost(A, n)); } else { run B (cost(B, 1)); }
         }
         ",
     );

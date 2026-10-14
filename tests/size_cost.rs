@@ -15,6 +15,12 @@ fn compile(server: &str, turn: &str) -> Result<Program, String> {
         }
     };
     let (svc, tool) = (stage("svc", "fifo"), stage("tool", "delay"));
+    // a request carries the items its turn sets
+    let (send, takes) = if turn.contains("items") {
+        ("send (items);", "(items)")
+    } else {
+        ("", "")
+    };
     compile_source(
         &format!(
             r#"fn main() {{
@@ -22,9 +28,9 @@ fn compile(server: &str, turn: &str) -> Result<Program, String> {
         pool other {{ cap 10; }}
         {svc}
         {tool}
-        workload {{ arrive batch(1); turn {{ {turn} }}
+        workload {{ arrive batch(1); turn {{ {turn} }} {send}
             session {{ turn; end; }} }}
-        server {{ {server} }}
+        server {takes} {{ {server} }}
     }}"#
         ),
         &common::horizon(20.0),
@@ -131,9 +137,9 @@ fn json_cannot_omit_the_contract_or_erase_a_conversion() {
 fn client_tool_cost_does_not_grant_server_resource_access() {
     let source = r#"fn main() {
         stage svc : fifo; stage tool : delay;
-        workload { arrive batch(1); turn { set items = 3; }
+        workload { arrive batch(1); turn { set items = 3; } send (items);
           session { turn; run tool (cost(tool, 2)); end; } }
-        server { run svc (cost(svc, items)); }
+        server (items) { run svc (cost(svc, items)); }
     }"#;
     compile_source(source, &common::horizon(10.0)).unwrap();
     let bad = source.replace("run tool (cost(tool, 2))", "run svc (cost(svc, 2))");
@@ -245,7 +251,7 @@ fn family_annotations_check_written_indices_before_projecting_the_type() {
 fn workload_cannot_supply_a_cost_for_server_growth_or_load() {
     for action in ["grow mem(c);", "load mem(c);"] {
         let src = format!(
-            "fn main() {{ pool mem {{ cap 10; }} workload {{ arrive batch(1); session {{ set c = cost(mem, 3); hold mem(cost(mem, 1)) {{ turn; }} end; }} }} server {{ {action} }} }}"
+            "fn main() {{ pool mem {{ cap 10; }} workload {{ arrive batch(1); send (c); session {{ set c = cost(mem, 3); hold mem(cost(mem, 1)) {{ turn; }} end; }} }} server (c) {{ {action} }} }}"
         );
         let e = compile_source(&src, &common::horizon(10.0)).unwrap_err();
         assert!(e.contains("workload cannot"), "{e}");

@@ -44,7 +44,7 @@ device gpu { kv cap 64; }
 const POOLS: &str = "
 pool kv on gpu { block bs; evict lru; preempt lifo; }
 pool reqs on llm { queue fifo; }
-workload { arrive batch(3); hidden o; turn { set n = 6; set o = 3; } }
+workload { arrive batch(3); turn { set n = 6; set o = 3; } send (n, o); }
 ";
 
 /// The engine admits a request with a slot and the blocks of the chunk the
@@ -64,7 +64,7 @@ engine llm on gpu {
 ";
 
 const SERVER: &str = "
-server {
+server (n, hidden o) {
   set t0 = now;
   llm (n, o);
   observe response = now - t0;
@@ -97,8 +97,8 @@ queue llm : prefill {
     } cache (cost(reqs, kv, prompt + o));
   }
 }
-workload { arrive batch(3); hidden o; turn { set n = 6; set o = 3; } }
-server {
+workload { arrive batch(3); turn { set n = 6; set o = 3; } send (n, o); }
+server (n, hidden o) {
   set t0 = now;
   llm.prefill (n);
   observe response = now - t0;
@@ -173,8 +173,8 @@ engine llm on gpu {{
   worker {{ forward (1); }}
 }}
 pool kv on gpu {{ block bs; }}
-workload {{ arrive batch(1); turn {{ set n = 6; }} }}
-server {{ llm (n, 1); }}
+workload {{ arrive batch(1); turn {{ set n = 6; }} send (n); }}
+server (n) {{ llm (n, 1); }}
 "
     );
     let p = compiled(&src);
@@ -458,8 +458,8 @@ fn a_session_does_not_call_an_engine() {
     let src = replaced(
         &program(),
         &[(
-            "workload { arrive batch(3); hidden o; turn { set n = 6; set o = 3; } }",
-            "workload { arrive batch(3); hidden o; turn { set n = 6; set o = 3; } session { turn; llm (n, o); } }",
+            "workload { arrive batch(3); turn { set n = 6; set o = 3; } send (n, o); }",
+            "workload { arrive batch(3); turn { set n = 6; set o = 3; } send (n, o); session { turn; llm (n, o); } }",
         )],
     );
     refused(&src, "is a request to engine `llm`, which a `server` makes");
@@ -499,8 +499,8 @@ queue P[2] : prefill {{
   pool kv on gpu {{ }}
   prefill (prompt) {{ {entry} }}
 }}
-workload {{ arrive batch(2); turn {{ set n = 6; }} }}
-server {{ {server} }}
+workload {{ arrive batch(2); turn {{ set n = 6; }} send (n); }}
+server (n) {{ {server} }}
 "
         )
     };
@@ -529,8 +529,8 @@ engine llm[2] on gpu {
   scheduler { advance running; admit waiting while (running.preempted == 0); }
   worker { forward (1); }
 }
-workload { arrive batch(1); turn { set n = 6; } }
-server { run llm[0] prefill (cost(llm, n)); }
+workload { arrive batch(1); turn { set n = 6; } send (n); }
+server (n) { run llm[0] prefill (cost(llm, n)); }
 ";
     refused(
         src,
