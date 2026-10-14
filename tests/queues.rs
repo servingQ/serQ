@@ -31,10 +31,11 @@ fn same_ir(queues: &str, flat: &str, renames: &[(&str, &str)]) {
 /// family from the server, which #539 refused for the queue family, so it
 /// no longer links: `NAME.ir.json` is the IR it compiled to on 3d23f4a
 /// (`main_source`, horizon 100), kept as the reference. A kernel change
-/// that moves what the flat program could write (IR 14 put a link's and a
-/// relation's latency on the transfer's run, which no flat program can
-/// spell) rewrites it with `SERQ_BLESS=1`, whose diff is reviewed against
-/// the change: from then on it is the sugar's own output, kept.
+/// that moves what the flat program would compile to (IR 14 put a link's
+/// and a relation's latency on the transfer's run, `(…, latency = x)`)
+/// rewrites it with `SERQ_BLESS=1`, whose diff is reviewed against the
+/// change: from then on it is the sugar's own output, kept beside the flat
+/// program that spells it.
 fn same_ir_as_flat(queues: &str, name: &str, renames: &[(&str, &str)]) {
     let mut q = compile_source(&common::main_source(queues), &common::horizon(100.0))
         .unwrap_or_else(|e| panic!("queues: {e}\n{queues}"))

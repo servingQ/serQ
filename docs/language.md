@@ -115,6 +115,7 @@ stmt     := turn ;                           -- draw attributes, submit, wait fo
                                              -- the mode: required on an engine, refused on any other stage
                                              -- growing: inside a hold of POOL, which grows with the tokens
           | run STAGE , STAGE [, STAGE]* ( expr , share = POLICY ) ;   -- one job holding every stage at once
+                                             -- either: ( expr [, share = POLICY] [, latency = expr ] ), the wait before the work
           | run ( expr ) ;                   -- in a queue's entry: the queue's own stage
           | if ( expr ) block [ else ( block | if … ) ]   -- a test; a draw is if (~bernoulli( p ))
           | while ( expr ) block             -- test before each pass; continue after the block
@@ -131,7 +132,7 @@ stmt     := turn ;                           -- draw attributes, submit, wait fo
 serving  := transfer [ '[' expr ']' | on STAGE [, STAGE]* ] expr from POOL to POOL ( expr ) ;
                                              -- the KV moves: run link; load; release
           | tool     [ '[' expr ']' | on STAGE [, STAGE]* ] expr ;
-                                             -- transfer and tool on several stages: expr is ( expr , share = POLICY )
+                                             -- transfer and tool on several stages: expr is ( expr , share = POLICY [, latency = expr ] )
 POLICY   := share.maxmin | share.bottleneck   -- std/share: how the flows of a fabric divide it (below, *Stages*)
 ```
 
@@ -262,7 +263,7 @@ call the engine (`E (input, output);`) and do not run an engine themselves.
 | `tool Z;` | `run tool (cost(tool, Z));` |
 | `tool[j] Z;` | `run tool[j] (cost(tool, Z));` (the index applies to the role's stage array) |
 | `tool on S[j] (Z);` | `run S[j] (cost(S, Z));` |
-| `transfer on egress[i], ingress[j] (X, share = s) from P to Q (n);` | `run egress[i], ingress[j] (cost(egress, ingress, X), share = s); load Q (cost(Q, n)); release P;` — one read that holds the sender's link and the receiver's at once (below, *Stages*) |
+| `transfer on egress[i], ingress[j] (X, share = s) from P to Q (n);` | `run egress[i], ingress[j] (cost(egress, ingress, X), share = s); load Q (cost(Q, n)); release P;` — one read that holds the sender's link and the receiver's at once (below, *Stages*); a link's `serve … latency x` puts `latency = x` on the `run` |
 
 The argument is work in the unit of the stage it runs on: the time the job
 takes alone on a `fifo`, `ps` or `delay` stage (seconds, when the program's
@@ -478,9 +479,8 @@ or a constant over `let`s; `latency = …` may be left out), and concurrent
 reads divide the two NICs by its `share` (*Stages*), which the relation
 must name: it is not left to a default. The decoder's engine reads the KV
 with its `connector P` (*An engine's request*): for a request its entry
-was called `from P[i]` with, the kernel's `run P.nic[i], D.nic[j] (…)`
-waiting `x0` first (the run's `latency`), then `load D.kv[j] (…); release
-P.kv[i];`, and nothing
+was called `from P[i]` with, the kernel's `run P.nic[i], D.nic[j] (…,
+latency = x0); load D.kv[j] (…); release P.kv[i];`, and nothing
 for a request its entry took from no source. Inside an entry of `D` called
 `from P[i]`, a `transfer` without `on` is the same read written by the
 entry. Both queues
@@ -537,9 +537,13 @@ for why the entry is the session's (*Known limitations*).
 a `server` does: link queues, or any `ps` stages. `latency x` on a link's
 `serve` is the wait before such a transfer: every `transfer on` naming the
 link waits it first, at the stages it names and taking none of their
-capacity (the kernel's `run … latency`), the links' waits summed in the
-order named. A number or a
-`let` constant; only a link without an entry takes one. A link with a `transfer (n)` entry is called
+capacity, the links' waits summed in the order named. A number or a
+`let` constant; only a link without an entry takes one. The kernel's
+spelling is the run's own clause, `run a, b (cost(a, b, w), share = s,
+latency = x)` or `transfer on a, b (w, share = s, latency = x) …`: a wait
+read at the run's start, in seconds; the stage report counts it as the
+run's `wait`, and the job as present. A transfer over a link with a
+`latency` may not name one too. A link with a `transfer (n)` entry is called
 instead, `nic[self].transfer (n) from P to kv (m);`, and runs its body on
 its own stage. Arguments are substituted like an `at admission` binding, so
 none may draw.

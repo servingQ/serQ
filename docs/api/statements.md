@@ -235,6 +235,7 @@ and `cached` count them.
 ```serq
 run STAGE [prefill | decode] (work) [growing POOL];
 run STAGE, STAGE [, STAGE]* (work, share = POLICY);
+run STAGE [, STAGE]* (work [, share = POLICY], latency = x);
 ```
 
 | Argument | Type | Description |
@@ -243,6 +244,7 @@ run STAGE, STAGE [, STAGE]* (work, share = POLICY);
 | mode | `prefill` \| `decode` | Required on a `step` stage, forbidden on any other. |
 | `work` | `Cost(STAGE)` | Clock time at rate 1 (`fifo`, `delay`), or at `φ(present)/present` (`ps`), or tokens on a `step` stage. A run of zero work completes at once. |
 | `growing` | `pool` | Only on a `step` stage. The hold on this pool grows block by block as the run advances, preempting if needed. |
+| `latency` | `expr` | Seconds the job waits at its stages before `work` starts, present there and taking none of their capacity (a NIXL READ posted, then polled); the stage report counts it as the run's `wait`. Not on a `step` stage. A run of zero work and a `latency` completes when the wait ends. |
 
 Blocks the session until the work is done.
 

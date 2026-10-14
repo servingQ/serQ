@@ -42,7 +42,6 @@ fn main() {
   stage nvl_in[ND] : ps(BwNV);    // a decoder's
   stage nic_out[NP] : ps(BwRDMA); // a prefiller's NIC
   stage nic_in[ND] : ps(BwRDMA);  // a decoder's
-  stage post : delay;             // the wait before an RDMA read
 
   workload {
     arrive poisson(Lambda);
@@ -65,9 +64,9 @@ fn main() {
         transfer on nvl_out[i], nvl_in[j] (n, share = share.bottleneck) from kvP[i] to kvD[j] (n);
         observe nvlink_read = now - t1;
       } else {
-        // across the nodes: RDMA, the NICs divided max-min fairly
-        run post (cost(post, x0));
-        transfer on nic_out[i], nic_in[j] (n, share = share.maxmin) from kvP[i] to kvD[j] (n);
+        // across the nodes: RDMA, the NICs divided max-min fairly, after
+        // the wait before each read
+        transfer on nic_out[i], nic_in[j] (n, share = share.maxmin, latency = x0) from kvP[i] to kvD[j] (n);
         observe rdma_read = now - t1;
       }
       run D[j] (cost(D, o * tok));

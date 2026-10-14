@@ -10,8 +10,7 @@
         server {
           hold kvP[i] (cost(kvP, prompt)) { run P[i] (cost(P, prompt)); } cache (cost(kvP, prompt)) lease kvP[i] (inf);
           hold kvD[j] (cost(kvD, prompt)) {
-            // the wait x1 + x0 is the transfer run's `latency` in the IR (14), which no flat program spells
-            transfer on egress, ingress[j] (prompt, share = share.maxmin) from kvP[i] to kvD[j] (prompt - 1);
+            transfer on egress, ingress[j] (prompt, share = share.maxmin, latency = x1 + x0) from kvP[i] to kvD[j] (prompt - 1);
             run D[j] decode (cost(D, o - 1)) growing kvD[j];
           }
         }

@@ -2718,28 +2718,46 @@ impl Parser {
     /// `(w)`, or `(w, share = share.maxmin)` for a job that holds several
     /// stages at once (`multi`): its work, and how its fabric divides it.
     /// `what` is the statement, for the errors.
-    fn work_and_share(
+    /// `(w)`, or `(w, share = POLICY)` for a run over several stages, and
+    /// either with `, latency = x`: the wait before the work (`Run.latency`).
+    fn work_clauses(
         &mut self,
         multi: bool,
         what: &str,
-    ) -> PResult<(Expr, Option<crate::ir::Share>)> {
+    ) -> PResult<(Expr, Option<crate::ir::Share>, Option<Expr>)> {
         let at = self.pos;
         self.expect(&Tok::LParen)?;
         let work = self.expr()?;
-        let share = if self.eat(&Tok::Comma) {
+        let mut share = None;
+        let mut latency = None;
+        while self.eat(&Tok::Comma) {
             let n_at = self.pos;
-            if *self.peek() != Tok::Ident("share".into()) {
-                return self.err_at(
-                    n_at,
-                    format!("`{what} (w, …)` takes `share = …`, found {}", self.peek()),
-                );
-            }
+            let name = match self.peek() {
+                Tok::Ident(n) if n == "share" || n == "latency" => n.clone(),
+                other => {
+                    return self.err_at(
+                        n_at,
+                        format!(
+                            "`{what} (w, …)` takes `share = …` and `latency = …`, found {other}"
+                        ),
+                    );
+                }
+            };
             self.advance();
             self.expect(&Tok::Assign)?;
-            Some(self.share_policy()?)
-        } else {
-            None
-        };
+            let twice = if name == "share" {
+                let given = share.is_some();
+                share = Some(self.share_policy()?);
+                given
+            } else {
+                let given = latency.is_some();
+                latency = Some(self.expr()?);
+                given
+            };
+            if twice {
+                return self.err_at(n_at, format!("`{what} (w, …)`: `{name}` twice"));
+            }
+        }
         self.expect(&Tok::RParen)?;
         match (multi, share) {
             (true, None) => self.err_at(
@@ -2757,7 +2775,7 @@ impl Parser {
                      and a job on a shared stage takes its fabric's"
                 ),
             ),
-            _ => Ok((work, share)),
+            _ => Ok((work, share, latency)),
         }
     }
 
@@ -5054,7 +5072,7 @@ impl Parser {
                     RunMode::Plain
                 };
                 let what = format!("run {}", stage_list(&stage, &also));
-                let (work, share) = self.work_and_share(!also.is_empty(), &what)?;
+                let (work, share, latency) = self.work_clauses(!also.is_empty(), &what)?;
                 let growing = if self.eat_kw("growing") {
                     Some(self.own_pool("growing")?)
                 } else {
@@ -5068,7 +5086,7 @@ impl Parser {
                     growing,
                     also,
                     share,
-                    latency: None,
+                    latency,
                 })
             }
             "if" => {
@@ -5515,15 +5533,15 @@ impl Parser {
             };
             Ref { span, name, index }
         };
-        let (raw_work, share) = if also.is_empty() && !self.paren_holds_comma() {
-            (self.expr()?, None)
+        let (raw_work, share, written) = if also.is_empty() && !self.paren_holds_comma() {
+            (self.expr()?, None, None)
         } else {
             let what = if on {
                 format!("{kw} on {}", stage_list(&stage, &also))
             } else {
                 kw.to_string()
             };
-            self.work_and_share(!also.is_empty(), &what)?
+            self.work_clauses(!also.is_empty(), &what)?
         };
         let resources: Vec<_> = std::iter::once(&stage)
             .chain(also.iter())
@@ -5570,17 +5588,35 @@ impl Parser {
             let units = self.paren_expr()?;
             self.expect(&Tok::Semi)?;
             // the links' latencies are waited first, as one wait: their
-            // sum, in the order named
-            let latency = std::iter::once(&stage)
-                .chain(also.iter())
-                .filter_map(|r| {
-                    self.queues
-                        .iter()
-                        .find(|q| q.name == r.name)?
-                        .latency
-                        .clone()
-                })
-                .reduce(|a, b| Expr::Binary(BinOp::Add, Box::new(a), Box::new(b)));
+            // sum, in the order named; or the transfer's own, not both
+            let link = std::iter::once(&stage).chain(also.iter()).find(|r| {
+                self.queues
+                    .iter()
+                    .any(|q| q.name == r.name && q.latency.is_some())
+            });
+            if let (Some(_), Some(l)) = (&written, link) {
+                return self.err_at(
+                    at,
+                    format!(
+                        "`transfer on {}` names a `latency` and `{}`'s `serve` has one: the wait \
+                         is written once, on the link or on the transfer",
+                        stage_list(&stage, &also),
+                        l.name
+                    ),
+                );
+            }
+            let latency = written.or_else(|| {
+                std::iter::once(&stage)
+                    .chain(also.iter())
+                    .filter_map(|r| {
+                        self.queues
+                            .iter()
+                            .find(|q| q.name == r.name)?
+                            .latency
+                            .clone()
+                    })
+                    .reduce(|a, b| Expr::Binary(BinOp::Add, Box::new(a), Box::new(b)))
+            });
             return Ok(vec![
                 Stmt::Run {
                     stage,
@@ -5619,7 +5655,7 @@ impl Parser {
             growing,
             also,
             share,
-            latency: None,
+            latency: written,
         }])
     }
 

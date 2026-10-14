@@ -4371,7 +4371,9 @@ impl<'p> Interp<'p> {
         let stage = &mut self.stages[st];
         let work = stage.jobs[&id].work;
         if work <= 0.0 {
-            let job = stage.jobs.remove(&id).unwrap();
+            // served now, for nothing: its wait was its run's `latency`
+            let mut job = stage.jobs.remove(&id).unwrap();
+            job.started = Some(now);
             self.job_done(st, job);
             return;
         }

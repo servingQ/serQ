@@ -746,10 +746,11 @@ pub enum CStmt {
         share: Option<Share>,
         /// A fixed wait before the work starts, in seconds: the job is at
         /// its stages from the run's start and takes none of their capacity
-        /// until the wait ends (a NIXL READ posted and polled before the
-        /// bytes move: `kvt.nixl_pull`'s `latency`, a link's `serve …
-        /// latency`). The stage report counts it as the run's wait. Read at
-        /// the run's start, like `work`; absent: no wait.
+        /// until the wait ends (posting a NIXL READ and the step that polls
+        /// its completion: `kvt.nixl_pull`'s `latency`, a link's `serve …
+        /// latency`, a run's `(w, latency = x)`). The stage report counts it
+        /// as the run's wait; a run of zero work with one completes when it
+        /// ends. Read at the run's start, like `work`; absent: no wait.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         latency: Option<CExpr>,
     },
