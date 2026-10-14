@@ -68,6 +68,8 @@ codes! {
     /// A connector that loads into a memory the engine's `taking` does not
     /// take.
     ConnectorUntaken => "E-connector-untaken",
+    /// A queue's NIC that no copy runs on.
+    NicUnused => "E-nic-unused",
 }
 
 impl Code {

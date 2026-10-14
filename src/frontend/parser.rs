@@ -4700,7 +4700,8 @@ impl Parser {
                 let nname = format!("{name}.nic");
                 self.stages.push(nname.clone());
                 prog.stages.push(StageDecl {
-                    span,
+                    // an error about the NIC is about its line
+                    span: Some(self.span_at(n_at)),
                     name: nname,
                     count,
                     array: family,

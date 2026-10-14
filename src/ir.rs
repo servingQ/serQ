@@ -2113,10 +2113,13 @@ impl Program {
         let what = self.stages[k].kind.noun();
         match name.strip_suffix(".nic") {
             Some(queue) => format!(
-                "the NIC `{name}` carries no copy: no relation or `transfer` runs on it, so no \
-                 request reaches it and the deployment view would leave it out\n\
-                 help: declare `kvt.nixl_pull` or `kvt.nixl_push` between `{queue}` and another \
-                 queue with a `nic`, or remove the `nic`"
+                "{}\nhelp: remove the `nic` of `{queue}` (and what reads `{name}`), or copy the \
+                 KV over it: `kvt.nixl_pull` or `kvt.nixl_push` between `{queue}` and another \
+                 queue with a `nic`",
+                crate::frontend::diagnostic::Code::NicUnused.message(format_args!(
+                    "the NIC `{name}` carries no copy: no relation or `transfer` runs on it, so \
+                     no request reaches it and the deployment view would leave it out"
+                ))
             ),
             None => format!(
                 "{what} `{name}` is run by no statement: no request reaches it, so the \
