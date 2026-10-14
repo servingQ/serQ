@@ -170,7 +170,7 @@ fn a_grow_after_the_lease_ended_says_why() {
 #[test]
 fn preempt_leases_by_is_refused_on_an_engines_memory_and_on_a_pool_nobody_leases() {
     let engine = r#"
-        queue E : decode {
+        queue E : agg {
           device gpu { kv cap 64; }
           engine on gpu { reqs cap 4; tokens cap 8; scheduler { advance running; admit waiting while (running.preempted == 0); } worker { forward (1); } }
           pool reqs on E { }

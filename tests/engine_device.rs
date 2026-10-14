@@ -1140,7 +1140,7 @@ workload { arrive batch(4); init { set prompt = 2; } }",
     let ov = common::horizon(20.0);
     let queue = |schedule: &str, on: &str| {
         format!(
-            "queue vllm[2] : decode {{
+            "queue vllm[2] : agg {{
   device gpu {{ kv cap 100; }}
   engine on gpu {{ tokens cap 8; scheduler {{ {schedule} }} worker {{ forward (1); }} }}
   pool kv on {on} {{ }}

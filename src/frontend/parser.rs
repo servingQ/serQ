@@ -4277,7 +4277,7 @@ impl Parser {
                     return self.err_at(
                         r_at,
                         format!(
-                            "unknown role `{r}`: a queue plays gateway, prefill, decode, link or l2"
+                            "unknown role `{r}`: a queue plays gateway, prefill, agg, decode, link or l2"
                         ),
                     );
                 }
@@ -4538,14 +4538,39 @@ impl Parser {
                 ),
             );
         }
-        // every role has one of its entries (a link may instead be its
-        // serve), and nothing else is there
+        // every entry is a role's the queue plays, and every role has its
+        // entry (a link may instead be its serve): an entry first, as the
+        // role it is the entry of is the likelier fix
         let q = &self.queues[qi];
+        for e in &q.entries {
+            match queue::role_of_verb(&e.verb, e.from.is_some()) {
+                Some(sig) if roles.iter().any(|x| x == sig.name) => {}
+                Some(sig) => {
+                    let r = sig.name;
+                    return self.err_at(
+                        e.at,
+                        format!(
+                            "{} is the `{r}` role's entry; declare `queue {name} : {r}`",
+                            sig.entry()
+                        ),
+                    );
+                }
+                None => {
+                    let hint = if e.from.is_some() {
+                        format!(": `{}` takes no `from`", e.verb)
+                    } else {
+                        String::new()
+                    };
+                    return self.err_at(
+                        e.at,
+                        format!("`{}` is not an entry of any role{hint}", e.verb),
+                    );
+                }
+            }
+        }
         for r in &roles {
             let sig = queue::RoleSig::named(r).expect("a role");
-            // one is enough: a decode pod that only decodes the KV it reads has
-            // no `decode (prompt)`, and one that reads none has no `… from` (#229)
-            if sig.from.iter().any(|&f| q.entry(sig.verb, f).is_some()) {
+            if !sig.verb.is_empty() && q.entry(sig.verb, sig.from).is_some() {
                 continue;
             }
             // an L2 is its pool and its `serve`: std/kvt copies through them
@@ -4584,37 +4609,13 @@ impl Parser {
                     );
                 }
             } else {
-                let missing = match sig.from {
-                    [_] => format!("no `{}` entry", sig.verb),
-                    _ => format!("neither {} nor {}", sig.entry(false), sig.entry(true)),
-                };
-                return self.err_at(at, format!("queue `{name}` plays `{r}` and has {missing}"));
-            }
-        }
-        for e in &q.entries {
-            let role = queue::role_of_verb(&e.verb, e.from.is_some()).map(|r| r.name);
-            match role {
-                Some(r) if roles.iter().any(|x| x == r) => {}
-                Some(r) => {
-                    return self.err_at(
-                        e.at,
-                        format!(
-                            "`{}` is an entry of a `{r}` queue; declare `queue {name} : {r}`",
-                            e.verb
-                        ),
-                    );
-                }
-                None => {
-                    let hint = if e.from.is_some() {
-                        format!(": `{}` takes no `from`", e.verb)
-                    } else {
-                        String::new()
-                    };
-                    return self.err_at(
-                        e.at,
-                        format!("`{}` is not an entry of any role{hint}", e.verb),
-                    );
-                }
+                return self.err_at(
+                    at,
+                    format!(
+                        "queue `{name}` plays `{r}` and has no {} entry",
+                        sig.entry()
+                    ),
+                );
             }
         }
         Ok(())
@@ -7295,7 +7296,7 @@ mod tests {
         for decls in [
             "stage E : fifo; pool E { cap 1; }",
             "pool E { cap 1; } stage E : fifo;",
-            "pool E { cap 4; } queue E[2] : decode { pool kv { cap 10; } serve fifo; decode (n) { hold kv (cost(kv, n)) { run E (cost(E, 1)); } } }",
+            "pool E { cap 4; } queue E[2] : agg { pool kv { cap 10; } serve fifo; decode (n) { hold kv (cost(kv, n)) { run E (cost(E, 1)); } } }",
             "pool E { cap 1; } device dev { } engine E on dev { tokens cap 1; scheduler { advance running; admit waiting while (running.preempted == 0); } worker { forward (1); } }",
             "device dev { } engine E on dev { tokens cap 1; scheduler { advance running; admit waiting while (running.preempted == 0); } worker { forward (1); } } pool E { cap 1; }",
         ] {

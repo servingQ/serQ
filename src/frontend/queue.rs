@@ -13,36 +13,35 @@
 
 use crate::frontend::ast::{Arg, Expr, Ref, Span, Stmt};
 
-/// A role of the serving vocabulary: its entries share one verb and its
-/// number of parameters, and are written without `from`, with it, or both.
-/// A queue of the role has at least one of them; a link may have none and
-/// be its `serve`, and an L2 has none: its pool and its `serve` are what
-/// std/kvt's `l2_load` and `l2_store` copy through.
+/// A role of the serving vocabulary: its entry's verb, its number of
+/// parameters, and whether it is written with `from`. A queue of the role
+/// has the entry; a link may have none and be its `serve`, and an L2 has
+/// none: its pool and its `serve` are what std/kvt's `l2_load` and
+/// `l2_store` copy through.
 pub struct RoleSig {
     pub name: &'static str,
     pub verb: &'static str,
     pub params: usize,
-    pub from: &'static [bool],
+    pub from: bool,
 }
 
 /// The roles of the serving vocabulary: name, verb, parameters, and
-/// whether its entries are written without `from` or with it. An L2 has
+/// whether its entry is written with `from`. A verb and a `from` name one
+/// role: `decode (prompt)` is an aggregated engine's, prefilling and
+/// decoding the request, `decode (prompt) from P` a disaggregated decoder's,
+/// reading the KV `P` leased; a pod that does either plays both. An L2 has
 /// no entry: its empty verb is never one `role_of_verb` finds.
 pub const ROLES: &[RoleSig] = &[
-    RoleSig::new("gateway", "route", 0, &[false]),
-    RoleSig::new("prefill", "prefill", 1, &[false]),
-    RoleSig::new("decode", "decode", 1, &[false, true]),
-    RoleSig::new("link", "transfer", 1, &[false]),
-    RoleSig::new("l2", "", 0, &[]),
+    RoleSig::new("gateway", "route", 0, false),
+    RoleSig::new("prefill", "prefill", 1, false),
+    RoleSig::new("agg", "decode", 1, false),
+    RoleSig::new("decode", "decode", 1, true),
+    RoleSig::new("link", "transfer", 1, false),
+    RoleSig::new("l2", "", 0, false),
 ];
 
 impl RoleSig {
-    const fn new(
-        name: &'static str,
-        verb: &'static str,
-        params: usize,
-        from: &'static [bool],
-    ) -> RoleSig {
+    const fn new(name: &'static str, verb: &'static str, params: usize, from: bool) -> RoleSig {
         RoleSig {
             name,
             verb,
@@ -56,10 +55,10 @@ impl RoleSig {
         ROLES.iter().find(|r| r.name == name)
     }
 
-    /// An entry as a program writes it: `decode (…) from Q`.
-    pub fn entry(&self, from: bool) -> String {
+    /// Its entry as a program writes it: `decode (…) from Q`.
+    pub fn entry(&self) -> String {
         let params = if self.params == 0 { "" } else { " (…)" };
-        let from = if from { " from Q" } else { "" };
+        let from = if self.from { " from Q" } else { "" };
         format!("`{}{params}{from}`", self.verb)
     }
 }
@@ -70,7 +69,7 @@ impl RoleSig {
 pub fn role_of_verb(verb: &str, from: bool) -> Option<&'static RoleSig> {
     ROLES
         .iter()
-        .find(|r| r.verb == verb && r.from.contains(&from))
+        .find(|r| !r.verb.is_empty() && r.verb == verb && r.from == from)
 }
 
 #[derive(Clone, Debug)]

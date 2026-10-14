@@ -8,7 +8,7 @@
 // An engine's request has no delay inside it, so the hold is a queue's
 // entry, which runs its engine's prefill and decode itself.
 fn main() {
-  queue llm : decode {
+  queue llm : agg {
     device gpu { kv cap 48; }
     engine on gpu {
       slots cap 4;

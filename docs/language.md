@@ -487,7 +487,7 @@ queue P[NP] : prefill {
 
 The pools are the queue's (`P.kv` from outside, `kv` within), the stage is
 named after the queue (`pool reqs on P`, `budget_left(P)`, `work(P[i])`), and
-an *entry* — one per verb of the queue's roles — holds what the station
+an *entry* — one per role the queue plays — holds what the station
 does with one request, with the role's parameters (`prefill (prompt)`). A
 queue declares its device and pools, then its stage (its engine, or a
 `serve` of `fifo`, `ps` or `delay`), then its entries, each reading what is
@@ -502,13 +502,14 @@ a family: its entries are called `D[j].decode (…)` and its lease taken
 (`holders(D[j].kv)`) is the kernel's array reference, which at size one
 also takes `D.kv`.
 
-Five roles are built into the parser, and a queue declares which it plays:
+Six roles are built into the parser, and a queue declares which it plays:
 
 | Role | Entries | The queue |
 |---|---|---|
 | `gateway` | `route { … }` | `Q.route();` enters this queue's `route`; each gateway is a single queue |
 | `prefill` | `prefill (prompt)` | computes the prompt; how it leaves the KV (`lease`, `cache`, a transfer) is the entry's |
-| `decode` | `decode (prompt)`, `decode (prompt) from Q`, either or both | a local prefill, or with the KV `Q`'s entry leased for this request; a pod that only decodes what it reads has no `decode (prompt)` |
+| `agg` | `decode (prompt)` | aggregated: prefills the prompt and decodes on its own engine |
+| `decode` | `decode (prompt) from Q` | disaggregated: decodes with the KV `Q`'s entry leased for this request |
 | `link` | `transfer (n)`, or none | the NIC: the body is the time to read `n` tokens; without one, the `serve` is the cost, and its `latency` a wait before it |
 | `l2` | none | an L2 KV cache (an LMCache server, a Mooncake store): one pool, the KV it holds, and a `serve`, the bandwidth its copies divide; an engine's `connector` copies through it (below) |
 
@@ -521,6 +522,13 @@ does not execute it or register a default server.
 syntax. The role names and their entry signatures in the table are
 predefined vocabulary; `gw`, `P` and `D` are names declared by this
 program. User-defined roles are not supported.
+
+An entry's verb and its `from` name its role: `decode (prompt)` is an
+`agg` queue's, `decode (prompt) from P` a `decode` queue's. A pod that
+does either, prefilling a short prompt itself and reading a long one's KV
+from a prefiller (llm-d's decode pod), plays both: `queue D[ND] : agg,
+decode`. Its callers call `D[j].decode (prompt)` either way, with `from`
+or without.
 
 The deployment calls an entry where the request goes: `P[i].prefill
 (prompt);` and `D[j].decode (prompt) from P[i];`. The entry names the

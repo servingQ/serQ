@@ -75,7 +75,7 @@ fn main() {
   // --8<-- [end:prefiller]
 
   // --8<-- [start:decoder]
-  queue D[ND] : decode {
+  queue D[ND] : agg, decode {
     device gpu { compute (t) = t * a; hbm (k) = omega + beta * k; kv cap blocksD * bs; }
     engine on gpu {
       reqs cap max_seqsD;
