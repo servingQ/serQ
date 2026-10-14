@@ -150,7 +150,6 @@ fn no_self_edges() {
 /// reader's none in.
 #[test]
 fn every_station_has_an_arrow_in_and_out() {
-    use serq::view::figure::{EdgeRole, Item};
     let mut files = vec![];
     let mut dirs = vec![
         std::path::PathBuf::from("examples"),
@@ -173,48 +172,35 @@ fn every_station_has_an_arrow_in_and_out() {
         let src = std::fs::read_to_string(&path).unwrap();
         let p = compile_source(&src, &common::horizon(10.0))
             .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-        let f = deployment::figure(&p);
-        let (mut ins, mut outs) = (vec![], vec![]);
-        for i in &f.items {
-            match i {
-                Item::Edge {
-                    role: Some(EdgeRole::Arrival { to }),
-                    ..
-                } => ins.push(to.clone()),
-                Item::Edge {
-                    role: Some(EdgeRole::Exit { from }),
-                    ..
-                } => outs.push(from.clone()),
-                Item::Edge {
-                    role: Some(EdgeRole::Flow { from, to }),
-                    ..
-                } => {
-                    outs.push(from.clone());
-                    ins.push(to.clone());
-                }
-                _ => {}
-            }
+        if let Some((node, which)) = deployment::figure(&p).unjoined() {
+            panic!("{}: station {node} has no arrow {which}", path.display());
         }
-        for i in &f.items {
-            if let Item::Station {
-                node,
-                stage: Some(_),
-                ..
-            } = i
-            {
-                assert!(
-                    ins.contains(node),
-                    "{}: station {node} has no arrow in",
-                    path.display()
-                );
-                assert!(
-                    outs.contains(node),
-                    "{}: station {node} has no arrow out",
-                    path.display()
-                );
-            }
-        }
+        deployment::checked_figure(&p).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     }
+}
+
+/// `serq check` and `serq draw` refuse a figure with a station cut off,
+/// naming it: a figure with a station and nothing going out of it.
+#[test]
+fn a_station_with_no_arrow_out_is_named() {
+    use serq::view::figure::{Item, StationKind, pt};
+    let mut f = Figure {
+        width: 100.0,
+        height: 40.0,
+        title: String::new(),
+        items: vec![],
+    };
+    f.push(Item::Station {
+        rect: serq::view::figure::Rect::new(40.0, 10.0, 20.0, 20.0),
+        kind: StationKind::Ps,
+        text: "PS".into(),
+        stage: Some("E.nic".into()),
+        node: "E.nic".into(),
+    });
+    f.arrival(vec![pt(0.0, 20.0), pt(40.0, 20.0)], "E.nic".into());
+    assert_eq!(f.unjoined(), Some(("E.nic".to_string(), "out")));
+    f.exit(vec![pt(60.0, 20.0), pt(100.0, 20.0)], "E.nic".into());
+    assert_eq!(f.unjoined(), None);
 }
 
 /// A chain of guards that moves nobody must not multiply the paths out.

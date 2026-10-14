@@ -269,16 +269,21 @@ fn main() {
         prog = serq::inline_trace(prog, base).unwrap_or_else(|e| fail(file, e));
     }
     match cmd {
-        "check" => println!(
-            "OK: {} pool(s), {} stage(s), {} attribute(s), {} block(s)",
-            prog.pools.len(),
-            prog.stages.len(),
-            prog.attrs.len(),
-            prog.blocks.len()
-        ),
+        "check" => {
+            // every station the view draws has an arrow in and one out (#624)
+            serq::view::deployment::checked_figure(&prog).unwrap_or_else(|e| fail(file, e));
+            println!(
+                "OK: {} pool(s), {} stage(s), {} attribute(s), {} block(s)",
+                prog.pools.len(),
+                prog.stages.len(),
+                prog.attrs.len(),
+                prog.blocks.len()
+            )
+        }
         "ir" => println!("{}", prog.to_json()),
         "draw" => {
-            let figure = serq::view::deployment::figure(&prog);
+            let figure =
+                serq::view::deployment::checked_figure(&prog).unwrap_or_else(|e| fail(file, e));
             let text = serq::view::render(&figure, &format).unwrap_or_else(|e| fail(file, e));
             match &out {
                 None => print!("{text}"),

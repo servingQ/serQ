@@ -305,6 +305,46 @@ impl Figure {
         self.items.push(item);
     }
 
+    /// The first station of a stage with no arrow in (the arrival, or a
+    /// flow to it) or no arrow out (a flow from it, or an exit), and which
+    /// of the two it lacks: `None` when every station has both.
+    pub fn unjoined(&self) -> Option<(String, &'static str)> {
+        let (mut ins, mut outs) = (vec![], vec![]);
+        for i in &self.items {
+            match i {
+                Item::Edge {
+                    role: Some(EdgeRole::Arrival { to }),
+                    ..
+                } => ins.push(to),
+                Item::Edge {
+                    role: Some(EdgeRole::Exit { from }),
+                    ..
+                } => outs.push(from),
+                Item::Edge {
+                    role: Some(EdgeRole::Flow { from, to }),
+                    ..
+                } => {
+                    outs.push(from);
+                    ins.push(to);
+                }
+                _ => {}
+            }
+        }
+        self.items.iter().find_map(|i| match i {
+            Item::Station {
+                node,
+                stage: Some(_),
+                ..
+            } if !ins.contains(&node) => Some((node.clone(), "in")),
+            Item::Station {
+                node,
+                stage: Some(_),
+                ..
+            } if !outs.contains(&node) => Some((node.clone(), "out")),
+            _ => None,
+        })
+    }
+
     pub fn text(&mut self, at: Point, text: impl Into<String>, anchor: Anchor, size: TextSize) {
         self.push(Item::Text {
             at,

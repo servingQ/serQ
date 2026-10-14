@@ -35,7 +35,7 @@ every way through holds it, whichever hold took it on each.
 | Element | Meaning |
 |---|---|
 | Station | A stage reached by a `run`; an array is labelled with its size. Consecutive prefill and decode runs at one engine share a station. |
-| Arrow | Request flow between stages, including branches and loop returns. Guards label alternatives; `out` marks an exit. Every station has an arrow in and one out (`tests/draw.rs`, over every example and tutorial program): a stage nothing runs does not link, and a request goes on from every station it reaches. |
+| Arrow | Request flow between stages, including branches and loop returns. Guards label alternatives; `out` marks an exit. Every station has an arrow in and one out: a stage nothing runs does not link, and a request goes on from every station it reaches. `serq check` and `serq draw` check it on every program (`deployment::checked_figure`) and refuse a figure that cuts a station off, naming it, as the view's fault; `tests/draw.rs` checks it over every example and tutorial program. |
 | Decision diamond | A branch or routing decision before the first station. |
 | Filled panel | An instance selected by `choose`, grouping the engine, NIC and pools indexed by exactly its variable. One the session also indexes otherwise (`E[j]`, `E[0]`) is in no panel; a panel takes in a dashed enclosure only when all of it stands inside. An instance's pool is drawn only inside its panel, so a station outside it does not show that hold; a run between stations the panels would pull apart is drawn outside them. |
 | Dashed enclosure | A pool held across several stations. |
