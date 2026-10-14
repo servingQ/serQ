@@ -145,7 +145,6 @@ fn load_advances_the_computed_position() {
 fn load_must_fit_the_allocation() {
     let src = r#"
         pool kv { cap 100; }
-        stage svc : delay;
         workload { arrive batch(1);
           session { turn; end;
           }
@@ -717,6 +716,7 @@ fn a_grow_with_nobody_to_preempt_waits() {
             if (serial == 0) { run svc (cost(svc, 1)); grow kv (cost(kv, 10)); observe grew = now; run svc (cost(svc, 1)); }
             else { run svc (cost(svc, 5)); }
           }
+          llm (1, 1);
         }
 
 "#;

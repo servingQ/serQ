@@ -212,7 +212,8 @@ fn a_fixed_shadow_can_size_an_array_but_an_input_dependent_shadow_cannot() {
         let count = args.number("size", 2);
         let count = 3;
         stage workers[count] : delay;
-
+        workload { arrive batch(1); session { turn; end; } }
+        server { run workers[0] (cost(workers, 1)); }
     }"#;
     let mut ov = common::horizon(1.0);
     ov.set("size", "4").unwrap();

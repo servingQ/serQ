@@ -1559,7 +1559,7 @@ def h(x) {{ 1 }}
 device gpu[2] {{ kv cap 100; }} pool kv on gpu {{ }}
 stage E[2] : fifo;
 workload {{ arrive batch(1); init {{ set prompt = 32; set j = 0; }} }}
-server {{ hold kv[j] (cost(kv, {size})) {{ }} }}"
+server {{ hold kv[j] (cost(kv, {size})) {{ run E[j] (cost(E, 1)); }} }}"
         )
     };
     let ov = common::horizon(10.0);

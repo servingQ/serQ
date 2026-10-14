@@ -81,7 +81,7 @@ fn a_hold_counts_only_through_its_body() {
 #[test]
 fn end_and_a_later_run_cover_the_loop() {
     check(&format!(
-        "{TOOL} workload {{ {CLIENT} session {{ turn; loop {{ if (w > 0) {{ end; }} else {{ end; }} }} \n}} }}\nserver {{\n}} "
+        "workload {{ {CLIENT} session {{ turn; loop {{ if (w > 0) {{ end; }} else {{ end; }} }} \n}} }}\nserver {{\n}} "
     ))
     .expect("ends");
     check(&format!(
@@ -364,7 +364,6 @@ fn consecutive_seeds_do_not_replay_each_others_sessions() {
 fn a_large_batch_that_ends_at_once_settles() {
     let r = run(
         "let N = 2000;
-        stage tool : delay;
         workload { arrive batch(N); init { set w = ~uniform(0, 1); }
           session { turn; end;
           }

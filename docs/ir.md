@@ -267,11 +267,16 @@ text and directly constructed IR meet the same rules. Validation covers:
   shared stage are `Plain`, without `growing`. A run names each family
   once, and has a `share` exactly when its `also` is nonempty. The stages
   runs join, however indirectly, are one fabric, and the runs of a fabric
-  name one `share` (`Program::stage_shares`).
+  name one `share` (`Program::stage_shares`). Every stage is the `stage`
+  or one of the `also` of some `Run`, the stage of some `Request`, or a
+  pool's spill `via` (`Program::unreached_stage`): a stage nothing runs
+  is reached by no request. It is checked last, so that a program wrong
+  in another way is told that first.
 
 `validate_located` identifies statement errors by block and statement
-index; the text frontend maps these to source locations. Declaration and
-flow checks may have no statement location. `src/ir.rs` is the authoritative
+index; the text frontend maps these to source locations, and a stage
+nothing runs to its declaration. Other declaration and flow checks may
+have no location. `src/ir.rs` is the authoritative
 set of validation rules, including restrictions on scheduling expressions
 and registers described above.
 

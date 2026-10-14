@@ -312,10 +312,16 @@ fn a_key_is_its_attribute_and_its_value() {
 /// `N` sessions with `sys = 7` on a stage and a pool of `cap` (block 16),
 /// the server's statements `server`.
 fn deployment(cap: u32, n: u32, pools: &str, server: &str) -> String {
+    // a stage no statement runs does not link: `llm` where the server runs it
+    let llm = if server.contains("run llm ") {
+        "stage llm : delay;"
+    } else {
+        ""
+    };
     format!(
         r#"
         device gpu {{ kv cap {cap}; }}
-        stage llm : delay;
+        {llm}
         pool kv on gpu {{ block 16; evict lru; preempt lifo; }}
         {pools}
         stage user : delay;

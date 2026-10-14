@@ -227,6 +227,7 @@ fn the_decode_leg_holds_its_blocks_during_the_prefill() {
               join;
               transfer (p) from P to kv (p);
               mark written;
+              run D prefill (cost(D, 1)) growing kv;
             }}
           }}
         }}
@@ -272,7 +273,7 @@ fn legs_that_wait_for_each_other_fail_the_run() {
           engine on gpu { tokens cap inf; scheduler { advance running; admit waiting while (running.preempted == 0); } worker { forward (1); } }
           nic ps(100);
           decode (p) { hold kv (cost(kv, p)) { run D prefill (cost(D, p)) growing kv; } }
-          decode (p) from P { hold kv (cost(kv, p)) { join; transfer (p) from P to kv (p); } }
+          decode (p) from P { hold kv (cost(kv, p)) { join; transfer (p) from P to kv (p); run D prefill (cost(D, 1)) growing kv; } }
         }
         use "std/kvt"; use "std/share"; kvt.nixl_push (P, D, share = share.maxmin);
         stage gate : delay;
@@ -461,7 +462,7 @@ fn a_lease_that_expires_is_not_a_deadlock() {
           engine on gpu { tokens cap inf; scheduler { advance running; admit waiting while (running.preempted == 0); } worker { forward (1); } }
           nic ps(100);
           decode (p) { hold kv (cost(kv, p)) { run D prefill (cost(D, p)) growing kv; } }
-          decode (p) from P { hold kv (cost(kv, p)) { join; transfer (p) from P to kv (p); } }
+          decode (p) from P { hold kv (cost(kv, p)) { join; transfer (p) from P to kv (p); run D prefill (cost(D, 1)) growing kv; } }
         }
         use "std/kvt"; use "std/share"; kvt.nixl_push (P, D, share = share.maxmin);
         stage gate : delay;

@@ -744,8 +744,19 @@ fn a_hold_without_cache_leaves_the_prefix_to_the_hold_that_caches() {
 #[test]
 fn bad_amounts_and_indices_fail_the_run() {
     let fail = |stmt: &str| {
+        // a stage no statement runs does not link: those `stmt` runs
+        let d = if stmt.contains("run d ") {
+            "stage d : delay;"
+        } else {
+            ""
+        };
+        let a = if stmt.contains("run a[") {
+            "stage a[2] : delay;"
+        } else {
+            ""
+        };
         let src = format!(
-            "pool kv {{ cap 64; }} pool q[2] {{ cap 64; }} stage d : delay; stage a[2] : delay;
+            "pool kv {{ cap 64; }} pool q[2] {{ cap 64; }} {d} {a}
         workload {{ arrive batch(1); init {{ set z = 0; set i = 0; }}
           session {{ turn; end;
           }}

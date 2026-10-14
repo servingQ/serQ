@@ -219,7 +219,8 @@ fn a_session_admitted_in_the_iteration_counts_among_the_residents() {
     let src = admitted(&only(
         "running.decoding < running.count ? !decoding : decoding",
     ))
-    .replace("run gate (cost(gate, serial > 0 ? 1 : 0));", "");
+    .replace("run gate (cost(gate, serial > 0 ? 1 : 0));", "")
+    .replace("stage gate : delay;", "");
     assert_eq!(
         trace("admitted-opposite", &src),
         [

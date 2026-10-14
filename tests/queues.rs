@@ -259,7 +259,10 @@ fn a_latency_is_the_links_constant() {
         engine on gpu {{ tokens cap inf; scheduler {{ advance running; admit waiting while (running.preempted == 0); }} worker {{ forward (1); }} }}
         decode (p) {{ hold kv (cost(kv, p)) {{ run D prefill (cost(D, p)) growing kv; }} }}
         decode ({param}) from P {{
-          hold kv (cost(kv, {param})) {{ transfer on egress, ingress ({param}, share = share.maxmin) from P to kv ({param} - 1); }}
+          hold kv (cost(kv, {param})) {{
+            transfer on egress, ingress ({param}, share = share.maxmin) from P to kv ({param} - 1);
+            run D prefill (cost(D, 1)) growing kv;
+          }}
         }}
       }}
       workload {{ arrive batch(1); init {{ set prompt = 32; }} session {{ turn; end; }} }} server {{ gw.route(); }}
@@ -857,7 +860,8 @@ fn a_decode_queue_needs_one_of_its_entries() {
             .unwrap_or_else(|e| panic!("{e}\n{src}"));
     };
     links(&program(remote_call, remote));
-    links(&program("D.decode (prompt);", local));
+    // `P` too, or a stage no statement runs would not link
+    links(&program("P.prefill (prompt); D.decode (prompt);", local));
     refused(
         &program("D.decode (prompt);", remote),
         "`D.decode`: queue `D` has no such entry: `D` has only `decode (…) from …`",
@@ -1416,11 +1420,11 @@ fn a_pull_relation_says_what_it_couples() {
             "queue gw : gateway {{ route {{ P.prefill (prompt); Q.prefill (prompt); D.decode (prompt) from {call_from}; }} }}
              queue P : prefill {{ pool kv {{ cap 100; }} serve fifo; {p_nic}
                prefill (p) {{ hold kv (cost(kv, p)) {{ run (cost(P, p)); }} cache (cost(kv, p)) lease kv (inf); }} }}
-             queue Q : prefill {{ pool kv {{ cap 100; }} serve fifo; nic ps(1);
+             queue Q : prefill {{ pool kv {{ cap 100; }} serve fifo;
                prefill (p) {{ hold kv (cost(kv, p)) {{ run (cost(Q, p)); }} cache (cost(kv, p)) lease kv (inf); }} }}
              queue D : decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; scheduler {{ advance running; admit waiting while (running.preempted == 0); }} worker {{ forward (1); }} }} nic ps(1);
                decode (p) {{ hold kv (cost(kv, p)) {{ run D prefill (cost(D, p)) growing kv; }} }}
-               decode (p) from P {{ hold kv (cost(kv, p)) {{ transfer (p) from P to kv (p); }} }} }}
+               decode (p) from P {{ hold kv (cost(kv, p)) {{ transfer (p) from P to kv (p); run D prefill (cost(D, 1)) growing kv; }} }} }}
              {rel}
              workload {{ arrive batch(1); init {{ set prompt = 3; }} session {{ turn; end; }} }} server {{ gw.route(); }} "
         )
@@ -1659,10 +1663,10 @@ fn an_entry_reaches_only_its_own() {
 #[test]
 fn each_overload_substitutes_only_its_own_locals() {
     same_ir(
-        "queue gw : gateway { route { D.decode (1); } }
-         queue P : prefill { pool kv { cap 1; } serve fifo; prefill (p) { hold kv (cost(kv, p)) { } lease kv (inf); } }
+        "queue gw : gateway { route { P.prefill (1); D.decode (1); } }
+         queue P : prefill { pool kv { cap 1; } serve fifo; prefill (p) { hold kv (cost(kv, p)) { run (cost(P, p)); } lease kv (inf); } }
          queue D : decode { serve fifo;
-           decode (p) { observe seen = x; }
+           decode (p) { run (cost(D, p)); observe seen = x; }
            decode (p) from P { set x = 1; }
          }
          workload { arrive batch(1); hidden x; init { set x = 3; }
@@ -1673,7 +1677,8 @@ fn each_overload_substitutes_only_its_own_locals() {
           session { turn; end;
           }
         }
-        server { observe seen = x;
+        server { hold kvP (cost(kvP, 1)) { run P (cost(P, 1)); } lease kvP (inf);
+          run D (cost(D, 1)); observe seen = x;
         } ",
         &[("P.kv", "kvP")],
     );
@@ -1711,7 +1716,7 @@ fn long_acyclic_delegation_succeeds_and_cycles_fail() {
             format!("Q{}.prefill (p);", i + 1)
         };
         src.push_str(&format!(
-            "queue Q{i} : prefill {{ serve fifo; prefill (p) {{ {body} }} }}\n"
+            "queue Q{i} : prefill {{ serve fifo; prefill (p) {{ run (cost(Q{i}, 1)); {body} }} }}\n"
         ));
     }
     src.push_str("workload { arrive batch(1); session { turn; end; } } server { gw.route(); } ");

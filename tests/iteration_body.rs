@@ -560,7 +560,7 @@ fn a_register_is_the_stage_s_own() {
           session {{ turn; end;
           }}
         }}
-        server {{ llm (2, 1); {session}
+        server {{ llm (2, 1); other (1, 1); {session}
         }}
 
 "#

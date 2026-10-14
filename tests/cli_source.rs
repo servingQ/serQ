@@ -117,8 +117,19 @@ fn an_argument_its_definition_does_not_read_is_still_resolved() {
     // in a hold's body, an unread argument sees the header's binding and is
     // not a read of it: the body sets nothing for it
     let hold = |body: &str, need: &str| {
+        // a stage no statement runs does not link: those the body runs
+        let svc = if body.contains("run svc ") {
+            "stage svc : fifo;"
+        } else {
+            ""
+        };
+        let f = if body.contains("run f[") {
+            "stage f[2] : fifo;"
+        } else {
+            ""
+        };
         let src = format!(
-            "def one(x) {{ 1 }}\nstage svc : fifo;\nstage f[2] : fifo;\npool kv {{ cap 10; }}\n\
+            "def one(x) {{ 1 }}\n{svc}\n{f}\npool kv {{ cap 10; }}\n\
              pool g[2] {{ cap 10; }}\nworkload {{ arrive batch(1); session {{ set s = 1; turn; \
              end; }} }}\nserver {{ hold kv (cost(kv, 1)) at admission (need = {need}) {{ {body} \
              }} }}\n"

@@ -1747,6 +1747,10 @@ impl Program {
         self.stage_shares()?;
         self.validate_declarations()?;
         self.validate_types()?;
+        // last, so that a program wrong in another way is told that first
+        if let Some(k) = self.unreached_stage() {
+            return Err(self.unreached_message(k).into());
+        }
         Ok(())
     }
 
@@ -2057,6 +2061,52 @@ impl Program {
             }
         }
         Ok(())
+    }
+
+    /// The first stage no statement runs: the stage of no `run` (nor one of
+    /// its `also`) and of no engine `request`, in any block, a connector's
+    /// among them, nor the link a pool spills `via`. No request reaches it,
+    /// so it has no arrow in and the deployment view leaves it out.
+    pub fn unreached_stage(&self) -> Option<usize> {
+        let mut reached = vec![false; self.stages.len()];
+        for s in self.pools.iter().filter_map(|p| p.spill.as_ref()) {
+            reached[s.via] = true;
+        }
+        for st in self.blocks.iter().flatten() {
+            match st {
+                CStmt::Run { stage, also, .. } => {
+                    for r in std::iter::once(stage).chain(also) {
+                        reached[r.base..r.base + r.count].fill(true);
+                    }
+                }
+                CStmt::Request { stage, .. } => {
+                    reached[stage.base..stage.base + stage.count].fill(true);
+                }
+                _ => {}
+            }
+        }
+        reached.iter().position(|r| !r)
+    }
+
+    /// Why stage `k`, which no statement runs (`unreached_stage`), does not
+    /// link, and what to write instead.
+    pub fn unreached_message(&self, k: usize) -> String {
+        let name = &self.stages[k].name;
+        let what = self.stages[k].kind.noun();
+        match name.strip_suffix(".nic") {
+            Some(queue) => format!(
+                "the NIC `{name}` carries no copy: no relation or `transfer` runs on it, so no \
+                 request reaches it and the deployment view would leave it out\n\
+                 help: declare `kvt.nixl_pull` or `kvt.nixl_push` between `{queue}` and another \
+                 queue with a `nic`, or remove the `nic`"
+            ),
+            None => format!(
+                "{what} `{name}` is run by no statement: no request reaches it, so the \
+                 deployment view would leave it out\n\
+                 help: run it, or call an entry of its queue, from the server or a gateway's \
+                 `route`; or remove it"
+            ),
+        }
     }
 
     /// The checks of the declarations and the run.
