@@ -1,0 +1,13 @@
+// A request arrives, is served, and its session ends
+// (examples/single-turn/vllm_single_turn.sq's workload): no context carries
+// over, so the prefix cache is never read back.
+let Lambda = 3.0;  // requests per second
+
+workload {
+  arrive poisson(Lambda);
+  turn {
+    set n = ceil(~uniform(1000, 3000));
+    set o = floor(~exp(200)) + 1;
+  }
+  send (input: n, output: o);
+}

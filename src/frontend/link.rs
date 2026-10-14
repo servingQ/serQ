@@ -1891,6 +1891,7 @@ impl Linker<'_> {
     }
 
     fn stage_ref(&self, r: &Ref) -> LResult<CRef> {
+        self.paired_stage(&r.name).map_err(|e| e.at(r.span))?;
         self.cref(r, &self.stages, "stage")
     }
 
@@ -2760,6 +2761,26 @@ impl Linker<'_> {
         self.side = initial_side;
         self.reader.set(reader);
         Ok(id)
+    }
+
+    /// For a pair of files: the workload runs on its own stages (and the
+    /// `tool` it needs none for), the deployment on none of them
+    /// (`docs/design/paired-workload.md`).
+    fn paired_stage(&self, name: &str) -> LResult<()> {
+        let (Some(wl), Some(side)) = (&self.prog.paired, self.reader.get()) else {
+            return Ok(());
+        };
+        let ours = wl.iter().any(|w| w == name);
+        match side {
+            crate::ir::Side::Workload if !ours && name != "tool" => Err(LinkError::new(format!(
+                "stage `{name}` is the deployment file's: the workload runs on its own stages \
+                 and sends the server what it runs"
+            ))),
+            crate::ir::Side::Server if ours => Err(LinkError::new(format!(
+                "stage `{name}` is the workload file's: the deployment runs on its own stages"
+            ))),
+            _ => Ok(()),
+        }
     }
 
     /// Refuse a read across the server's signature: the server (and the

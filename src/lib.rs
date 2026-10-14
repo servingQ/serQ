@@ -40,7 +40,67 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub fn compile_source(src: &str, ov: &Overrides) -> Result<ir::Program, String> {
     let prog =
         frontend::parser::parse_with(src, &ov.defs, &overridden(ov)).map_err(|e| e.render(src))?;
-    finish(prog, src, ov)
+    finish(
+        prog,
+        &|span, msg| match span {
+            Some(span) => span.render(src, msg),
+            None => msg.to_string(),
+        },
+        ov,
+    )
+}
+
+/// Compile a deployment file paired with a workload file
+/// (`frontend::paired`): the tool's pairing, `serq run D --workload W`.
+/// `names` are how a message names the files (their paths).
+pub fn compile_paired(
+    deployment: &str,
+    workload: &str,
+    names: (&str, &str),
+    ov: &Overrides,
+) -> Result<ir::Program, String> {
+    let p = frontend::paired::Paired::new(deployment, workload, names);
+    let prog = frontend::parser::parse_paired(&p, &ov.defs, &overridden(ov))?;
+    finish(prog, &|span, msg| p.render(span, msg), ov)
+}
+
+/// `compile_paired`, for inspection (`load_inspected`).
+pub fn compile_paired_inspected(
+    deployment: &str,
+    workload: &str,
+    names: (&str, &str),
+    ov: &Overrides,
+) -> Result<ir::Program, String> {
+    compile_paired(deployment, workload, names, &inspected(ov))
+}
+
+/// The outlines of a pair: the deployment file's (what an editor of the
+/// deployment changes) and the workload file's, each with byte ranges into
+/// its own text (`Outline::split`).
+pub fn outline_paired(
+    deployment: &str,
+    workload: &str,
+) -> Result<(frontend::outline::Outline, frontend::outline::Outline), String> {
+    let p = frontend::paired::Paired::new(deployment, workload, ("deployment", "workload"));
+    let (mut d, mut w) = frontend::parser::outline_paired(&p)?.split(p.at);
+    // the names as each file writes them (`frontend::paired`)
+    for decl in d.decls.iter_mut().chain(w.decls.iter_mut()) {
+        decl.name = frontend::paired::written(&decl.name);
+    }
+    Ok((d, w))
+}
+
+/// Run a pair (`compile_paired`); a trace the workload reads is read next
+/// to the workload file (`base`).
+pub fn run_paired(
+    deployment: &str,
+    workload: &str,
+    names: (&str, &str),
+    ov: &Overrides,
+    base: Option<&Path>,
+) -> Result<Report, String> {
+    let p = compile_paired(deployment, workload, names, ov)?;
+    run_ir(&p, base)
 }
 
 /// The supplied inputs, which the parser checks cannot change an array size.
@@ -48,9 +108,18 @@ fn overridden(ov: &Overrides) -> Vec<String> {
     ov.lets.iter().map(|(name, _)| name.clone()).collect()
 }
 
+/// How a message at a place of the text is shown: the program's own
+/// text, or the file of a pair it is in.
+type Render<'a> = dyn Fn(Option<frontend::diagnostic::Span>, &str) -> String + 'a;
+
 /// Link a parsed program and check its IR.
-fn finish(prog: frontend::ast::Program, src: &str, ov: &Overrides) -> Result<ir::Program, String> {
-    let (mut p, spans) = frontend::link::link_located(&prog, ov).map_err(|e| e.render(src))?;
+fn finish(
+    prog: frontend::ast::Program,
+    render: &Render,
+    ov: &Overrides,
+) -> Result<ir::Program, String> {
+    let (mut p, spans) = frontend::link::link_located(&prog, ov)
+        .map_err(|e| render(e.span, &format!("link error: {}", e.message)))?;
     if let Some(t) = &ov.trace {
         p.trace = Some(t.clone());
     }
@@ -71,10 +140,7 @@ fn finish(prog: frontend::ast::Program, src: &str, ov: &Overrides) -> Result<ir:
             });
         let span =
             declared.or_else(|| e.at.and_then(|(b, k)| spans.get(b)?.get(k)?.of(&e.message)));
-        match span {
-            Some(span) => span.render(src, &e.message),
-            None => e.message,
-        }
+        render(span, &e.message)
     })?;
     Ok(p)
 }
@@ -162,6 +228,33 @@ pub fn load(path: &Path, ov: &Overrides) -> Result<ir::Program, String> {
     } else {
         compile_source(&text, ov)
     }
+}
+
+/// `load` for a deployment file paired with a workload file
+/// (`compile_paired`), read from their paths.
+pub fn load_paired(
+    deployment: &Path,
+    workload: &Path,
+    ov: &Overrides,
+) -> Result<ir::Program, String> {
+    let read = |path: &Path| {
+        std::fs::read_to_string(path).map_err(|e| format!("cannot read {}: {e}", path.display()))
+    };
+    let (d, w) = (read(deployment)?, read(workload)?);
+    let names = (
+        deployment.display().to_string(),
+        workload.display().to_string(),
+    );
+    compile_paired(&d, &w, (&names.0, &names.1), ov)
+}
+
+/// `load_paired`, for inspection (`load_inspected`).
+pub fn load_paired_inspected(
+    deployment: &Path,
+    workload: &Path,
+    ov: &Overrides,
+) -> Result<ir::Program, String> {
+    load_paired(deployment, workload, &inspected(ov))
 }
 
 /// Run an IR program. A relative trace path is resolved against `base`

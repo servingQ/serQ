@@ -180,6 +180,12 @@ struct Parser {
     sent_as_is: Vec<String>,
     /// The position of the workload's first `hidden`.
     hidden_at: Option<usize>,
+    /// The tokens of a paired workload file (`frontend::paired`), at the
+    /// end of `fn main()`'s body.
+    /// (the last line of the deployment's: a later token is the workload's)
+    paired: Option<usize>,
+    /// Check the syntax alone: half of a pair (`parse_half`).
+    syntax_only: bool,
     /// Header bindings the body of their hold reads, with the position of
     /// the name: `set` at the top of the body, checked once the program's
     /// attributes are known (`check_body_bindings`).
@@ -655,6 +661,77 @@ pub fn parse_with(src: &str, defs: &[(String, String)], lets: &[String]) -> PRes
         });
     }
     Ok(prog)
+}
+
+/// Parse a deployment file and a workload file as one program
+/// (`frontend::paired`): positions are into `p.combined`.
+pub fn parse_paired(
+    p: &crate::frontend::paired::Paired,
+    defs: &[(String, String)],
+    lets: &[String],
+) -> Result<Program, String> {
+    use crate::frontend::paired::{DEPLOYMENT, WORKLOAD};
+    let spliced = p.tokens()?;
+    let mut parser = Parser::new(spliced.toks);
+    parser.paired = Some(spliced.split);
+    // an override names a definition as its file writes it
+    parser.def_overrides = defs
+        .iter()
+        .map(|(n, e)| {
+            let prefix = if spliced.defs.1.contains(n) {
+                WORKLOAD
+            } else if spliced.defs.0.contains(n) {
+                DEPLOYMENT
+            } else {
+                ""
+            };
+            (format!("{prefix}{n}"), e.clone(), false)
+        })
+        .collect();
+    parser.supplied_inputs = lets.to_vec();
+    let mut prog = parser
+        .program()
+        .map_err(|e| crate::frontend::paired::parse_error(p, &e))?;
+    prog.paired = Some(spliced.stages);
+    if let Some(name) = parser.def_overrides.iter().find(|d| !d.2).map(|d| &d.0) {
+        return Err(format!(
+            "unknown `def` override `{}`",
+            crate::frontend::paired::written(name)
+        ));
+    }
+    Ok(prog)
+}
+
+/// Check half of a pair alone, for its syntax (`serq fmt`): beside an
+/// empty other half, without what only a whole program is checked for.
+pub fn parse_half(src: &str, half: crate::frontend::paired::File) -> Result<(), String> {
+    use crate::frontend::paired::{File, Paired};
+    let p = match half {
+        File::Workload => Paired::new("fn main() {\n}\n", src, ("deployment", "workload")),
+        File::Deployment => Paired::new(src, "workload { }\n", ("deployment", "workload")),
+    };
+    let spliced = p.tokens()?;
+    let mut parser = Parser::new(spliced.toks);
+    parser.paired = Some(spliced.split);
+    parser.syntax_only = true;
+    parser
+        .program()
+        .map(|_| ())
+        .map_err(|e| crate::frontend::paired::parse_error(&p, &e))
+}
+
+/// `outline` of a pair: positions are into `p.combined`.
+pub fn outline_paired(
+    p: &crate::frontend::paired::Paired,
+) -> Result<crate::frontend::outline::Outline, String> {
+    let spliced = p.tokens()?;
+    let mut parser = Parser::new(spliced.toks);
+    parser.paired = Some(spliced.split);
+    parser.outline = Some(crate::frontend::outline::Recorder::new(&p.combined));
+    parser
+        .program()
+        .map_err(|e| crate::frontend::paired::parse_error(p, &e))?;
+    Ok(parser.outline.take().expect("set above").out)
 }
 
 /// Parse, recording where each declaration is written (`serq::outline`).
@@ -1654,6 +1731,8 @@ impl Parser {
             turned: false,
             sent_as_is: vec![],
             hidden_at: None,
+            paired: None,
+            syntax_only: false,
             body_binds: vec![],
             header_binds: vec![],
             bind_at: vec![],
@@ -1962,6 +2041,9 @@ impl Parser {
                 }
                 continue;
             }
+            if let Some(split) = self.paired {
+                self.paired_item(self.toks[item_at].line > split)?;
+            }
             if !in_main && !self.is_kw("use") && !self.is_kw("def") && !self.is_kw("let") {
                 return self.err("executable declarations belong inside `fn main() { … }`; only `use`, `def` and constants belong outside it");
             }
@@ -2132,6 +2214,9 @@ impl Parser {
         }
         if in_main {
             return self.err("unclosed `fn main()`; expected `}`");
+        }
+        if self.syntax_only {
+            return Ok(prog);
         }
         if self.kvt_imported && self.declares(&prog, "kvt") {
             return self
@@ -2307,6 +2392,9 @@ impl Parser {
     }
 
     fn assemble(&mut self, prog: &mut Program, served: &mut Served) -> PResult<()> {
+        if self.paired.is_some() && prog.workload.is_none() {
+            return self.err("a workload file declares `workload { … }`");
+        }
         if self.wl_session.is_none() && self.server.is_some() {
             if prog.workload.is_none() {
                 return self.err("`server` needs a `workload`: its default session is one turn");
@@ -4862,6 +4950,28 @@ impl Parser {
             header_refused,
             at,
         });
+        Ok(())
+    }
+
+    /// Under a pairing: the workload file declares its constants and inputs,
+    /// definitions, stages and `workload`; the deployment file all else.
+    fn paired_item(&self, in_workload: bool) -> PResult<()> {
+        let Tok::Ident(kw) = self.peek().clone() else {
+            return Ok(());
+        };
+        let own = ["use", "let", "def", "stage", "workload"];
+        if in_workload && !own.contains(&kw.as_str()) && KEYWORDS.contains(&kw.as_str()) {
+            return self.err(format!(
+                "`{kw}` is the deployment file's: a workload file declares its constants and \
+                 inputs (`let`), definitions (`def`), its own stages and `workload {{ … }}`"
+            ));
+        }
+        if !in_workload && kw == "workload" {
+            return self.err(
+                "the workload is the workload file's: this deployment is paired with one, so it \
+                 declares none",
+            );
+        }
         Ok(())
     }
 

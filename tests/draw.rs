@@ -162,8 +162,13 @@ fn every_station_has_an_arrow_in_and_out() {
     while let Some(d) = dirs.pop() {
         for e in std::fs::read_dir(&d).unwrap() {
             let path = e.unwrap().path();
-            // an instance file sets a program's inputs; it is no program
-            if path.is_dir() && path.file_name().is_some_and(|n| n != "instances") {
+            // an instance file sets a program's inputs, and half of a pair
+            // is a program only with its other half (below): no programs
+            if path.is_dir()
+                && path
+                    .file_name()
+                    .is_some_and(|n| n != "instances" && n != "paired")
+            {
                 dirs.push(path);
             } else if path.extension().is_some_and(|x| x == "sq") {
                 files.push(path);
@@ -180,6 +185,25 @@ fn every_station_has_an_arrow_in_and_out() {
             panic!("{}: station {node} has no arrow {which}", path.display());
         }
         deployment::checked_figure(&p).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    }
+    // every deployment under every workload (docs/design/paired-workload.md)
+    let sq = |d: &str| {
+        let mut v: Vec<_> = std::fs::read_dir(d)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|p| p.extension().is_some_and(|x| x == "sq"))
+            .collect();
+        v.sort();
+        v
+    };
+    for d in sq("examples/paired/deployments") {
+        for w in sq("examples/paired/workloads") {
+            let read = |p: &std::path::Path| std::fs::read_to_string(p).unwrap();
+            let p = serq::compile_paired(&read(&d), &read(&w), ("d", "w"), &common::horizon(10.0))
+                .unwrap_or_else(|e| panic!("{} with {}: {e}", d.display(), w.display()));
+            deployment::checked_figure(&p)
+                .unwrap_or_else(|e| panic!("{} with {}: {e}", d.display(), w.display()));
+        }
     }
 }
 
