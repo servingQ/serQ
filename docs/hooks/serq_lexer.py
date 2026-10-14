@@ -13,6 +13,10 @@ and wrong in the places that matter: `hold`, `observe` and `~exp`
 are not Rust, and the words that carry a serQ program's meaning were the ones
 left uncoloured.
 
+The roles are `src/frontend/highlight.rs`'s, which an editor reads (serq-lar
+colours its program with it); this is the copy Pygments can read, and
+`tests/docs_lexer.rs` holds its lists to that module's, both ways.
+
 mkdocs loads this through `hooks:`. Pygments finds a lexer through its
 `_mapping.LEXERS` table, so the module is put on `sys.modules` under the name
 that table points at.
