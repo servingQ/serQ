@@ -35,12 +35,12 @@ every way through holds it, whichever hold took it on each.
 | Element | Meaning |
 |---|---|
 | Station | A stage reached by a `run`; an array is labelled with its size. Consecutive prefill and decode runs at one engine share a station. |
-| Arrow | Request flow between stages, including branches and loop returns. Guards label alternatives; `out` marks an exit. |
+| Arrow | Request flow between stages, including branches and loop returns. Guards label alternatives; `out` marks an exit. Every station has an arrow in and one out (`tests/draw.rs`, over every example and tutorial program): a stage nothing runs does not link, and a request goes on from every station it reaches. |
 | Decision diamond | A branch or routing decision before the first station. |
 | Filled panel | An instance selected by `choose`, grouping the engine, NIC and pools indexed by exactly its variable. One the session also indexes otherwise (`E[j]`, `E[0]`) is in no panel; a panel takes in a dashed enclosure only when all of it stands inside. An instance's pool is drawn only inside its panel, so a station outside it does not show that hold; a run between stations the panels would pull apart is drawn outside them. |
 | Dashed enclosure | A pool held across several stations. |
 | Unfilled frame | Pools held at one station, listed below its glyph. |
-| Transfer bracket | A job using both endpoints' NICs; its label names the source and destination KV. |
+| Transfer bracket | A job using both endpoints' NICs, an arrow inside it from each station to the next the run names; its label names the source and destination KV. |
 | `pull` / `push`, a dot on the bracket | Who posts a KV relation's copy (`kvt.nixl_pull`, `kvt.nixl_push`): the dot stands over the poster's NIC, and the word leads the copy's label. A pull is posted at the arrow's head, where the bytes arrive; a push at its tail. A `transfer on` written by hand names no poster and has neither. |
 | Latency label | A delay before a single transfer. A delay leading to several transfers remains a station. |
 
@@ -79,10 +79,10 @@ TikZ writer ignores the ids.
 | `flow` | a `<path>` | an arrow sessions take from `data-from` to `data-to`: the next station, a loop's return, a transfer between two NICs |
 | `exit` | a `<path>` | an arrow sessions leave by, from `data-from` |
 | `budget` | a `<rect>` inside `<g data-stage>` | the used part of an engine's budget bar |
-| `bracket` | a `<rect>` | the stations one job holds at once (a transfer over two NICs); `data-nodes` lists them, and no arrow joins them |
+| `bracket` | a `<rect>` | the stations one job holds at once (a transfer over two NICs); `data-nodes` lists them, and a `flow` arrow joins each to the next in the run's order |
 
-A KV relation's copy also says who posts it, on its bracket and, when it
-crosses from one instance to another, on its `flow` arrow:
+A KV relation's copy also says who posts it, on its bracket and on its
+`flow` arrow:
 `data-copy="pull"` or `"push"`, and `data-poster` the poster's node
 (`D.nic`). The dot is a `<circle class="poster">`.
 
