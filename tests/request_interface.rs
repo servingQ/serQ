@@ -1,8 +1,8 @@
 //! The server's signature (`docs/design/request-interface.md`): what a
 //! request carries, `server (P, …)`, and what its reply carries, `reply (R,
 //! …)`. The workload binds the parameters with `send (P: e, …);` and reads
-//! the reply as `reply.R`; nothing else crosses. A bare `server { … }` keeps
-//! the shared attributes until every program has a signature.
+//! the reply as `reply.R`; nothing else crosses. A bare `server { … }`
+//! takes nothing and replies nothing.
 
 mod common;
 
@@ -249,7 +249,7 @@ fn hiding_is_a_parameters_under_a_signature() {
             "server (s) { run svc (cost(svc, s)); }",
         ),
         &[
-            "`hidden s;` in `workload`: hiding is the server's parameter's",
+            "`hidden s;` in `workload`: the server hides a parameter in its signature",
             "`server (…, hidden s, …)`",
         ],
     );
@@ -286,6 +286,15 @@ fn a_bare_server_takes_nothing() {
         &["`reply.done`: the server's reply carries nothing"],
     );
     compile(&with("", "server { run svc (cost(svc, 1)); }")).unwrap();
+    // one spelling of nothing
+    refused(
+        &with("", "server () { run svc (cost(svc, 1)); }"),
+        &["`server ()` takes nothing, as `server { … }` does"],
+    );
+    refused(
+        &with("send ();", "server { run svc (cost(svc, 1)); }"),
+        &["`send ()` sends nothing: leave it out"],
+    );
 }
 
 /// A parameter sent as the workload's attribute of the same name is that
@@ -294,6 +303,8 @@ fn a_bare_server_takes_nothing() {
 fn sending_an_attribute_as_it_is_adds_nothing_to_the_ir() {
     let turn = |workload: &str, server: &str| {
         let p = compile(&with(workload, server)).unwrap();
+        // the hidden parameter, and nothing else, is hidden
+        assert_eq!(p.hidden.len(), 1);
         p.blocks[p.turn].len()
     };
     assert_eq!(

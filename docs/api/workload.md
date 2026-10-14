@@ -22,7 +22,7 @@ only `set` and `observe`. Random draws in the workload use their own stream.
 | [`turn`](#turn) | Set attributes whenever the session executes `turn;`. |
 | [`send`](#send) | Bind what each request carries: the server's parameters. |
 | [`session`](#session) | Describe how completed turns lead to the next; default: one turn. |
-| [`hidden`](#hidden) | Restrict scheduler access to future attributes: a parameter's, `server (hidden o)`. |
+| [`hidden`](#hidden) | Refused here: the server hides a parameter, `server (hidden o)`. |
 
 Workload assignments produce [`Size`](attributes.md#sizes-values-and-costs)
 attributes. The server reads only what the workload sends it, and
@@ -102,8 +102,8 @@ send (s);
 | `NAME: expr` | a parameter of the [server](program.md#server), `expr` | The value a request carries for the parameter. |
 | `NAME` | a parameter named as a workload attribute | The attribute, as it is. |
 
-What each request carries, for a server with a signature, `server (input,
-hidden output) { … }`: its parameters, which the server, its gateways'
+What each request carries to the server, `server (input, hidden output) {
+… }`: its parameters, which the server, its gateways'
 routes and the scheduler's expressions read instead of
 the workload's attributes. Each `turn;` evaluates the binding after the
 `turn` block's draws, at moment `Session`, with the attributes as they are
@@ -115,7 +115,8 @@ that attribute, sent as it is, `send (s)`, and `s: s` is refused as a
 second spelling of it. The workload reads the reply after `turn;` as
 `reply.R` ([Program](program.md#server)), and no other attribute the server,
 the scheduler or an engine sets; a parameter bound to an expression is the
-server's name, which the workload does not read. `send` without a signature is an error.
+server's name, which the workload does not read. `send ()` is refused: a
+workload whose server takes nothing sends nothing.
 
 ## `session`
 

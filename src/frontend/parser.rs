@@ -2067,7 +2067,22 @@ impl Parser {
                 if self.server.is_some() {
                     return self.err_at(at, "duplicate server");
                 }
-                self.signature = Some(self.signature()?);
+                let sig = self.signature()?;
+                if let Some(r) = self.outline.as_mut() {
+                    use crate::frontend::outline;
+                    r.out.signature = Some(outline::Signature {
+                        params: sig
+                            .params
+                            .iter()
+                            .map(|p| outline::Param {
+                                name: p.name.clone(),
+                                hidden: p.hidden,
+                            })
+                            .collect(),
+                        reply: sig.reply.iter().map(|(_, r)| r.clone()).collect(),
+                    });
+                }
+                self.signature = Some(sig);
                 self.side = Side::Server;
                 let body = self.block()?;
                 self.side = Side::Session;
@@ -2503,8 +2518,8 @@ impl Parser {
             return self.err_at(
                 at,
                 format!(
-                    "`hidden {hidden};` in `workload`: hiding is the server's parameter's\n\
-                     help: `server (…, hidden {hidden}, …)`"
+                    "`hidden {hidden};` in `workload`: the server hides a parameter in its \
+                     signature\nhelp: `server (…, hidden {hidden}, …)`"
                 ),
             );
         }
@@ -2622,8 +2637,7 @@ impl Parser {
         Ok(())
     }
 
-    /// Under a server's signature, once the queues' entries are in place:
-    /// the server sets its reply on every way it completes a request, and
+    /// Once the queues' entries are in place: the server sets its reply on every way it completes a request, and
     /// the linker learns what each side keeps to itself.
     fn interface(&self, prog: &mut Program) -> PResult<()> {
         let Some(sig) = &self.signature else {
@@ -4859,6 +4873,9 @@ impl Parser {
             reply: vec![],
         };
         if self.eat(&Tok::LParen) {
+            if *self.peek() == Tok::RParen {
+                return self.err("`server ()` takes nothing, as `server { … }` does: write that");
+            }
             while *self.peek() != Tok::RParen {
                 let hidden = self.eat_kw("hidden");
                 let at = self.pos;
@@ -4908,6 +4925,9 @@ impl Parser {
             return self.err_at(at, "duplicate `send` in workload");
         }
         self.expect(&Tok::LParen)?;
+        if *self.peek() == Tok::RParen {
+            return self.err_at(at, "`send ()` sends nothing: leave it out");
+        }
         let mut binds: Binds = vec![];
         while *self.peek() != Tok::RParen {
             let n_at = self.pos;

@@ -1,7 +1,7 @@
 # The server's request interface
 
-A server with a signature reads what a request carries and nothing else of
-the workload; the workload reads what the reply carries and nothing else of
+The server reads what a request carries and nothing else of the
+workload; the workload reads what the reply carries and nothing else of
 the server. The signature is the deployment's: `server (P, …) reply (R, …)`.
 The workload binds the parameters, `send (P: e, …);`, and reads the reply as
 `reply.R`. The IR does not change.
@@ -129,7 +129,8 @@ bare `server { … }` a server that takes nothing and replies nothing, and
 refuses the workload's `hidden`: the test programs and the reference
 pages' examples were given their signatures in it, every one by sending
 attributes as they are (`send (s)`), which keeps each test's IR. There is
-one form again; `server () { … }` and `server { … }` mean the same.
+one form again: `server () { … }` and `send ();`, which would spell the
+bare forms twice, are refused.
 
 `serving-queue-theory` pins a released serQ (pyserq and `.serq/`,
 `research/serq.md` there): its 24 programs take their signatures in the
@@ -182,4 +183,5 @@ the 12 programs whose server now reads `input`/`output` moved (a slot and a
 `set` in the `turn` block); the other 27 are identical, so
 `tools/oracle/*.ir.json`, `tools/claims/*.ir.json` and `lean/` do not move.
 `tests/request_interface.rs` holds the rules, the IR of a parameter sent as
-it is, and a sent expression's run against the bare server's.
+it is, and a sent expression's run against the same expression read from
+parameters sent as they are.

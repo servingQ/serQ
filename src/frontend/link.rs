@@ -598,8 +598,8 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
         }
         stage_base += s.count;
     }
-    // Pools and stages are the scheduler's: under a signature they read
-    // what the server reads.
+    // Pools and stages are the scheduler's: they read what the server
+    // reads.
     lk.reader.set(Some(crate::ir::Side::Server));
     // Pools.
     let mut pools = vec![];
@@ -849,20 +849,14 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
     if warmup >= horizon {
         return Err(LinkError::new("warmup must be below the horizon".into()));
     }
-    // `hidden` names session attributes the scheduler's expressions may not
+    // the hidden parameters, which the scheduler's expressions may not
     // read; `Program::validate` enforces it by moment and rejects what the
-    // scheduler itself sets. A name nothing sets is a mistake, not an attribute
+    // scheduler itself sets. The parser sends every parameter, so each is an
+    // attribute (`lower_send`)
     let mut hidden = vec![];
     if let Some(w) = prog.workload.as_ref() {
         for n in &w.hidden {
-            match lk.attr_index.get(n) {
-                Some(&i) => hidden.push(i),
-                None => {
-                    return Err(LinkError::new(format!(
-                        "hidden `{n}`: no `set` or `choose` makes it a session attribute"
-                    )));
-                }
-            }
+            hidden.push(lk.attr_index[n]);
         }
     }
     if let Some(w) = prog.workload.as_ref() {
@@ -2768,9 +2762,9 @@ impl Linker<'_> {
         Ok(id)
     }
 
-    /// Under a server's signature, refuse a read across it: the server
-    /// (and the scheduler) of what the workload keeps, the workload of
-    /// what the server keeps (`docs/design/request-interface.md`).
+    /// Refuse a read across the server's signature: the server (and the
+    /// scheduler) of what the workload keeps, the workload of what the
+    /// server keeps (`docs/design/request-interface.md`).
     fn cross(&self, n: &str) -> LResult<()> {
         let (Some(i), Some(side)) = (&self.prog.interface, self.reader.get()) else {
             return Ok(());
@@ -2787,8 +2781,14 @@ impl Linker<'_> {
         };
         match side {
             crate::ir::Side::Server if i.client.iter().any(|c| c == n) => {
+                // a trace's attributes a turn draws, the others the workload sets
+                let what = if BUILTIN_ATTRS.contains(&n) {
+                    "which a turn draws"
+                } else {
+                    "which the workload sets"
+                };
                 Err(LinkError::new(format!(
-                    "the server reads `{n}`, which the workload sets; a request carries {}\n\
+                    "the server reads `{n}`, {what}; a request carries {}\n\
                      help: add `{n}` to `server (…)` and bind it in the workload's `send (…)`",
                     names(&i.params)
                 )))
