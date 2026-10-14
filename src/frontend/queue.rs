@@ -136,6 +136,8 @@ pub struct Takes {
     pub push: bool,
     /// `share = share.maxmin`: how the copies divide the two NICs.
     pub share: crate::ir::Share,
+    /// Where `kvt.…` is written, for an error about the relation.
+    pub at: usize,
 }
 
 /// The stage a `transfer` without `on` names inside an entry of a queue
@@ -434,6 +436,7 @@ impl Ctx<'_> {
             latency,
             share,
             push,
+            ..
         }) = &self.q.takes
         else {
             return err(

@@ -799,6 +799,29 @@ fn sets_always(stmts: &[Stmt], name: &str) -> bool {
     })
 }
 
+/// Whether `stmts` copy the KV over the NICs anywhere, an entry's
+/// `transfer (n) from S to kv (m)` (a run on `queue::PULL`).
+fn transfers(stmts: &[Stmt]) -> bool {
+    stmts.iter().any(|s| match s {
+        Stmt::Run { stage, .. } => stage.name == queue::PULL,
+        Stmt::Branch(_, a, b) => transfers(a) || transfers(b),
+        Stmt::Hold { body, .. } | Stmt::While(_, body) | Stmt::Loop(body) | Stmt::Fork(body) => {
+            transfers(body)
+        }
+        _ => false,
+    })
+}
+
+/// Whether `stmts` fork a leg anywhere, in a block in them as well.
+fn forks(stmts: &[Stmt]) -> bool {
+    stmts.iter().any(|s| match s {
+        Stmt::Fork(_) => true,
+        Stmt::Branch(_, a, b) => forks(a) || forks(b),
+        Stmt::Hold { body, .. } | Stmt::While(_, body) | Stmt::Loop(body) => forks(body),
+        _ => false,
+    })
+}
+
 /// An argument of the statements `def` reads the clock or live state,
 /// which the body would read where it reads the parameter.
 fn live_message(def: &str, p: &str, what: &str) -> String {
@@ -2391,6 +2414,79 @@ impl Parser {
                 push: t.push,
                 share: t.share,
             }));
+        }
+        // and the other way: a relation copies only through its reader's
+        // connector, which loads each copy, or an entry's `transfer … from
+        // S`; without either no copy runs, and the NICs it declares carry
+        // nothing
+        for q in &self.queues {
+            let Some(t) = &q.takes else {
+                continue;
+            };
+            if q.entries.iter().any(|e| transfers(&e.body)) {
+                continue;
+            }
+            let verb = if t.push { "push" } else { "pull" };
+            let written = format!("`kvt.nixl_{verb} ({}, {})`", t.source, q.name);
+            let engine = prog.stages.iter().find_map(|st| match &st.kind {
+                StageKind::Step(sp) if st.name == q.name => Some(sp),
+                _ => None,
+            });
+            let has = match engine.map(|sp| sp.connector.as_ref()) {
+                Some(Some(c)) if c.queue == t.source => continue,
+                Some(Some(c)) => format!(
+                    "`{}`'s engine has `connector {}`, not `connector {}`",
+                    q.name, c.queue, t.source
+                ),
+                Some(None) => format!("`{}`'s engine has no `connector {}`", q.name, t.source),
+                None => format!("`{}` has no engine", q.name),
+            };
+            return self.err_at(
+                t.at,
+                format!(
+                    "{written} copies the KV `{0}` leases to `{1}`, and {has}, nor does an \
+                     entry of `{1}` `transfer` it: the reader's connector loads each copy, so \
+                     none would run\n\
+                     help: in `{1}`'s engine, write `connector {0} {{ load (…); }}`, the tokens a \
+                     request loads from `{0}` (`request.input - request.hit`)",
+                    t.source, q.name
+                ),
+            );
+        }
+        // a push's reader waits for the source's leg (the connector's
+        // `join`): a program that forks no leg has none to wait for
+        if let Some((q, t)) = self
+            .queues
+            .iter()
+            .find_map(|q| q.takes.as_ref().filter(|t| t.push).map(|t| (q, t)))
+        {
+            let forked = self.server.iter().any(|(_, b)| forks(b))
+                || self.wl_session.iter().any(|(_, b)| forks(b))
+                || forks(&prog.session)
+                || self
+                    .queues
+                    .iter()
+                    .flat_map(|q| &q.entries)
+                    .any(|e| forks(&e.body));
+            if !forked {
+                let call = self
+                    .queues
+                    .iter()
+                    .find(|s| s.name == t.source)
+                    .and_then(|s| s.entries.iter().find(|e| e.from.is_none()))
+                    .map_or("…".to_string(), |e| e.verb.clone());
+                return self.err_at(
+                    t.at,
+                    format!(
+                        "`kvt.nixl_push ({0}, {1})`: in a push `{0}` posts the copy as its leg \
+                         ends, and `{1}`'s connector waits for that leg (`join`); no call is \
+                         forked, so there is no leg to wait for\n\
+                         help: call `{0}` in a leg beside the rest of the request: \
+                         `fork {{ {0}.{call} (…); }}`",
+                        t.source, q.name
+                    ),
+                );
+            }
         }
         Ok(())
     }
@@ -6096,6 +6192,7 @@ impl Parser {
             latency,
             push,
             share,
+            at,
         });
         Ok(())
     }
