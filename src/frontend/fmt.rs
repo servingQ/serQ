@@ -66,10 +66,15 @@ fn format_with(
 ) -> Result<String, String> {
     // half of a pair (a deployment file, a workload file) parses only with
     // its other half (`frontend::paired`): it keeps its tokens, below
-    let whole = match parse(src) {
-        Ok(_) => true,
-        Err(_) if crate::frontend::paired::half(src) => false,
-        Err(e) => return Err(e.render(src)),
+    let half = match parse(src) {
+        Ok(_) => None,
+        Err(e) => match crate::frontend::paired::half(src) {
+            Some(h) => {
+                parser::parse_half(src, h)?;
+                Some(h)
+            }
+            None => return Err(e.render(src)),
+        },
     };
     let tokens = lex(src).map_err(|e| e.to_string())?;
     let lines: Vec<&str> = src.lines().collect();
@@ -178,9 +183,13 @@ fn format_with(
     if src.is_empty() {
         out.clear();
     }
-    if whole {
-        parse(&out)
-            .map_err(|e| format!("formatter produced invalid syntax: {}", e.render(&out)))?;
+    match half {
+        None => {
+            parse(&out)
+                .map_err(|e| format!("formatter produced invalid syntax: {}", e.render(&out)))?;
+        }
+        Some(h) => parser::parse_half(&out, h)
+            .map_err(|e| format!("formatter produced invalid syntax: {e}"))?,
     }
     let formatted = lex(&out).map_err(|e| e.to_string())?;
     let before: Vec<&Tok> = tokens.iter().map(|t| &t.tok).collect();

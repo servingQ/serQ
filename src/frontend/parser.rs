@@ -183,6 +183,8 @@ struct Parser {
     /// The tokens of a paired workload file (`frontend::paired`), at the
     /// head of `fn main()`'s body.
     paired: Option<std::ops::Range<usize>>,
+    /// Check the syntax alone: half of a pair (`parse_half`).
+    syntax_only: bool,
     /// Header bindings the body of their hold reads, with the position of
     /// the name: `set` at the top of the body, checked once the program's
     /// attributes are known (`check_body_bindings`).
@@ -667,31 +669,63 @@ pub fn parse_paired(
     defs: &[(String, String)],
     lets: &[String],
 ) -> Result<Program, String> {
-    let (toks, range) = p.tokens()?;
-    let mut parser = Parser::new(toks);
-    parser.paired = Some(range);
+    use crate::frontend::paired::{DEPLOYMENT, WORKLOAD};
+    let spliced = p.tokens()?;
+    let mut parser = Parser::new(spliced.toks);
+    parser.paired = Some(spliced.range);
+    // an override names a definition as its file writes it
     parser.def_overrides = defs
         .iter()
-        .map(|(n, e)| (n.clone(), e.clone(), false))
+        .map(|(n, e)| {
+            let prefix = if spliced.defs.1.contains(n) {
+                WORKLOAD
+            } else if spliced.defs.0.contains(n) {
+                DEPLOYMENT
+            } else {
+                ""
+            };
+            (format!("{prefix}{n}"), e.clone(), false)
+        })
         .collect();
     parser.supplied_inputs = lets.to_vec();
     let mut prog = parser
         .program()
         .map_err(|e| crate::frontend::paired::parse_error(p, &e))?;
-    prog.paired = Some(p.workload_names()?);
+    prog.paired = Some(spliced.stages);
     if let Some(name) = parser.def_overrides.iter().find(|d| !d.2).map(|d| &d.0) {
-        return Err(format!("unknown `def` override `{name}`"));
+        return Err(format!(
+            "unknown `def` override `{}`",
+            crate::frontend::paired::written(name)
+        ));
     }
     Ok(prog)
+}
+
+/// Check half of a pair alone, for its syntax (`serq fmt`): beside an
+/// empty other half, without what only a whole program is checked for.
+pub fn parse_half(src: &str, half: crate::frontend::paired::File) -> Result<(), String> {
+    use crate::frontend::paired::{File, Paired};
+    let p = match half {
+        File::Workload => Paired::new("fn main() {\n}\n", src, ("deployment", "workload")),
+        File::Deployment => Paired::new(src, "workload { }\n", ("deployment", "workload")),
+    };
+    let spliced = p.tokens()?;
+    let mut parser = Parser::new(spliced.toks);
+    parser.paired = Some(spliced.range);
+    parser.syntax_only = true;
+    parser
+        .program()
+        .map(|_| ())
+        .map_err(|e| crate::frontend::paired::parse_error(&p, &e))
 }
 
 /// `outline` of a pair: positions are into `p.combined`.
 pub fn outline_paired(
     p: &crate::frontend::paired::Paired,
 ) -> Result<crate::frontend::outline::Outline, String> {
-    let (toks, range) = p.tokens()?;
-    let mut parser = Parser::new(toks);
-    parser.paired = Some(range);
+    let spliced = p.tokens()?;
+    let mut parser = Parser::new(spliced.toks);
+    parser.paired = Some(spliced.range);
     parser.outline = Some(crate::frontend::outline::Recorder::new(&p.combined));
     parser
         .program()
@@ -1697,6 +1731,7 @@ impl Parser {
             sent_as_is: vec![],
             hidden_at: None,
             paired: None,
+            syntax_only: false,
             body_binds: vec![],
             header_binds: vec![],
             bind_at: vec![],
@@ -2178,6 +2213,9 @@ impl Parser {
         }
         if in_main {
             return self.err("unclosed `fn main()`; expected `}`");
+        }
+        if self.syntax_only {
+            return Ok(prog);
         }
         if self.kvt_imported && self.declares(&prog, "kvt") {
             return self

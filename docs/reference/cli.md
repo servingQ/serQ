@@ -24,7 +24,8 @@ With `--workload W`, `FILE` is a deployment file and `W` a workload file,
 which the tool pairs ([paired files](../language.md#paired-files)):
 `serq run examples/paired/deployments/vllm.sq --workload examples/paired/workloads/chat.sq --horizon 3000`.
 A message names the file it is about; a trace the workload reads is read
-next to `W`.
+next to `W`. `--workload` pairs program text: an IR (`.json`) is a whole
+program already.
 
 Source models contain no execution settings. `run` and `ir` require
 `--horizon T` or an explicit `--instance F` that supplies it. `warmup` defaults

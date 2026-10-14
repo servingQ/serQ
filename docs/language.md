@@ -432,9 +432,10 @@ workload {
 }
 ```
 
-Each file reads its own names: the server and the scheduler read no
-constant of the workload file, the workload none of the deployment's, and a
-name both declare is refused. The inputs of both are the program's
+Each file reads its own names: no constant or definition of the workload
+file is read by the deployment, none of the deployment's by the workload, and
+both may declare `p`, each meaning its own. The workload runs on its own
+stages, the server on none of them. The inputs of both are the program's
 (`--Lambda 0.5 --max_seqs 32`). A single-file program is the same program
 written in one file.
 

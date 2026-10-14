@@ -1,14 +1,15 @@
-//! `serq run FILE [--seed N] [--horizon T] [--warmup T] [--arrivals N] [--instance F] [--def k=expr]... [--trace F] [--json] [--dump DIR] [--log FILE] [--name value]...`
-//! `serq check FILE [--instance F] [--def k=expr]... [--name value]...`
-//! `serq ir FILE [--instance F] [--def k=expr]... [--seed N] [--horizon T] [--warmup T] [--arrivals N] [--trace F] [--inline-trace] [--name value]...`
-//! `serq draw FILE [--format tikz|svg] [--out PATH] [--name value]...` (experimental)
-//! `serq target FILE [--instance F] [--def k=expr]... [--name value]...`
+//! `serq run FILE [--workload W] [--seed N] [--horizon T] [--warmup T] [--arrivals N] [--instance F] [--def k=expr]... [--trace F] [--json] [--dump DIR] [--log FILE] [--name value]...`
+//! `serq check FILE [--workload W] [--instance F] [--def k=expr]... [--name value]...`
+//! `serq ir FILE [--workload W] [--instance F] [--def k=expr]... [--seed N] [--horizon T] [--warmup T] [--arrivals N] [--trace F] [--inline-trace] [--name value]...`
+//! `serq draw FILE [--workload W] [--format tikz|svg] [--out PATH] [--name value]...` (experimental)
+//! `serq target FILE [--workload W] [--instance F] [--def k=expr]... [--name value]...`
 //!
 //! `--name value` is an input the program declares with `args.number`.
 //! `serq fmt [--check] FILE...`
 //! `serq --version`
 //!
-//! FILE is program text (`.sq`) or IR (`.json`, as written by `serq ir`).
+//! FILE is program text (`.sq`) or IR (`.json`, as written by `serq ir`); with
+//! `--workload W`, a deployment file the tool pairs with the workload file W.
 
 use std::path::Path;
 use std::process::exit;
@@ -18,16 +19,20 @@ use serq::Overrides;
 fn usage(cmd: &str) -> &'static str {
     match cmd {
         "run" => {
-            "serq run FILE [--seed N] [--horizon T] [--warmup T] [--arrivals N] [--instance F] [--def name=expr]... [--trace F] [--json] [--dump DIR] [--log FILE] [--name value]..."
+            "serq run FILE [--workload W] [--seed N] [--horizon T] [--warmup T] [--arrivals N] [--instance F] [--def name=expr]... [--trace F] [--json] [--dump DIR] [--log FILE] [--name value]..."
         }
-        "check" => "serq check FILE [--instance F] [--def name=expr]... [--name value]...",
+        "check" => {
+            "serq check FILE [--workload W] [--instance F] [--def name=expr]... [--name value]..."
+        }
         "ir" => {
-            "serq ir FILE [--instance F] [--def name=expr]... [--seed N] [--horizon T] [--warmup T] [--arrivals N] [--trace F] [--inline-trace] [--name value]..."
+            "serq ir FILE [--workload W] [--instance F] [--def name=expr]... [--seed N] [--horizon T] [--warmup T] [--arrivals N] [--trace F] [--inline-trace] [--name value]..."
         }
         "draw" => {
-            "serq draw FILE [--instance F] [--def name=expr]... [--format tikz|svg] [--out PATH] [--name value]..."
+            "serq draw FILE [--workload W] [--instance F] [--def name=expr]... [--format tikz|svg] [--out PATH] [--name value]..."
         }
-        "target" => "serq target FILE [--instance F] [--def name=expr]... [--name value]...",
+        "target" => {
+            "serq target FILE [--workload W] [--instance F] [--def name=expr]... [--name value]..."
+        }
         "fmt" => "serq fmt [--check] FILE...",
         _ => "serq <run|check|ir|draw|target|fmt> FILE [OPTIONS] | serq --version",
     }
@@ -250,6 +255,12 @@ fn main() {
     // Checking, target extraction and drawing do not execute or export this IR.
     let inspect = matches!(cmd, "check" | "target" | "draw");
     let paired = workload.as_deref().map(Path::new);
+    if paired.is_some() && file.extension().is_some_and(|e| e == "json") {
+        argument_error(
+            cmd,
+            "--workload pairs a .sq deployment with a workload file; an IR is a whole program already",
+        );
+    }
     let load = |file: &Path, ov: &Overrides| match paired {
         // a pair's message names its file itself
         Some(w) => {

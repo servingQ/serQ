@@ -110,20 +110,91 @@ fn each_file_reads_its_own_names() {
     refused(
         &deployment,
         "let rate = scale;\nworkload { arrive poisson(rate); turn { set s = 1; } send (work: s); }\n",
-        &["`scale` is the deployment file's"],
+        &["w.sq: 1:", "`scale` is the deployment file's"],
     );
     // the arrival reads the deployment's
     refused(
         &deployment,
         "workload { arrive poisson(scale); turn { set s = 1; } send (work: s); }\n",
-        &["`scale` is the deployment file's"],
+        &["w.sq: 1:", "`scale` is the deployment file's"],
     );
-    // a name both declare
+    // a declaration of the deployment reads the workload's constant
     refused(
+        "fn main() {\n  pool q { cap rate; }\n  stage svc : fifo;\n  server (work) { hold q (cost(q, 1)) { run svc (cost(svc, work)); } }\n}\n",
+        WORKLOAD,
+        &["d.sq: 2:", "`rate` is the workload file's"],
+    );
+    // a definition of the other file
+    refused(
+        "def twice(x) { x * 2 }\nfn main() {\n  stage svc : fifo;\n  server (work) { run svc (cost(svc, work)); }\n}\n",
+        "workload { arrive poisson(1); turn { set s = twice(1); } send (work: s); }\n",
+        &["w.sq: 1:", "`twice` is the deployment file's"],
+    );
+}
+
+/// Each file runs on its own stages.
+#[test]
+fn each_file_runs_on_its_own_stages() {
+    // the workload on a stage of the deployment
+    refused(
+        "fn main() {\n  stage svc : fifo;\n  stage wait : delay;\n  server (work) { run svc (cost(svc, work)); }\n}\n",
+        "workload { arrive poisson(1); turn { set s = 1; } send (work: s);\n  session { turn; run wait (cost(wait, 1)); } }\n",
+        &["w.sq: 2:", "stage `wait` is the deployment file's"],
+    );
+    // the server on a stage of the workload
+    refused(
+        "fn main() {\n  stage svc : fifo;\n  server (work) { run user (cost(user, work)); run svc (cost(svc, 1)); }\n}\n",
+        "stage user : delay;\nworkload { arrive poisson(1); turn { set s = 1; } send (work: s); }\n",
+        &["d.sq: 3:", "stage `user` is the workload file's"],
+    );
+}
+
+/// Each file's names are its own: both may declare `p`, each reading its own.
+#[test]
+fn both_files_may_declare_a_name() {
+    compile_paired(
         &format!("let rate = 2;\n{DEPLOYMENT}"),
         WORKLOAD,
-        &["w.sq: 1:5:", "`rate` is declared in both files"],
+        names(),
+        &common::horizon(10.0),
+    )
+    .unwrap();
+}
+
+/// A position a message quotes is in its own file.
+#[test]
+fn a_quoted_position_is_in_its_file() {
+    let err = compile_paired(
+        "fn main() {\n  stage svc : fifo;\n  server (work) { run svc (cost(svc, work)); }\n  claim c : at end (rate > 0);\n}\n",
+        WORKLOAD,
+        names(),
+        &common::horizon(10.0),
+    )
+    .unwrap_err();
+    assert!(!err.contains("6:5") && !err.contains("w·"), "{err}");
+}
+
+#[test]
+fn an_empty_or_unclosed_file_is_its_own() {
+    refused(
+        DEPLOYMENT,
+        "use \"std/args\";\n",
+        &["w.sq: 1:1:", "a workload file declares `workload { … }`"],
     );
+    refused(
+        "fn main() {\n  stage svc : fifo;\n  server (work) { run svc (cost(svc, work)); }\n",
+        WORKLOAD,
+        &["d.sq: ", "unclosed `fn main()`"],
+    );
+}
+
+/// `serq fmt` checks half of a pair for its syntax.
+#[test]
+fn a_half_is_formatted_only_if_it_parses() {
+    serq::frontend::fmt::format(WORKLOAD).unwrap();
+    serq::frontend::fmt::format(DEPLOYMENT).unwrap();
+    serq::frontend::fmt::format("workload ;;; }}} {{ let let 1 2 3").unwrap_err();
+    serq::frontend::fmt::format("fn main ( ) { stage svc : fifo").unwrap_err();
 }
 
 /// A local name of one file is no read of the other's constant.

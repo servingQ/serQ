@@ -82,7 +82,12 @@ pub fn outline_paired(
     workload: &str,
 ) -> Result<(frontend::outline::Outline, frontend::outline::Outline), String> {
     let p = frontend::paired::Paired::new(deployment, workload, ("deployment", "workload"));
-    Ok(frontend::parser::outline_paired(&p)?.split(p.at))
+    let (mut d, mut w) = frontend::parser::outline_paired(&p)?.split(p.at);
+    // the names as each file writes them (`frontend::paired`)
+    for decl in d.decls.iter_mut().chain(w.decls.iter_mut()) {
+        decl.name = frontend::paired::written(&decl.name);
+    }
+    Ok((d, w))
 }
 
 /// Run a pair (`compile_paired`); a trace the workload reads is read next
@@ -113,13 +118,8 @@ fn finish(
     render: &Render,
     ov: &Overrides,
 ) -> Result<ir::Program, String> {
-    let (mut p, spans) = frontend::link::link_located(&prog, ov).map_err(|e| {
-        let msg = format!("link error: {}", e.message);
-        match e.span {
-            Some(_) => render(e.span, &msg),
-            None => e.to_string(),
-        }
-    })?;
+    let (mut p, spans) = frontend::link::link_located(&prog, ov)
+        .map_err(|e| render(e.span, &format!("link error: {}", e.message)))?;
     if let Some(t) = &ov.trace {
         p.trace = Some(t.clone());
     }
@@ -140,10 +140,7 @@ fn finish(
             });
         let span =
             declared.or_else(|| e.at.and_then(|(b, k)| spans.get(b)?.get(k)?.of(&e.message)));
-        match span {
-            Some(_) => render(span, &e.message),
-            None => e.message,
-        }
+        render(span, &e.message)
     })?;
     Ok(p)
 }

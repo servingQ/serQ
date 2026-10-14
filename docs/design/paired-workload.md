@@ -4,7 +4,8 @@ A deployment and a workload can be written in two files and paired by the
 tool: `serq run DEPLOYMENT --workload WORKLOAD`, `serq::compile_paired`.
 The workload file has no `fn main()`. The two meet only at the server's
 signature ([request interface](request-interface.md)). The IR does not
-change: a pair compiles to the program the two files would make as one.
+change: a pair compiles to the program the two files would make as one, up
+to the order of their declarations (the workload's own stages first).
 
 ## Before and after
 
@@ -30,10 +31,12 @@ reports what `serq run examples/multi-turn/vllm_chat.sq --horizon 200` does
   and inputs (`let`, `args.number` among them), definitions (`def`), the
   stages it runs on itself, and exactly one `workload { … }`; anything else
   (`pool`, `engine`, `server`, …) is the deployment file's and refused.
-- Each file reads its own names. The server, its routes and the
-  scheduler's expressions read no constant of the workload file; the
-  workload reads none of the deployment's; a constant reads its own file's;
-  a name both files declare is refused. What crosses is the signature.
+- Each file reads its own names. No constant or definition of the
+  workload file is read by the deployment, wherever (the server, a pool's
+  capacity, an engine's schedule, a constant), and none of the deployment's
+  by the workload; both may declare `p`, each its own. The workload runs on
+  its own stages (and the `tool` it needs none for), the server on none of
+  them. What crosses is the signature.
 - The inputs of both are the program's.
 - A message names its file, at its own line (`chat.sq: 3:5: …`).
 
@@ -41,13 +44,17 @@ reports what `serq run examples/multi-turn/vllm_chat.sq --horizon 200` does
 
 The tool lexes both files and puts the workload file's tokens at the head
 of the deployment's `fn main()` body (its `use`s before the deployment's),
-then parses one program. Its lines are numbered after the deployment's, in
-one text (`Paired::combined`), so every position the parser, the linker and
-the IR's check record maps back to its file (`Paired::locate`), and the
+then parses one program. Each file's constants and definitions are
+renamed apart inside the pair (`w·Z`, `d·B`), so a name of the other file
+resolves to nothing wherever it is read, in an expression, a capacity or a
+family's size, and a message says whose it is in place of "unknown"; the
+names a message shows are as written. Stages keep their names (a report and
+a figure show them): the linker checks, by the side running one, that it is
+its file's (`Linker::paired_stage`). The workload's lines are numbered after
+the deployment's, in one text (`Paired::combined`), so every position the
+parser, the linker and the IR's check record, and each one a message quotes
+(`declared at 6:5`), maps back to its file (`Paired::render`), and the
 outline splits into the two files' (`Outline::split`, `serq::outline_paired`).
-The parser records the workload file's names (`Program::paired`), and the
-linker refuses a read across at the one place it resolves a name, by the
-side reading (`Linker::cross`), as it does the attributes.
 
 ## Self-critique
 
@@ -59,15 +66,17 @@ side reading (`Linker::cross`), as it does the attributes.
   `workload` outside `fn main()`; a single-file program still writes it
   inside. Moving it out everywhere would be a second migration for no
   meaning: in one file, the workload reads `fn main()`'s inputs.
-- **Renaming each file's names apart.** A hidden prefix would let both
-  declare `p`, but every message would show the mangled name. A name both
-  declare is refused.
-- **Token-level reads across.** A first version refused a token of the
-  other file's name; it refused `hbm (k)`, a parameter, beside a workload's
-  `let k`. The linker refuses by meaning instead.
-- **`serq fmt` on half a pair.** A half parses only with its other half, so
-  `fmt` checks a half by its tokens alone (it never changes one); `serq
-  check D --workload W` is its parse.
+- **Checking each read across.** A first version refused a token of the
+  other file's name (it refused `hbm (k)`, a parameter, beside a workload's
+  `let k`), then the linker's reads of constants by side: a pool's capacity,
+  a family's size and a `def` slipped past both. Renaming each file's names
+  apart closes every place at once, since nothing resolves a name of the
+  other file; messages take the renaming off.
+- **Refusing a name both declare.** With each file its own namespace there
+  is nothing to refuse: the chat workload and the engine may both say `p`.
+- **`serq fmt` on half a pair.** A half links only with its other half;
+  `fmt` parses it for its syntax beside an empty other half
+  (`parser::parse_half`), and `serq check D --workload W` checks the rest.
 - **pyserq.** It compiles one file; a pair is the CLI's and the library's
   for now.
 

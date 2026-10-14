@@ -520,7 +520,6 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
             return Err(LinkError::new(refusal));
         }
     }
-    paired_constants(prog)?;
     // Constants, in order; supplied inputs replace only their declared defaults.
     for (index, (name, e)) in prog.lets.iter().enumerate() {
         let input = prog
@@ -1682,64 +1681,6 @@ fn member(base: usize, count: usize, i: usize, n: usize, who: &str, what: &str) 
     }
 }
 
-/// A constant of the other file of a pair, read on `side`.
-fn paired_message(n: &str, side: crate::ir::Side) -> String {
-    let whose = match side {
-        crate::ir::Side::Server => "workload",
-        crate::ir::Side::Workload => "deployment",
-    };
-    format!(
-        "`{n}` is the {whose} file's: the workload and the deployment read their own names, \
-         and meet only at the server's signature (`send`, `reply`)"
-    )
-}
-
-/// For a pair of files: a constant reads its own file's constants, and the
-/// arrival the workload file's.
-fn paired_constants(prog: &Program) -> LResult<()> {
-    let Some(wl) = &prog.paired else {
-        return Ok(());
-    };
-    let ours = |n: &str| wl.iter().any(|w| w == n);
-    let lets: Vec<&str> = prog.lets.iter().map(|(n, _)| n.as_str()).collect();
-    let reads = |e: &Expr| {
-        let mut vars = vec![];
-        crate::frontend::parser::names(e, &mut vars, &mut Vec::new());
-        vars
-    };
-    for (name, e) in &prog.lets {
-        for v in reads(e) {
-            if lets.contains(&v.as_str()) && ours(name) != ours(&v) {
-                let side = if ours(name) {
-                    crate::ir::Side::Workload
-                } else {
-                    crate::ir::Side::Server
-                };
-                return Err(LinkError::new(paired_message(&v, side)));
-            }
-        }
-    }
-    if let Some(w) = &prog.workload {
-        let arrival = match &w.arrive {
-            Arrival::Poisson(e) | Arrival::Renewal(e) | Arrival::Closed(e) | Arrival::Batch(e) => {
-                Some(e)
-            }
-            Arrival::None => None,
-        };
-        if let Some(v) = arrival
-            .into_iter()
-            .flat_map(reads)
-            .find(|v| lets.contains(&v.as_str()) && !ours(v))
-        {
-            return Err(LinkError::new(paired_message(
-                &v,
-                crate::ir::Side::Workload,
-            )));
-        }
-    }
-    Ok(())
-}
-
 fn collect_attrs(stmts: &[Stmt], lk: &mut Linker) {
     let mut names = vec![];
     crate::frontend::parser::assigned_in(stmts, &mut names);
@@ -1950,6 +1891,7 @@ impl Linker<'_> {
     }
 
     fn stage_ref(&self, r: &Ref) -> LResult<CRef> {
+        self.paired_stage(&r.name).map_err(|e| e.at(r.span))?;
         self.cref(r, &self.stages, "stage")
     }
 
@@ -2821,22 +2763,30 @@ impl Linker<'_> {
         Ok(id)
     }
 
+    /// For a pair of files: the workload runs on its own stages (and the
+    /// `tool` it needs none for), the deployment on none of them
+    /// (`docs/design/paired-workload.md`).
+    fn paired_stage(&self, name: &str) -> LResult<()> {
+        let (Some(wl), Some(side)) = (&self.prog.paired, self.reader.get()) else {
+            return Ok(());
+        };
+        let ours = wl.iter().any(|w| w == name);
+        match side {
+            crate::ir::Side::Workload if !ours && name != "tool" => Err(LinkError::new(format!(
+                "stage `{name}` is the deployment file's: the workload runs on its own stages \
+                 and sends the server what it runs"
+            ))),
+            crate::ir::Side::Server if ours => Err(LinkError::new(format!(
+                "stage `{name}` is the workload file's: the deployment runs on its own stages"
+            ))),
+            _ => Ok(()),
+        }
+    }
+
     /// Refuse a read across the server's signature: the server (and the
     /// scheduler) of what the workload keeps, the workload of what the
-    /// server keeps (`docs/design/request-interface.md`); and, for a pair of
-    /// files, a constant of the other file (`docs/design/paired-workload.md`).
+    /// server keeps (`docs/design/request-interface.md`).
     fn cross(&self, n: &str) -> LResult<()> {
-        if let (Some(wl), Some(side)) = (&self.prog.paired, self.reader.get()) {
-            let theirs = match side {
-                crate::ir::Side::Server => wl.iter().any(|w| w == n),
-                crate::ir::Side::Workload => {
-                    !wl.iter().any(|w| w == n) && self.prog.lets.iter().any(|(l, _)| l == n)
-                }
-            };
-            if theirs {
-                return Err(LinkError::new(paired_message(n, side)));
-            }
-        }
         let (Some(i), Some(side)) = (&self.prog.interface, self.reader.get()) else {
             return Ok(());
         };
