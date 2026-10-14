@@ -55,17 +55,21 @@
 </g>
 <text x="747.6" y="270" text-anchor="start" font-size="10" fill="#1d2021">pool E.reqs on E</text>
 <text x="747.6" y="282" text-anchor="start" font-size="8" fill="#6b7280" class="dim">cap 256</text>
+<g data-node="#0">
 <polygon class="station" fill="#d8e6e4" stroke="#4b5563" stroke-width="1.3" points="223.2,103 249.2,129 223.2,155 197.2,129"/>
+</g>
 <text x="223.2" y="95" text-anchor="middle" font-size="10" fill="#1d2021">choose j</text>
+<g data-node="#1">
 <rect class="station" fill="#d8e6e4" stroke="#4b5563" stroke-width="1.3" x="525.6" y="103" width="84" height="52" rx="8"/>
 <circle class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" cx="539.6" cy="129" r="4"/>
 <circle class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" cx="553.6" cy="129" r="4"/>
 <circle class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" cx="567.6" cy="129" r="4"/>
 <circle class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" cx="581.6" cy="129" r="4"/>
 <circle class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" cx="595.6" cy="129" r="4"/>
+</g>
 <text x="567.6" y="95" text-anchor="middle" font-size="10" fill="#1d2021">tick</text>
 <text x="567.6" y="168" text-anchor="middle" font-size="8" fill="#6b7280" class="dim">every 5</text>
-<g data-stage="E">
+<g data-node="E" data-stage="E">
 <rect class="station" fill="#d8e6e4" stroke="#4b5563" stroke-width="1.3" x="879.2" y="103" width="84" height="52" rx="3"/>
 <rect class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" x="887.2" y="142" width="68" height="6"/>
 <rect class="solid" fill="#eef2f5" stroke="#4b5563" stroke-width="1.1" data-role="budget" x="887.2" y="142" width="42.16" height="6"/>
@@ -73,14 +77,14 @@
 </g>
 <text x="921.2" y="95" text-anchor="middle" font-size="10" fill="#1d2021">E[home]</text>
 <text x="921.2" y="168" text-anchor="middle" font-size="8" fill="#6b7280" class="dim">tokens cap 8192</text>
-<path class="flow" fill="none" stroke="#4b5563" stroke-width="1.3" data-role="arrival" d="M28 129 L181.2 129" marker-end="url(#a)"/>
+<path class="flow" fill="none" stroke="#4b5563" stroke-width="1.3" data-role="arrival" data-to="#0" d="M28 129 L181.2 129" marker-end="url(#a)"/>
 <text x="28" y="119" text-anchor="start" font-size="8" fill="#6b7280" class="dim">new sessions: closed, 32 live</text>
-<path class="flow" fill="none" stroke="#4b5563" stroke-width="1.3" data-role="exit" d="M244.2 155 L244.2 331 L1164.8 331" marker-end="url(#a)"/>
+<path class="flow" fill="none" stroke="#4b5563" stroke-width="1.3" data-role="exit" data-from="#0" d="M244.2 155 L244.2 331 L1164.8 331" marker-end="url(#a)"/>
 <text x="1168.8" y="334" text-anchor="start" font-size="8" fill="#6b7280" class="dim">out (prompt + 100 &gt;= 4000 * 16)</text>
-<path class="flow" fill="none" stroke="#4b5563" stroke-width="1.3" d="M265.2 129 L525.6 129" marker-end="url(#a)"/>
+<path class="flow" fill="none" stroke="#4b5563" stroke-width="1.3" data-role="flow" data-from="#0" data-to="#1" d="M265.2 129 L525.6 129" marker-end="url(#a)"/>
 <text x="271.2" y="121" text-anchor="start" font-size="8" fill="#6b7280" class="dim">else</text>
-<path class="flow" fill="none" stroke="#4b5563" stroke-width="1.3" d="M233.7 155 L233.7 353 L921.2 353 L921.2 295" marker-end="url(#a)"/>
-<path class="flow" fill="none" stroke="#4b5563" stroke-width="1.3" d="M609.6 129 L879.2 129" marker-end="url(#a)"/>
+<path class="flow" fill="none" stroke="#4b5563" stroke-width="1.3" data-role="flow" data-from="#0" data-to="E" d="M233.7 155 L233.7 353 L921.2 353 L921.2 295" marker-end="url(#a)"/>
+<path class="flow" fill="none" stroke="#4b5563" stroke-width="1.3" data-role="flow" data-from="#1" data-to="E" d="M609.6 129 L879.2 129" marker-end="url(#a)"/>
 <path class="flow" fill="none" stroke="#4b5563" stroke-width="1.3" data-role="exit" data-from="E" d="M963.2 129 L1164.8 129" marker-end="url(#a)"/>
 <text x="1168.8" y="132" text-anchor="start" font-size="8" fill="#6b7280" class="dim">out</text>
 </svg>

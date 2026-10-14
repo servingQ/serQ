@@ -97,7 +97,9 @@ pub fn render(f: &Figure) -> String {
 
     for item in &f.items {
         match item {
-            Item::Box { rect, style, round } => {
+            Item::Box {
+                rect, style, round, ..
+            } => {
                 let r = if *round > 0.0 {
                     format!("rounded corners={}pt, ", n(*round))
                 } else {

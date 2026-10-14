@@ -57,11 +57,12 @@ neither: a request arrives at `vllm` and goes out.
 ## Addressing the figure
 
 The SVG is a picture that a page can also address. Each station's shapes
-are grouped under its stage's name, `<g data-stage="P">` (an array's
-members share the name: `P[0]` and `P[1]` are one station, `P`); a queue
-glyph and a drum carry their pool and which of the two they are,
-`<g data-pool="P.reqs" data-role="queue">`. A decision diamond and a
-pool's tick are no stage and have no name. That is what
+are grouped under the name the arrows call it by, `<g data-node="P"
+data-stage="P">` (an array's members share the name: `P[0]` and `P[1]`
+are one station, `P`); a queue glyph and a drum carry their pool and which
+of the two they are, `<g data-pool="P.reqs" data-role="queue">`. A
+decision diamond and a pool's tick are no stage: they have a node name
+(`<g data-node="#0">`) and no `data-stage`. That is what
 [serq-lar](https://github.com/servingQ/serq-lar) animates a
 [run log](../reference/log.md) over: it finds a station by what the
 program calls it, so a change of layout moves nothing but the picture. The
@@ -71,9 +72,19 @@ TikZ writer ignores the ids.
 |---|---|---|
 | `queue` | `<g data-pool>` | the queue glyph where holds of the pool wait |
 | `drum` | `<g data-pool>` | the pool's drum |
-| `arrival` | a `<path>` | the arrow sessions arrive by |
-| `exit` | a `<path>` | an arrow sessions leave by; `data-from` names the stage it leaves, absent from a decision |
+| `arrival` | a `<path>` | the arrow sessions arrive by; `data-to` names the node it reaches |
+| `flow` | a `<path>` | an arrow sessions take from `data-from` to `data-to`: the next station, a loop's return, a transfer between two NICs |
+| `exit` | a `<path>` | an arrow sessions leave by, from `data-from` |
 | `budget` | a `<rect>` inside `<g data-stage>` | the used part of an engine's budget bar |
+| `bracket` | a `<rect>` | the stations one job holds at once (a transfer over two NICs); `data-nodes` lists them, and no arrow joins them |
+
+An arrow's ends name a station by its stage, and a decision or a tick, which
+is no stage, by its place among the figure's nodes: `#0` is the first. The
+place is the layout's, so the name holds within one figure, not across
+programs. A page can so walk a request from one station to the next along
+the arrows it would take, through the decision between them, and across a
+bracket as one place. A loop's return among the flows is the one painted
+`class="back"`, which the layout decides (`a >= b` in the row).
 
 ## Glyphs
 

@@ -94,16 +94,21 @@ pub enum EdgeStyle {
     Relation,
 }
 
-/// What an edge is, beyond its style: where sessions enter the figure and
-/// where they leave it. Written into the SVG (`data-role`) so that a page
-/// animating the figure knows where a request comes from and goes to.
+/// What an edge is, beyond its style: where sessions enter the figure, how
+/// they go from one station to the next, and where they leave. Written into
+/// the SVG (`data-role`, `data-from`, `data-to`) so that a page animating a
+/// run over the figure can move a request along the arrows. A station is
+/// named by its stage; a decision or a tick, which is no stage, by its place
+/// among the net's nodes (`#0`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EdgeRole {
-    Arrival,
-    /// An exit, from the stage it leaves (`None` from a decision).
-    Exit {
-        from: Option<String>,
-    },
+    /// Sessions arrive by it, at `to`.
+    Arrival { to: String },
+    /// Sessions leave by it, from `from`.
+    Exit { from: String },
+    /// Sessions go from `from` to `to` by it: the next station, a loop's
+    /// return, a transfer between two NICs.
+    Flow { from: String, to: String },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -164,6 +169,9 @@ pub enum Item {
         style: BoxStyle,
         /// Corner radius in points; 0 for square corners.
         round: f64,
+        /// For a `Flow` bracket: the nodes one job holds at once (the SVG's
+        /// `data-nodes`), between which it draws no arrow. Empty otherwise.
+        nodes: Vec<String>,
     },
     /// A queueing station.
     Station {
@@ -176,6 +184,9 @@ pub enum Item {
         /// SVG writer puts it on the glyph as `data-stage`, so that the
         /// figure is addressable as well as a picture.
         stage: Option<String>,
+        /// What the arrows call it (`EdgeRole`): the stage's name, or `#k`
+        /// for a decision or a tick (`data-node`).
+        node: String,
     },
     /// The queueing-theory queue glyph: `cells` boxes between two rails,
     /// where holds of `pool` wait (`data-pool`).
@@ -190,7 +201,8 @@ pub enum Item {
         pts: Vec<Point>,
         style: EdgeStyle,
         arrow: bool,
-        /// An arrival or an exit, which the SVG writer marks (`data-role`).
+        /// An arrival, a flow or an exit, which the SVG writer marks
+        /// (`data-role`, `data-from`, `data-to`); `None` for a relation.
         role: Option<EdgeRole>,
     },
     Text {
@@ -288,7 +300,22 @@ impl Figure {
     }
 
     pub fn boxed(&mut self, rect: Rect, style: BoxStyle, round: f64) {
-        self.push(Item::Box { rect, style, round });
+        self.push(Item::Box {
+            rect,
+            style,
+            round,
+            nodes: vec![],
+        });
+    }
+
+    /// The bracket around the stations one job holds at once, `nodes`.
+    pub fn bracket(&mut self, rect: Rect, nodes: Vec<String>) {
+        self.push(Item::Box {
+            rect,
+            style: BoxStyle::Flow,
+            round: 4.0,
+            nodes,
+        });
     }
 
     pub fn edge(&mut self, pts: Vec<Point>, style: EdgeStyle) {
@@ -300,23 +327,34 @@ impl Figure {
         });
     }
 
-    /// The arrow sessions arrive by.
-    pub fn arrival(&mut self, pts: Vec<Point>) {
+    /// The arrow sessions arrive by, at node `to`.
+    pub fn arrival(&mut self, pts: Vec<Point>, to: String) {
         self.push(Item::Edge {
             pts,
             style: EdgeStyle::Flow,
             arrow: true,
-            role: Some(EdgeRole::Arrival),
+            role: Some(EdgeRole::Arrival { to }),
         });
     }
 
-    /// An arrow sessions leave by, from stage `from` (`None`: from a decision).
-    pub fn exit(&mut self, pts: Vec<Point>, from: Option<String>) {
+    /// An arrow sessions leave by, from node `from`.
+    pub fn exit(&mut self, pts: Vec<Point>, from: String) {
         self.push(Item::Edge {
             pts,
             style: EdgeStyle::Flow,
             arrow: true,
             role: Some(EdgeRole::Exit { from }),
+        });
+    }
+
+    /// An arrow sessions take from node `from` to node `to`, drawn in
+    /// `style` (a loop's return is `Back`).
+    pub fn flow(&mut self, pts: Vec<Point>, style: EdgeStyle, from: String, to: String) {
+        self.push(Item::Edge {
+            pts,
+            style,
+            arrow: true,
+            role: Some(EdgeRole::Flow { from, to }),
         });
     }
 

@@ -178,10 +178,25 @@ pub fn render(f: &Figure) -> String {
 
     for item in &f.items {
         match item {
-            Item::Box { rect, style, round } => {
+            Item::Box {
+                rect,
+                style,
+                round,
+                nodes,
+            } => {
+                // a bracket names the nodes one job holds at once, which no
+                // arrow joins: a page walking a request treats them as one place
+                let tag = if nodes.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        r#" data-role="bracket" data-nodes="{}""#,
+                        esc(&nodes.join(" "))
+                    )
+                };
                 let _ = writeln!(
                     s,
-                    r#"<rect {} x="{}" y="{}" width="{}" height="{}" rx="{}"/>"#,
+                    r#"<rect {}{tag} x="{}" y="{}" width="{}" height="{}" rx="{}"/>"#,
                     paint(box_class(*style)),
                     n(rect.x),
                     n(rect.y),
@@ -195,13 +210,25 @@ pub fn render(f: &Figure) -> String {
                 kind,
                 text,
                 stage,
+                node,
             } => {
                 let c = rect.centre();
-                // the station's shapes in a group that names its stage, so
+                // the station's shapes in a group that names it as the arrows
+                // do and, when it is a stage, by what the program calls it, so
                 // that a page can find the station (and, in an engine, its
-                // budget bar) by what the program calls it
-                if let Some(name) = stage {
-                    let _ = writeln!(s, r#"<g data-stage="{}">"#, esc(name));
+                // budget bar)
+                match stage {
+                    Some(name) => {
+                        let _ = writeln!(
+                            s,
+                            r#"<g data-node="{}" data-stage="{}">"#,
+                            esc(node),
+                            esc(name)
+                        );
+                    }
+                    None => {
+                        let _ = writeln!(s, r#"<g data-node="{}">"#, esc(node));
+                    }
                 }
                 match kind {
                     StationKind::Fifo | StationKind::Ps => {
@@ -315,9 +342,7 @@ pub fn render(f: &Figure) -> String {
                         esc(text)
                     );
                 }
-                if stage.is_some() {
-                    s.push_str("</g>\n");
-                }
+                s.push_str("</g>\n");
             }
             Item::Queue { rect, cells, pool } => {
                 let _ = writeln!(s, r#"<g data-pool="{}" data-role="queue">"#, esc(pool));
@@ -401,11 +426,17 @@ pub fn render(f: &Figure) -> String {
                     ""
                 };
                 let r = match role {
-                    Some(EdgeRole::Arrival) => r#" data-role="arrival""#.to_string(),
-                    Some(EdgeRole::Exit { from: Some(st) }) => {
-                        format!(r#" data-role="exit" data-from="{}""#, esc(st))
+                    Some(EdgeRole::Arrival { to }) => {
+                        format!(r#" data-role="arrival" data-to="{}""#, esc(to))
                     }
-                    Some(EdgeRole::Exit { from: None }) => r#" data-role="exit""#.to_string(),
+                    Some(EdgeRole::Exit { from }) => {
+                        format!(r#" data-role="exit" data-from="{}""#, esc(from))
+                    }
+                    Some(EdgeRole::Flow { from, to }) => format!(
+                        r#" data-role="flow" data-from="{}" data-to="{}""#,
+                        esc(from),
+                        esc(to)
+                    ),
                     None => String::new(),
                 };
                 let _ = writeln!(s, r#"<path {}{r} d="{d}"{m}/>"#, paint(edge_class(*style)));
