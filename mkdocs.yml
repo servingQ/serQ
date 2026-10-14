@@ -131,6 +131,7 @@ nav:
   - CLI Reference:
       - reference/cli.md
       - The run log: reference/log.md
+      - The outline of a text: reference/outline.md
   - Python Reference:
       - python.md
       - Compilation and execution:
