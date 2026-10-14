@@ -24,10 +24,11 @@
 //   may preempt too, and its iteration does not move the ratio;
 // - the radix cache is shared across requests by content; here the kv pool
 //   has no `block` (page size 1), on which a request writes no shared chain
-//   (`prefix`, docs/design/shared-prefix-cache.md), and this workload shares
-//   nothing across sessions, so LPM orders the waiting by their own
-//   sessions' cached prefixes; SGLang also moves an in-batch duplicate
-//   prefix to the back, which no request here has;
+//   (`prefix`, docs/design/shared-prefix-cache.md), and its workload
+//   (examples/workloads/sglang.sq) shares nothing across sessions, so LPM
+//   orders the waiting by their own sessions' cached prefixes; SGLang also
+//   moves an in-batch duplicate prefix to the back, which no request here
+//   has;
 // - SGLang decides LPM or FCFS once a round and sorts the list, FCFS
 //   keeping the last sort's order; here the key is read at every admission
 //   try, and ties are in the order the requests joined.
@@ -46,9 +47,6 @@ let lpm_queue = 128;    // LPM sorts while at most this many wait (`_determine_a
 let a = 2e-5;           // compute per scheduled token (s)
 let omega = 2e-4;       // weights read per iteration (s)
 let beta = 2e-9;        // KV read per iteration per resident context token (s)
-let Lambda = 0.5;       // sessions per second
-let p = 0.9;            // continue after a turn
-let Z = 3.0;            // tool time (s)
 
 fn main() {
   let lpm = args.number("lpm", 0);         // 1: --schedule-policy lpm
@@ -98,24 +96,6 @@ fn main() {
   // `_determine_active_policy`)
   pool reqs on sglang { queue by (lpm == 1 && queued(reqs) <= lpm_queue ? -cachedin(kv) : 0); }
   pool kv on gpu { evict lru; preempt by (1 - decoding, position - input, -input) requeue tail; }
-
-  workload {
-    arrive poisson(Lambda);
-    init { set K = 0; }
-    turn {
-      set n = ceil(K == 0 ? ~uniform(1000, 3000) : ~exp(500));
-      set o = min(M, floor(~exp(200)) + 1);
-      set more = ~bernoulli(p);
-    }
-    send (input: K + n, output: o);
-    session {
-      loop {
-        turn;
-        set K = K + n + o;
-        if (more) { tool (~exp(Z)); } else { end; }
-      }
-    }
-  }
 
   server (input, hidden output) {
     sglang (input, output);

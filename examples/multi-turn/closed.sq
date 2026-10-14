@@ -1,27 +1,9 @@
-// Closed loop of N sessions over one FIFO server with exponential work
-// (mean 1/mu) and an exponential think time (mean Z): the M/M/1//N
+// One FIFO server. Under examples/workloads/closed.sq, a closed loop of N
+// sessions with exponential work and think time, it is the M/M/1//N
 // finite-source queue of paper `prop:finite` (mean value analysis).
-
-let N = 8;
-let mu = 1.0;
-let Z = 4.0;
 
 fn main() {
   stage svc : fifo;
-  stage user : delay;
-
-  workload {
-    arrive closed(N);
-    send (s, t0);
-    session {
-      loop {
-        set t0 = now;
-        set s = ~exp(1 / mu);
-        turn;
-        run user (cost(user, ~exp(Z)));
-      }
-    }
-  }
 
   server (s, t0) {
     run svc (cost(svc, s));

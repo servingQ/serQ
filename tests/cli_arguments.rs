@@ -1,5 +1,5 @@
 mod common;
-use common::{Fixture, PROGRAM, failure};
+use common::{Fixture, PROGRAM, WORKLOAD, failure};
 
 #[test]
 fn invalid_arguments_are_diagnosed_before_file_io() {
@@ -104,10 +104,13 @@ fn invalid_arguments_are_diagnosed_before_file_io() {
 fn supported_options_still_work() {
     let f = Fixture::new();
     f.write("model.sq", &common::main_source(PROGRAM));
+    f.write("w.sq", WORKLOAD);
     for args in [
         vec![
             "run",
             "model.sq",
+            "--workload",
+            "w.sq",
             "--seed",
             "2",
             "--horizon",
@@ -118,9 +121,27 @@ fn supported_options_still_work() {
             "--dump",
             "data",
         ],
-        vec!["check", "model.sq", "--rate", "2"],
-        vec!["ir", "model.sq", "--horizon", "10", "--seed", "2"],
-        vec!["draw", "model.sq", "--format", "svg", "--out", "figure.svg"],
+        vec!["check", "model.sq", "--workload", "w.sq", "--rate", "2"],
+        vec![
+            "ir",
+            "model.sq",
+            "--workload",
+            "w.sq",
+            "--horizon",
+            "10",
+            "--seed",
+            "2",
+        ],
+        vec![
+            "draw",
+            "model.sq",
+            "--workload",
+            "w.sq",
+            "--format",
+            "svg",
+            "--out",
+            "figure.svg",
+        ],
     ] {
         let out = f.run(&args);
         assert!(
@@ -156,4 +177,102 @@ fn version_is_printed_on_request() {
         2,
         &["missing value for program argument `--version`"],
     );
+}
+
+/// `--workload W` gives the deployment its workload's file on every command
+/// that compiles program text (`docs/design/workload-file.md`); a server
+/// given none is refused.
+#[test]
+fn the_workload_is_given_on_every_command_that_compiles() {
+    let f = Fixture::new();
+    f.write("model.sq", &common::main_source(PROGRAM));
+    f.write("w.sq", WORKLOAD);
+    for args in [
+        vec!["run", "model.sq", "--workload", "w.sq", "--horizon", "10"],
+        vec!["check", "model.sq", "--workload", "w.sq"],
+        vec!["ir", "model.sq", "--workload", "w.sq", "--horizon", "10"],
+        vec!["draw", "model.sq", "--workload", "w.sq"],
+    ] {
+        let out = f.run(&args);
+        assert!(
+            out.status.success(),
+            "{:?}: {}",
+            args,
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let mut alone = args.clone();
+        alone.drain(2..4);
+        failure(
+            &f.run(&alone),
+            1,
+            &["model.sq", "the server needs a workload to run"],
+        );
+    }
+    let root = env!("CARGO_MANIFEST_DIR");
+    let vllm = format!("{root}/examples/multi-turn/vllm.sq");
+    let chat = format!("{root}/examples/workloads/chat.sq");
+    let out = f.run(&["target", &vllm, "--workload", &chat]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    serde_json::from_slice::<serde_json::Value>(&out.stdout).unwrap();
+}
+
+/// IR holds the workload it was compiled with: another one is refused, as a
+/// usage error.
+#[test]
+fn a_workload_is_refused_with_ir() {
+    let f = Fixture::new();
+    f.write("model.sq", &common::main_source(PROGRAM));
+    f.write("w.sq", WORKLOAD);
+    let out = f.run(&["ir", "model.sq", "--workload", "w.sq", "--horizon", "10"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    f.write("model.json", &String::from_utf8(out.stdout).unwrap());
+    for command in ["run", "ir", "check", "draw", "target"] {
+        failure(
+            &f.run(&[command, "model.json", "--workload", "w.sq"]),
+            2,
+            &[
+                "--workload pairs a .sq deployment with a workload file; an IR is a whole program already",
+            ],
+        );
+    }
+}
+
+#[test]
+fn a_missing_workload_file_is_named() {
+    let f = Fixture::new();
+    f.write("model.sq", &common::main_source(PROGRAM));
+    for command in ["run", "check", "ir", "draw", "target"] {
+        failure(
+            &f.run(&[command, "model.sq", "--workload", "absent.sq"]),
+            1,
+            &["cannot read absent.sq"],
+        );
+    }
+}
+
+/// An error in the workload's file is located in that file, by its own
+/// lines, and not prefixed with the deployment's path.
+#[test]
+fn an_error_in_the_workload_is_located_in_its_file() {
+    let f = Fixture::new();
+    f.write("model.sq", &common::main_source(PROGRAM));
+    f.write(
+        "w.sq",
+        "workload { arrive batch(1);\n  init { set c = nowhere; }\n  session { turn; end; } }\n",
+    );
+    for command in ["run", "check", "ir", "draw"] {
+        let out = f.run(&[command, "model.sq", "--workload", "w.sq"]);
+        failure(&out, 1, &["nowhere"]);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(stderr.starts_with("w.sq: 2:18:"), "{stderr}");
+        assert!(!stderr.contains("model.sq"), "{stderr}");
+    }
 }

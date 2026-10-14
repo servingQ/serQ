@@ -6,26 +6,47 @@
 
 mod common;
 
-use serq::{compile_source, run_source};
+/// A deployment and the workload's file beside it
+/// (`docs/design/workload-file.md`).
+type Pair = (String, String);
 
-fn compile(body: &str) -> Result<serq::Program, String> {
-    compile_source(&common::main_source(body), &common::horizon(50.0))
+fn compile((deployment, workload): &Pair) -> Result<serq::Program, String> {
+    common::compile(
+        &common::main_source(deployment),
+        workload,
+        &common::horizon(50.0),
+    )
 }
 
-fn refused(body: &str, fragments: &[&str]) {
-    let err = compile(body).unwrap_err();
+fn refused(pair: &Pair, fragments: &[&str]) {
+    let err = compile(pair).unwrap_err();
     for f in fragments {
-        assert!(err.contains(f), "{body}\n  missing {f:?} in {err}");
+        assert!(err.contains(f), "{pair:?}\n  missing {f:?} in {err}");
     }
 }
 
 /// A queue, a workload of exponential jobs and a counter of turns.
-fn with(workload: &str, server: &str) -> String {
-    format!(
-        "stage svc : fifo;
-        workload {{ arrive poisson(1); init {{ set K = 0; }} turn {{ set s = ~exp(1); }}
-          {workload} }}
-        {server}"
+fn with(workload: &str, server: &str) -> Pair {
+    (
+        format!(
+            "stage svc : fifo;
+            {server}"
+        ),
+        format!(
+            "workload {{ arrive poisson(1); init {{ set K = 0; }} turn {{ set s = ~exp(1); }}
+              {workload} }}"
+        ),
+    )
+}
+
+/// `items` (a pool, an engine) before the deployment of `pair`.
+fn before(items: &str, (deployment, workload): Pair) -> Pair {
+    (
+        format!(
+            "{items}
+            {deployment}"
+        ),
+        workload,
     )
 }
 
@@ -56,13 +77,12 @@ fn the_server_reads_no_attribute_the_workload_keeps() {
 #[test]
 fn the_scheduler_reads_what_the_server_reads() {
     let pool = |key: &str| {
-        format!(
-            "pool q {{ cap 1; queue by ({key}); }}
-            {}",
+        before(
+            &format!("pool q {{ cap 1; queue by ({key}); }}"),
             with(
                 "send (work: s);",
                 "server (work) { hold q (cost(q, 1)) { run svc (cost(svc, work)); } }",
-            )
+            ),
         )
     };
     compile(&pool("work")).unwrap();
@@ -174,13 +194,12 @@ fn the_workload_reads_its_own() {
           worker { forward (1); } }
         pool kv on gpu { block 16; }";
     refused(
-        &format!(
-            "{engine}
-            {}",
+        &before(
+            engine,
             with(
                 "send (work: ceil(s * 10) + 1); session { turn; observe x = e.first; }",
                 "server (work) { e (work, 1); }",
-            )
+            ),
         ),
         &[
             "the workload reads `e.first`, which the server sets",
@@ -194,16 +213,17 @@ fn the_workload_reads_its_own() {
 #[test]
 fn an_entry_reads_the_hidden_parameters() {
     let program = |server: &str| {
-        format!(
+        let deployment = format!(
             "queue gw : gateway {{ route {{ E.decode (prompt); }} }}
              queue E : agg {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }}
                engine on gpu {{ tokens cap inf; scheduler {{ advance running; admit waiting while (running.preempted == 0); }} worker {{ forward (1); }} }}
                decode (prompt) {{ hold kv (cost(kv, prompt)) {{
                  run E prefill (cost(E, 1)) growing kv; run E decode (cost(E, o - 1)) growing kv; }} }} }}
-             workload {{ arrive batch(1); init {{ set p = 32; set out = 4; }}
-               send (prompt: p, o: out); session {{ turn; end; }} }}
              server ({server}) {{ gw.route(); }}"
-        )
+        );
+        let workload = "workload { arrive batch(1); init { set p = 32; set out = 4; }
+               send (prompt: p, o: out); session { turn; end; } }";
+        (deployment, workload.to_string())
     };
     compile(&program("prompt, hidden o")).unwrap();
     refused(
@@ -256,13 +276,12 @@ fn hiding_is_a_parameters_under_a_signature() {
     // a hidden parameter is hidden from the scheduler as `hidden` was
     let key = "pool q { cap 1; queue by (work); }";
     refused(
-        &format!(
-            "{key}
-            {}",
+        &before(
+            key,
             with(
                 "send (work: s);",
                 "server (hidden work) { hold q (cost(q, 1)) { run svc (cost(svc, work)); } }",
-            )
+            ),
         ),
         &["pool `q`: `work` is hidden from the scheduler"],
     );
@@ -334,10 +353,179 @@ fn a_sent_expression_is_its_value_at_the_turn() {
         &format!("send (work: s + K); {session}"),
         "server (work) { run svc (cost(svc, work)); observe w = work; }",
     );
-    let run = |src: &str| {
-        run_source(&common::main_source(src), &common::horizon(200.0), None)
-            .unwrap()
-            .json()
+    let run = |(deployment, workload): &Pair| {
+        common::run(
+            &common::main_source(deployment),
+            workload,
+            &common::horizon(200.0),
+        )
+        .unwrap()
+        .json()
     };
     assert_eq!(run(&as_is), run(&bound));
+}
+
+/// The two files cross by the server's signature alone
+/// (`docs/design/paired-workload.md`): the server, its routes and the
+/// scheduler read none of the workload's names, a constant, a `def` or a
+/// stage, and the workload none of the deployment's.
+#[test]
+fn the_server_reads_none_of_the_workloads_names() {
+    let workload = |items: &str| {
+        let (deployment, workload) = with("send (work: s);", "");
+        (deployment, format!("{items}\n{workload}"))
+    };
+    let pair = |items: &str, server: &str| {
+        let (deployment, workload) = workload(items);
+        (format!("{deployment}\n{server}"), workload)
+    };
+    compile(&pair(
+        "let p = 2;",
+        "server (work) { run svc (cost(svc, work)); }",
+    ))
+    .unwrap();
+    const CROSS: &str = "the workload and the deployment read their own names, and meet only at the server's signature (`send`, `reply`)";
+    refused(
+        &pair(
+            "let p = 2;",
+            "server (work) { run svc (cost(svc, work * p)); }",
+        ),
+        &[
+            "deployment.sq: 3:43: link error: `p` is the workload file's: ",
+            CROSS,
+        ],
+    );
+    refused(
+        &pair(
+            "def twice(x) { x * 2 }",
+            "server (work) { run svc (cost(svc, twice(work))); }",
+        ),
+        &["`twice` is the workload file's: ", CROSS],
+    );
+    refused(
+        &pair(
+            "stage user : delay;",
+            "server (work) { run svc (cost(svc, work)); run user (cost(user, 1)); }",
+        ),
+        &[
+            "stage `user` is the workload file's: the deployment runs on and holds its own stages and pools",
+        ],
+    );
+    // the scheduler is the deployment's too
+    refused(
+        &before(
+            "pool q { cap 1; queue by (p); }",
+            pair(
+                "let p = 2;",
+                "server (work) { hold q (cost(q, 1)) { run svc (cost(svc, work)); } }",
+            ),
+        ),
+        &["`p` is the workload file's: ", CROSS],
+    );
+}
+
+#[test]
+fn the_workload_reads_none_of_the_deployments_names() {
+    let pair = |items: &str, session: &str| {
+        let (deployment, workload) = with(
+            &format!("send (work: s); session {{ {session} }}"),
+            "server (work) { run svc (cost(svc, work)); }",
+        );
+        (format!("{items}\n{deployment}"), workload)
+    };
+    const CROSS: &str = "the workload and the deployment read their own names, and meet only at the server's signature (`send`, `reply`)";
+    compile(&pair("let p = 2;", "turn; observe x = s;")).unwrap();
+    refused(
+        &pair("let p = 2;", "turn; observe x = s * p;"),
+        &[
+            "workload.sq: 2:63: link error: `p` is the deployment file's: ",
+            CROSS,
+        ],
+    );
+    refused(
+        &pair("def twice(x) { x * 2 }", "turn; observe x = twice(s);"),
+        &["`twice` is the deployment file's: ", CROSS],
+    );
+    refused(
+        &pair("stage aside : delay;", "turn; run aside (cost(aside, 1));"),
+        &[
+            "stage `aside` is the deployment file's: the workload runs on and holds its own stages and pools, and sends the server what it runs",
+        ],
+    );
+    refused(
+        &pair("pool q { cap 4; }", "hold q (cost(q, 1)) { turn; }"),
+        &[
+            "pool `q` is the deployment file's: the workload runs on and holds its own stages and pools, and sends the server what it runs",
+        ],
+    );
+}
+
+/// A constant's value reads its own file's constants: one both sides need
+/// is written in each, under its own name or under one name.
+#[test]
+fn a_constant_reads_its_own_files_constants() {
+    let pair = |deployment_let: &str, workload_let: &str| {
+        let (deployment, workload) = with(
+            "send (work: s * b); session { turn; end; }",
+            "server (work) { run svc (cost(svc, work * a)); }",
+        );
+        (
+            format!("{deployment_let}\n{deployment}"),
+            format!("{workload_let}\n{workload}"),
+        )
+    };
+    const CROSS: &str = "the workload and the deployment read their own names, and meet only at the server's signature (`send`, `reply`)";
+    compile(&pair("let a = 2;", "let b = 2;")).unwrap();
+    refused(
+        &pair("let a = b;", "let b = 2;"),
+        &[
+            "deployment.sq: 1:21: link error: `b` is the workload file's: ",
+            CROSS,
+        ],
+    );
+    refused(
+        &pair("let a = 2;", "let b = a;"),
+        &["`a` is the deployment file's: ", CROSS],
+    );
+}
+
+/// Both files may declare one constant or `def` name: each is its own
+/// file's, and each side reads its own. The server prices the work with its
+/// `p` (3) and its `f`; the workload sends its `p` (2) through its `f`.
+#[test]
+fn both_files_may_declare_one_name_and_each_reads_its_own() {
+    let deployment = "let p = 3;
+        def f(x) { x * 10 }
+        stage svc : fifo;
+        server (work) { run svc (cost(svc, work * p)); observe priced = f(work * p); }";
+    let workload = "let p = 2;
+        def f(x) { x + 1 }
+        workload { arrive batch(1); send (work: f(p)); session { turn; observe own = f(p); end; } }";
+    let r = common::run(
+        &common::main_source(deployment),
+        workload,
+        &common::horizon(50.0),
+    )
+    .unwrap();
+    // the workload's: f(p) = 2 + 1; the server's: f(3 * 3) = 90
+    assert_eq!(r.observe("own").unwrap().samples, vec![3.0]);
+    assert_eq!(r.observe("priced").unwrap().samples, vec![90.0]);
+}
+
+/// The workload is a file of its own: not a block of the deployment's
+/// `fn main`, and a server runs only when the workload's file is given.
+#[test]
+fn the_workload_is_its_own_file() {
+    let (deployment, workload) = with("", "server { run svc (cost(svc, 1)); }");
+    let alone = |src: &str| serq::compile_source(&common::main_source(src), &common::horizon(50.0));
+    let e = alone(&format!("{deployment}\n{workload}")).unwrap_err();
+    assert!(
+        e.contains("a workload is a file of its own, given when the program runs"),
+        "{e}"
+    );
+    let e = alone(&deployment).unwrap_err();
+    assert!(
+        e.contains("the server needs a workload to run: give the workload's file"),
+        "{e}"
+    );
 }

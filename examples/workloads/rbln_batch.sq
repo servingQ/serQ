@@ -1,0 +1,10 @@
+// Six requests at once, each a 256-token prompt and 16 output tokens
+// (examples/vendors/rbln.sq runs it).
+
+// --8<-- [start:workload]
+workload {
+  arrive batch(6);
+  init { set prompt = 256; set out = 16; }
+  send (prompt, out);
+}
+// --8<-- [end:workload]

@@ -27,14 +27,18 @@ const STUCK: &str = r#"
         }
         pool reqs on llm { }
         pool kv on gpu { block 16; evict lru; preempt lifo; }
+        server { llm (100, 101); }
+
+"#;
+
+/// `STUCK`'s workload.
+const STUCK_WORKLOAD: &str = r#"
         workload { arrive batch(1);
           session { turn;
             end;
 
           }
         }
-        server { llm (100, 101); }
-
 "#;
 
 #[test]
@@ -43,9 +47,13 @@ fn a_stuck_run_prints_its_report_and_exits_0() {
     std::fs::create_dir_all(&dir).unwrap();
     let file = dir.join("stuck.sq");
     std::fs::write(&file, common::main_source(STUCK)).unwrap();
+    let workload = dir.join("w.sq");
+    std::fs::write(&workload, STUCK_WORKLOAD).unwrap();
     let out = serq()
         .arg("run")
         .arg(&file)
+        .arg("--workload")
+        .arg(&workload)
         .args(["--horizon", "400"])
         .output()
         .unwrap();
@@ -55,6 +63,8 @@ fn a_stuck_run_prints_its_report_and_exits_0() {
     let out = serq()
         .arg("run")
         .arg(&file)
+        .arg("--workload")
+        .arg(&workload)
         .args(["--horizon", "400"])
         .arg("--json")
         .output()
@@ -71,14 +81,16 @@ fn a_program_that_does_not_load_exits_1() {
     let file = dir.join("bad.sq");
     std::fs::write(
         &file,
-        common::main_source(
-        "stage svc : delay;\nworkload { session { turn; end; \n} }\nserver { run nowhere (cost(nowhere, 1));\n}\n\n",
-        ),
+        common::main_source("stage svc : delay;\nserver { run nowhere (cost(nowhere, 1));\n}\n\n"),
     )
     .unwrap();
+    let workload = dir.join("w.sq");
+    std::fs::write(&workload, "workload { session { turn; end; \n} }\n").unwrap();
     let out = serq()
         .arg("run")
         .arg(&file)
+        .arg("--workload")
+        .arg(&workload)
         .args(["--horizon", "400"])
         .output()
         .unwrap();
@@ -94,19 +106,28 @@ fn a_runtime_guard_error_exits_1_without_a_panic() {
     std::fs::write(
         &file,
         common::main_source(
-            "stage svc : delay; workload { arrive batch(1); init { set c = 5; set K = 10; } send (c, K);
-          session { turn; end;
-          }
-        }
+            "stage svc : delay;
         server (c, K) { if (c / K) { run svc (cost(svc, 1)); }
         }
 ",
         ),
     )
     .unwrap();
+    let workload = dir.join("w.sq");
+    std::fs::write(
+        &workload,
+        "workload { arrive batch(1); init { set c = 5; set K = 10; } send (c, K);
+          session { turn; end;
+          }
+        }
+",
+    )
+    .unwrap();
     let out = serq()
         .arg("run")
         .arg(&file)
+        .arg("--workload")
+        .arg(&workload)
         .args(["--horizon", "400"])
         .output()
         .unwrap();

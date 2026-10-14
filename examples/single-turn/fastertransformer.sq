@@ -1,5 +1,6 @@
 // FasterTransformer's scheduler as Dai et al. model it (arXiv 2504.07347 §4).
-// docs/use-cases/fastertransformer.md explains it a part at a time.
+// docs/use-cases/fastertransformer.md explains it a part at a time; its
+// workload is examples/workloads/periodic.sq.
 use "std/args";
 
 // --8<-- [start:settings]
@@ -7,7 +8,6 @@ let kmax = 100;  // batch size limit k_max (§6)
 let c = 11.28e-3;  // s
 let a = 35.47e-3;  // s per step of b0 tokens
 let b0 = 128;
-let gap = 0.4675;  // fixed inter-arrival time (s)
 let vp = 290;
 let vd = 990;
 
@@ -34,16 +34,12 @@ fn main() {
   }
   // --8<-- [end:engine]
 
-  // --8<-- [start:workload]
-  workload {
-    arrive renewal(gap);
-  }
-
+  // --8<-- [start:server]
   server {
     // the model's vd decode steps after the prefill's sampled token
     hold reqs (cost(reqs, 1)) { fastertransformer (vp, vd + 1); }
   }
 
   gauge pending = holders(reqs) + queued(reqs);
-  // --8<-- [end:workload]
+  // --8<-- [end:server]
 }

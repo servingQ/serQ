@@ -1,0 +1,26 @@
+// Multi-turn sessions whose clients ask for at most `max_tokens` output
+// tokens, a tool call between turns (examples/engines/tensorrt_llm.sq runs
+// it).
+
+let max_tokens = 1024;   // max_tokens (the server's `mt`)
+let Lambda = 0.3;        // sessions per second
+let p = 0.9;             // continue after a turn
+let Z = 3.0;             // tool time (s)
+
+workload {
+  arrive poisson(Lambda);
+  init { set K = 0; }
+  turn {
+    set n = ceil(K == 0 ? ~uniform(1000, 3000) : ~exp(500));
+    set o = min(floor(~exp(200)) + 1, max_tokens);
+    set more = ~bernoulli(p);
+  }
+  send (input: K + n, output: o);
+  session {
+    loop {
+      turn;
+      set K = K + n + o;
+      if (more) { tool (~exp(Z)); } else { end; }
+    }
+  }
+}

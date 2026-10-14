@@ -1,5 +1,5 @@
 mod common;
-use common::{Fixture, PROGRAM, failure};
+use common::{Fixture, PROGRAM, WORKLOAD, failure};
 use serq::frontend::parser;
 use serq::{Overrides, compile_source};
 
@@ -7,9 +7,18 @@ use serq::{Overrides, compile_source};
 fn misspelled_and_empty_override_names_do_not_produce_ir() {
     let f = Fixture::new();
     f.write("model.sq", &common::main_source(PROGRAM));
+    f.write("w.sq", WORKLOAD);
     for name in ["raet", "Rate", ""] {
         failure(
-            &f.run(&["ir", "model.sq", "--horizon", "10", &format!("--{name}=2")]),
+            &f.run(&[
+                "ir",
+                "model.sq",
+                "--workload",
+                "w.sq",
+                "--horizon",
+                "10",
+                &format!("--{name}=2"),
+            ]),
             if name.is_empty() { 2 } else { 1 },
             // an empty name is the CLI's argument error; a misspelled one
             // the linker's, which speaks of the `let` it overrides
@@ -21,7 +30,16 @@ fn misspelled_and_empty_override_names_do_not_produce_ir() {
         );
     }
     failure(
-        &f.run(&["ir", "model.sq", "--horizon", "10", "--raet", "2"]),
+        &f.run(&[
+            "ir",
+            "model.sq",
+            "--workload",
+            "w.sq",
+            "--horizon",
+            "10",
+            "--raet",
+            "2",
+        ]),
         1,
         &[
             "unknown program argument `raet`",
@@ -32,7 +50,8 @@ fn misspelled_and_empty_override_names_do_not_produce_ir() {
 
 #[test]
 fn overrides_keep_last_value_and_declaration_order() {
-    let src = "use \"std/args\"; let rate = args.number(\"rate\", 1); let doubled = rate * 2; workload { arrive poisson(doubled); } server {} ";
+    let src = "server {} ";
+    let workload = "use \"std/args\"; let rate = args.number(\"rate\", 1); let doubled = rate * 2; workload { arrive poisson(doubled); }";
     let ov = Overrides {
         lets: vec![
             ("rate".into(), parser::parse_expr("2").unwrap()),
@@ -40,13 +59,16 @@ fn overrides_keep_last_value_and_declaration_order() {
         ],
         ..common::horizon(10.0)
     };
-    let p = compile_source(&common::main_source(src), &ov).unwrap();
+    let p = common::compile(&common::main_source(src), workload, &ov).unwrap();
     assert_eq!(p.arrival, serq::ir::CArrival::Poisson(6.0));
     let f = Fixture::new();
     f.write("model.sq", &common::main_source(src));
+    f.write("w.sq", workload);
     let out = f.run(&[
         "ir",
         "model.sq",
+        "--workload",
+        "w.sq",
         "--horizon",
         "10",
         "--rate",
@@ -73,14 +95,22 @@ fn sdk_cannot_inject_an_undeclared_constant() {
 #[test]
 fn arrival_override_applies_to_run_and_ir() {
     let f = Fixture::new();
+    f.write("model.sq", &common::main_source("server {\n} "));
     f.write(
-        "model.sq",
-        &common::main_source(
-            "workload { arrive renewal(2); \n  session { turn; end; \n  }\n} server {\n} ",
-        ),
+        "w.sq",
+        "workload { arrive renewal(2); \n  session { turn; end; \n  }\n}",
     );
     for command in ["run", "ir"] {
-        let mut args = vec![command, "model.sq", "--horizon", "10", "--arrivals", "3"];
+        let mut args = vec![
+            command,
+            "model.sq",
+            "--workload",
+            "w.sq",
+            "--horizon",
+            "10",
+            "--arrivals",
+            "3",
+        ];
         if command == "run" {
             args.push("--json");
         }
@@ -94,7 +124,7 @@ fn arrival_override_applies_to_run_and_ir() {
         assert_eq!(json["arrivals"], 3);
         for bad in ["0", "-1", "1.5", "abc"] {
             failure(
-                &f.run(&[command, "model.sq", "--arrivals", bad]),
+                &f.run(&[command, "model.sq", "--workload", "w.sq", "--arrivals", bad]),
                 2,
                 &["--arrivals", "positive integer"],
             );
@@ -105,10 +135,9 @@ fn arrival_override_applies_to_run_and_ir() {
 #[test]
 fn arrival_override_also_applies_to_json_ir() {
     let f = Fixture::new();
-    let program = compile_source(
-        &common::main_source(
-            "workload { arrive renewal(2); \n  session { turn; end; \n  }\n} server {\n} ",
-        ),
+    let program = common::compile(
+        &common::main_source("server {\n} "),
+        "workload { arrive renewal(2); \n  session { turn; end; \n  }\n}",
         &Overrides {
             arrivals: Some(1),
             ..common::horizon(10.0)
@@ -138,14 +167,15 @@ fn arrival_override_also_applies_to_json_ir() {
 #[test]
 fn overrides_are_refused_on_ir_by_what_they_override() {
     let f = Fixture::new();
-    let program = compile_source(
+    let program = common::compile(
         &common::main_source(
-            "let lam = 1; def law() { ~exp(1) } workload { arrive poisson(lam);
-          session { turn; end;
-          }
-        } server { set x = law();
+            "def law() { ~exp(1) } server { set x = law();
         } ",
         ),
+        "let lam = 1; workload { arrive poisson(lam);
+          session { turn; end;
+          }
+        }",
         &common::horizon(10.0),
     )
     .unwrap();

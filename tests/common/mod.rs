@@ -4,7 +4,12 @@ use std::path::PathBuf;
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-pub const PROGRAM: &str = "use \"std/args\"; let rate = args.number(\"rate\", 1);\nstage svc : fifo;\nworkload { arrive batch(1); session { turn; end; } }\nserver { run svc (cost(svc, rate)); }\n\n";
+/// A deployment for the CLI tests; its workload is `WORKLOAD`, written as a
+/// file of its own and given with `--workload`.
+pub const PROGRAM: &str = "use \"std/args\"; let rate = args.number(\"rate\", 1);\nstage svc : fifo;\nserver { run svc (cost(svc, rate)); }\n\n";
+
+/// `PROGRAM`'s workload.
+pub const WORKLOAD: &str = "workload { arrive batch(1); session { turn; end; } }\n";
 
 pub struct Fixture(pub PathBuf);
 
@@ -67,4 +72,48 @@ pub fn horizon(horizon: f64) -> serq::Overrides {
         horizon: Some(horizon),
         ..Default::default()
     }
+}
+
+/// What a pair's messages name its files: a deployment error begins
+/// `deployment.sq: L:C:`, a workload error `workload.sq: L:C:`.
+pub const NAMES: (&str, &str) = ("deployment.sq", "workload.sq");
+
+/// Compile a deployment with the workload file `workload` beside it, as
+/// `serq run deployment.sq --workload workload.sq` does.
+pub fn compile(
+    deployment: &str,
+    workload: &str,
+    ov: &serq::Overrides,
+) -> Result<serq::Program, String> {
+    serq::compile_paired(deployment, workload, NAMES, ov)
+}
+
+/// `compile`, for inspection: text without a horizon is given one.
+pub fn inspected(
+    deployment: &str,
+    workload: &str,
+    ov: &serq::Overrides,
+) -> Result<serq::Program, String> {
+    serq::compile_paired_inspected(deployment, workload, NAMES, ov)
+}
+
+/// Run a pair (`compile`).
+pub fn run(deployment: &str, workload: &str, ov: &serq::Overrides) -> Result<serq::Report, String> {
+    serq::run_paired(deployment, workload, NAMES, ov, None)
+}
+
+/// An example (or tutorial) program and the workload `examples/pairs.json`
+/// pairs it with, compiled; `path` relative to the crate.
+pub fn example(path: &str, ov: &serq::Overrides) -> Result<serq::Program, String> {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let program = root.join(path);
+    let workload = serq::paired_workload(&program).unwrap_or_else(|| panic!("{path}: no pair"));
+    serq::load_paired(&program, &workload, ov)
+}
+
+/// `example`, run; a trace is read beside the workload's file.
+pub fn run_example(path: &str, ov: &serq::Overrides) -> Result<serq::Report, String> {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let workload = serq::paired_workload(&root.join(path)).expect("a pair");
+    serq::run_ir(&example(path, ov)?, workload.parent())
 }

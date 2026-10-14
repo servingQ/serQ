@@ -4,13 +4,18 @@
 
 mod common;
 use serq::ir::{CExpr, CtxVar, DistKind};
-use serq::{Program, compile_source, run_ir, run_source};
+use serq::{Program, run_ir};
 
 /// Who engine `llm` admitted and when, in the order it admitted them: what
 /// it records of each admission is keyed by the session and timed.
 fn admissions(r: &serq::Report) -> (Vec<f64>, Vec<f64>) {
     let o = r.observe("llm.prefill").unwrap();
     o.records.iter().map(|rec| (rec.1 as f64, rec.0)).unzip()
+}
+
+/// `n` sessions arrive at t = 0, each one turn.
+fn sessions(n: usize) -> String {
+    format!("workload {{ arrive batch({n}); session {{ turn; end; }} }}\n")
 }
 
 fn aging_source(bound: bool, key: &str) -> String {
@@ -48,12 +53,6 @@ fn aging_source(bound: bool, key: &str) -> String {
         {stage}
         {pool} {{ {cap}queue by ({key}); }}
         stage delay : delay;
-        workload {{ arrive batch(6);
-          session {{ turn;
-            end;
-
-          }}
-        }}
         server {{
           set prompt = serial == 1 || serial == 5 ? 256 : 64;
           set immediate = serial == 4;
@@ -76,7 +75,12 @@ fn immediate_then_aged_long_then_short_at_both_admission_paths() {
     let key = "immediate ? 0 : prompt > 128 && waited >= 3 ? 1 : prompt <= 128 ? 2 : 3, serial";
     for bound in [false, true] {
         let src = aging_source(bound, key);
-        let r = run_source(&common::main_source(&src), &common::horizon(20.0), None).unwrap();
+        let r = common::run(
+            &common::main_source(&src),
+            &sessions(6),
+            &common::horizon(20.0),
+        )
+        .unwrap();
         assert_eq!(r.ended, 6);
         assert_eq!(
             r.observe("selected").unwrap().samples,
@@ -86,7 +90,12 @@ fn immediate_then_aged_long_then_short_at_both_admission_paths() {
             r.observe("admitted_at").unwrap().samples,
             [0., 4., 5., 6., 7., 8.]
         );
-        let p = compile_source(&common::main_source(&src), &common::horizon(20.0)).unwrap();
+        let p = common::compile(
+            &common::main_source(&src),
+            &sessions(6),
+            &common::horizon(20.0),
+        )
+        .unwrap();
         let q = Program::from_json(&p.to_json()).unwrap();
         assert_eq!(r.text(), run_ir(&q, None).unwrap().text());
     }
@@ -101,7 +110,12 @@ fn existing_single_key_is_recomputed_without_another_enqueue() {
         false,
         "immediate ? 0 : prompt > 128 && now - queued >= 3 ? 1 : prompt <= 128 ? 2 : 3",
     );
-    let r = run_source(&common::main_source(&src), &common::horizon(20.0), None).unwrap();
+    let r = common::run(
+        &common::main_source(&src),
+        &sessions(6),
+        &common::horizon(20.0),
+    )
+    .unwrap();
     assert_eq!(
         r.observe("selected").unwrap().samples,
         [0., 4., 1., 5., 2., 3.]
@@ -124,12 +138,6 @@ fn each_selection_reads_the_current_remaining_iteration_budget() {
         }
         pool reqs on llm { queue by (budget_left(llm) >= 4 ? serial : -serial); }
         stage delay : delay;
-        workload { arrive batch(4);
-          session { turn;
-            end;
-
-          }
-        }
         server {
           run delay (cost(delay, serial == 0 ? 0 : 0.25));
           // the blocker decodes one token; the others prefill and end
@@ -137,7 +145,12 @@ fn each_selection_reads_the_current_remaining_iteration_budget() {
         }
 
 "#;
-    let r = run_source(&common::main_source(src), &common::horizon(10.0), None).unwrap();
+    let r = common::run(
+        &common::main_source(src),
+        &sessions(4),
+        &common::horizon(10.0),
+    )
+    .unwrap();
     assert_eq!(r.ended, 4);
     let (selected, at) = admissions(&r);
     assert_eq!(selected, [0., 1., 3., 2.]);
@@ -152,19 +165,18 @@ fn lexicographic_keys_preserve_enqueue_order_for_equal_keys() {
         pool reqs { cap 1; queue by (0, serial == 2 ? 0 : 1); }
         stage engine : fifo;
         stage delay : delay;
-        workload { arrive batch(4);
-          session { turn;
-            end;
-
-          }
-        }
         server {
           run delay (cost(delay, serial == 0 ? 0 : 0.25));
           hold reqs (cost(reqs, 1)) { observe selected = serial; run engine (cost(engine, 1)); }
         }
 
 "#;
-    let r = run_source(&common::main_source(src), &common::horizon(10.0), None).unwrap();
+    let r = common::run(
+        &common::main_source(src),
+        &sessions(4),
+        &common::horizon(10.0),
+    )
+    .unwrap();
     assert_eq!(r.observe("selected").unwrap().samples, [0., 2., 1., 3.]);
 }
 
@@ -175,16 +187,17 @@ fn selection_rejects_random_hidden_and_wrong_moment_keys_in_source_and_ir() {
         ("tokens", "exists only"),
         ("secret", "hidden"),
     ] {
-        let src = format!(
-            "pool reqs {{ cap 1; queue by ({key}); }} workload {{ init {{ set secret = 1; }} send (secret); \n  session {{ turn; end; \n  }}\n}} server (hidden secret) {{\n}} "
-        );
-        let error = compile_source(&common::main_source(&src), &common::horizon(1.0))
+        let src =
+            format!("pool reqs {{ cap 1; queue by ({key}); }} server (hidden secret) {{\n}} ");
+        let workload = "workload { init { set secret = 1; } send (secret); \n  session { turn; end; \n  }\n}\n";
+        let error = common::compile(&common::main_source(&src), workload, &common::horizon(1.0))
             .unwrap_err()
             .to_string();
         assert!(error.contains(message), "{key}: {error}");
     }
-    let src = "pool reqs { cap 1; queue by (waited); } workload { session { turn; end; \n} }\nserver {\n} ";
-    let p = compile_source(&common::main_source(src), &common::horizon(1.0)).unwrap();
+    let src = "pool reqs { cap 1; queue by (waited); }\nserver {\n} ";
+    let unpaced = "workload { session { turn; end; \n} }\n";
+    let p = common::compile(&common::main_source(src), unpaced, &common::horizon(1.0)).unwrap();
     let mut bad = p.clone();
     bad.pools[0].queue = Some(vec![]);
     assert!(
@@ -214,10 +227,9 @@ fn selection_rejects_random_hidden_and_wrong_moment_keys_in_source_and_ir() {
             .contains("exists only")
     );
     assert!(
-        compile_source(
-            &common::main_source(
-                "workload { session { turn; end; \n} }\nserver { observe x = waited;\n} "
-            ),
+        common::compile(
+            &common::main_source("server { observe x = waited;\n} "),
+            unpaced,
             &common::horizon(1.0)
         )
         .unwrap_err()
@@ -235,12 +247,6 @@ fn a_selected_request_that_cannot_fit_still_blocks_lower_priority_requests() {
         pool kv { cap 4; queue by (serial == 1 && waited >= 0.5 ? 0 : serial); }
         stage delay : delay;
         stage service : delay;
-        workload { arrive batch(3);
-          session { turn;
-            end;
-
-          }
-        }
         server {
           run delay (cost(delay, serial == 0 ? 0 : 0.25));
           hold kv (cost(kv, serial == 0 ? 3 : serial == 1 ? 2 : 1)) {
@@ -251,7 +257,12 @@ fn a_selected_request_that_cannot_fit_still_blocks_lower_priority_requests() {
         }
 
 "#;
-    let r = run_source(&common::main_source(src), &common::horizon(10.0), None).unwrap();
+    let r = common::run(
+        &common::main_source(src),
+        &sessions(3),
+        &common::horizon(10.0),
+    )
+    .unwrap();
     assert_eq!(r.observe("selected").unwrap().samples, [0., 1., 2.]);
     assert_eq!(r.observe("admitted_at").unwrap().samples, [0., 4., 4.]);
 }
@@ -278,12 +289,6 @@ fn resumed_holds_keep_prepend_priority_over_recomputed_keys() {
         pool reqs on llm { queue by (-serial); }
         pool kv on gpu { preempt lifo; }
         stage delay : delay;
-        workload { arrive batch(3);
-          session { turn;
-            end;
-
-          }
-        }
         server {
           run delay (cost(delay, serial == 2 ? 3.25 : 0));
           // 2 decodes one token; 0 and 1 prefill 2 and decode 3
@@ -291,7 +296,12 @@ fn resumed_holds_keep_prepend_priority_over_recomputed_keys() {
         }
 
 "#;
-    let r = run_source(&common::main_source(src), &common::horizon(20.0), None).unwrap();
+    let r = common::run(
+        &common::main_source(src),
+        &sessions(3),
+        &common::horizon(20.0),
+    )
+    .unwrap();
     assert_eq!(r.ended, 3);
     assert_eq!(r.pool("kv").unwrap().preemptions, 1);
     let (selected, at) = admissions(&r);
@@ -305,7 +315,12 @@ fn the_program_can_disable_aging_and_keep_short_request_precedence() {
     // precede both longs even after the longs have waited three seconds.
     for bound in [false, true] {
         let src = aging_source(bound, "immediate ? 0 : prompt <= 128 ? 1 : 2");
-        let r = run_source(&common::main_source(&src), &common::horizon(20.0), None).unwrap();
+        let r = common::run(
+            &common::main_source(&src),
+            &sessions(6),
+            &common::horizon(20.0),
+        )
+        .unwrap();
         assert_eq!(
             r.observe("selected").unwrap().samples,
             [0., 4., 2., 3., 1., 5.]

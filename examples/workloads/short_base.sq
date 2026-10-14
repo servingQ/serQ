@@ -1,0 +1,23 @@
+// The short-context trace replayed (examples/pd-disaggregation/
+// vllm_nixl_push.sq runs it).
+
+let spacing = 3.0;     // seconds between session arrivals
+let N = 96;            // sessions replayed (957 requests)
+
+stage gate : delay;
+
+// The client: the trace's first N sessions, sent `spacing` apart; a turn is
+// sent `think` seconds after the previous one completes.
+workload {
+  arrive batch(N);
+  trace "../replay/data/short_base.csv" ordered;
+  send (new, out);
+  session {
+    run gate (cost(gate, serial * spacing));
+    turn;
+    while (more) {
+      tool think;
+      turn;
+    }
+  }
+}

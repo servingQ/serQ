@@ -5,14 +5,13 @@
 // (kv_cache_utils.py:650-680, block_pool.py:754-768); the request says the
 // same with `prefix (product: floor(system, bs), serial: inf)`, its first item: the
 // product's system prompt, then the session's own. A session's first turn
-// may reuse the system prompt; a follow-up, its previous prompt.
+// may reuse the system prompt; a follow-up, its previous prompt. The
+// sessions: examples/workloads/shared_trace.sq.
 use "std/args";
 
 let bs = 16;           // block_size
 
 fn main() {
-  let spacing = args.number("spacing", 5);     // seconds between session arrivals
-  let N = args.number("N", 3);             // sessions in the trace
   let S = args.number("S", 64);            // tokens of the system prompt
   let B = args.number("B", 64);            // max_num_batched_tokens
   let max_seqs = args.number("max_seqs", 4);      // max_num_seqs
@@ -40,27 +39,6 @@ fn main() {
   }
   pool kv on gpu { block bs; evict lru; preempt lifo; }
   pool reqs on vllm { queue fifo; }  // the scheduler admits (scheduler.py:868)
-  stage gate : delay;
-
-  // The client: the trace's sessions, sent `spacing` apart; a turn is sent
-  // `think` seconds after the previous one completes. Every session sends
-  // the one system prompt.
-  workload {
-    arrive batch(N);
-    trace "../../tools/oracle/shared_trace.csv" ordered;
-    init { set system = 1; }
-    send (system, new, prev, out);
-    session {
-      run gate (cost(gate, serial * spacing));
-      set prev = 0;
-      turn;
-      while (more) {
-        set prev = new;
-        tool think;
-        turn;
-      }
-    }
-  }
 
   // the scheduler knows max_tokens, not the length (sched/utils.py:98-119)
   server (system, new, prev, hidden out) {

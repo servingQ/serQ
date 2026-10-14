@@ -2,9 +2,10 @@
 // vLLM v0.31.0, `vllm/distributed/kv_transfer/kv_connector/v1/
 // lmcache_mp_connector.py`; the scheduler at ref/vllm 0c87a197, which
 // v0.31.0 contains): `multi-turn/vllm.sq` with a second, larger
-// cache outside the GPU. When the scheduler admits a request it asks the
-// connector how much of the prompt the L2 holds past what the GPU's prefix
-// cache holds (scheduler.py:941-954), and the connector answers in whole
+// cache outside the GPU, under the same workload
+// (examples/workloads/chat.sq). When the scheduler admits a request it asks
+// the connector how much of the prompt the L2 holds past what the GPU's
+// prefix cache holds (scheduler.py:941-954), and the connector answers in whole
 // LMCache chunks, nothing for a preempted request
 // (lmcache_mp_connector.py:758, 775, 788). The request is given blocks for
 // that KV and none for new work (scheduler.py:1069-1072), waits while it is
@@ -27,7 +28,6 @@ let a = 2e-5;          // compute per scheduled token (s)
 let omega = 2e-4;      // weights read per iteration (s)
 let beta = 2e-9;       // KV read per iteration per resident context token (s)
 let c0 = 0;            // fixed cost per iteration (s)
-let p = 0.9;           // continue after a turn
 let chunk = 256;       // LMCache's chunk: what it stores and finds, in tokens
 let r = 5e-6;          // seconds per token at the server's bandwidth (128 KiB/token at ~25 GB/s)
 
@@ -36,8 +36,6 @@ fn main() {
   let blocks = args.number("blocks", 2000);     // num_gpu_blocks: small, so that the GPU evicts
   let chunk_cap = args.number("chunk_cap", inf);   // long_prefill_token_threshold (inf: none)
   let l2_cap = args.number("l2_cap", 1e6);      // tokens the LMCache server holds
-  let Lambda = args.number("Lambda", 0.3);      // sessions per second
-  let Z = args.number("Z", 3.0);           // tool time (s)
 
   device gpu {
     compute (t) = t * a;
@@ -91,25 +89,6 @@ fn main() {
     }
   }
   pool reqs on vllm { queue fifo; }
-
-  workload {
-    arrive poisson(Lambda);
-    init { set K = 0; }
-    turn {
-      set n = ceil(K == 0 ? ~uniform(1000, 3000) : ~exp(500));
-      set o = floor(~exp(200)) + 1;
-      set more = ~bernoulli(p);
-    }
-    send (input: K + n, output: o);
-    session {
-      turn;
-      while (more) {
-        set K = K + n + o;
-        tool (~exp(Z));
-        turn;
-      }
-    }
-  }
 
   server (input, hidden output) {
     vllm (input, output);

@@ -3,7 +3,8 @@
 // session's KV lives on the replica that served its last turn. New sessions
 // are placed with a skew (`hot` of them on replica 0). A turn served away
 // from its KV recomputes the prefix (a miss) or, if the policy allows,
-// migrates the KV over a shared FIFO link first.
+// migrates the KV over a shared FIFO link first. The sessions:
+// examples/workloads/routing.sq.
 //   policy 0 affinity: always the home replica
 //          1 least loaded, recompute off home
 //          2 least loaded, fetch over the link when cheaper than a recompute
@@ -11,50 +12,17 @@
 //          4 lookahead: min_j W_j + S_j with migrate-or-recompute off home
 
 let J = 4;
-let rate = 0.9;      // sessions per second
-let hot = 0.5;
 let policy = 0;
 let s0 = 0.005;
 let a = 2e-5;
 let b = 2e-9;
 let d = 2e-4;
-let p = 0.9;
-let Z = 2.0;
 let bw = 2e6;        // migration link, tokens/s
 let dv = 0.0;        // decode KV-read cost, seconds/token^2
-
-// the laws, by name (`--def new_tokens='~erlang(2, 500)'`)
-def initial_tokens() { ~uniform(5000, 15000) }
-def new_tokens() { ~exp(500) }
-def output_tokens() { ~exp(200) }
-def tool_time() { ~exp(Z) }
 
 fn main() {
   stage rep[4] : fifo;
   stage link : fifo;
-
-  workload {
-    arrive poisson(rate);
-    init {
-      set initial_home = ~bernoulli(hot) ? 0 : floor(~uniform(0, J));
-      set K = 0;
-      set first = 1;
-    }
-    turn {
-      set n = first ? initial_tokens() : new_tokens();
-      set o = output_tokens();
-    }
-    send (n, K, o, first, initial_home);
-    // the conversation: a request per turn, then a tool call or the end
-    session {
-      loop {
-        turn;
-        set first = 0;
-        set K = K + n + o;
-        if (~bernoulli(p)) { tool (tool_time()); } else { end; }
-      }
-    }
-  }
 
   // the router and the replicas: where a turn is served, and the KV's new home
   server (n, K, o, first, initial_home) {

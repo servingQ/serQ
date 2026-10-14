@@ -1,0 +1,18 @@
+// Poisson requests, each to one of N colocated engines at random, with an
+// output length (examples/pd-disaggregation/pd_ps.sq runs it).
+use "std/args";
+
+let engines = 4;       // colocated engines (the server's N)
+let Lambda = args.number("Lambda", 15.0);     // requests per second (load Lambda E[o - 1] tok / (N f) = 0.6)
+
+// the law, by name (`--def output='201'`)
+def output() { floor(~exp(200)) + 2 }
+
+workload {
+  arrive poisson(Lambda);
+  init {
+    set o = output();
+    set k = floor(~uniform(0, engines));   // a Poisson stream split at random is Poisson
+  }
+  send (k, o);
+}

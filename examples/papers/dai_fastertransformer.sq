@@ -1,11 +1,11 @@
 // Dai et al., FasterTransformer's scheduler in the basic LLM queueing model
-// (arXiv 2504.07347 §4). docs/use-cases/dai.md explains it.
+// (arXiv 2504.07347 §4), under examples/workloads/dai_periodic.sq.
+// docs/use-cases/dai.md explains it.
 
 let bmax = 128;
 let c = 1128;
 let a = 3547;
 let b0 = 128;
-let gap = 46750;
 let vp = 290;
 let vd = 990;
 
@@ -24,12 +24,6 @@ fn main() {
     }
   }
   // --8<-- [end:engine]
-
-  workload {
-    arrive renewal(gap);
-    init { set t0 = now; }
-    send (t0);
-  }
 
   server (t0) {
     fastertransformer (vp, vd + 1);   // the model's decode steps after the prefill's sampled token

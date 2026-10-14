@@ -3,10 +3,22 @@
 
 mod common;
 
-use serq::{Overrides, run_source};
+use serq::Overrides;
 
-fn run(src: &str, options: &Overrides) -> serq::Report {
-    run_source(&common::main_source(src), options, None).unwrap()
+fn run(src: &str, workload: &str, options: &Overrides) -> serq::Report {
+    common::run(&common::main_source(src), workload, options).unwrap()
+}
+
+/// The error of running `src` beside `workload`.
+fn fails(src: &str, workload: &str, options: &Overrides) -> String {
+    common::run(&common::main_source(src), workload, options).unwrap_err()
+}
+
+/// `n` sessions of one request each, on the system prompt `sys`.
+fn prompted(n: u32, sys: &str) -> String {
+    format!(
+        "workload {{ arrive batch({n}); init {{ set sys = {sys}; }} send (sys); session {{ turn; }} }}"
+    )
 }
 
 fn options(horizon: f64) -> Overrides {
@@ -17,19 +29,17 @@ fn options(horizon: f64) -> Overrides {
     }
 }
 
-/// A stage on a pool of `cap`; `N` sessions, each a 1600-token request
-/// whose first 1200 tokens are the system prompt `sys`. Session `k` is sent
-/// at `STAGGER`; the request's hold reads its chain with `PREFIX`.
-fn program(cap: u32, n: u32, stagger: &str, prefix: &str) -> String {
+/// A stage on a pool of `cap`, for sessions each a 1600-token request
+/// whose first 1200 tokens are the system prompt `sys` (`prompted`).
+/// Session `k` is sent at `STAGGER`; the request's hold reads its chain
+/// with `PREFIX`.
+fn program(cap: u32, stagger: &str, prefix: &str) -> String {
     format!(
         r#"
         device gpu {{ kv cap {cap}; }}
         stage llm : delay;
         pool kv on gpu {{ block 16; evict lru; }}
         stage user : delay;
-        workload {{ arrive batch({n}); init {{ set sys = 7; }} send (sys);
-          session {{ turn; }}
-        }}
         server (sys) {{
           run user (cost(user, {stagger}));
           hold kv (cost(kv, 1600)) {prefix} {{
@@ -50,14 +60,22 @@ const CHAIN: &str = "prefix (sys: 1200, serial: inf)";
 /// nothing is read.
 #[test]
 fn a_system_prompt_is_computed_once() {
-    let shared = run(&program(100_000, 5, "serial * 10", CHAIN), &options(100.0));
+    let shared = run(
+        &program(100_000, "serial * 10", CHAIN),
+        &prompted(5, "7"),
+        &options(100.0),
+    );
     assert_eq!(
         shared.observe("got").unwrap().samples,
         [0.0, 1200.0, 1200.0, 1200.0, 1200.0],
         "{}",
         shared.text()
     );
-    let own = run(&program(100_000, 5, "serial * 10", ""), &options(100.0));
+    let own = run(
+        &program(100_000, "serial * 10", ""),
+        &prompted(5, "7"),
+        &options(100.0),
+    );
     assert_eq!(own.observe("got").unwrap().samples, [0.0; 5]);
 }
 
@@ -69,7 +87,8 @@ fn a_system_prompt_is_computed_once() {
 #[test]
 fn holds_reading_one_prefix_allocate_it_once() {
     let r = run(
-        &program(2400, 4, "serial > 0 ? 10 : 0", CHAIN),
+        &program(2400, "serial > 0 ? 10 : 0", CHAIN),
+        &prompted(4, "7"),
         &options(100.0),
     );
     let got = &r.observe("got").unwrap().samples;
@@ -89,7 +108,11 @@ fn holds_reading_one_prefix_allocate_it_once() {
 /// every admission evicts the tail before it.
 #[test]
 fn eviction_takes_the_tail_before_the_prompt() {
-    let r = run(&program(1800, 6, "serial * 10", CHAIN), &options(100.0));
+    let r = run(
+        &program(1800, "serial * 10", CHAIN),
+        &prompted(6, "7"),
+        &options(100.0),
+    );
     assert_eq!(
         r.observe("got").unwrap().samples,
         [0.0, 1200.0, 1200.0, 1200.0, 1200.0, 1200.0],
@@ -111,7 +134,6 @@ fn the_own_chain_is_the_default() {
         stage llm : delay;
         pool kv on gpu {{ block 16; evict lru; }}
         stage user : delay;
-        workload {{ arrive closed(3); session {{ turn; }} }}
         server {{ loop {{ run user (cost(user, ~exp(1)));
           hold kv (cost(kv, min(cachedin(kv), 992) + 8)) {prefix} {{
             observe got = cached;
@@ -121,17 +143,13 @@ fn the_own_chain_is_the_default() {
 "#
         )
     };
-    let own = run(&src(""), &options(50.0));
-    let chain = run(&src("prefix (serial: 1e12)"), &options(50.0));
+    let closed = "workload { arrive closed(3); session { turn; } }";
+    let own = run(&src(""), closed, &options(50.0));
+    let chain = run(&src("prefix (serial: 1e12)"), closed, &options(50.0));
     let a = &own.observe("got").unwrap().samples;
     assert!(a.iter().any(|&x| x > 0.0), "the program must hit: {a:?}");
     assert_eq!(a, &chain.observe("got").unwrap().samples);
-    let error = run_source(
-        &common::main_source(&src("prefix (serial: inf)")),
-        &options(50.0),
-        None,
-    )
-    .unwrap_err();
+    let error = fails(&src("prefix (serial: inf)"), closed, &options(50.0));
     assert!(error.contains("leave the clause out"), "{error}");
 }
 
@@ -148,25 +166,25 @@ fn a_key_reads_no_state() {
         ),
         ("prefix (~exp(1): 1200)", "a `prefix` segment's key reads"),
     ] {
-        let error = run_source(
-            &common::main_source(&program(100_000, 1, "0", prefix)),
+        let error = fails(
+            &program(100_000, "0", prefix),
+            &prompted(1, "7"),
             &options(10.0),
-            None,
-        )
-        .unwrap_err();
+        );
         assert!(error.contains(said), "{prefix}: {error}");
     }
-    let spills = program(100_000, 1, "0", CHAIN).replace(
+    let spills = program(100_000, "0", CHAIN).replace(
         "pool kv on gpu { block 16; evict lru; }",
         "pool kv on gpu { block 16; evict lru; spill l2 via link (1) when (1); }
          pool l2 { cap 1000000; block 16; evict lru; } stage link : delay;",
     );
-    let error = run_source(&common::main_source(&spills), &options(10.0), None).unwrap_err();
+    let error = fails(&spills, &prompted(1, "7"), &options(10.0));
     assert!(error.contains("not supported yet"), "{error}");
 }
 
-/// Three sessions on the system prompt, one after another, then each a
-/// second request on its own context, in reverse order. `INNER` stands in
+/// Three sessions on the system prompt (`prompted(3, "7")`), one after
+/// another, then each a second request on its own context, in reverse
+/// order. `INNER` stands in
 /// the first request's body, `REUSE` bounds its read.
 fn two_requests(reuse: &str, inner: &str) -> String {
     format!(
@@ -175,7 +193,6 @@ fn two_requests(reuse: &str, inner: &str) -> String {
         stage llm : delay;
         pool kv on gpu {{ block 16; evict lru; }}
         stage user : delay;
-        workload {{ arrive batch(3); init {{ set sys = 7; }} send (sys); session {{ turn; }} }}
         server (sys) {{
           run user (cost(user, serial * 10));
           hold kv (cost(kv, 1600)) {CHAIN} {reuse} {{
@@ -202,6 +219,7 @@ fn two_requests(reuse: &str, inner: &str) -> String {
 fn a_reuse_bound_cuts_no_other_session() {
     let r = run(
         &two_requests("reuse (cost(kv, serial == 2 ? 800 : 1e9))", ""),
+        &prompted(3, "7"),
         &options(200.0),
     );
     assert_eq!(
@@ -226,7 +244,7 @@ fn a_shared_prefix_is_no_session_s_consumed_entry() {
                      observe inner = cached;
                    } cache (cost(kv, 1600));
                  }";
-    let r = run(&two_requests("", inner), &options(200.0));
+    let r = run(&two_requests("", inner), &prompted(3, "7"), &options(200.0));
     assert_eq!(
         r.observe("inner").unwrap().samples,
         [1200.0],
@@ -252,7 +270,6 @@ fn a_hold_reads_at_most_what_it_allocates() {
         device gpu { kv cap 100000; }
         pool kv on gpu { block 16; evict lru; }
         stage user : delay;
-        workload { arrive batch(3); init { set sys = 7; } send (sys); session { turn; } }
         server (sys) {
           run user (cost(user, serial == 0 ? 0 : 10));
           hold kv (cost(kv, serial == 0 ? 1600 : 160)) prefix (sys: 1200, serial: inf) {
@@ -262,7 +279,7 @@ fn a_hold_reads_at_most_what_it_allocates() {
           } cache (cost(kv, serial == 0 ? 1600 : 16));
         }
 "#;
-    let r = run(src, &options(200.0));
+    let r = run(src, &prompted(3, "7"), &options(200.0));
     assert_eq!(
         r.observe("got").unwrap().samples,
         [0.0, 160.0, 160.0],
@@ -288,7 +305,6 @@ fn a_key_is_its_attribute_and_its_value() {
         stage llm : delay;
         pool kv on gpu {{ block 16; evict lru; }}
         stage user : delay;
-        workload {{ arrive batch(3); init {{ set sys = 1; }} send (sys); session {{ turn; }} }}
         server (sys) {{
           run user (cost(user, serial * 10));
           if (serial == 1) {{
@@ -305,13 +321,13 @@ fn a_key_is_its_attribute_and_its_value() {
         }}
 "#
     );
-    let r = run(&src, &options(100.0));
+    let r = run(&src, &prompted(3, "1"), &options(100.0));
     assert_eq!(r.observe("got").unwrap().samples, [0.0], "{}", r.text());
 }
 
-/// `N` sessions with `sys = 7` on a stage and a pool of `cap` (block 16),
-/// the server's statements `server`.
-fn deployment(cap: u32, n: u32, pools: &str, server: &str) -> String {
+/// A stage and a pool of `cap` (block 16), for sessions with `sys = 7`
+/// (`prompted`), the server's statements `server`.
+fn deployment(cap: u32, pools: &str, server: &str) -> String {
     // a stage no statement runs does not link: `llm` where the server runs it
     let llm = if server.contains("run llm ") {
         "stage llm : delay;"
@@ -325,7 +341,6 @@ fn deployment(cap: u32, n: u32, pools: &str, server: &str) -> String {
         pool kv on gpu {{ block 16; evict lru; preempt lifo; }}
         {pools}
         stage user : delay;
-        workload {{ arrive batch({n}); init {{ set sys = 7; }} send (sys); session {{ turn; }} }}
         server (sys) {{ {server} }}
 "#
     )
@@ -342,7 +357,6 @@ fn the_first_writer_does_not_own_the_shared_prompt() {
     for (units, keep) in [(320, 320), (1600, 320)] {
         let src = deployment(
             100_000,
-            3,
             "",
             &format!(
                 "run user (cost(user, serial * 10));
@@ -358,7 +372,7 @@ fn the_first_writer_does_not_own_the_shared_prompt() {
                  }}"
             ),
         );
-        let r = run(&src, &options(100.0));
+        let r = run(&src, &prompted(3, "7"), &options(100.0));
         assert_eq!(
             r.observe("late").unwrap().samples,
             [1200.0],
@@ -375,7 +389,6 @@ fn the_first_writer_does_not_own_the_shared_prompt() {
 fn drop_takes_the_session_s_entry_alone() {
     let src = deployment(
         100_000,
-        3,
         "",
         &format!(
             "run user (cost(user, serial * 10));
@@ -387,7 +400,7 @@ fn drop_takes_the_session_s_entry_alone() {
              if (serial == 0) {{ drop kv; }}"
         ),
     );
-    let r = run(&src, &options(100.0));
+    let r = run(&src, &prompted(3, "7"), &options(100.0));
     assert_eq!(r.observe("mid").unwrap().samples, [1200.0], "{}", r.text());
 }
 
@@ -400,7 +413,6 @@ fn drop_takes_the_session_s_entry_alone() {
 fn two_legs_read_one_prompt() {
     let src = deployment(
         100_000,
-        1,
         "",
         &format!(
             "hold kv (cost(kv, 1600)) {CHAIN} {{
@@ -422,7 +434,7 @@ fn two_legs_read_one_prompt() {
              join;"
         ),
     );
-    let r = run(&src, &options(100.0));
+    let r = run(&src, &prompted(1, "7"), &options(100.0));
     assert_eq!(r.observe("a").unwrap().samples, [1600.0], "{}", r.text());
     assert_eq!(r.observe("b").unwrap().samples, [1200.0], "{}", r.text());
 }
@@ -435,7 +447,6 @@ fn two_legs_read_one_prompt() {
 fn an_empty_segment_is_left_out() {
     let src = deployment(
         100_000,
-        1,
         "",
         "set ctx = 0;
          loop {
@@ -447,7 +458,7 @@ fn an_empty_segment_is_left_out() {
            run user (cost(user, 1));
          }",
     );
-    let r = run(&src, &options(9.5));
+    let r = run(&src, &prompted(1, "7"), &options(9.5));
     assert_eq!(
         r.observe("got").unwrap().samples,
         [0.0, 400.0, 800.0, 1200.0, 1600.0],
@@ -464,7 +475,6 @@ fn an_empty_segment_is_left_out() {
 fn a_chain_leaves_a_slot_pool_its_cap() {
     let src = deployment(
         100_000,
-        6,
         "pool slots { cap 2; }",
         &format!(
             "run user (cost(user, serial == 0 ? 0 : 10));
@@ -474,22 +484,21 @@ fn a_chain_leaves_a_slot_pool_its_cap() {
              }} cache (cost(slots, kv, 1600));"
         ),
     );
-    let r = run(&src, &options(100.0));
+    let r = run(&src, &prompted(6, "7"), &options(100.0));
     let together = &r.observe("together").unwrap().samples;
     assert!(
         together.iter().all(|&t| t <= 2.0),
         "{together:?}\n{}",
         r.text()
     );
-    let error = run_source(
-        &common::main_source(&src.replace(
+    let error = fails(
+        &src.replace(
             &format!("slots (cost(slots, 1)), kv (cost(kv, 1600)) {CHAIN}"),
             &format!("slots (cost(slots, 1)) {CHAIN}"),
-        )),
+        ),
+        &prompted(6, "7"),
         &options(10.0),
-        None,
-    )
-    .unwrap_err();
+    );
     assert!(error.contains("no pool with `block`"), "{error}");
 }
 
@@ -502,7 +511,6 @@ fn a_chain_leaves_a_slot_pool_its_cap() {
 fn the_own_chain_is_consumed_whole() {
     let src = deployment(
         3000,
-        1,
         "",
         "hold kv (cost(kv, 1600)) {
            run llm (cost(llm, 1));
@@ -512,7 +520,7 @@ fn the_own_chain_is_consumed_whole() {
            observe got = cached;
          } cache (cost(kv, 320));",
     );
-    let r = run(&src, &options(100.0));
+    let r = run(&src, &prompted(1, "7"), &options(100.0));
     assert_eq!(r.observe("got").unwrap().samples, [1600.0], "{}", r.text());
 }
 
@@ -524,7 +532,6 @@ fn the_own_chain_is_consumed_whole() {
 fn a_preempted_reader_reads_the_prompt_again() {
     let src = deployment(
         4000,
-        5,
         "",
         &format!(
             "run user (cost(user, serial == 0 ? 0 : 10));
@@ -535,7 +542,7 @@ fn a_preempted_reader_reads_the_prompt_again() {
              }} cache (cost(kv, 2200));"
         ),
     );
-    let r = run(&src, &options(200.0));
+    let r = run(&src, &prompted(5, "7"), &options(200.0));
     let kv = r.pools.iter().find(|p| p.name == "kv").unwrap();
     assert!(kv.preemptions > 0, "{}", r.text());
     let got = &r.observe("got").unwrap().samples;
@@ -558,7 +565,6 @@ fn serial_is_not_set() {
         device gpu { kv cap 100000; }
         pool kv on gpu { block 16; evict lru; }
         stage user : delay;
-        workload { arrive batch(3); init { set d = serial; set serial = 0; } send (d); session { turn; } }
         server (d) {
           run user (cost(user, d * 10));
           hold kv (cost(kv, 1600)) prefix (serial: 1e12) {
@@ -566,7 +572,8 @@ fn serial_is_not_set() {
           } cache (cost(kv, 1600));
         }
 "#;
-    let error = run_source(&common::main_source(src), &options(100.0), None).unwrap_err();
+    let workload = "workload { arrive batch(3); init { set d = serial; set serial = 0; } send (d); session { turn; } }";
+    let error = fails(src, workload, &options(100.0));
     assert!(
         error.contains("`serial` is the session's number"),
         "{error}"
@@ -591,10 +598,9 @@ fn a_request_s_chain_reads_nothing_the_admission_reads() {
           }
           worker { forward (batch.tokens * 1e-5 + 1e-4); }
         }
-        workload { arrive batch(1); init { set sys = 7; } send (sys); session { turn; } }
         server (sys) { llm (1600, 1); }
 "#;
-    let error = run_source(&common::main_source(src), &options(10.0), None).unwrap_err();
+    let error = fails(src, &prompted(1, "7"), &options(10.0));
     assert!(
         error.contains("`prefix` segment reads the state"),
         "{error}"
@@ -608,7 +614,7 @@ fn a_request_s_chain_reads_nothing_the_admission_reads() {
 /// contexts piled into the first.
 #[test]
 fn a_chain_without_cache_or_with_an_endless_middle_does_not_link() {
-    let base = program(100_000, 1, "0", CHAIN);
+    let base = program(100_000, "0", CHAIN);
     for (src, said) in [
         (
             base.replace("}} cache (cost(kv, 1600));", "}}")
@@ -616,11 +622,11 @@ fn a_chain_without_cache_or_with_an_endless_middle_does_not_link() {
             "no `cache` clause",
         ),
         (
-            program(100_000, 1, "0", "prefix (sys: inf, serial: inf)"),
+            program(100_000, "0", "prefix (sys: inf, serial: inf)"),
             "other than the last is endless",
         ),
     ] {
-        let error = run_source(&common::main_source(&src), &options(10.0), None).unwrap_err();
+        let error = fails(&src, &prompted(1, "7"), &options(10.0));
         assert!(error.contains(said), "{error}\n{src}");
     }
 }
@@ -647,7 +653,6 @@ fn an_engine_s_request_takes_a_chain() {
           worker {{ forward (batch.tokens * 1e-5 + 1e-4); }}
         }}
         stage user : delay;
-        workload {{ arrive batch(4); init {{ set sys = 7; }} send (sys); session {{ turn; }} }}
         server (sys) {{
           run user (cost(user, serial * 10));
           llm (1600, 1);
@@ -655,14 +660,18 @@ fn an_engine_s_request_takes_a_chain() {
 "#
         )
     };
-    let r = run(&src("prefix (sys: 1200, serial: inf)"), &options(100.0));
+    let r = run(
+        &src("prefix (sys: 1200, serial: inf)"),
+        &prompted(4, "7"),
+        &options(100.0),
+    );
     assert_eq!(
         r.observe("llm.reused").unwrap().samples,
         [0.0, 1200.0, 1200.0, 1200.0],
         "{}",
         r.text()
     );
-    let own = run(&src(""), &options(100.0));
+    let own = run(&src(""), &prompted(4, "7"), &options(100.0));
     assert_eq!(own.observe("llm.reused").unwrap().samples, [0.0; 4]);
 }
 
@@ -680,7 +689,6 @@ fn lpm_admits_the_longest_cached_chain_first() {
         device gpu {{ kv cap 2000; }}
         pool kv on gpu {{ block 16; evict lru; {queue} }}
         stage user : delay;
-        workload {{ arrive batch(3); init {{ set sys = serial == 1 ? 9 : 7; }} send (sys); session {{ turn; }} }}
         server (sys) {{
           run user (cost(user, serial == 0 ? 0 : 1));
           hold kv (cost(kv, 1600)) {CHAIN} {{
@@ -702,13 +710,14 @@ fn lpm_admits_the_longest_cached_chain_first() {
             .map(|(_, v)| *v)
             .unwrap()
     };
-    let fifo = run(&src(""), &options(100.0));
+    let sys = prompted(3, "serial == 1 ? 9 : 7");
+    let fifo = run(&src(""), &sys, &options(100.0));
     assert!(
         of(&fifo, "start", 1) < of(&fifo, "start", 2),
         "{}",
         fifo.text()
     );
-    let lpm = run(&src("queue by (-cachedin(kv));"), &options(100.0));
+    let lpm = run(&src("queue by (-cachedin(kv));"), &sys, &options(100.0));
     assert!(
         of(&lpm, "start", 2) < of(&lpm, "start", 1),
         "{}",
@@ -737,21 +746,25 @@ fn an_entry_keys_its_prefix_by_the_requests_serial() {
             }} cache (cost(kv, reqs, prompt));
           }}
         }}
-        workload {{ arrive batch(2); init {{ set other = 1; }} session {{ turn; }} }}
         server {{ E.decode (48); }}
 "#
         )
     };
-    serq::check_source(
+    let workload = "workload { arrive batch(2); init { set other = 1; } session { turn; } }";
+    common::compile(
         &common::main_source(&entry("serial", "prompt")),
+        workload,
         &common::horizon(10.0),
     )
+    .map(|_| ())
     .unwrap();
     let refused = |key: &str, units: &str| {
-        serq::check_source(
+        common::compile(
             &common::main_source(&entry(key, units)),
+            workload,
             &common::horizon(10.0),
         )
+        .map(|_| ())
         .unwrap_err()
     };
     let e = refused("other", "prompt");
@@ -780,7 +793,6 @@ fn cachedin_outside_a_hold_reads_the_chain_cached_along() {
         r#"
         stage svc : delay;
         pool kv { cap 1000; block 16; }
-        workload { arrive batch(2); session { turn; } }
         server {
           hold kv (cost(kv, 32)) prefix (0: 16, serial: inf) { run svc (cost(svc, 1)); }
             cache (cost(kv, 32)) lease kv (inf);
@@ -795,6 +807,7 @@ fn cachedin_outside_a_hold_reads_the_chain_cached_along() {
           observe after_leg = cachedin(kv);
         }
 "#,
+        "workload { arrive batch(2); session { turn; } }",
         &options(100.0),
     );
     let samples = |name: &str| r.observe(name).unwrap().samples.clone();
@@ -813,7 +826,6 @@ fn a_lease_does_not_hide_the_entry_cached_after_it() {
         r#"
         stage svc : delay;
         pool kv { cap 1000; block 16; }
-        workload { arrive batch(1); session { turn; } }
         server {
           hold kv (cost(kv, 200)) prefix (0: 16, serial: inf) { run svc (cost(svc, 1)); }
             cache (cost(kv, 200)) lease kv (inf);
@@ -821,6 +833,7 @@ fn a_lease_does_not_hide_the_entry_cached_after_it() {
           observe after_own = cachedin(kv);
         }
 "#,
+        "workload { arrive batch(1); session { turn; } }",
         &options(100.0),
     );
     assert_eq!(

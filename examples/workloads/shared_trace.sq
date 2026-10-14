@@ -1,0 +1,28 @@
+// The oracle scenario `tools/oracle/shared_trace`'s sessions
+// (examples/oracle/vllm_shared_prompt.sq runs it).
+use "std/args";
+
+let spacing = args.number("spacing", 5);     // seconds between session arrivals
+let N = args.number("N", 3);             // sessions in the trace
+
+stage gate : delay;
+
+// The client: the trace's sessions, sent `spacing` apart; a turn is sent
+// `think` seconds after the previous one completes. Every session sends
+// the one system prompt.
+workload {
+  arrive batch(N);
+  trace "../../tools/oracle/shared_trace.csv" ordered;
+  init { set system = 1; }
+  send (system, new, prev, out);
+  session {
+    run gate (cost(gate, serial * spacing));
+    set prev = 0;
+    turn;
+    while (more) {
+      set prev = new;
+      tool think;
+      turn;
+    }
+  }
+}

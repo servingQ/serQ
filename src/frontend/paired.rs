@@ -55,7 +55,8 @@ pub struct Spliced {
     /// later line is the workload file's, wherever the parser's expansions
     /// (a `def`'s use) move it in the token stream.
     pub split: usize,
-    /// The stages the workload file declares: what it runs on itself.
+    /// The stages and pools the workload file declares: what it runs on
+    /// and holds itself (a closed loop's user, a session cap).
     pub stages: Vec<String>,
     /// The definitions of the deployment file and of the workload file, as
     /// written: an override names one (`--def service=…`).
@@ -247,13 +248,20 @@ impl<'a> Paired<'a> {
         };
         // each file's own constants and definitions: the workload's at its
         // top level, the deployment's at its top level and in `fn main()`
-        let wl_own = names(&rest, &["let", "def"], 0);
-        let dep_own = names(&dep, &["let", "def"], 1);
+        // a word of the language keeps its spelling, so the parser refuses
+        // it as it would in one file (`def min`)
+        let named = |toks: &[Token], depth| {
+            let mut own = names(toks, &["let", "def"], depth);
+            own.retain(|(_, n)| !word(n));
+            own
+        };
+        let wl_own = named(&rest, 0);
+        let dep_own = named(&dep, 1);
         let defs = (
             plain(names(&dep, &["def"], 1)),
             plain(names(&rest, &["def"], 0)),
         );
-        let stages = plain(names(&rest, &["stage"], 0));
+        let stages = plain(names(&rest, &["stage", "pool"], 0));
         rename(&mut uses, &wl_own, WORKLOAD);
         rename(&mut rest, &wl_own, WORKLOAD);
         rename(&mut dep, &dep_own, DEPLOYMENT);
@@ -286,6 +294,20 @@ impl<'a> Paired<'a> {
     }
 }
 
+/// A word of the language (supplied, retired or a built-in attribute) or a
+/// std module's name:
+/// never a file's own name.
+fn word(name: &str) -> bool {
+    use crate::frontend::link::{BUILTIN_ATTRS, SCHEDULER_ATTRS};
+    use crate::frontend::parser::{is_reserved, retired};
+    matches!(name, "args" | "kvt" | "share")
+        || BUILTIN_ATTRS.contains(&name)
+        || SCHEDULER_ATTRS.contains(&name)
+        || is_reserved(name)
+        || retired(name).is_some()
+        || crate::frontend::link::takes_supplied(name, "a definition").is_some()
+}
+
 /// A name as the program wrote it: the pair's renaming taken off.
 pub fn written(s: &str) -> String {
     s.replace(WORKLOAD, "").replace(DEPLOYMENT, "")
@@ -300,8 +322,15 @@ fn plain(names: Vec<(Token, String)>) -> Vec<String> {
 fn rename(toks: &mut [Token], own: &[(Token, String)], prefix: &str) {
     for k in 0..toks.len() {
         let field = k > 0 && toks[k - 1].tok == Tok::Dot;
+        // the word a clause begins with, followed by its value
+        // (`pool live { cap cap; }`): an option, not the constant
+        let clause = (k == 0 || matches!(toks[k - 1].tok, Tok::LBrace | Tok::Semi))
+            && toks
+                .get(k + 1)
+                .is_some_and(|t| matches!(t.tok, Tok::Ident(_) | Tok::Num(_)));
         if let Tok::Ident(n) = &toks[k].tok
             && !field
+            && !clause
             && own.iter().any(|(_, o)| o == n)
         {
             toks[k].tok = Tok::Ident(format!("{prefix}{n}"));

@@ -15,7 +15,7 @@ mod common;
 use std::path::Path;
 
 use serq::frontend::parser;
-use serq::{Overrides, Program, inline_trace, program_path, run_ir};
+use serq::{Overrides, Program, inline_trace, paired_workload, program_path, run_ir};
 
 fn dir() -> std::path::PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tools/oracle")
@@ -44,8 +44,11 @@ fn cache_ir() -> Program {
         ov.lets
             .push((k.to_string(), parser::parse_expr(v).unwrap()));
     }
-    let src = std::fs::read_to_string(program_path("vllm_replay")).unwrap();
-    let p = serq::compile_source(&common::main_source(&src), &ov).unwrap();
+    let path = program_path("vllm_replay");
+    let src = std::fs::read_to_string(&path).unwrap();
+    let workload =
+        std::fs::read_to_string(paired_workload(&path).expect("the example's workload")).unwrap();
+    let p = common::compile(&common::main_source(&src), &workload, &ov).unwrap();
     inline_trace(p, None).unwrap()
 }
 
@@ -128,8 +131,11 @@ fn shared_trace_matches_the_real_scheduler() {
         trace: Some(dir().join("shared_trace.csv").display().to_string()),
         ..common::horizon(200.0)
     };
-    let src = std::fs::read_to_string(program_path("vllm_shared_prompt")).unwrap();
-    let p = serq::compile_source(&common::main_source(&src), &ov).unwrap();
+    let path = program_path("vllm_shared_prompt");
+    let src = std::fs::read_to_string(&path).unwrap();
+    let workload =
+        std::fs::read_to_string(paired_workload(&path).expect("the example's workload")).unwrap();
+    let p = common::compile(&common::main_source(&src), &workload, &ov).unwrap();
     let r = run_ir(&inline_trace(p, None).unwrap(), None).unwrap();
     let cached = agrees(&r, "shared_trace.out.csv");
     assert_eq!(cached.len(), 9);

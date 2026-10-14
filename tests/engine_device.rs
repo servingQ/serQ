@@ -8,32 +8,86 @@ mod common;
 
 use std::path::Path;
 
+use serq::Overrides;
 use serq::ir::{
     BinOp, CArg, CExpr, CIter, CRef, CServe, CStageKind, CStep, CtxVar, Fun, Program, Register,
     UnOp,
 };
-use serq::{Overrides, compile_source};
 
 fn root() -> &'static Path {
     Path::new(env!("CARGO_MANIFEST_DIR"))
 }
 
+/// `src` with the small engine's workload, `WORKLOAD` below.
 fn compiled(src: &str, ov: &Overrides) -> Program {
-    compile_source(&common::main_source(src), ov).unwrap_or_else(|e| panic!("{e}\n{src}"))
+    compiled_with(src, WORKLOAD, ov)
+}
+
+/// The deployment `src` with the workload's file `workload`.
+fn compiled_with(src: &str, workload: &str, ov: &Overrides) -> Program {
+    common::compile(&common::main_source(src), workload, ov)
+        .unwrap_or_else(|e| panic!("{e}\n{src}\n{workload}"))
 }
 
 #[track_caller]
 fn error(src: &str) -> String {
-    match compile_source(&common::main_source(src), &common::horizon(10.0)) {
-        Ok(_) => panic!("links:\n{src}"),
+    error_with(src, WORKLOAD)
+}
+
+#[track_caller]
+fn error_with(src: &str, workload: &str) -> String {
+    match common::compile(&common::main_source(src), workload, &common::horizon(10.0)) {
+        Ok(_) => panic!("links:\n{src}\n{workload}"),
         Err(e) => e,
     }
 }
 
 #[track_caller]
 fn refused(src: &str, fragment: &str) {
-    let e = error(src);
+    refused_with(src, WORKLOAD, fragment);
+}
+
+#[track_caller]
+fn refused_with(src: &str, workload: &str, fragment: &str) {
+    let e = error_with(src, workload);
     assert!(e.contains(fragment), "missing {fragment:?}:\n{e}");
+}
+
+/// The workload file an example is paired with (`examples/pairs.json`)
+/// and the overrides that run it.
+struct Paired {
+    workload: String,
+    ov: Overrides,
+}
+
+/// An example's text, and its workload with the overrides `ov`.
+fn example(path: &Path, ov: &Overrides) -> (String, Paired) {
+    let w = serq::paired_workload(path).unwrap_or_else(|| panic!("{}: no pair", path.display()));
+    let paired = Paired {
+        workload: std::fs::read_to_string(w).unwrap(),
+        ov: ov.clone(),
+    };
+    (std::fs::read_to_string(path).unwrap(), paired)
+}
+
+/// An example's text `src`, perhaps edited, with its workload.
+fn compile_paired(src: &str, paired: &Paired) -> Result<Program, String> {
+    common::compile(src, &paired.workload, &paired.ov)
+}
+
+/// An example's text `src`, edited, refused with its workload.
+#[track_caller]
+fn refused_example(src: &str, ov: &Paired, fragment: &str) {
+    match compile_paired(src, ov) {
+        Ok(_) => panic!("links:\n{src}"),
+        Err(e) => assert!(e.contains(fragment), "missing {fragment:?}:\n{e}"),
+    }
+}
+
+/// An example compiled with its workload.
+fn compiled_example(path: &Path, ov: &Overrides) -> Program {
+    let (text, ov) = example(path, ov);
+    compile_paired(&text, &ov).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
 }
 
 fn replaced(text: &str, pairs: &[(&str, &str)]) -> String {
@@ -198,8 +252,10 @@ fn reg(r: usize) -> CExpr {
 /// (vLLM's `long_prefill_token_threshold`): `inf`, no cap, is its 0, and a cap of 512 is 512.
 #[test]
 fn vllm_as_an_engine_is_the_procedure() {
-    let text = std::fs::read_to_string(root().join("examples/multi-turn/vllm.sq")).unwrap();
-    let ov = common::horizon(100.0);
+    let (text, ov) = example(
+        &root().join("examples/multi-turn/vllm.sq"),
+        &common::horizon(100.0),
+    );
     let chunk = |cap: &str| {
         let src = replaced(
             &text,
@@ -208,7 +264,7 @@ fn vllm_as_an_engine_is_the_procedure() {
                 &format!(r#"args.number("chunk_cap", {cap})"#),
             )],
         );
-        let p = compiled(&src, &ov);
+        let p = compile_paired(&src, &ov).unwrap_or_else(|e| panic!("{e}"));
         let st = step(&p, "vllm");
         assert_eq!(Schedule::of(st).keys, Some(vec![]));
         assert_eq!(st.iteration, None);
@@ -246,7 +302,7 @@ fn vllm_as_an_engine_is_the_procedure() {
 fn sglang_and_tgi_as_engines_are_bodies() {
     let base = root().join("examples/engines");
     let ov = common::horizon(100.0);
-    let tgi = compiled(&std::fs::read_to_string(base.join("tgi.sq")).unwrap(), &ov);
+    let tgi = compiled_example(&base.join("tgi.sq"), &ov);
     let st = step(&tgi, "tgi");
     let e = stage(&tgi, "tgi", None);
     // `state just = 0;`
@@ -279,10 +335,7 @@ fn sglang_and_tgi_as_engines_are_bodies() {
     assert_eq!(st.memory, Some(kv));
     assert_eq!(tgi.pools[kv].admit_via, Some(e));
 
-    let sglang = compiled(
-        &std::fs::read_to_string(base.join("sglang.sq")).unwrap(),
-        &ov,
-    );
+    let sglang = compiled_example(&base.join("sglang.sq"), &ov);
     let st = step(&sglang, "sglang");
     let e = stage(&sglang, "sglang", None);
     let (kv, reqs) = (pool(&sglang, "kv", None), pool(&sglang, "reqs", None));
@@ -359,8 +412,8 @@ fn sglang_and_tgi_as_engines_are_bodies() {
 
 /// A small engine, for the forms below: its `reqs` admitted by it, its
 /// memory `kv` on its device.
-const WORKLOAD: &str = "
-workload { arrive batch(3); init { set prompt = 2; } send (prompt); }
+const WORKLOAD: &str = "workload { arrive batch(3); init { set prompt = 2; } send (prompt); }\n";
+const SERVER: &str = "
 server (prompt) { vllm (prompt, 3); }
 ";
 
@@ -393,7 +446,7 @@ engine vllm on gpu {{
 }}
 pool reqs on vllm {{ }}
 pool kv on gpu {{ preempt lifo; }}
-{WORKLOAD}"
+{SERVER}"
     )
 }
 
@@ -1032,7 +1085,7 @@ fn the_design_refuses_what_it_says() {
             "device gpu {{ t (x) = 1; }}
 engine e1 on gpu {{ tokens cap 4; scheduler {{ advance running; }} worker {{ forward (t(batch.tokens)); }} }}
 engine e2 on gpu {{ tokens cap 4; scheduler {{ advance running; }} worker {{ forward (t(batch.tokens)); }} }}
-{WORKLOAD}"
+{SERVER}"
         ),
         "one device runs one engine",
     );
@@ -1089,7 +1142,10 @@ engine e2 on gpu {{ tokens cap 4; scheduler {{ advance running; }} worker {{ for
     // a pool on a name nothing declares is pointed at that name, the owner
     // (line 9, `pool kv on gpuu`, column 12), not the pool's
     let e = error(&engine(ok).replace("pool kv on gpu", "pool kv on gpuu"));
-    assert!(e.starts_with("9:12: no device or engine `gpuu`"), "{e}");
+    assert!(
+        e.starts_with("deployment.sq: 9:12: no device or engine `gpuu`"),
+        "{e}"
+    );
     assert!(e.contains("did you mean `gpu`?"), "{e}");
     // a context variable's old name is answered with the engine's name
     let e = error(&engine(ok).replace("forward (step_time(batch.tokens))", "forward (ntok)"));
@@ -1131,10 +1187,10 @@ fn an_engine_reads_the_programs_own_names() {
 /// member's queues.
 #[test]
 fn a_family_of_engines_is_a_queue_family() {
-    refused(
+    refused_with(
         "device gpu[2] { kv cap 100; } pool kv on gpu { }
-engine vllm[2] on gpu { tokens cap 8; scheduler { advance running; admit waiting while (running.preempted == 0); } worker { forward (1); } }
-workload { arrive batch(4); init { set prompt = 2; } }",
+engine vllm[2] on gpu { tokens cap 8; scheduler { advance running; admit waiting while (running.preempted == 0); } worker { forward (1); } }",
+        "workload { arrive batch(4); init { set prompt = 2; } }",
         "engine family `vllm[2]`: a family of engines is a queue family, `queue vllm[2] : ROLE",
     );
     let ov = common::horizon(20.0);
@@ -1146,14 +1202,14 @@ workload { arrive batch(4); init { set prompt = 2; } }",
   pool kv on {on} {{ }}
   decode (prompt) {{ hold kv (cost(kv, prompt)) {{ run vllm prefill (cost(vllm, prompt)) growing kv; }} }}
 }}
-workload {{ arrive batch(4); init {{ set prompt = 2; set j = serial < 2 ? 0 : 1; }} send (prompt, j); }}
 server (prompt, j) {{ vllm[j].decode (prompt); }}"
         )
     };
+    let w = "workload { arrive batch(4); init { set prompt = 2; set j = serial < 2 ? 0 : 1; } send (prompt, j); }";
     let ok = "advance running; admit waiting while (running.preempted == 0);";
     for (on, admitted) in [("vllm.gpu", true), ("gpu", false)] {
         let src = queue(ok, on);
-        let p = compiled(&src, &ov);
+        let p = compiled_with(&src, w, &ov);
         for i in [0, 1] {
             let (e, kv) = (stage(&p, "vllm", Some(i)), pool(&p, "vllm.kv", Some(i)));
             assert_eq!(step_at(&p, e).memory, Some(kv), "{src}");
@@ -1161,17 +1217,19 @@ server (prompt, j) {{ vllm[j].decode (prompt); }}"
             assert_eq!(p.pools[kv].admit_via, admitted.then_some(e), "{src}");
         }
     }
-    refused(
+    refused_with(
         &queue(
             "let c = waiting.count > 0 ? 2 : inf; advance running each at most (c); \
              admit waiting while (running.preempted == 0) each at most (c);",
             "vllm.gpu",
         ),
+        w,
         "is a family, and its `waiting.count`",
     );
     // nor its `tokens cap`
-    refused(
+    refused_with(
         &queue(ok, "vllm.gpu").replace("tokens cap 8;", "tokens cap 8 + waiting.count;"),
+        w,
         "which no member's engine may",
     );
 }
@@ -1220,13 +1278,14 @@ engine llm on gpu {
 }
 pool kv on gpu { }
 pool reqs on llm { }
-workload { arrive poisson(1); init { set n = 10; set t = ~bernoulli(0.5); } send (n, t); session { turn; end; } }
 server (n, t) { hold reqs[t] (cost(reqs[t], 1)), kv (cost(kv, n)) { run llm prefill (cost(llm, n)) growing kv; } }";
+const QUEUES_WORKLOAD: &str = "workload { arrive poisson(1); init { set n = 10; set t = ~bernoulli(0.5); } send (n, t); session { turn; end; } }";
 
 #[test]
 fn an_engine_admits_no_family_of_capacities() {
-    refused(
+    refused_with(
         QUEUES,
+        QUEUES_WORKLOAD,
         "`reqs[2]` in engine `llm`: an engine admits through its request's `taking`, which names \
          one `reqs`; write `reqs cap c;`, or a queue family `queue Q[2]` for 2 engines",
     );
@@ -1237,7 +1296,7 @@ fn an_engine_admits_no_family_of_capacities() {
 /// and never held: it is refused where it is declared.
 #[test]
 fn a_queues_engine_holds_no_family_capacity() {
-    refused(
+    refused_with(
         "queue Q : prefill {
   device gpu { kv cap 1000; }
   engine on gpu {
@@ -1250,8 +1309,8 @@ fn a_queues_engine_holds_no_family_capacity() {
   pool reqs on Q { }
   entry prefill(n) { hold reqs (cost(reqs, 1)), kv (cost(kv, n)) { run Q prefill (cost(Q, n)) growing kv; } }
 }
-workload { arrive poisson(1); init { set n = 10; } send (n); session { turn; end; } }
 server (n) { call Q.prefill(n); }",
+        "workload { arrive poisson(1); init { set n = 10; } send (n); session { turn; end; } }",
         "`reqs[2]` in queue `Q`'s engine",
     );
 }
@@ -1264,7 +1323,7 @@ fn admit_via_is_refused_and_says_what_to_write() {
         "pool reqs on llm { }",
         "pool reqs[2] { cap 4; admit via llm; }",
     );
-    let e = error(&old);
+    let e = error_with(&old, QUEUES_WORKLOAD);
     for part in [
         "who admits a pool is said in its `on`",
         "`NAME cap c;` in `engine E { … }`",
@@ -1284,10 +1343,7 @@ fn admit_via_is_refused_and_says_what_to_write() {
 #[test]
 fn a_queue_holds_its_engine() {
     let base = root().join("examples/pd-disaggregation");
-    let p = compiled(
-        &std::fs::read_to_string(base.join("llmd_nixl_pull.sq")).unwrap(),
-        &common::horizon(100.0),
-    );
+    let p = compiled_example(&base.join("llmd_nixl_pull.sq"), &common::horizon(100.0));
     for (q, kv_admitted) in [("P", false), ("D", true)] {
         // `queue P[NP]`, `queue D[ND]`: one engine per member
         let n = p.stages.iter().filter(|s| s.name == q).count() as u32;
@@ -1317,41 +1373,47 @@ fn a_queues_engine_is_its_stage() {
     hold kv (cost(kv, prompt)) {{ run E prefill (cost(E, prompt)) growing kv; }}
   }}
 }}
-workload {{ arrive batch(1); init {{ set prompt = 2; }} send (prompt); }}
 server (prompt) {{ E.prefill (prompt); }}
 "
         )
     };
     let device = "device gpu { t1 (x) = 1; kv cap 10; }";
     let engine = "engine on gpu { tokens cap 4; scheduler { advance running; admit waiting while (running.preempted == 0); } worker { forward (t1(batch.tokens)); } }";
+    let w = "workload { arrive batch(1); init { set prompt = 2; } send (prompt); }";
     let ov = common::horizon(10.0);
-    compiled(
+    compiled_with(
         &pod(&format!("{device} {engine} pool kv on gpu {{ }}")),
+        w,
         &ov,
     );
-    compiled(
+    compiled_with(
         &pod(&format!("{device} {engine} pool kv on E.gpu {{ }}")),
+        w,
         &ov,
     );
-    refused(
+    refused_with(
         &pod(&format!(
             "{} {engine} pool kv on gpu {{ }}",
             device.replace("gpu", "gpu[2]")
         )),
+        w,
         "a queue's device is the member's",
     );
-    refused(
+    refused_with(
         &pod(&format!(
             "{device} {engine} serve fifo; pool kv on gpu {{ }}"
         )),
+        w,
         "is one stage",
     );
-    refused(
+    refused_with(
         &pod(&format!("{engine} {device} pool kv on gpu {{ }}")),
+        w,
         "no device `gpu` in queue `E`",
     );
-    refused(
+    refused_with(
         &pod(&format!("{device} {engine} {engine} pool kv on gpu {{ }}")),
+        w,
         "has one stage",
     );
     // a queue's pool is on its own device or engine, never one outside it
@@ -1359,78 +1421,87 @@ server (prompt) {{ E.prefill (prompt); }}
         "queue F[3] {{ device g {{ t1 (x) = 1; }} {} }}\n",
         engine.replace("gpu", "g")
     );
-    refused(
+    refused_with(
         &format!(
             "{other}{}",
             pod(&format!(
                 "{device} {engine} pool kv on gpu {{ }} pool r on F {{ }}"
             ))
         ),
+        w,
         "`F` is not a device or the engine of queue `E`",
     );
-    refused(
+    refused_with(
         &format!(
             "device gtop {{ t1 (x) = 1; }}\n{}",
             pod(&format!("{device} {engine} pool kv on gtop {{ }}"))
         ),
+        w,
         "`gtop` is not a device or the engine of queue `E`",
     );
-    refused(
+    refused_with(
         &format!(
             "{}pool reqs on E {{ }}\n",
             pod(&format!("{device} {engine} pool kv on gpu {{ }}"))
         ),
+        w,
         "declare `pool reqs on E` in queue `E`",
     );
     // a queue and a top-level device of one name: refused in either order
     let top = "device E { t1 (x) = 1; z cap 2; } pool z on E { }\n";
     let queue = pod(&format!("{device} {engine} pool kv on gpu {{ }}"));
-    let (decls, rest) = queue.split_at(queue.find("workload").unwrap());
+    let (decls, rest) = queue.split_at(queue.find("server").unwrap());
     let device_first =
         "`E` is a device at 1:20; a queue named `E` would make the one word mean two things";
     let queue_first = "a device named `E` would make the one word mean two things";
-    refused(&format!("{top}{decls}{rest}"), device_first);
-    refused(&format!("{decls}{top}{rest}"), queue_first);
+    refused_with(&format!("{top}{decls}{rest}"), w, device_first);
+    refused_with(&format!("{decls}{top}{rest}"), w, queue_first);
     // a gateway has no stage, and is named all the same
     let gateway = "queue E : gateway { route () { } }\n";
-    refused(&format!("{top}{gateway}"), device_first);
-    refused(&format!("{gateway}{top}"), queue_first);
+    refused_with(&format!("{top}{gateway}"), w, device_first);
+    refused_with(&format!("{gateway}{top}"), w, queue_first);
     // the names a declaration outside a queue may not take
-    refused(
+    refused_with(
         &pod(&format!("{device} {engine} pool kv on E {{ }}").replace("gpu", "E")),
+        w,
         "a queue's device needs another name",
     );
-    refused(
+    refused_with(
         &pod(&format!("{device} {engine} pool kv on gpu {{ }}"))
             .replace("queue E", "queue engine")
             .replace("run E", "run engine")
             .replace("cost(E,", "cost(engine,")
             .replace("E.prefill", "engine.prefill"),
+        w,
         "a queue's engine is named after the queue",
     );
-    refused(
+    refused_with(
         &pod(&format!("{device} {engine} pool kv on gpu {{ }}").replace("gpu", "schedule")),
+        w,
         "`schedule` is a word of the language",
     );
-    refused(
+    refused_with(
         &pod(&format!("{device} {engine} pool kv on kv {{ }}").replace("gpu", "kv")),
+        w,
         "`kv` is a device of queue `E` at 2:10; a pool of queue `E` named `kv` would make the one word mean two things",
     );
     // an error names a queue's device as the program does
-    refused(
+    refused_with(
         &pod(&format!("{device} {engine} pool kv on gpu {{ }}")
             .replace(" kv cap 10;", " kv cap 10; enc cap 5;")),
+        w,
         "`enc` of `gpu` of queue `E` is no pool: declare `pool enc on gpu { … }` in queue `E`",
     );
     // #403's checks hold for a queue's engine
-    refused(
+    refused_with(
         &pod(&format!("{device} {engine} pool kv on gpu {{ }}")).replace(
             "advance running; admit waiting while (running.preempted == 0);",
             "advance running each at most (0);",
         ),
+        w,
         "`each at most (0)`",
     );
-    refused(
+    refused_with(
         &pod(&format!("{device} {engine} pool kv on gpu {{ }}"))
             .replace("queue E :", "queue E[2] :")
             .replace("E.prefill", "E[0].prefill")
@@ -1438,6 +1509,7 @@ server (prompt) {{ E.prefill (prompt); }}
                 "while (running.preempted == 0)",
                 "while (waiting.count > 0)",
             ),
+        w,
         "its `waiting.count` would read every member's",
     );
 }
@@ -1481,7 +1553,10 @@ fn an_argument_its_definition_drops_is_resolved_where_the_use_stands() {
 /// `def each(x) { x }` linked.
 #[test]
 fn a_def_may_not_be_named_each_or_most() {
-    let src = std::fs::read_to_string(root().join("docs/tutorial/programs/01-queue.sq")).unwrap();
+    let (src, ov) = example(
+        &root().join("docs/tutorial/programs/01-queue.sq"),
+        &common::horizon(10.0),
+    );
     for w in ["each", "most"] {
         let prog = src.replacen(
             "let S = 1.0;",
@@ -1489,7 +1564,7 @@ fn a_def_may_not_be_named_each_or_most() {
             1,
         );
         assert_ne!(prog, src);
-        refused(&prog, &format!("`{w}` is a word of the language"));
+        refused_example(&prog, &ov, &format!("`{w}` is a word of the language"));
     }
 }
 
@@ -1498,36 +1573,46 @@ fn a_def_may_not_be_named_each_or_most() {
 /// unknown, in a constant too (it read "not a constant function").
 #[test]
 fn a_power_is_written_with_a_caret() {
-    let src = std::fs::read_to_string(root().join("docs/tutorial/programs/01-queue.sq")).unwrap();
+    let (src, ov) = example(
+        &root().join("docs/tutorial/programs/01-queue.sq"),
+        &common::horizon(10.0),
+    );
     for (from, to) in [
         ("let S = 1.0;", "let S = pow(1, 1);"),
         ("set t0 = now;", "set t0 = pow(now, 1);"),
     ] {
         let prog = src.replacen(from, to, 1);
         assert_ne!(prog, src);
-        refused(&prog, "unknown function `pow`: `pow(x, y)` is now `x ^ y`");
+        refused_example(
+            &prog,
+            &ov,
+            "unknown function `pow`: `pow(x, y)` is now `x ^ y`",
+        );
     }
     let prog = src.replacen("let S = 1.0;", "let S = foo(1);", 1);
-    refused(&prog, "unknown function `foo`");
+    refused_example(&prog, &ov, "unknown function `foo`");
     let prog = src.replacen("let S = 1.0;", "let S = 1.0 ^ 1;", 1);
-    compile_source(&prog, &common::horizon(10.0)).unwrap();
+    compile_paired(&prog, &ov).unwrap();
     // the name is free: only a call is told
     let prog = src.replacen("let S = 1.0;", "let pow = 1.0;\nlet S = pow;", 1);
-    compile_source(&prog, &common::horizon(10.0)).unwrap();
+    compile_paired(&prog, &ov).unwrap();
 }
 
 /// A device's resource is a definition too, replaced token by token: its
 /// parameter may not be named like a distribution, as a `def`'s may not.
 #[test]
 fn a_resource_parameter_may_not_be_named_like_a_distribution() {
-    let src = std::fs::read_to_string(root().join("docs/tutorial/programs/05-engine.sq")).unwrap();
+    let (src, ov) = example(
+        &root().join("docs/tutorial/programs/05-engine.sq"),
+        &common::horizon(10.0),
+    );
     let prog = src.replacen(
         "compute (t) = t * alpha;",
         "compute (uniform) = uniform * alpha;",
         1,
     );
     assert_ne!(prog, src);
-    refused(&prog, "`uniform` is a word of the language");
+    refused_example(&prog, &ov, "`uniform` is a word of the language");
 }
 
 /// An arithmetic function takes numbers alone; one that reads a pool or a
@@ -1558,14 +1643,17 @@ fn a_name_passed_as_a_number_is_read_as_written() {
 def h(x) {{ 1 }}
 device gpu[2] {{ kv cap 100; }} pool kv on gpu {{ }}
 stage E[2] : fifo;
-workload {{ arrive batch(1); init {{ set prompt = 32; set j = 0; }} send (prompt, j); }}
 server (prompt, j) {{ hold kv[j] (cost(kv, {size})) {{ run E[j] (cost(E, 1)); }} }}"
         )
     };
+    let w = "workload { arrive batch(1); init { set prompt = 32; set j = 0; } send (prompt, j); }";
     let ov = common::horizon(10.0);
-    compiled(&src("min(prompt, 1000)"), &ov);
+    compiled_with(&src("min(prompt, 1000)"), w, &ov);
     // a value may not share a stage's name, so a bare `E` is the stage (#470)
-    let shared = error(&src("min(E, 1)").replace("set j = 0;", "set j = 0; set E = 3;"));
+    let shared = error_with(
+        &src("min(E, 1)"),
+        &w.replace("set j = 0;", "set j = 0; set E = 3;"),
+    );
     assert!(
         shared.contains("a stage named `E` would make the one word mean two things"),
         "{shared}"
@@ -1601,11 +1689,12 @@ server (prompt, j) {{ hold kv[j] (cost(kv, {size})) {{ run E[j] (cost(E, 1)); }}
             "unknown name `no_such_name`".to_string(),
         ),
     ] {
-        refused(&src(size), &message);
+        refused_with(&src(size), w, &message);
     }
     // a constant's function call: `min(N[1], 4)` was `min(N, 4)`
-    refused(
+    refused_with(
         &format!("let N = 2; let A = min(N[1], 4);\n{}", src("A")),
+        w,
         "`N[…]`: a number has no index: write `N`",
     );
 }
@@ -1621,20 +1710,23 @@ fn a_name_is_a_number_only_where_its_function_takes_one() {
             "{pre}
 device gpu {{ kv cap 100; }} pool kv on gpu {{ }}
 engine E on gpu {{ tokens cap inf; scheduler {{ advance running; admit waiting while (running.preempted == 0); }} worker {{ forward (1); }} }}
-workload {{ arrive batch(1); init {{ set prompt = 32; }} send (prompt); }}
 server (prompt) {{ hold kv (cost(kv, {size})) {{ E (1, 1); }} }}"
         )
     };
-    refused(
+    let w = "workload { arrive batch(1); init { set prompt = 32; } send (prompt); }";
+    refused_with(
         &src("", "prompt[7]"),
+        w,
         "`prompt[…]`: an attribute has no index: write `prompt`",
     );
-    refused(
+    refused_with(
         &src("", "kv"),
+        w,
         "`cost` reads `kv` as a number, but a pool is none",
     );
-    refused(
+    refused_with(
         &src("let A = queued(kv);", "A"),
+        w,
         "`queued` with 1 argument(s) is not a constant function",
     );
 }

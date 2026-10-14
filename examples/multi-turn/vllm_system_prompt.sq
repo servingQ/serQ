@@ -8,8 +8,9 @@
 // of them frees it (block_pool.py:776-796). The request says what its
 // prompt is made of, its first item: `prefix (product: system, serial:
 // inf)`, the product's system prompt, then the session's own context. The
-// engine is `vllm.sq`'s, the request's segments named; the workload is
-// `vllm.sq`'s with a system prompt in front.
+// engine is `vllm.sq`'s, the request's segments named; the workload
+// (examples/workloads/chat_products.sq) is `vllm.sq`'s, each session of one
+// of M products.
 use "std/args";
 
 let B = 8192;          // max_num_batched_tokens
@@ -18,16 +19,12 @@ let a = 2e-5;          // compute per scheduled token (s)
 let omega = 2e-4;      // weights read per iteration (s)
 let beta = 2e-9;       // KV read per iteration per resident context token (s)
 let c0 = 0;            // fixed cost per iteration (s)
-let p = 0.9;           // continue after a turn
 
 fn main() {
   let max_seqs = args.number("max_seqs", 16);     // max_num_seqs
   let blocks = args.number("blocks", 10000);    // num_gpu_blocks (less the null block)
   let chunk_cap = args.number("chunk_cap", inf);   // long_prefill_token_threshold (inf: none)
-  let Lambda = args.number("Lambda", 0.3);      // sessions per second
-  let Z = args.number("Z", 3.0);           // tool time (s)
   let S = args.number("S", 4000);          // tokens of a system prompt
-  let M = args.number("M", 1);             // products, each with its own system prompt
 
   device gpu {
     compute (t) = t * a;
@@ -61,31 +58,6 @@ fn main() {
     }
   }
   pool reqs on vllm { queue fifo; }   // the engine admits the waiting, FCFS
-
-  // The client: `vllm.sq`'s sessions, each of one of M products chosen
-  // uniformly; a prompt is the product's system prompt, the session's
-  // context K and the turn's n new tokens.
-  workload {
-    arrive poisson(Lambda);
-    init {
-      set K = 0;
-      set product = floor(~uniform(0, M));
-    }
-    turn {
-      set n = ceil(K == 0 ? ~uniform(1000, 3000) : ~exp(500));
-      set o = floor(~exp(200)) + 1;
-      set more = ~bernoulli(p);
-    }
-    send (input: K + n, output: o, product);
-    session {
-      turn;
-      while (more) {
-        set K = K + n + o;
-        tool (~exp(Z));
-        turn;
-      }
-    }
-  }
 
   // A turn is one request to the engine.
   // the scheduler knows max_tokens, not the length (sched/utils.py:98-119)

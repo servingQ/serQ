@@ -807,8 +807,9 @@ pub struct Program {
     /// What crosses between the workload and the server; `None` without a
     /// workload or a server.
     pub interface: Option<Interface>,
-    /// The stages a paired workload file declares (`frontend::paired`):
-    /// the workload runs on these and the deployment on none of them.
+    /// The stages and pools a paired workload file declares
+    /// (`frontend::paired`): the workload runs on and holds these, and the
+    /// deployment none of them.
     /// `None` for one file.
     pub paired: Option<Vec<String>>,
 }

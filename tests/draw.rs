@@ -26,9 +26,19 @@ const PROGRAMS: [&str; 10] = [
 ];
 
 fn program(name: &str) -> Program {
-    let path = program_path(name);
-    let src = std::fs::read_to_string(&path).unwrap();
-    compile_source(&src, &common::horizon(10.0)).unwrap_or_else(|e| panic!("{name}: {e}"))
+    example(&program_path(name))
+}
+
+/// The program at `path` with the workload `examples/pairs.json` runs it
+/// with (`docs/design/workload-file.md`).
+fn example(path: &std::path::Path) -> Program {
+    let ov = common::horizon(10.0);
+    let src = common::main_source(&std::fs::read_to_string(path).unwrap());
+    match serq::paired_workload(path) {
+        Some(w) => common::compile(&src, &std::fs::read_to_string(w).unwrap(), &ov),
+        None => compile_source(&src, &ov),
+    }
+    .unwrap_or_else(|e| panic!("{}: {e}", path.display()))
 }
 
 fn stage(p: &Program, name: &str) -> usize {
@@ -162,12 +172,13 @@ fn every_station_has_an_arrow_in_and_out() {
     while let Some(d) = dirs.pop() {
         for e in std::fs::read_dir(&d).unwrap() {
             let path = e.unwrap().path();
-            // an instance file sets a program's inputs, and half of a pair
-            // is a program only with its other half (below): no programs
+            // an instance file sets a program's inputs, a workload's file is
+            // the client a program runs with, and half of a pair is a
+            // program only with its other half (below): no programs
             if path.is_dir()
                 && path
                     .file_name()
-                    .is_some_and(|n| n != "instances" && n != "paired")
+                    .is_some_and(|n| n != "instances" && n != "workloads" && n != "paired")
             {
                 dirs.push(path);
             } else if path.extension().is_some_and(|x| x == "sq") {
@@ -178,9 +189,7 @@ fn every_station_has_an_arrow_in_and_out() {
     files.sort();
     assert!(files.len() > 30, "found {} programs", files.len());
     for path in files {
-        let src = std::fs::read_to_string(&path).unwrap();
-        let p = compile_source(&src, &common::horizon(10.0))
-            .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        let p = example(&path);
         if let Some((node, which)) = deployment::figure(&p).unjoined() {
             panic!("{}: station {node} has no arrow {which}", path.display());
         }
@@ -266,8 +275,10 @@ fn choose_annotates_the_station_it_selects() {
     assert!(net.nodes[link].note.is_none(), "the link is not chosen");
 }
 
-fn compile(src: &str) -> Program {
-    compile_source(&common::main_source(src), &common::horizon(10.0)).expect("the fixture compiles")
+/// The deployment `src`, with the workload's file `workload`.
+fn compile(src: &str, workload: &str) -> Program {
+    common::compile(&common::main_source(src), workload, &common::horizon(10.0))
+        .expect("the fixture compiles")
 }
 
 /// `grow` advances the *innermost* hold holding the pool, so a `growing` run
@@ -289,14 +300,11 @@ fn growing_is_found_through_nested_holds() {
             } cache (cost(kv, reqs, n + o));
           }
         }
-        workload { arrive poisson(0.2); turn { set n = 100; set o = 2; } send (n, o);
-          session {  turn;
-            end;
-          }
-        }
         server (n, hidden o) { llm.prefill (n); }
 
 "#,
+        "workload { arrive poisson(0.2); turn { set n = 100; set o = 2; } send (n, o);
+          session { turn; end; } }",
     );
     let net = deployment::project(&p);
     assert_eq!(
@@ -314,11 +322,6 @@ fn disjoint_holds_of_one_pool_get_separate_enclosures() {
         r#"
         pool kv { cap 100; }
         stage s1 : fifo; stage s2 : fifo; stage s3 : delay; stage s4 : fifo; stage s5 : fifo;
-        workload { arrive poisson(0.2);
-          session { turn;
-            end;
-          }
-        }
         server {
           hold kv (cost(kv, 1)) { run s1 (cost(s1, 1)); run s2 (cost(s2, 1)); }
           run s3 (cost(s3, 1));
@@ -326,6 +329,7 @@ fn disjoint_holds_of_one_pool_get_separate_enclosures() {
         }
 
 "#,
+        POISSON_SLOW,
     );
     let net = deployment::project(&p);
     let f = deployment::layout(&p, &net);
@@ -338,6 +342,15 @@ fn disjoint_holds_of_one_pool_get_separate_enclosures() {
             .all(|b| !b.contains(&middle))
     );
 }
+
+/// A workload of single requests, one every five seconds.
+const POISSON_SLOW: &str = "workload { arrive poisson(0.2); session { turn; end; } }";
+
+/// A workload of single requests, one a second.
+const POISSON: &str = "workload { arrive poisson(1); session { turn; end; } }";
+
+/// One request.
+const ONE: &str = "workload { arrive batch(1); session { turn; end; } }";
 
 /// A name with the member indices a stacked instance writes taken out:
 /// `P.nic[1]` is `P.nic`.
@@ -402,14 +415,11 @@ fn a_session_that_decides_first_starts_at_a_decision() {
     let p = compile(
         r#"
         stage s1 : fifo; stage s2 : fifo;
-        workload { arrive poisson(1); init { set a = 1; } send (a);
-          session { turn; end;
-          }
-        }
         server (a) { if (a) { run s1 (cost(s1, 1)); } else { run s2 (cost(s2, 1)); }
         }
 
 "#,
+        "workload { arrive poisson(1); init { set a = 1; } send (a); session { turn; end; } }",
     );
     let net = deployment::project(&p);
     let d = decision(&net).expect("a decision");
@@ -441,14 +451,11 @@ fn negative_constants_reparse() {
         r#"
         let k = 0 - 2;
         stage s : fifo;
-        workload { arrive batch(1); turn { set a = 2; } send (a);
-          session {  turn; end;
-          }
-        }
         server (a) { observe o = k ^ a; run s (cost(s, 1));
         }
 
 "#,
+        "workload { arrive batch(1); turn { set a = 2; } send (a); session { turn; end; } }",
     );
     let printed = p
         .blocks
@@ -489,10 +496,6 @@ fn cache_targets_follow_the_release_rule() {
 /// A pool held across two stations, and one held inside it at the first.
 const ACROSS: &str = "pool live { cap 2; } pool kv { cap 9; }
         stage A : fifo; stage B : fifo;
-        workload { arrive poisson(1);
-          session { turn; end;
-          }
-        }
         server { hold live (cost(live, 1)) { hold kv (cost(kv, 1)) { run A (cost(A, 1)); } run B (cost(B, 1)); }
         }
         ";
@@ -503,7 +506,7 @@ fn nested_holds_nest() {
     let p = program("replica");
     let net = deployment::project(&p);
     assert_eq!(pools_of(&p, &net, "llm"), ["live", "reqs", "kv"]);
-    let p = compile(ACROSS);
+    let p = compile(ACROSS, POISSON);
     let net = deployment::project(&p);
     assert_eq!(pools_of(&p, &net, "A"), ["live", "kv"]);
     assert_eq!(pools_of(&p, &net, "B"), ["live"], "outside the inner hold");
@@ -546,7 +549,7 @@ fn pools_held_at_one_station_are_drawn_in_it() {
 
     // `live` held across two stations is a box, and the hold that waits in
     // it does so ahead of the box; `kv`, at `A` alone, is `A`'s
-    let p = compile(ACROSS);
+    let p = compile(ACROSS, POISSON);
     let net = deployment::project(&p);
     let a = net.node_of(stage(&p, "A")).unwrap();
     assert_eq!(net.resident_pools(a), [pool(&p, "kv")]);
@@ -580,14 +583,11 @@ fn separate_holds_side_by_side_are_two_frames() {
     let p = compile(
         r#"
         pool a { cap 10; } stage s1 : fifo; stage s2 : fifo;
-        workload { arrive poisson(0.2);
-          session { turn; end;
-          }
-        }
         server { hold a (cost(a, 1)) { run s1 (cost(s1, 1)); } hold a (cost(a, 1)) { run s2 (cost(s2, 1)); }
         }
 
 "#,
+        POISSON_SLOW,
     );
     let net = deployment::project(&p);
     assert_eq!(net.resident_pools(0), [pool(&p, "a")]);
@@ -605,14 +605,11 @@ fn a_hold_across_stations_is_no_stations_own() {
     let p = compile(
         r#"
         pool a { cap 10; } stage s1 : fifo; stage s2 : fifo; stage s3 : fifo;
-        workload { arrive poisson(0.2);
-          session { turn; end;
-          }
-        }
         server { run s1 (cost(s1, 1)); run s2 (cost(s2, 1)); hold a (cost(a, 1)) { run s1 (cost(s1, 1)); run s3 (cost(s3, 1)); run s2 (cost(s2, 1)); }
         }
 
 "#,
+        POISSON_SLOW,
     );
     let net = deployment::project(&p);
     let s3 = net.node_of(stage(&p, "s3")).unwrap();
@@ -647,13 +644,10 @@ fn no_overlapping_enclosures(f: &Figure, name: &str) {
 fn a_release_in_one_arm_does_not_reach_the_other() {
     let p = compile(
         "pool p { cap 10; } stage s1 : delay; stage s2 : delay; stage s3 : delay;
-        workload { arrive batch(1); init { set c = 1; } send (c);
-          session { turn; end;
-          }
-        }
         server (c) { hold p (cost(p, 1)) { if (c) { release p; run s1 (cost(s1, 1)); } else { run s2 (cost(s2, 1)); } run s3 (cost(s3, 1)); }
         }
         ",
+        "workload { arrive batch(1); init { set c = 1; } send (c); session { turn; end; } }",
     );
     let net = deployment::project(&p);
     assert!(pools_of(&p, &net, "s1").is_empty());
@@ -667,13 +661,10 @@ fn a_release_in_one_arm_does_not_reach_the_other() {
 fn a_lease_keeps_the_pool_on_the_stations_until_its_release() {
     let p = compile(
         "pool p { cap 10; } stage s1 : delay; stage s2 : delay; stage s3 : delay;
-        workload { arrive batch(1);
-          session { turn; end;
-          }
-        }
         server { hold p (cost(p, 1)) { run s1 (cost(s1, 1)); } lease p (inf); run s2 (cost(s2, 1)); release p; run s3 (cost(s3, 1));
         }
         ",
+        ONE,
     );
     let net = deployment::project(&p);
     assert_eq!(pools_of(&p, &net, "s1"), ["p"]);
@@ -700,12 +691,14 @@ fn a_pool_both_arms_hold_stays_held_whichever_hold_took_it() {
         } else {
             ""
         };
-        let p = compile(&format!(
-            "pool p {{ cap 10; }} stage s1 : delay; stage s2 : delay; {s3}
-            workload {{ arrive batch(1); send (turn_no); session {{ turn; turn; }} }}
+        let p = compile(
+            &format!(
+                "pool p {{ cap 10; }} stage s1 : delay; stage s2 : delay; {s3}
             server (turn_no) {{ {shape} run s2 (cost(s2, 1)); }}
             "
-        ));
+            ),
+            "workload { arrive batch(1); send (turn_no); session { turn; turn; } }",
+        );
         let net = deployment::project(&p);
         assert_eq!(pools_of(&p, &net, "s2"), ["p"], "{shape}");
     }
@@ -717,7 +710,6 @@ fn a_pool_both_arms_hold_stays_held_whichever_hold_took_it() {
 fn a_pool_leased_anew_in_a_loop_stays_held_after_it() {
     let p = compile(
         "pool p { cap 10; } stage s1 : delay; stage s2 : delay; stage s3 : delay;
-        workload { arrive batch(1); session { turn; } }
         server {
           set m = 0;
           hold p (cost(p, 1)) { run s1 (cost(s1, 1)); } lease p (inf);
@@ -725,6 +717,7 @@ fn a_pool_leased_anew_in_a_loop_stays_held_after_it() {
           run s2 (cost(s2, 1));
         }
         ",
+        "workload { arrive batch(1); session { turn; } }",
     );
     let net = deployment::project(&p);
     assert_eq!(pools_of(&p, &net, "s2"), ["p"]);
@@ -737,13 +730,13 @@ fn a_pool_leased_anew_in_a_loop_stays_held_after_it() {
 fn a_lease_grown_in_one_arm_and_shrunk_in_the_other_stays_held() {
     let p = compile(
         "pool p { cap 10; } stage s1 : delay; stage s2 : delay;
-        workload { arrive batch(1); init { set m = 1; } send (m); session { turn; } }
         server (m) {
           hold p (cost(p, 2)) { run s1 (cost(s1, 1)); } lease p (inf);
           if (m > 0) { grow p (cost(p, 1)); } else { shrink p (cost(p, 1)); }
           run s2 (cost(s2, 1));
         }
         ",
+        "workload { arrive batch(1); init { set m = 1; } send (m); session { turn; } }",
     );
     let net = deployment::project(&p);
     assert_eq!(pools_of(&p, &net, "s2"), ["p"]);
@@ -843,14 +836,16 @@ fn a_transfer_between_instances_is_drawn_between_their_boxes() {
 
 fn pools_at(src: &str, stage_name: &str) -> Vec<String> {
     let src = format!(
-        "pool p {{ cap 2; }} stage A : delay; workload {{ arrive poisson(1);
-          session {{ turn;
-          }}
-        }}
+        "pool p {{ cap 2; }} stage A : delay;
         server {{ {src}
         }} "
     );
-    let p = compile_source(&common::main_source(&src), &common::horizon(1.0)).unwrap();
+    let p = common::compile(
+        &common::main_source(&src),
+        "workload { arrive poisson(1); session { turn; } }",
+        &common::horizon(1.0),
+    )
+    .unwrap();
     let net = deployment::project(&p);
     pools_of(&p, &net, stage_name)
 }
@@ -965,23 +960,41 @@ fn drawn_stages(p: &Program, net: &deployment::Net) -> Vec<String> {
     v
 }
 
-/// A session whose requests run two different things, here one inside the
-/// workload's `live` and one outside it, has no one request to draw: the
-/// figure is the session's, with the workload's station.
+/// A session whose requests ran two different things, one inside a pool
+/// the workload held and one outside it, had no one request to draw. The
+/// workload is a file of its own now and holds none of the deployment's
+/// pools, so every request runs the server: the figure is the server's,
+/// without the workload's station. (Requests that differ in the IR are
+/// the next test's.)
 #[test]
 fn requests_that_run_different_things_draw_the_session() {
-    let p = compile(
-        "pool live { cap 2; }
-        stage A : fifo; stage tool : delay;
+    let deployment = "pool live { cap 2; }
+        stage A : fifo;
+        server { run A (cost(A, 1)); }
+        ";
+    let e = common::compile(
+        &common::main_source(deployment),
+        "stage tool : delay;
         workload { arrive poisson(1);
           session { turn; run tool (cost(tool, 1)); hold live (cost(live, 1)) { turn; } }
-        }
-        server { run A (cost(A, 1)); }
-        ",
+        }",
+        &common::horizon(10.0),
+    )
+    .unwrap_err();
+    assert!(
+        e.contains("pool `live` is the deployment file's: the workload runs on and holds its own"),
+        "{e}"
     );
-    assert!(deployment::request(&p).is_none());
+    let p = compile(
+        deployment,
+        "stage tool : delay;
+        workload { arrive poisson(1);
+          session { turn; run tool (cost(tool, 1)); turn; }
+        }",
+    );
+    assert!(deployment::request(&p).is_some());
     let net = deployment::project(&p);
-    assert_eq!(drawn_stages(&p, &net), ["A", "tool"]);
+    assert_eq!(drawn_stages(&p, &net), ["A"]);
 }
 
 /// The view reads what each request runs from the IR, not from the parser's
@@ -990,10 +1003,11 @@ fn requests_that_run_different_things_draw_the_session() {
 #[test]
 fn requests_that_differ_in_the_ir_draw_the_session() {
     let mut p = compile(
-        "stage A : fifo; stage C : delay;
-        workload { arrive poisson(1); session { turn; run C (cost(C, 1)); turn; } }
+        "stage A : fifo;
         server { run A (cost(A, 1)); }
         ",
+        "stage C : delay;
+        workload { arrive poisson(1); session { turn; run C (cost(C, 1)); turn; } }",
     );
     // `B`, which no statement of the text runs (it would not link), is
     // added to the IR with the run that reaches it
@@ -1031,7 +1045,10 @@ fn requests_that_differ_in_the_ir_draw_the_session() {
 /// `if (first)`).
 #[test]
 fn a_server_guard_on_the_workload_draws_both_arms() {
-    let src = "stage big : fifo; stage small : fifo; stage tool : delay;
+    let src = "stage big : fifo; stage small : fifo;
+        server (first, n) { if (first) { run big (cost(big, n)); } else { run small (cost(small, n)); } }
+        ";
+    let workload = "stage tool : delay;
         workload {
           arrive poisson(1);
           init { set first = 1; }
@@ -1039,10 +1056,8 @@ fn a_server_guard_on_the_workload_draws_both_arms() {
           send (first, n);
           session { loop {  turn; set first = 0;
               if (~bernoulli(0.5)) { run tool (cost(tool, 1)); } else { end; } } }
-        }
-        server (first, n) { if (first) { run big (cost(big, n)); } else { run small (cost(small, n)); } }
-        ";
-    let p = compile_source(&common::main_source(src), &common::horizon(100.0)).unwrap();
+        }";
+    let p = common::compile(&common::main_source(src), workload, &common::horizon(100.0)).unwrap();
     let net = deployment::project(&p);
     assert_eq!(drawn_stages(&p, &net), ["big", "small"]);
 }
@@ -1053,13 +1068,13 @@ fn a_server_guard_on_the_workload_draws_both_arms() {
 fn a_turn_forgets_what_the_path_set() {
     let p = compile(
         "stage A : fifo; stage B : fifo;
-        workload { arrive poisson(1); turn { set n = ~exp(10); } send (n);
-          session { set n = 0;  turn;
-          }
-        }
         server (n) { if (n > 0) { run A (cost(A, n)); } else { run B (cost(B, 1)); }
         }
         ",
+        "workload { arrive poisson(1); turn { set n = ~exp(10); } send (n);
+          session { set n = 0;  turn;
+          }
+        }",
     );
     let net = deployment::project(&p);
     assert_eq!(drawn_stages(&p, &net), ["A", "B"]);
@@ -1073,16 +1088,15 @@ fn a_turn_forgets_what_the_path_set() {
 #[test]
 fn a_decided_guard_drops_only_an_arm_with_no_station() {
     let program = |arms: &str| {
-        compile(&format!(
-            "stage A : fifo; stage B : fifo; stage C : fifo; pool kv {{ cap 100; }}
-        workload {{ arrive poisson(1);
-          session {{ turn; end;
-          }}
-        }}
+        compile(
+            &format!(
+                "stage A : fifo; stage B : fifo; stage C : fifo; pool kv {{ cap 100; }}
         server {{ set x = 0; hold kv (cost(kv, 1)) {{ run A (cost(A, 1)); {arms} set x = 1; run C (cost(C, 1)); }}
         }}
         "
-        ))
+            ),
+            POISSON,
+        )
     };
     let p = program("if (!x) { run B (cost(B, 1)); }");
     let net = deployment::project(&p);
@@ -1100,13 +1114,10 @@ fn a_decided_guard_drops_only_an_arm_with_no_station() {
 fn a_guard_on_constants_draws_both_arms() {
     let p = compile(
         "let mode = 0; stage A : fifo; stage B : fifo;
-        workload { arrive poisson(1);
-          session { turn; end;
-          }
-        }
         server { if (mode == 0) { run A (cost(A, 1)); } else { run B (cost(B, 1)); }
         }
         ",
+        POISSON,
     );
     let net = deployment::project(&p);
     assert_eq!(drawn_stages(&p, &net), ["A", "B"]);
@@ -1114,7 +1125,8 @@ fn a_guard_on_constants_draws_both_arms() {
 
 // --- loops ------------------------------------------------------------------
 
-/// A session program over stages `A`, `B`, `C`, projected.
+/// A session program over stages `A`, `B`, `C`, projected. The stages are
+/// the client's own, so they are declared in the workload's file.
 fn shape(session: &str) -> (Program, deployment::Net) {
     // a stage no statement runs does not link: declare those the session names
     let stages: String = ["A", "B", "C"]
@@ -1122,13 +1134,17 @@ fn shape(session: &str) -> (Program, deployment::Net) {
         .filter(|s| session.contains(&format!("run {s} ")))
         .map(|s| format!("stage {s} : delay; "))
         .collect();
-    let src = format!(
+    let workload = format!(
         "{stages}
         workload {{ arrive poisson(1); session {{ turn; {session} }} }}
-        server {{}}
         "
     );
-    let p = compile_source(&common::main_source(&src), &common::horizon(1.0)).unwrap();
+    let p = common::compile(
+        &common::main_source("server {}"),
+        &workload,
+        &common::horizon(1.0),
+    )
+    .unwrap();
     let net = deployment::project(&p);
     (p, net)
 }
@@ -1277,7 +1293,8 @@ fn a_decision_is_named_by_its_leading_chooses() {
 /// are the session's, so the view draws the session and its loop.
 #[test]
 fn the_looking_pass_leaves_nothing() {
-    let src = "stage A : delay; stage x : ps(1); stage y : ps(1);
+    // the session's stations are the workload's own
+    let workload = "stage A : delay; stage x : ps(1); stage y : ps(1);
         use \"std/share\";
         workload { arrive batch(1);
           session {
@@ -1289,9 +1306,8 @@ fn the_looking_pass_leaves_nothing() {
             }
           }
         }
-        server {}
         ";
-    let p = compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap();
+    let p = compile("server {}", workload);
     let net = deployment::project(&p);
     assert_eq!(net.flows.len(), 1);
     assert_eq!(net.flow_notes.len(), 1);
@@ -1309,11 +1325,6 @@ fn the_looking_pass_leaves_nothing() {
 #[test]
 fn a_decision_stays_before_its_stations() {
     let src = "pool kv[2] { cap 9; } stage A[2] : delay; stage B[2] : delay; stage C[2] : delay;
-        workload { arrive batch(1);
-          session { turn;
-
-          }
-        }
         server {
           choose i in 2 by (0);
           hold kv[i] (cost(kv, 1)) { run A[i] (cost(A, 1)); }
@@ -1323,7 +1334,7 @@ fn a_decision_stays_before_its_stations() {
           }
         }
         ";
-    let p = compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap();
+    let p = compile(src, "workload { arrive batch(1); session { turn; } }");
     let net = deployment::project(&p);
     let End::Node(d) = decision(&net).expect("a decision") else {
         unreachable!()
@@ -1505,9 +1516,11 @@ fn docs_assets_are_current() {
         let tutorial = root
             .join("docs/tutorial/programs")
             .join(format!("{stem}.sq"));
+        // a workload's file may share its program's name: it is not one
         let mut found: Vec<std::path::PathBuf> = std::fs::read_dir(root.join("examples"))
             .unwrap()
             .flatten()
+            .filter(|g| g.file_name() != "workloads")
             .map(|g| g.path().join(format!("{stem}.sq")))
             .filter(|p| p.is_file())
             .collect();
@@ -1523,9 +1536,7 @@ fn docs_assets_are_current() {
         let src_path = found
             .pop()
             .unwrap_or_else(|| panic!("docs/assets/{name} has no program: {stem}.sq"));
-        let src = std::fs::read_to_string(&src_path).unwrap();
-        let p = serq::compile_source(&src, &common::horizon(10.0))
-            .unwrap_or_else(|e| panic!("{}: {e}", src_path.display()));
+        let p = example(&src_path);
         let got = serq::view::svg::render(&deployment::figure(&p));
         // the view reads the IR alone: the program read back from its JSON
         // draws the same figure (#265)
@@ -1588,12 +1599,6 @@ fn a_run_over_several_stages_is_one_bracketed_job() {
     let src = "pool kvP { cap 100; } pool kvD[2] { cap 100; }
         stage P : delay; stage egress : ps(1); stage ingress[2] : ps(1); stage D[2] : delay;
         use \"std/share\";
-        workload { arrive batch(2);
-          session { turn;
-            end;
-
-          }
-        }
         server {
           set j = serial;
           hold kvP (cost(kvP, 10)) { run P (cost(P, 1)); } lease kvP (inf);
@@ -1603,7 +1608,7 @@ fn a_run_over_several_stages_is_one_bracketed_job() {
           }
         }
         ";
-    let p = compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap();
+    let p = compile(src, "workload { arrive batch(2); session { turn; end; } }");
     let net = deployment::project(&p);
     let at = |name: &str| net.node_of(stage(&p, name)).unwrap();
     let (pf, eg, ing, d) = (at("P"), at("egress"), at("ingress"), at("D"));
@@ -1627,18 +1632,12 @@ fn a_delay_before_a_transfer_is_a_station() {
     let src = "pool kvP { cap 100; } pool kvD { cap 100; }
         stage P : delay; stage wait : delay; stage egress : ps(1); stage ingress : ps(1); stage D : delay;
         use \"std/share\";
-        workload { arrive batch(1);
-          session { turn;
-            end;
-
-          }
-        }
         server {
           hold kvP (cost(kvP, 10)) { run P (cost(P, 1)); } lease kvP (inf);
           hold kvD (cost(kvD, 10)) { run wait (cost(wait, 1)); transfer on egress, ingress (1, share = share.maxmin) from kvP to kvD (10); run D (cost(D, 1)); }
         }
         ";
-    let p = compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap();
+    let p = compile(src, ONE);
     let net = deployment::project(&p);
     assert!(net.node_of(stage(&p, "wait")).is_some());
     assert!(net.flow_notes[0].latency.is_empty());
@@ -1652,19 +1651,13 @@ fn a_run_from_an_unboxed_choice_does_not_span() {
     let src =
         "pool kv[2] { cap 100; } stage nic[2] : ps(1); stage ing[2] : ps(1); stage D[2] : delay;
         use \"std/share\";
-        workload { arrive batch(1);
-          session { turn;
-            end;
-
-          }
-        }
         server {
           choose i in 2 by (0);
           choose j in 2 by (0);
           hold kv[j] (cost(kv, 10)) { run nic[i], ing[j] (cost(nic, ing, 1), share = share.maxmin); run D[j] (cost(D, 1)); }
         }
         ";
-    let p = compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap();
+    let p = compile(src, ONE);
     let net = deployment::project(&p);
     let ing = net.node_of(stage(&p, "ing")).unwrap();
     assert_eq!(
@@ -1686,12 +1679,6 @@ fn a_links_latency_is_on_each_transfer_over_it() {
         stage P : delay; stage a : ps(1); stage b : ps(1);
         queue L : link { serve ps(1) latency 0.5; }
         use \"std/share\";
-        workload { arrive batch(1);
-          session { turn;
-            end;
-
-          }
-        }
         server {
           hold kvP (cost(kvP, 10)) { run P (cost(P, 1)); } lease kvP (inf);
           set c = ~bernoulli(0.5);
@@ -1701,7 +1688,7 @@ fn a_links_latency_is_on_each_transfer_over_it() {
           }
         }
         ";
-    let p = compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap();
+    let p = compile(src, ONE);
     let net = deployment::project(&p);
     assert!(p.stages.iter().all(|s| !s.name.ends_with(".latency")));
     assert_eq!(net.flows.len(), 2);
@@ -1718,12 +1705,6 @@ fn a_transfers_note_is_what_every_run_over_it_moves() {
     let src = "pool p1 { cap 9; } pool p2 { cap 9; } pool q1 { cap 9; } pool q2 { cap 9; }
         stage s : delay; stage a : ps(1); stage b : ps(1);
         use \"std/share\";
-        workload { arrive batch(1);
-          session { turn;
-            end;
-
-          }
-        }
         server {
           set c = ~bernoulli(0.5);
           if (c) {
@@ -1735,7 +1716,7 @@ fn a_transfers_note_is_what_every_run_over_it_moves() {
           }
         }
         ";
-    let p = compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap();
+    let p = compile(src, ONE);
     let net = deployment::project(&p);
     assert_eq!(net.flows.len(), 1);
     let n = &net.flow_notes[0];
@@ -1745,18 +1726,12 @@ fn a_transfers_note_is_what_every_run_over_it_moves() {
         queue A : link { serve ps(1) latency 0.25; }
         queue B : link { serve ps(1) latency 0.5; }
         use \"std/share\";
-        workload { arrive batch(1);
-          session { turn;
-            end;
-
-          }
-        }
         server {
           hold kP (cost(kP, 1)) { run P (cost(P, 1)); } lease kP (inf);
           hold kD (cost(kD, 1)) { transfer on A, B (1, share = share.maxmin) from kP to kD (1); }
         }
         ";
-    let p = compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap();
+    let p = compile(src, ONE);
     let net = deployment::project(&p);
     // the two links' waits are the one run's, summed in the order named
     assert_eq!(net.flow_notes[0].latency, ["latency (0.25 + 0.5)"]);
@@ -1764,12 +1739,6 @@ fn a_transfers_note_is_what_every_run_over_it_moves() {
     let src = "pool kv[2] { cap 9; } stage a[2] : ps(1); stage b[2] : ps(1); stage c[2] : ps(1);
         stage A[2] : delay; stage B[2] : delay;
         use \"std/share\";
-        workload { arrive batch(1);
-          session { turn;
-            end;
-
-          }
-        }
         server {
           choose i in 2 by (0);
           choose j in 2 by (0);
@@ -1778,7 +1747,7 @@ fn a_transfers_note_is_what_every_run_over_it_moves() {
           run a[i], b[j], c[i] (cost(a, b, c, 1), share = share.maxmin);
         }
         ";
-    let p = compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap();
+    let p = compile(src, ONE);
     let net = deployment::project(&p);
     assert!(!net.spans(&net.flows[0]));
 }
@@ -1790,14 +1759,10 @@ fn a_transfers_note_is_what_every_run_over_it_moves() {
 fn a_flows_stations_are_neighbours_in_the_row() {
     let src = "stage ingress : ps(1); stage D : delay; stage egress : ps(1);
         use \"std/share\";
-        workload { arrive batch(1);
-          session { turn; end;
-          }
-        }
         server { run ingress (cost(ingress, 1)); run D (cost(D, 1)); run egress, ingress (cost(egress, ingress, 1), share = share.maxmin);
         }
         ";
-    let p = compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap();
+    let p = compile(src, ONE);
     let net = deployment::project(&p);
     let at = |name: &str| net.node_of(stage(&p, name)).unwrap();
     let (eg, ing, d) = (at("egress"), at("ingress"), at("D"));
@@ -1870,14 +1835,10 @@ fn an_arrow_past_stations_goes_below_the_row() {
 fn a_reordered_arrow_is_drawn_the_way_it_points() {
     let src = "stage a : ps(1); stage v : delay; stage u : ps(1);
         use \"std/share\";
-        workload { arrive batch(1);
-          session { turn; end;
-          }
-        }
         server { run a (cost(a, 1)); run v (cost(v, 1)); run u (cost(u, 1)); run v (cost(v, 1)); run a, u (cost(a, u, 1), share = share.maxmin);
         }
         ";
-    let p = compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap();
+    let p = compile(src, ONE);
     let net = deployment::project(&p);
     let at = |name: &str| End::Node(net.node_of(stage(&p, name)).unwrap());
     let (u, v) = (at("u"), at("v"));
@@ -1901,6 +1862,10 @@ fn labels_do_not_overlap() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut files: Vec<std::path::PathBuf> = vec![];
     for dir in std::fs::read_dir(root.join("examples")).unwrap().flatten() {
+        // a workload's file is drawn with the program it runs
+        if dir.file_name() == "workloads" {
+            continue;
+        }
         for f in std::fs::read_dir(dir.path())
             .into_iter()
             .flatten()
@@ -1920,8 +1885,7 @@ fn labels_do_not_overlap() {
     assert!(files.len() > PROGRAMS.len());
     for path in &files {
         let name = path.strip_prefix(root).unwrap().display().to_string();
-        let src = std::fs::read_to_string(path).unwrap();
-        let p = serq::compile_source(&common::main_source(&src), &common::horizon(10.0)).unwrap();
+        let p = example(path);
         let f = deployment::figure(&p);
         let boxes: Vec<(f64, f64, f64, &str)> = f
             .items
@@ -1968,10 +1932,10 @@ fn labels_do_not_overlap() {
 
 fn instance_net(decls: &str, session: &str) -> (Program, deployment::Net) {
     let src = format!(
-        "{decls} workload {{ arrive batch(1); session {{ turn; end; }} }}
+        "{decls}
          server {{ choose i in 2 by (0); choose j in 2 by (0); {session} }}"
     );
-    let p = compile_source(&common::main_source(&src), &common::horizon(10.0))
+    let p = common::compile(&common::main_source(&src), ONE, &common::horizon(10.0))
         .unwrap_or_else(|e| panic!("{e}"));
     let net = deployment::project(&p);
     (p, net)
@@ -2134,7 +2098,6 @@ fn after_a_branch_a_load_follows_no_arms_transfer() {
 fn a_while_body_does_not_determine_its_continuation() {
     let src = common::main_source(
         "stage a : delay; stage b : delay; stage c : delay;
-      workload { arrive batch(1); }
       server {
         set flag = 0;
         while (flag) { run a (cost(a, 1)); set flag = 1; }
@@ -2142,7 +2105,12 @@ fn a_while_body_does_not_determine_its_continuation() {
       }
       ",
     );
-    let p = compile_source(&src, &common::horizon(10.0)).unwrap();
+    let p = common::compile(
+        &src,
+        "workload { arrive batch(1); }",
+        &common::horizon(10.0),
+    )
+    .unwrap();
     let net = deployment::project(&p);
     assert!(net.node_of(stage(&p, "c")).is_some(), "zero passes reach c");
 }
@@ -2362,7 +2330,9 @@ fn pd_with(np: usize, nd: usize) -> serq::view::figure::Figure {
         .unwrap()
         .replace("let NP = 2;", &format!("let NP = {np};"))
         .replace("let ND = 2;", &format!("let ND = {nd};"));
-    deployment::figure(&compile_source(&src, &common::horizon(10.0)).unwrap())
+    let w = serq::paired_workload(&program_path("llmd_nixl_pull")).unwrap();
+    let workload = std::fs::read_to_string(w).unwrap();
+    deployment::figure(&common::compile(&src, &workload, &common::horizon(10.0)).unwrap())
 }
 
 /// `choose i in NP` picks one of `NP` pods, and the figure draws the `NP`:

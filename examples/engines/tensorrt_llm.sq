@@ -28,9 +28,6 @@ let mt = 1024;           // max_tokens, known to the scheduler
 let a = 2e-5;            // compute per scheduled token (s)
 let omega = 2e-4;        // weights read per iteration (s)
 let beta = 2e-9;         // KV read per iteration per resident context token (s)
-let Lambda = 0.3;        // sessions per second
-let p = 0.9;             // continue after a turn
-let Z = 3.0;             // tool time (s)
 
 fn main() {
   device gpu { compute (t) = t * a; hbm (k) = omega + beta * k; kv cap blocks * bs; }
@@ -54,24 +51,6 @@ fn main() {
   }
   pool kv on gpu { block bs; evict lru; preempt none; reserve held; }
   pool reqs on trtllm { queue fifo; }
-
-  workload {
-    arrive poisson(Lambda);
-    init { set K = 0; }
-    turn {
-      set n = ceil(K == 0 ? ~uniform(1000, 3000) : ~exp(500));
-      set o = min(floor(~exp(200)) + 1, mt);
-      set more = ~bernoulli(p);
-    }
-    send (input: K + n, output: o);
-    session {
-      loop {
-        turn;
-        set K = K + n + o;
-        if (more) { tool (~exp(Z)); } else { end; }
-      }
-    }
-  }
 
   // A turn is one request to the engine.
   server (input, hidden output) {

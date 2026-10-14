@@ -8,13 +8,12 @@
 // is the testbed's fit (c0 + a n + b n (K + n/2)), spent chunk by chunk;
 // c0 is the per-request front-end overhead outside the engine; a decode
 // iteration reads the weights (omega, the idle ITL) plus the batch's KV.
+// The trace's sessions: examples/workloads/vllm_replay.sq.
 use "std/args";
 
 let bs = 16;           // block_size
 
 fn main() {
-  let spacing = args.number("spacing", 3.5);     // seconds between session arrivals
-  let N = args.number("N", 333);           // sessions in the trace
   let B = args.number("B", 512);           // max_num_batched_tokens
   let max_seqs = args.number("max_seqs", 64);     // max_num_seqs
   let blocks = args.number("blocks", 8010);     // 128 160 tokens / 16
@@ -56,27 +55,6 @@ fn main() {
   pool kv on gpu { block bs; evict lru; preempt lifo; }
   pool reqs on vllm { queue fifo; }  // the scheduler admits (scheduler.py:868)
   stage front : delay;
-  stage gate : delay;
-
-  // The client: the trace's sessions, sent `spacing` apart; a turn is sent
-  // `think` seconds after the previous one completes.
-  workload {
-    arrive batch(N);
-    trace "data/short_base.csv" ordered;
-    send (new, forced, prev, prevout, out);
-    session {
-      run gate (cost(gate, serial * spacing));
-      set prev = 0;
-      set prevout = 0;
-      turn;
-      while (more) {
-        set prev = new;
-        set prevout = out;
-        tool think;
-        turn;
-      }
-    }
-  }
 
   // The served path: the front end, then the engine.
   // the scheduler knows max_tokens, not the length (sched/utils.py:98-119)

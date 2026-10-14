@@ -4,46 +4,57 @@ use common::Fixture;
 use serq::compile_source;
 
 const SOURCE: &str = r#"
-use "std/args";
 let fixed = 2;
 def twice(x) { x * 2 }
 fn main() {
-  let rate = args.number("arrival_rate", 0.5);
   let service = twice(fixed);
   stage worker : delay;
-  workload { arrive batch(1); session { turn; end; } }
   server { run worker (cost(worker, service)); observe elapsed = now; }
 
 }
 "#;
 
+/// `SOURCE`'s workload: its input is the arrival rate. Each file reads its
+/// own names; its constant is `scale`.
+const WORKLOAD: &str = r#"
+use "std/args";
+let scale = 2;
+let rate = args.number("arrival_rate", 0.5);
+workload { arrive batch(1); session { turn; end; } }
+"#;
+
+/// `SOURCE`'s workload, arriving by `arrive`.
+fn arriving(arrive: &str) -> String {
+    WORKLOAD.replace("arrive batch(1)", arrive)
+}
+
 #[test]
 fn main_constructs_the_program_and_only_its_session_runs_per_arrival() {
-    let r = serq::run_source(SOURCE, &common::horizon(10.0), None).unwrap();
+    let r = common::run(SOURCE, WORKLOAD, &common::horizon(10.0)).unwrap();
     // One request, one delay of twice(2) seconds, regardless of the input name.
     assert_eq!(r.observe("elapsed").unwrap().mean, 4.0);
-    let p = compile_source(SOURCE, &common::horizon(10.0)).unwrap();
+    let p = common::compile(SOURCE, WORKLOAD, &common::horizon(10.0)).unwrap();
     assert_eq!(p.horizon, 10.0);
 }
 
 #[test]
 fn program_inputs_are_explicit_and_can_have_different_local_names() {
-    let src = SOURCE.replace("arrive batch(1)", "arrive poisson(rate * fixed)");
+    let workload = arriving("arrive poisson(rate * scale)");
     let mut ov = common::horizon(10.0);
     ov.set("arrival_rate", "3").unwrap();
-    let p = compile_source(&src, &ov).unwrap();
+    let p = common::compile(SOURCE, &workload, &ov).unwrap();
     assert_eq!(p.arrival, serq::ir::CArrival::Poisson(6.0));
     assert_eq!(
-        compile_source(&src, &common::horizon(10.0))
+        common::compile(SOURCE, &workload, &common::horizon(10.0))
             .unwrap()
             .arrival,
         serq::ir::CArrival::Poisson(1.0)
     );
-    for private in ["fixed", "rate", "service"] {
+    for private in ["fixed", "scale", "rate", "service"] {
         let mut ov = common::horizon(10.0);
         ov.set(private, "10").unwrap();
         assert!(
-            compile_source(SOURCE, &ov)
+            common::compile(SOURCE, WORKLOAD, &ov)
                 .unwrap_err()
                 .contains("unknown program argument")
         );
@@ -86,15 +97,24 @@ fn argument_declarations_require_the_library_and_main() {
 #[test]
 fn cli_and_instance_bind_the_same_declared_inputs() {
     let f = Fixture::new();
-    f.write(
-        "model.sq",
-        &SOURCE.replace("arrive batch(1)", "arrive poisson(rate)"),
-    );
+    f.write("model.sq", SOURCE);
+    f.write("w.sq", &arriving("arrive poisson(rate)"));
     f.write("values.sq", "let arrival_rate = 3;");
-    let direct = f.run(&["ir", "model.sq", "--horizon", "10", "--arrival_rate", "3"]);
+    let direct = f.run(&[
+        "ir",
+        "model.sq",
+        "--workload",
+        "w.sq",
+        "--horizon",
+        "10",
+        "--arrival_rate",
+        "3",
+    ]);
     let instance = f.run(&[
         "ir",
         "model.sq",
+        "--workload",
+        "w.sq",
         "--horizon",
         "10",
         "--instance",
@@ -112,7 +132,7 @@ fn cli_and_instance_bind_the_same_declared_inputs() {
         vec!["--arrival_rate"],
         vec!["oops"],
     ] {
-        let mut command = vec!["ir", "model.sq", "--horizon", "10"];
+        let mut command = vec!["ir", "model.sq", "--workload", "w.sq", "--horizon", "10"];
         command.extend(rest);
         assert!(!f.run(&command).status.success());
     }
@@ -124,13 +144,12 @@ fn an_input_name_does_not_make_an_unrelated_constant_structural() {
       let count = 2;
       let cost = args.number("count", 1);
       queue q[count] : prefill { serve delay; prefill(p) { run (cost(q, p)); } }
-      workload { session { turn; end; } }
       server { q[0].prefill(cost); }
 
     }"#;
     let mut ov = common::horizon(10.0);
     ov.set("count", "3").unwrap();
-    compile_source(src, &ov).unwrap();
+    common::compile(src, "workload { session { turn; end; } }", &ov).unwrap();
 }
 
 #[test]
@@ -150,21 +169,29 @@ fn a_program_is_one_file() {
 fn numeric_options_accept_equals_negatives_and_last_value() {
     let f = Fixture::new();
     f.write("model.sq", SOURCE);
+    f.write("w.sq", WORKLOAD);
     // This input is unused in this fixture; accepting -2 tests numeric parsing
     // without asking an arrival process to have a negative rate.
-    let out = f.run(&["ir", "model.sq", "--horizon", "10", "--arrival_rate=-2"]);
+    let out = f.run(&[
+        "ir",
+        "model.sq",
+        "--workload",
+        "w.sq",
+        "--horizon",
+        "10",
+        "--arrival_rate=-2",
+    ]);
     assert!(
         out.status.success(),
         "{}",
         String::from_utf8_lossy(&out.stderr)
     );
-    f.write(
-        "model.sq",
-        &SOURCE.replace("arrive batch(1)", "arrive poisson(rate)"),
-    );
+    f.write("w.sq", &arriving("arrive poisson(rate)"));
     let out = f.run(&[
         "ir",
         "model.sq",
+        "--workload",
+        "w.sq",
         "--horizon",
         "10",
         "--arrival_rate",
@@ -189,9 +216,11 @@ fn inputs_bind_declarations_without_replacing_shadowed_constants() {
             8.0,
         ),
     ] {
-        let src = format!(
-            "use \"std/args\"; fn main() {{ {declarations} workload {{ arrive poisson(x); }} server {{}}  }}"
-        );
+        // the arrival reads them, so they are the workload's: at the top of
+        // its file, as an input is declared there
+        let workload =
+            format!("use \"std/args\"; {declarations} workload {{ arrive poisson(x); }}");
+        let src = "fn main() { server {}  }";
         let mut ov = common::horizon(1.0);
         ov.set("first", "3").unwrap();
         if declarations.contains("second") {
@@ -200,7 +229,7 @@ fn inputs_bind_declarations_without_replacing_shadowed_constants() {
         // The last fixed binding is 7; an earlier fixed x contributes 2*2;
         // two distinct inputs contribute 3+5 even with one local spelling.
         assert_eq!(
-            compile_source(&src, &ov).unwrap().arrival,
+            common::compile(src, &workload, &ov).unwrap().arrival,
             serq::ir::CArrival::Poisson(expected)
         );
     }
@@ -212,22 +241,22 @@ fn a_fixed_shadow_can_size_an_array_but_an_input_dependent_shadow_cannot() {
         let count = args.number("size", 2);
         let count = 3;
         stage workers[count] : delay;
-        workload { arrive batch(1); session { turn; end; } }
         server { run workers[0] (cost(workers, 1)); }
     }"#;
+    let workload = "workload { arrive batch(1); session { turn; end; } }";
     let mut ov = common::horizon(1.0);
     ov.set("size", "4").unwrap();
-    assert_eq!(compile_source(src, &ov).unwrap().stages.len(), 3);
+    assert_eq!(common::compile(src, workload, &ov).unwrap().stages.len(), 3);
     let dependent = src.replace("let count = 3;", "let count = count + 1;");
     assert!(
-        compile_source(&dependent, &ov)
+        common::compile(&dependent, workload, &ov)
             .unwrap_err()
             .contains("affects an array size")
     );
     // passed bare to a function, the override is read as in a sum
     let through_min = src.replace("let count = 3;", "let count = min(count, 4);");
     assert!(
-        compile_source(&through_min, &ov)
+        common::compile(&through_min, workload, &ov)
             .unwrap_err()
             .contains("affects an array size")
     );
@@ -238,8 +267,8 @@ fn a_fixed_shadow_can_size_an_array_but_an_input_dependent_shadow_cannot() {
 #[test]
 fn an_input_may_not_be_named_like_an_interpreter_option() {
     for option in serq::frontend::args::OPTIONS {
-        let src = SOURCE.replace("\"arrival_rate\"", &format!("\"{option}\""));
-        let err = compile_source(&src, &common::horizon(10.0)).unwrap_err();
+        let workload = WORKLOAD.replace("\"arrival_rate\"", &format!("\"{option}\""));
+        let err = common::compile(SOURCE, &workload, &common::horizon(10.0)).unwrap_err();
         // `inline-trace` is not an identifier in the first place
         assert!(
             err.contains(&format!("the interpreter's option `--{option}`"))
@@ -248,12 +277,28 @@ fn an_input_may_not_be_named_like_an_interpreter_option() {
         );
     }
     let f = Fixture::new();
-    f.write(
+    f.write("model.sq", SOURCE);
+    f.write("w.sq", &arriving("arrive poisson(rate)"));
+    let first = f.run(&[
+        "ir",
         "model.sq",
-        &SOURCE.replace("arrive batch(1)", "arrive poisson(rate)"),
-    );
-    let first = f.run(&["ir", "model.sq", "--arrival_rate", "3", "--horizon", "10"]);
-    let last = f.run(&["ir", "model.sq", "--horizon", "10", "--arrival_rate", "3"]);
+        "--workload",
+        "w.sq",
+        "--arrival_rate",
+        "3",
+        "--horizon",
+        "10",
+    ]);
+    let last = f.run(&[
+        "ir",
+        "model.sq",
+        "--workload",
+        "w.sq",
+        "--horizon",
+        "10",
+        "--arrival_rate",
+        "3",
+    ]);
     assert!(
         first.status.success(),
         "{}",

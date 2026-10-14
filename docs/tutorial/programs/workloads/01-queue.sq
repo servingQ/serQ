@@ -1,0 +1,11 @@
+// Chapter 1's workload: requests arrive as a Poisson process, each with an
+// exponential amount of work (01-queue.sq runs it).
+use "std/args";
+
+let Lambda = args.number("Lambda", 0.8);     // arrivals per second
+
+workload {
+  arrive poisson(Lambda);
+  turn { Size work_size = ~exp(1); }
+  send (work_size);
+}

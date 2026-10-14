@@ -6,19 +6,44 @@ mod common;
 
 use std::path::Path;
 
-use serq::{Overrides, Program, compile_source, run_ir, run_source};
+use serq::{Overrides, Program, run_ir};
 
 fn programs() -> Vec<std::path::PathBuf> {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples");
     let mut v: Vec<_> = std::fs::read_dir(&dir)
         .unwrap()
-        .flat_map(|g| std::fs::read_dir(g.unwrap().path()).unwrap())
+        .map(|g| g.unwrap().path())
+        // the workloads' files are not programs: `examples/pairs.json` pairs
+        // them with the programs that run them; `examples/paired/` pairs its
+        // own deployments and workloads (`tests/paired.rs`)
+        .filter(|g| {
+            g.is_dir()
+                && g.file_name()
+                    .is_some_and(|n| n != "workloads" && n != "paired")
+        })
+        .flat_map(|g| std::fs::read_dir(g).unwrap())
         .map(|e| e.unwrap().path())
         .filter(|p| p.extension().is_some_and(|e| e == "sq"))
         .collect();
     v.sort();
     assert!(v.len() >= 10, "example programs");
     v
+}
+
+/// The workload file `examples/pairs.json` pairs the program at `path`
+/// with; a relative trace is read beside it.
+fn workload(path: &Path) -> std::path::PathBuf {
+    serq::paired_workload(path).unwrap_or_else(|| panic!("{}: no pair", path.display()))
+}
+
+/// The program at `path` compiled with its workload.
+fn compiled(path: &Path, ov: &Overrides) -> Program {
+    serq::load_paired(path, &workload(path), ov)
+        .unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+}
+
+fn read(path: &Path) -> String {
+    std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
 }
 
 /// A short run of every program, so the comparison is cheap.
@@ -34,8 +59,7 @@ fn short() -> Overrides {
 #[test]
 fn json_round_trip_is_exact() {
     for path in programs() {
-        let src = std::fs::read_to_string(&path).unwrap();
-        let p = compile_source(&common::main_source(&src), &common::horizon(10.0)).unwrap();
+        let p = compiled(&path, &common::horizon(10.0));
         let j = p.to_json();
         let q = Program::from_json(&j).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
         assert_eq!(j, q.to_json(), "{}", path.display());
@@ -47,16 +71,18 @@ fn json_round_trip_is_exact() {
 /// as 0.91. The round trip needs `float_roundtrip`.
 #[test]
 fn a_folded_constant_survives_the_round_trip() {
-    let src = "let rate = 0.1 * (1 + 0.3 * 3 * 0.9 / (1 - 0.9));
-        stage svc : fifo;
+    let src = "stage svc : fifo;
+        server { run svc (cost(svc, ~exp(1)));
+        }
+        ";
+    let workload = "let rate = 0.1 * (1 + 0.3 * 3 * 0.9 / (1 - 0.9));
         workload { arrive poisson(rate);
           session { turn; end;
           }
         }
-        server { run svc (cost(svc, ~exp(1)));
-        }
         ";
-    let j = compile_source(&common::main_source(src), &common::horizon(10.0))
+    let ov = common::horizon(10.0);
+    let j = common::compile(&common::main_source(src), workload, &ov)
         .unwrap()
         .to_json();
     assert!(
@@ -69,12 +95,15 @@ fn a_folded_constant_survives_the_round_trip() {
 #[test]
 fn ir_runs_like_text() {
     for path in programs() {
-        let src = std::fs::read_to_string(&path).unwrap();
-        let base = path.parent();
-        let from_text = run_source(&common::main_source(&src), &short(), base)
-            .unwrap()
+        let w = workload(&path);
+        let (src, wsrc) = (read(&path), read(&w));
+        let names = (path.to_str().unwrap(), w.to_str().unwrap());
+        let ov = short();
+        let base = w.parent();
+        let from_text = serq::run_paired(&src, &wsrc, names, &ov, base)
+            .unwrap_or_else(|e| panic!("{}: {e}", path.display()))
             .text();
-        let p = compile_source(&common::main_source(&src), &short()).unwrap();
+        let p = compiled(&path, &ov);
         let q = Program::from_json(&p.to_json()).unwrap();
         let from_ir = run_ir(&q, base).unwrap().text();
         assert_eq!(from_text, from_ir, "{}", path.display());
@@ -96,14 +125,16 @@ fn ir_that_skips_the_linker_meets_its_checks() {
         pool kv on gpu { }
         pool m { cap 10; }
         stage d : delay;
-        workload { arrive batch(1); init { set x = 1; }
-          session { turn; end;
-          }
-        }
         server { hold m (cost(m, 1)) { llm (8, 1); } run d (cost(d, 1));
         }
         ";
-    let p = compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap();
+    let workload = "workload { arrive batch(1); init { set x = 1; }
+          session { turn; end;
+          }
+        }
+        ";
+    let ov = common::horizon(10.0);
+    let p = common::compile(&common::main_source(src), workload, &ov).unwrap();
     let d = p.stages.iter().position(|s| s.name == "d").unwrap();
     let m = CRef {
         base: p.pools.iter().position(|q| q.name == "m").unwrap(),
@@ -256,7 +287,8 @@ fn ir_that_skips_the_linker_meets_its_checks() {
 /// when the expression is read, so it holds for IR loaded from JSON too.
 #[test]
 fn a_moment_error_on_loaded_ir_says_when() {
-    let mut p = serq::load(&serq::program_path("vllm"), &common::horizon(10.0)).unwrap();
+    let path = serq::program_path("vllm");
+    let mut p = compiled(&path, &common::horizon(10.0));
     let st = p
         .stages
         .iter_mut()
@@ -279,8 +311,8 @@ fn a_moment_error_on_loaded_ir_says_when() {
 
 #[test]
 fn malformed_ir_is_rejected() {
-    let src = std::fs::read_to_string(serq::program_path("mg1")).unwrap();
-    let p = compile_source(&common::main_source(&src), &common::horizon(10.0)).unwrap();
+    let path = serq::program_path("mg1");
+    let p = compiled(&path, &common::horizon(10.0));
     let mut bad = p.clone();
     bad.version = 0;
     assert!(bad.validate().unwrap_err().contains("version"));
@@ -339,26 +371,28 @@ fn budget_left_needs_a_step_stage() {
         }
         pool kv on gpu { }
         stage d : delay;
-        workload { arrive batch(1);
-          session { turn; end;
-          }
-        }
         server { set b = budget_left(d); run d (cost(d, 1));
         }
         ";
-    let e = compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap_err();
+    let ov = common::horizon(10.0);
+    let workload = "workload { arrive batch(1);
+          session { turn; end;
+          }
+        }
+        ";
+    let e = common::compile(&common::main_source(src), workload, &ov).unwrap_err();
     assert!(e.contains("`budget_left(d)`: `d` is a delay stage"), "{e}");
     // an array is named as one
     let fam = src
         .replace("stage d : delay;", "stage d : delay; stage F[2] : fifo;")
         .replace("budget_left(d)", "budget_left(F[serial])");
-    let e = compile_source(&common::main_source(&fam), &common::horizon(10.0)).unwrap_err();
+    let e = common::compile(&common::main_source(&fam), workload, &ov).unwrap_err();
     assert!(e.contains("a member of `F` is a fifo stage"), "{e}");
     // the engine is run too, or a stage no statement runs would not link
     let ok = src
         .replace("budget_left(d)", "budget_left(llm)")
         .replace("run d (cost(d, 1));", "run d (cost(d, 1)); llm (8, 1);");
-    let mut p = compile_source(&common::main_source(&ok), &common::horizon(10.0)).unwrap();
+    let mut p = common::compile(&common::main_source(&ok), workload, &ov).unwrap();
     // the same refusal from IR: point the call at the delay stage
     use serq::ir::{CArg, CExpr, CStmt, Fun};
     let d = p.stages.iter().position(|s| s.name == "d").unwrap();
@@ -384,15 +418,18 @@ fn explicit_sessions_preset_attributes() {
     // two sessions with different service times through a delay stage
     let src = r#"
         stage d : delay;
-        workload { arrive batch(1); init { set w = 1; } send (w);
-          session { turn; end;
-          }
-        }
         server (w) { run d (cost(d, w)); observe done = now;
         }
 
 "#;
-    let p = compile_source(&common::main_source(src), &common::horizon(100.0))
+    let workload = r#"
+        workload { arrive batch(1); init { set w = 1; } send (w);
+          session { turn; end;
+          }
+        }
+"#;
+    let ov = common::horizon(100.0);
+    let p = common::compile(&common::main_source(src), workload, &ov)
         .unwrap()
         .with_sessions(&[vec![("w", 5.0)], vec![("w", 2.0)]])
         .unwrap();
@@ -405,7 +442,7 @@ fn explicit_sessions_preset_attributes() {
     };
     assert_eq!(by_serial, vec![(0, 5.0), (1, 2.0)]);
     assert!(
-        compile_source(&common::main_source(src), &common::horizon(100.0))
+        common::compile(&common::main_source(src), workload, &ov)
             .unwrap()
             .with_sessions(&[vec![("nope", 1.0)]])
             .is_err()
@@ -418,13 +455,13 @@ fn inlined_trace_runs_like_the_corpus() {
     // sessions): the trace file and its sessions inlined into the IR give
     // the same run
     let path = serq::program_path("vllm_replay");
-    let src = std::fs::read_to_string(&path).unwrap();
     let ov = Overrides {
         horizon: Some(1500.0),
         ..common::horizon(10.0)
     };
-    let p = compile_source(&common::main_source(&src), &ov).unwrap();
-    let base = path.parent();
+    let p = compiled(&path, &ov);
+    let w = workload(&path);
+    let base = w.parent();
     let from_trace = run_ir(&p, base).unwrap().text();
     let inlined = serq::inline_trace(p, base).unwrap();
     assert!(inlined.trace.is_none());
@@ -444,48 +481,56 @@ fn serving_forms_compile_to_the_kernel_ir() {
         stage prefill : fifo;
         stage link : ps(1);
         stage decode : ps(min(present, 4));
-        stage tool : delay;
 
 
     "#;
-    let deployment_workload = r#"arrive poisson(0.5);
+    // the client's own station, which its session runs
+    let deployment_workload = r#"stage tool : delay; workload { arrive poisson(0.5);
           init { set K = 0; }
           turn { set n = ~exp(100); set o = ~exp(20); set Z = ~exp(3); set T = K + n; }
           send (K, n, o, T);"#;
     let serving = format!(
-        "{deployment} workload {{ {deployment_workload} session {{
-            loop {{ turn; set K = T;
-              if (~bernoulli(0.8)) {{ tool Z; }} else {{ end; }}
-            }}
-
-        }} }}
+        "{deployment}
         server (K, n, o, T) {{
           hold memP (cost(memP, T)) {{ run prefill (cost(prefill, n + K)); }} cache (cost(memP, T)) lease memP (inf);
           hold memD (cost(memD, T)) {{ transfer (T / 100) from memP to memD (T); run decode (cost(decode, o)); }}
         }}"
     );
-    let kernel = format!(
-        "{deployment} workload {{ {deployment_workload} session {{
+    let serving_workload = format!(
+        "{deployment_workload} session {{
             loop {{ turn; set K = T;
-              if (~bernoulli(0.8)) {{ run tool (cost(tool, Z)); }} else {{ end; }}
+              if (~bernoulli(0.8)) {{ tool Z; }} else {{ end; }}
             }}
 
-        }} }}
+        }} }}"
+    );
+    let kernel = format!(
+        "{deployment}
         server (K, n, o, T) {{
           hold memP (cost(memP, T)) {{ run prefill (cost(prefill, n + K)); }} cache (cost(memP, T)) lease memP (inf);
           hold memD (cost(memD, T)) {{ run link (cost(link, T / 100)); load memD (cost(memD, T)); release memP; run decode (cost(decode, o)); }}
         }}"
     );
-    let a = compile_source(
+    let kernel_workload = format!(
+        "{deployment_workload} session {{
+            loop {{ turn; set K = T;
+              if (~bernoulli(0.8)) {{ run tool (cost(tool, Z)); }} else {{ end; }}
+            }}
+
+        }} }}"
+    );
+    let a = common::compile(
         &common::main_source(&serving),
+        &serving_workload,
         &Overrides {
             seed: Some(1),
             ..common::horizon(100.0)
         },
     )
     .unwrap();
-    let b = compile_source(
+    let b = common::compile(
         &common::main_source(&kernel),
+        &kernel_workload,
         &Overrides {
             seed: Some(1),
             ..common::horizon(100.0)
@@ -501,21 +546,21 @@ fn serving_forms_compile_to_the_kernel_ir() {
 /// run of the program that declares `stage tool : delay;` last.
 #[test]
 fn a_workload_tool_runs_on_its_own_delay() {
+    let src = "stage svc : fifo; server { run svc (cost(svc, 1)); }";
     let body = "workload { arrive poisson(0.5); turn { set Z = ~exp(3); }
           session { loop { turn; if (~bernoulli(0.8)) { tool (Z); } else { end; } } }
-        }
-        server { run svc (cost(svc, 1)); }";
-    let declared = format!("stage svc : fifo; stage tool : delay; {body}");
-    let implicit = format!("stage svc : fifo; {body}");
+        }";
+    let declared = format!("stage tool : delay; {body}");
     let ov = Overrides {
         seed: Some(1),
         ..common::horizon(200.0)
     };
-    let a = compile_source(&common::main_source(&declared), &ov).unwrap();
-    let b = compile_source(&common::main_source(&implicit), &ov).expect("nothing to declare");
+    let src = common::main_source(src);
+    let a = common::compile(&src, &declared, &ov).unwrap();
+    let b = common::compile(&src, body, &ov).expect("nothing to declare");
     assert_eq!(a.to_json(), b.to_json());
-    let one = run_source(&common::main_source(&declared), &ov, None).unwrap();
-    let two = run_source(&common::main_source(&implicit), &ov, None).unwrap();
+    let one = common::run(&src, &declared, &ov).unwrap();
+    let two = common::run(&src, body, &ov).unwrap();
     assert_eq!(one.text(), two.text());
 }
 
@@ -523,12 +568,14 @@ fn a_workload_tool_runs_on_its_own_delay() {
 /// kind: a tool server with capacity is the deployment's.
 #[test]
 fn a_declared_fifo_tool_is_still_used() {
-    let src = "stage svc : fifo; stage tool : fifo;
+    let src = "stage svc : fifo;
+        server { run svc (cost(svc, 1)); }";
+    let workload = "stage tool : fifo;
         workload { arrive poisson(0.5); turn { set Z = ~exp(3); }
           session { loop { turn; if (~bernoulli(0.8)) { tool (Z); } else { end; } } }
-        }
-        server { run svc (cost(svc, 1)); }";
-    let p = compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap();
+        }";
+    let ov = common::horizon(10.0);
+    let p = common::compile(&common::main_source(src), workload, &ov).unwrap();
     let tools: Vec<_> = p.stages.iter().filter(|s| s.name == "tool").collect();
     assert_eq!(tools.len(), 1, "no second, implicit `tool`");
     assert!(!tools[0].kind.is_delay(), "the declared fifo, not a delay");
@@ -539,34 +586,34 @@ fn a_declared_fifo_tool_is_still_used() {
 /// `tool` still names a declared stage.
 #[test]
 fn the_workload_delay_stands_in_only_for_an_undeclared_tool() {
-    let below = "stage svc : fifo;
-        workload { arrive batch(1); session { turn; tool (1); turn; } }
-        stage tool : fifo;
-        server { run svc (cost(svc, 1)); }";
-    let e = compile_source(&common::main_source(below), &common::horizon(10.0))
-        .expect_err("a stage `tool` below the call");
+    let svc = "stage svc : fifo; server { run svc (cost(svc, 1)); }";
+    let refused = |src: &str, workload: &str| {
+        common::compile(&common::main_source(src), workload, &common::horizon(10.0))
+            .expect_err(workload)
+    };
+    let below = "workload { arrive batch(1); session { turn; tool (1); turn; } }
+        stage tool : fifo;";
+    let e = refused(svc, below);
     assert!(e.contains("declared below"), "{e}");
     // the supplied stage's name is no other declaration's (#483)
     let pool = "stage svc : fifo; pool tool { cap 4; }
-        workload { arrive batch(1); session { turn; tool (1); turn; } }
         server { run svc (cost(svc, 1)); }";
-    let e = compile_source(&common::main_source(pool), &common::horizon(10.0))
-        .expect_err("a pool `tool` beside the supplied stage");
+    let e = refused(
+        pool,
+        "workload { arrive batch(1); session { turn; tool (1); turn; } }",
+    );
     assert!(
         e.contains("runs on a stage `tool` the parser supplies, and `tool` is a pool at"),
         "{e}"
     );
     let server = "stage svc : fifo;
-        workload { arrive batch(1); }
         server { run svc (cost(svc, 1)); tool (1); }";
-    let e = compile_source(&common::main_source(server), &common::horizon(10.0))
-        .expect_err("a server's tool is the deployment's");
+    let e = refused(server, "workload { arrive batch(1); }");
     assert!(e.contains("no stage declared above plays `tool`"), "{e}");
-    let indexed = "stage svc : fifo;
-        workload { arrive batch(1); session { turn; tool[0] (1); turn; } }
-        server { run svc (cost(svc, 1)); }";
-    let e = compile_source(&common::main_source(indexed), &common::horizon(10.0))
-        .expect_err("an indexed tool names an array");
+    let e = refused(
+        svc,
+        "workload { arrive batch(1); session { turn; tool[0] (1); turn; } }",
+    );
     assert!(e.contains("no stage declared above plays `tool`"), "{e}");
 }
 
@@ -578,10 +625,12 @@ fn delay_is_ps_of_present() {
     let ir = |kind: &str| {
         let src = format!(
             "stage d : {kind}; stage f : fifo(1);
-            workload {{ arrive renewal(1); init {{ set s = floor(~uniform(1, 4)); }} send (s); }}
             server (s) {{ run d (cost(d, s)); run f (cost(f, 0.5)); }}"
         );
-        compile_source(&common::main_source(&src), &common::horizon(10.0)).unwrap()
+        let workload =
+            "workload { arrive renewal(1); init { set s = floor(~uniform(1, 4)); } send (s); }";
+        let ov = common::horizon(10.0);
+        common::compile(&common::main_source(&src), workload, &ov).unwrap()
     };
     let (delay, ps) = (ir("delay"), ir("ps(present)"));
     assert!(delay.stages[0].kind.is_delay());
@@ -593,20 +642,21 @@ fn delay_is_ps_of_present() {
 /// nested form, in a session (`tests/iteration_body.rs` has the schedule).
 #[test]
 fn else_if_is_the_nested_if() {
+    let src = "stage svc : delay;
+            server { run svc (cost(svc, 1)); }";
     let session = |arms: &str| {
         format!(
-            "stage svc : delay;
-            workload {{ arrive poisson(0.5); turn {{ set k = ~bernoulli(0.5) + ~bernoulli(0.5); }}
-              session {{ loop {{ turn; {arms} }} }} }}
-            server {{ run svc (cost(svc, 1)); }}"
+            "workload {{ arrive poisson(0.5); turn {{ set k = ~bernoulli(0.5) + ~bernoulli(0.5); }}
+              session {{ loop {{ turn; {arms} }} }} }}"
         )
     };
+    let ov = common::horizon(100.0);
     let flat = session("if (k == 0) { end; } else if (k == 1) { tool (1); } else { tool (2); }");
     let nested =
         session("if (k == 0) { end; } else { if (k == 1) { tool (1); } else { tool (2); } }");
-    let ov = common::horizon(100.0);
-    let a = compile_source(&common::main_source(&flat), &ov).expect("`else if` compiles");
-    let b = compile_source(&common::main_source(&nested), &ov).expect("the nested form compiles");
+    let a = common::compile(&common::main_source(src), &flat, &ov).expect("`else if` compiles");
+    let b =
+        common::compile(&common::main_source(src), &nested, &ov).expect("the nested form compiles");
     assert_eq!(
         a.to_json(),
         b.to_json(),
@@ -617,20 +667,19 @@ fn else_if_is_the_nested_if() {
 /// The retired `branch` says what it is now, in a session and as a name.
 #[test]
 fn branch_is_retired_for_if() {
-    let src = |body: &str| {
-        common::main_source(&format!(
-            "stage svc : delay;
-            workload {{ arrive poisson(0.5); session {{ loop {{ turn; {body} }} }} }}
-            server {{ run svc (cost(svc, 1)); }}"
-        ))
+    let src = common::main_source(
+        "stage svc : delay;
+            server { run svc (cost(svc, 1)); }",
+    );
+    let workload = |body: &str| {
+        format!("workload {{ arrive poisson(0.5); session {{ loop {{ turn; {body} }} }} }}")
     };
-    let ov = common::horizon(100.0);
     for body in [
         "branch (1) { end; }",
         "branch with (0.5) { end; }",
         "set branch = 1; end;",
     ] {
-        let e = compile_source(&src(body), &ov).expect_err(body);
+        let e = common::compile(&src, &workload(body), &common::horizon(100.0)).expect_err(body);
         assert!(e.contains("is now `if (e)`"), "{body}: {e}");
     }
 }
@@ -642,15 +691,17 @@ fn a_draw_is_labelled_w_p() {
     // a station before the branch, as every program in the corpus has: the
     // guard labels the edge that leaves it; the runs are the session's, so
     // the view draws the session
-    let src = "stage svc : fifo; stage tool : delay;
+    let src = "server {}
+        ";
+    let workload = "stage svc : fifo; stage tool : delay;
         workload { arrive poisson(0.5); turn { set Z = ~exp(3); }
           session {  loop { turn; run svc (cost(svc, 1));
               if (~bernoulli(0.8)) { run tool (cost(tool, Z));  } else { end; } }
           }
         }
-        server {}
         ";
-    let p = serq::compile_source(&common::main_source(src), &common::horizon(100.0)).unwrap();
+    let ov = common::horizon(100.0);
+    let p = common::compile(&common::main_source(src), workload, &ov).unwrap();
     let svg = serq::view::svg::render(&serq::view::deployment::figure(&p));
     assert!(
         svg.contains("w.p. 0.8"),
@@ -662,20 +713,19 @@ fn a_draw_is_labelled_w_p() {
     );
 }
 
+/// A workload that sends nothing, one turn a session.
+const POISSON: &str = "workload { arrive poisson(1); session { turn; end; } }";
+
 /// The bindings are substituted, so a name used twice would draw twice. That
 /// is not a binding anyone means to write, and the parser says so.
 #[test]
 fn at_admission_rejects_a_draw() {
     let src = "pool kv { cap 100; } stage s : fifo;
-        workload { arrive poisson(1);
-          session { turn; end;
-          }
-        }
         server { hold kv (cost(kv, x)) at admission (x = ~exp(3)) { run s (cost(s, 1)); }
         }
         ";
-    let e = serq::compile_source(&common::main_source(src), &common::horizon(10.0))
-        .expect_err("rejected");
+    let ov = common::horizon(10.0);
+    let e = common::compile(&common::main_source(src), POISSON, &ov).expect_err("rejected");
     assert!(e.contains("draws a sample"), "{e}");
 }
 
@@ -685,23 +735,23 @@ fn at_admission_bindings_are_sequential() {
     let head = "pool kv { cap 1000; } stage s : fifo;
 
         ";
-    let head_workload = "arrive poisson(1); init { set n = 10; } send (n);";
+    let head_workload =
+        "workload { arrive poisson(1); init { set n = 10; } send (n); session { turn; end; } }";
     let steps = format!(
-        "{head} workload {{ {head_workload} session {{ turn; end;
-        }} }}
+        "{head}
         server (n) {{ hold kv (cost(kv, need)) at admission (half = n / 2, need = half + 1)
           {{ run s (cost(s, 1)); }}
         }}"
     );
     let flat = format!(
-        "{head} workload {{ {head_workload} session {{ turn; end; \n}} }}\nserver (n) {{ hold kv (cost(kv, n / 2 + 1)) {{ run s (cost(s, 1)); }}\n}}"
+        "{head}\nserver (n) {{ hold kv (cost(kv, n / 2 + 1)) {{ run s (cost(s, 1)); }}\n}}"
     );
     let ov = common::horizon(10.0);
     assert_eq!(
-        serq::compile_source(&common::main_source(&steps), &ov)
+        common::compile(&common::main_source(&steps), head_workload, &ov)
             .unwrap()
             .to_json(),
-        serq::compile_source(&common::main_source(&flat), &ov)
+        common::compile(&common::main_source(&flat), head_workload, &ov)
             .unwrap()
             .to_json()
     );
@@ -712,15 +762,11 @@ fn at_admission_bindings_are_sequential() {
 #[test]
 fn fits_says_it_is_now_reserve() {
     let src = "pool kv { cap 100; } stage s : fifo;
-        workload { arrive poisson(1);
-          session { turn; end;
-          }
-        }
         server { hold kv (cost(kv, 1)) fits (2) { run s (cost(s, 1)); }
         }
         ";
-    let e = serq::compile_source(&common::main_source(src), &common::horizon(10.0))
-        .expect_err("rejected");
+    let ov = common::horizon(10.0);
+    let e = common::compile(&common::main_source(src), POISSON, &ov).expect_err("rejected");
     assert!(e.contains("`fits` is now `reserve`"), "{e}");
 }
 
@@ -729,15 +775,11 @@ fn fits_says_it_is_now_reserve() {
 #[test]
 fn admit_as_a_statement_says_what_to_write() {
     let src = "pool kv { cap 100; } stage s : fifo;
-        workload { arrive poisson(1);
-          session { turn; end;
-          }
-        }
         server { admit kv (1) { run s (cost(s, 1)); }
         }
         ";
-    let e = serq::compile_source(&common::main_source(src), &common::horizon(10.0))
-        .expect_err("rejected");
+    let ov = common::horizon(10.0);
+    let e = common::compile(&common::main_source(src), POISSON, &ov).expect_err("rejected");
     assert!(e.contains("is now `hold … at admission"), "{e}");
 }
 
@@ -761,23 +803,12 @@ fn the_request_boundary_preserves_size_ownership() {
         }
         pool kv on gpu { block 16; evict lru; }
         pool reqs on llm { }
-        stage tool : delay;
         ";
-    let client = "arrive poisson(0.3); init { set K = 0; }
+    let client = "stage tool : delay; workload { arrive poisson(0.3); init { set K = 0; }
         turn { set n = ~exp(500); set o = ~exp(200) + 1; set more = ~bernoulli(0.9); }
         send (K, n, o);";
     let split = format!(
         "{head}
-        workload {{ {client}
-          session {{
-
-            loop {{
-              turn;
-              set K = reply.prompt + o;
-              if (more) {{ tool (~exp(3));  }} else {{ end; }}
-            }}
-          }}
-        }}
         server (K, n, o) reply (prompt) {{
           set t0 = now;
           set prompt = K + n;
@@ -786,17 +817,20 @@ fn the_request_boundary_preserves_size_ownership() {
           observe response = now - t0;
         }}"
     );
-    let flat = format!(
-        "{head}
-        workload {{ {client}
+    let split_client = format!(
+        "{client}
           session {{
 
-            loop {{ turn;
+            loop {{
+              turn;
+              set K = reply.prompt + o;
               if (more) {{ tool (~exp(3));  }} else {{ end; }}
             }}
-
           }}
-        }}
+        }}"
+    );
+    let flat = format!(
+        "{head}
         server (K, n, o) {{
           set t0 = now;
           set prompt = K + n;
@@ -806,12 +840,24 @@ fn the_request_boundary_preserves_size_ownership() {
           set K = prompt + o;
         }}"
     );
+    let flat_client = format!(
+        "{client}
+          session {{
+
+            loop {{ turn;
+              if (more) {{ tool (~exp(3));  }} else {{ end; }}
+            }}
+
+          }}
+        }}"
+    );
     let ov = Overrides {
         seed: Some(1),
         ..common::horizon(500.0)
     };
-    let a = serq::compile_source(&common::main_source(&split), &ov).expect("the two sides compile");
-    let error = serq::compile_source(&common::main_source(&flat), &ov)
+    let a = common::compile(&common::main_source(&split), &split_client, &ov)
+        .expect("the two sides compile");
+    let error = common::compile(&common::main_source(&flat), &flat_client, &ov)
         .expect_err("moving a client size update into the server changes the contract");
     assert!(
         error.contains("server cannot assign request size `K`"),
@@ -841,6 +887,13 @@ fn numbers_read_as_written() {
     assert_eq!(show_num_exact(0.9100000000000001), "0.9100000000000001");
 }
 
+/// One session of one turn.
+const BATCH: &str = "workload { arrive batch(1);
+          session { turn; end;
+          }
+        }
+        ";
+
 /// `choose j in n by (k1, k2, …)` takes the smallest key tuple, compared
 /// in order (#140): the second key decides only among the first key's ties,
 /// and a tie on every key goes to the smallest index.
@@ -848,15 +901,12 @@ fn numbers_read_as_written() {
 fn choose_compares_its_keys_in_order() {
     let pick = |by: &str| {
         let src = format!(
-            "workload {{ arrive batch(1);
-          session {{ turn; end;
-          }}
-        }}
-        server {{ choose j in 4 by ({by}); observe picked = j;
+            "server {{ choose j in 4 by ({by}); observe picked = j;
         }}
         "
         );
-        let r = run_source(&common::main_source(&src), &common::horizon(1.0), None).unwrap();
+        let ov = common::horizon(1.0);
+        let r = common::run(&common::main_source(&src), BATCH, &ov).unwrap();
         r.observe("picked").unwrap().samples[0]
     };
     // the first key ties 1 and 3; the second picks 3
@@ -874,13 +924,10 @@ fn choose_compares_its_keys_in_order() {
 /// no text can write, is refused too.
 #[test]
 fn an_old_or_keyless_choose_is_refused_plainly() {
-    let src = "workload { arrive batch(1);
-          session { turn; end;
-          }
-        }
-        server { choose j in 2 by (-j);
+    let src = "server { choose j in 2 by (-j);
         } ";
-    let p = compile_source(&common::main_source(src), &common::horizon(1.0)).unwrap();
+    let ov = common::horizon(1.0);
+    let p = common::compile(&common::main_source(src), BATCH, &ov).unwrap();
     let json = p.to_json();
     let old = json
         .replacen(
@@ -917,23 +964,18 @@ fn an_old_or_keyless_choose_is_refused_plainly() {
 fn a_validate_error_points_at_the_statement() {
     let src = "pool kv { cap 64; }
         stage d : delay;
-        workload { arrive batch(1);
-          session { turn;
-            end;
-
-          }
-        }
         server {
           run d (cost(d, 1));
           load kv (cost(kv, 1));
         }
         ";
-    let e = compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap_err();
+    let ov = common::horizon(10.0);
+    let e = common::compile(&common::main_source(src), BATCH, &ov).unwrap_err();
     assert!(
-        e.starts_with("11:16: session: `load kv` outside a hold of `kv`"),
+        e.starts_with("deployment.sq: 5:16: session: `load kv` outside a hold of `kv`"),
         "{e}"
     );
-    assert!(e.contains("11 |           load kv (cost(kv, 1));"), "{e}");
+    assert!(e.contains("5 |           load kv (cost(kv, 1));"), "{e}");
 }
 
 /// A KV relation's copy names its poster, the side whose worker starts it
@@ -944,7 +986,7 @@ fn a_relations_copy_names_its_poster() {
     use serq::ir::CStmt;
     let posters = |name: &str| -> Vec<Option<usize>> {
         let path = serq::program_path(name);
-        let p = compile_source(&std::fs::read_to_string(&path).unwrap(), &short()).unwrap();
+        let p = compiled(&path, &short());
         p.blocks
             .iter()
             .flatten()

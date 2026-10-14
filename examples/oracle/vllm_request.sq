@@ -2,7 +2,8 @@
 // oracle (tools/oracle/*.json, tests/vllm_oracle.rs) and, compiled to IR,
 // of the Lean theorems about it (lean/Serq/Oracle.lean).
 // The constants are a scenario's engine; the requests are the workload
-// instance, given as explicit sessions in the IR (prompt, o, arrive).
+// instance, given as explicit sessions in the IR (prompt, o, arrive), in
+// place of examples/workloads/one_request.sq's one.
 use "std/args";
 
 fn main() {
@@ -34,14 +35,6 @@ fn main() {
   }
   pool reqs on vllm { queue fifo; }
   pool kv on gpu { block bs; evict lru; preempt lifo; }
-  stage gate : delay;
-
-  workload {
-    arrive batch(1);
-    init { set prompt = 1; set o = 1; set arrive = 0; }
-    send (prompt, o);
-    session { run gate (cost(gate, arrive)); turn; }
-  }
 
   // the scheduler knows max_tokens, not the length (sched/utils.py:98-119)
   server (prompt, hidden o) {

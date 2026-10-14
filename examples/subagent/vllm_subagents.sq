@@ -4,7 +4,8 @@
 // and a parent waits for them at a delay stage for `W`, the time the
 // slowest of its subagents took in a previous run. The engine is
 // `examples/multi-turn/vllm.sq`'s line for line (docs/use-cases/workloads.md).
-// `--q 0` is the same agents without subagents.
+// `--q 0` is the same agents without subagents. The sessions:
+// examples/workloads/subagents.sq.
 use "std/args";
 
 let B = 8192;  // max_num_batched_tokens
@@ -13,22 +14,11 @@ let a = 2e-5;  // compute per scheduled token (s)
 let omega = 2e-4;  // weights read per iteration (s)
 let beta = 2e-9;  // KV read per iteration per resident context token (s)
 let c0 = 0;  // fixed cost per iteration (s)
-let Lambda = 0.1;      // agent sessions per second
-let p = 0.9;           // the agent continues after a turn
-let Z = 3.0;           // tool time (s)
-let k = 3;             // subagents per delegation
-let pc = 0.7;          // a subagent continues after a turn
 
 fn main() {
   let max_seqs = args.number("max_seqs", 16);     // max_num_seqs
   let blocks = args.number("blocks", 10000);    // num_gpu_blocks (less the null block)
   let chunk_cap = args.number("chunk_cap", inf);   // long_prefill_token_threshold (inf: none)
-  let q = args.number("q", 0.3);           // a turn delegates instead of calling a tool
-  let W = args.number("W", 15.4);          // the wait for the subagents (s): the mean of the longest of k
-                         // `subagent` samples of a previous run (`--dump`), iterated to its
-                         // fixed point at seed 1, horizon 10000 s, warm-up 1000 s; seeds 1-5
-                         // give 15.22 +- 0.25, so a move of this size is mostly seed noise
-  let kids = q * k * p / (1 - p);   // subagents per agent session (a last turn does not delegate)
 
   device gpu {
     compute (t) = t * a;
@@ -53,42 +43,6 @@ fn main() {
     }
   }
   pool reqs on vllm { queue fifo; }
-  stage tool : delay;      // declared, though a workload's `tool` needs none: it keeps its IR index before `delegate`
-  stage delegate : delay;
-
-  // --8<-- [start:workload]
-  // An arrival is a subagent with probability kids / (1 + kids), so the
-  // stream carries both at the rate the parents would create them. A
-  // subagent starts from a context of its own: the parent's context it
-  // copies is not shared across sessions (docs/language.md §9).
-  workload {
-    arrive poisson(Lambda * (1 + kids));
-    init {
-      set sub = ~bernoulli(kids / (1 + kids));
-      set K = sub ? floor(~uniform(2000, 6000)) : 0;
-      set t_s = now;
-    }
-    turn {
-      set n = ceil(K == 0 ? ~uniform(1000, 3000) : ~exp(500));
-      set o = floor(~exp(200)) + 1;
-      set more = ~bernoulli(sub ? pc : p);
-      set fan = sub ? 0 : ~bernoulli(q);
-    }
-    send (input: K + n, output: o);
-    session {
-      loop {
-        turn;
-        set K = K + n + o;
-        if (more) {
-          if (fan) { run delegate (cost(delegate, W)); } else { tool (~exp(Z)); }
-        } else {
-          if (sub) { observe subagent = now - t_s; }
-          end;
-        }
-      }
-    }
-  }
-  // --8<-- [end:workload]
 
   // the scheduler knows max_tokens, not the length (sched/utils.py:98-119)
   server (input, hidden output) {

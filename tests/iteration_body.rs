@@ -4,10 +4,26 @@
 
 mod common;
 
-use serq::{Overrides, compile_source, run_source};
+use serq::Overrides;
 
-fn run(src: &str, options: &Overrides) -> serq::Report {
-    run_source(&common::main_source(src), options, None).unwrap()
+/// A workload's text and the overrides it runs with.
+type Pair = (String, Overrides);
+
+fn run(src: &str, (workload, options): &Pair) -> serq::Report {
+    common::run(&common::main_source(src), workload, options).unwrap()
+}
+
+/// `src` (a deployment) compiled with the pair's workload.
+fn compile(src: &str, (workload, options): &Pair) -> Result<serq::Program, String> {
+    common::compile(src, workload, options)
+}
+
+/// `ov`, with a workload of single-turn sessions that arrive by `arrive`.
+fn sessions(arrive: &str, ov: Overrides) -> Pair {
+    (
+        format!("workload {{ arrive {arrive};\n  session {{ turn; end;\n  }}\n}}\n"),
+        ov,
+    )
 }
 
 /// `scheduler` with `taking {pools}` on each `admit waiting`: what the
@@ -35,7 +51,11 @@ fn the_vllm_body_is_the_procedure() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut checked = 0;
     for dir in std::fs::read_dir(root.join("examples")).unwrap().flatten() {
-        for f in std::fs::read_dir(dir.path()).unwrap().flatten() {
+        // (`examples/pairs.json` is a file beside the groups)
+        let Ok(files) = std::fs::read_dir(dir.path()) else {
+            continue;
+        };
+        for f in files.flatten() {
             let path = f.path();
             if path.extension().is_none_or(|e| e != "sq") {
                 continue;
@@ -44,12 +64,17 @@ fn the_vllm_body_is_the_procedure() {
             let Some(body) = procedure_as_body(&src) else {
                 continue;
             };
+            // (a workload's file has no engine: it is skipped above)
             let ov = common::horizon(20.0);
-            let base = path.parent();
-            let a = run_source(&common::main_source(&src), &ov, base)
-                .unwrap_or_else(|e| panic!("{path:?}: {e}"));
-            let b = run_source(&common::main_source(&body), &ov, base)
-                .unwrap_or_else(|e| panic!("{path:?}: {e}"));
+            let w = serq::paired_workload(&path)
+                .unwrap_or_else(|| panic!("{}: no workload", path.display()));
+            let workload = std::fs::read_to_string(&w).unwrap();
+            let names = (path.to_str().unwrap(), w.to_str().unwrap());
+            let run = |src: &str| {
+                serq::run_paired(&common::main_source(src), &workload, names, &ov, w.parent())
+                    .unwrap_or_else(|e| panic!("{path:?}: {e}"))
+            };
+            let (a, b) = (run(&src), run(&body));
             assert_eq!(a.text(), b.text(), "{}", path.display());
             checked += 1;
         }
@@ -101,12 +126,6 @@ fn several_prefills_run_alone_in_one_iteration() {
         }}
         pool reqs on llm {{ }}
         pool kv on gpu {{ }}
-        workload {{ arrive batch(3);
-          session {{ turn;
-            end;
-
-          }}
-        }}
         server {{
           set t0 = now;
           llm (2, 3);
@@ -120,11 +139,14 @@ fn several_prefills_run_alone_in_one_iteration() {
                   if (batch.tokens == 0) { advance running; }";
     let r = run(
         &prog(sglang),
-        &Overrides {
-            warmup: Some(0.0),
-            seed: Some(1),
-            ..common::horizon(20.0)
-        },
+        &sessions(
+            "batch(3)",
+            Overrides {
+                warmup: Some(0.0),
+                seed: Some(1),
+                ..common::horizon(20.0)
+            },
+        ),
     );
     assert_eq!(
         r.observe("ttft").unwrap().samples,
@@ -134,11 +156,14 @@ fn several_prefills_run_alone_in_one_iteration() {
     );
     let r = run(
         &prog("exclusive prefill; admit waiting while (running.preempted == 0);"),
-        &Overrides {
-            warmup: Some(0.0),
-            seed: Some(1),
-            ..common::horizon(20.0)
-        },
+        &sessions(
+            "batch(3)",
+            Overrides {
+                warmup: Some(0.0),
+                seed: Some(1),
+                ..common::horizon(20.0)
+            },
+        ),
     );
     assert_eq!(
         r.observe("ttft").unwrap().samples,
@@ -162,12 +187,6 @@ fn a_gate_on_the_residents_admits_only_into_an_empty_engine() {
         }
         pool reqs on llm { }
         stage gap : delay;
-        workload { arrive batch(4);
-          session { turn;
-            end;
-
-          }
-        }
         server {
           run gap (cost(gap, serial < 2 ? 0 : 0.5));
           set t0 = now;
@@ -178,11 +197,14 @@ fn a_gate_on_the_residents_admits_only_into_an_empty_engine() {
 "#;
     let r = run(
         src,
-        &Overrides {
-            warmup: Some(0.0),
-            seed: Some(1),
-            ..common::horizon(50.0)
-        },
+        &sessions(
+            "batch(4)",
+            Overrides {
+                warmup: Some(0.0),
+                seed: Some(1),
+                ..common::horizon(50.0)
+            },
+        ),
     );
     let start = &r.observe("start").unwrap().samples;
     // the first two at 0; they prefill 1 and decode 4, one token an
@@ -207,10 +229,6 @@ fn a_body_that_may_schedule_nothing_does_not_link() {
           worker {{ forward (1); }}
         }}
         pool reqs on llm {{ }}
-        workload {{ arrive batch(1);
-          session {{ turn; end;
-          }}
-        }}
         server {{ llm (2, 1);
         }}
 
@@ -218,9 +236,9 @@ fn a_body_that_may_schedule_nothing_does_not_link() {
         )
     };
     let err = |schedule: &str| {
-        compile_source(
+        compile(
             &common::main_source(&prog(schedule)),
-            &common::horizon(20.0),
+            &sessions("batch(1)", common::horizon(20.0)),
         )
         .err()
         .unwrap_or_else(|| panic!("`{schedule}` linked"))
@@ -238,9 +256,9 @@ fn a_body_that_may_schedule_nothing_does_not_link() {
     // cannot: it is refused in a schedule other than its own form, and in
     // the IR beside a body
     assert!(err("exclusive prefill; admit waiting;").contains("takes back"));
-    let mut p = compile_source(
+    let mut p = compile(
         &common::main_source(&prog("advance running; admit waiting;")),
-        &common::horizon(20.0),
+        &sessions("batch(1)", common::horizon(20.0)),
     )
     .unwrap();
     let serq::ir::CStageKind::Step(st) = &mut p.stages[0].kind else {
@@ -252,7 +270,13 @@ fn a_body_that_may_schedule_nothing_does_not_link() {
     // `admitted` and `preempted` are a body's
     let src = prog("advance running; admit waiting;")
         .replace("llm (2, 1);", "llm (2, 1); set x = admitted;");
-    assert!(compile_source(&common::main_source(&src), &common::horizon(20.0)).is_err());
+    assert!(
+        compile(
+            &common::main_source(&src),
+            &sessions("batch(1)", common::horizon(20.0))
+        )
+        .is_err()
+    );
 }
 
 /// The procedure and its body agree where serving is by keys and
@@ -289,12 +313,6 @@ fn the_vllm_body_is_the_procedure_under_keys_and_preemption() {
         }}
         pool reqs on llm {{ }}
         pool kv on gpu {{ preempt lifo; }}
-        workload {{ arrive renewal(1.5);
-          session {{ turn;
-            end;
-
-          }}
-        }}
         server {{
           set n = 3 + serial - 5 * floor(serial / 5);
           llm (n, 7 + serial - 3 * floor(serial / 3));
@@ -302,11 +320,14 @@ fn the_vllm_body_is_the_procedure_under_keys_and_preemption() {
 
 "#
             );
-            let options = Overrides {
-                warmup: Some(0.0),
-                seed: Some(1),
-                ..common::horizon(120.0)
-            };
+            let options = sessions(
+                "renewal(1.5)",
+                Overrides {
+                    warmup: Some(0.0),
+                    seed: Some(1),
+                    ..common::horizon(120.0)
+                },
+            );
             let a = run(&src, &options);
             let b = run(&procedure_as_body(&src).unwrap(), &options);
             if kv == 24 {
@@ -335,12 +356,8 @@ fn the_vllm_body_is_the_procedure_under_keys_and_preemption() {
 #[test]
 fn an_engines_shared_only_lowers_to_the_serve_only_body() {
     use serq::ir::{CExpr, CIter, CStageKind, CtxVar, UnOp};
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let file = "examples/papers/bari_rad.sq";
-    let path = root.join(file);
-    let text = std::fs::read_to_string(&path).unwrap();
-    let p = serq::compile_source(&common::main_source(&text), &common::horizon(20.0))
-        .unwrap_or_else(|e| panic!("{file}: {e}"));
+    let p = common::example(file, &common::horizon(20.0)).unwrap_or_else(|e| panic!("{file}: {e}"));
     let CStageKind::Step(st) = &p.stages[0].kind else {
         panic!("{file}: `E` is an engine")
     };
@@ -380,21 +397,20 @@ fn an_engine_idle_with_work_is_named() {
           worker { forward (1); }
         }
         pool reqs on llm { }
-        workload { arrive batch(3);
-          session { turn; end;
-          }
-        }
         server { llm (2, 1);
         }
 
 "#;
     let r = run(
         src,
-        &Overrides {
-            warmup: Some(0.0),
-            seed: Some(1),
-            ..common::horizon(20.0)
-        },
+        &sessions(
+            "batch(3)",
+            Overrides {
+                warmup: Some(0.0),
+                seed: Some(1),
+                ..common::horizon(20.0)
+            },
+        ),
     );
     assert!(r.stages[0].idle_with_work, "{}", r.text());
     assert!(r.text().contains("idle: engine `llm`"), "{}", r.text());
@@ -412,24 +428,19 @@ fn a_guard_that_is_not_a_test_fails_the_run() {
           worker { forward (1); }
         }
         pool reqs on llm { }
-        workload { arrive batch(1);
-          session { turn; end;
-          }
-        }
         server { llm (2, 1);
         }
 
 "#;
-    let e = run_source(
-        &common::main_source(src),
-        &Overrides {
+    let (workload, ov) = sessions(
+        "batch(1)",
+        Overrides {
             warmup: Some(0.0),
             seed: Some(1),
             ..common::horizon(20.0)
         },
-        None,
-    )
-    .unwrap_err();
+    );
+    let e = common::run(&common::main_source(src), &workload, &ov).unwrap_err();
     assert!(e.contains("a test is 1 or 0"), "{e}");
 }
 
@@ -452,12 +463,6 @@ fn a_register_remembers_the_last_iteration() {
           worker {{ forward (1); }}
         }}
         pool reqs on llm {{ }}
-        workload {{ arrive renewal(1);
-          session {{ turn;
-            end;
-
-          }}
-        }}
         server {{
           set t0 = now;
           llm (1, 31);
@@ -470,11 +475,14 @@ fn a_register_remembers_the_last_iteration() {
     let wait = |items: &str| {
         let r = run(
             &prog(items),
-            &Overrides {
-                warmup: Some(0.0),
-                seed: Some(1),
-                ..common::horizon(40.0)
-            },
+            &sessions(
+                "renewal(1)",
+                Overrides {
+                    warmup: Some(0.0),
+                    seed: Some(1),
+                    ..common::horizon(40.0)
+                },
+            ),
         );
         r.observe("wait").unwrap().samples.clone()
     };
@@ -517,10 +525,6 @@ fn a_set_in_an_iteration_that_is_none_is_undone() {
           worker { forward (1); }
         }
         pool reqs on llm { }
-        workload { arrive renewal(1);
-          session { turn; end;
-          }
-        }
         server { llm (100, 1);
         }
         gauge count = n;
@@ -528,11 +532,14 @@ fn a_set_in_an_iteration_that_is_none_is_undone() {
 "#;
     let r = run(
         src,
-        &Overrides {
-            warmup: Some(0.0),
-            seed: Some(1),
-            ..common::horizon(30.0)
-        },
+        &sessions(
+            "renewal(1)",
+            Overrides {
+                warmup: Some(0.0),
+                seed: Some(1),
+                ..common::horizon(30.0)
+            },
+        ),
     );
     // the first session is admitted and gets 4 tokens; after that its
     // prefill is excluded and nothing else may be admitted: every later
@@ -556,10 +563,6 @@ fn a_register_is_the_stage_s_own() {
           scheduler {{ advance running; admit waiting; }}
           worker {{ forward (1); }}
         }}
-        workload {{ arrive batch(1);
-          session {{ turn; end;
-          }}
-        }}
         server {{ llm (2, 1); other (1, 1); {session}
         }}
 
@@ -567,18 +570,18 @@ fn a_register_is_the_stage_s_own() {
         )
     };
     let err = |items: &str, session: &str| {
-        compile_source(
+        compile(
             &common::main_source(&prog(items, session)),
-            &common::horizon(20.0),
+            &sessions("batch(1)", common::horizon(20.0)),
         )
         .err()
         .unwrap_or_else(|| panic!("`{items}` `{session}` linked"))
     };
     let body = "state k = 0; scheduler { advance running; admit waiting; set k = k + 1; }";
     assert!(
-        compile_source(
+        compile(
             &common::main_source(&prog(body, "")),
-            &common::horizon(20.0)
+            &sessions("batch(1)", common::horizon(20.0))
         )
         .is_ok()
     );
@@ -646,10 +649,6 @@ fn a_register_is_read_where_its_stage_orders_the_read() {
         pool reqs on b {{ }}
         pool other on gpu {{ }}
         {extra}
-        workload {{ arrive batch(1);
-          session {{ turn; end;
-          }}
-        }}
         server {{ {server}
         }}
 
@@ -657,9 +656,9 @@ fn a_register_is_read_where_its_stage_orders_the_read() {
         )
     };
     let ok = |extra: &str, taking: &str, server: &str| {
-        compile_source(
+        compile(
             &common::main_source(&prog(extra, taking, server)),
-            &common::horizon(20.0),
+            &sessions("batch(1)", common::horizon(20.0)),
         )
     };
     let call = "b (2, 1);";
@@ -725,10 +724,6 @@ fn a_try_that_admitted_keeps_its_sets() {
           worker { forward (1); }
         }
         pool reqs on llm { }
-        workload { arrive batch(2);
-          session { turn; end;
-          }
-        }
         server { llm (2, 1);
         }
         gauge seen = k;
@@ -736,11 +731,14 @@ fn a_try_that_admitted_keeps_its_sets() {
 "#;
     let r = run(
         src,
-        &Overrides {
-            warmup: Some(0.0),
-            seed: Some(1),
-            ..common::horizon(10.0)
-        },
+        &sessions(
+            "batch(2)",
+            Overrides {
+                warmup: Some(0.0),
+                seed: Some(1),
+                ..common::horizon(10.0)
+            },
+        ),
     );
     assert!(r.pool("reqs").unwrap().admissions > 0, "{}", r.text());
     assert!(r.gauge("seen").unwrap().max >= 1.0, "{}", r.text());
@@ -767,12 +765,6 @@ fn a_reserve_on_a_register_waits_for_the_iteration() {
         }
         pool reqs on llm { }
         pool kv on gpu { evict lru; }
-        workload { arrive renewal(2);
-          session { turn;
-            end;
-
-          }
-        }
         server {
           llm (100, 10);
         }
@@ -780,11 +772,14 @@ fn a_reserve_on_a_register_waits_for_the_iteration() {
 "#;
     let r = run(
         src,
-        &Overrides {
-            warmup: Some(0.0),
-            seed: Some(1),
-            ..common::horizon(50.0)
-        },
+        &sessions(
+            "renewal(2)",
+            Overrides {
+                warmup: Some(0.0),
+                seed: Some(1),
+                ..common::horizon(50.0)
+            },
+        ),
     );
     assert_eq!(r.pool("kv").unwrap().rejected, 0, "{}", r.text());
     assert!(r.pool("reqs").unwrap().admissions > 20, "{}", r.text());
@@ -805,15 +800,15 @@ fn a_schedule_else_if_is_the_nested_if() {
           worker {{ forward (1); }}
         }}
         pool reqs on llm {{ }}
-        workload {{ arrive batch(1);
-          session {{ turn; end;
-          }}
-        }}
         server {{ llm (2, 1);
         }}
 "#
         );
-        compile_source(&common::main_source(&src), &common::horizon(20.0)).map(|p| p.to_json())
+        compile(
+            &common::main_source(&src),
+            &sessions("batch(1)", common::horizon(20.0)),
+        )
+        .map(|p| p.to_json())
     };
     let ir = |schedule: &str| compile(schedule).unwrap_or_else(|e| panic!("`{schedule}`: {e}"));
     // a `let` stands at the schedule's top, not in an `else if`'s block

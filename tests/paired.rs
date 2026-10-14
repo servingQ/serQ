@@ -5,7 +5,7 @@
 
 mod common;
 
-use serq::{compile_paired, outline_paired, program_path, run_file, run_paired};
+use serq::{compile_paired, outline_paired, run_paired};
 
 const DEPLOYMENT: &str = "fn main() {
   stage svc : fifo;
@@ -56,24 +56,35 @@ fn main() {
     .unwrap();
 }
 
-/// The paired example runs as the single file it was cut from.
+/// The paired example's one deployment, under each workload, reports what
+/// the example that pairs the same engine with that workload
+/// (`examples/pairs.json`) does.
 #[test]
-fn a_pair_runs_as_its_one_file() {
+fn a_pair_runs_as_its_example() {
     let read = |p: &str| std::fs::read_to_string(p).unwrap();
     let deployment = read("examples/paired/deployments/vllm.sq");
     let ov = common::horizon(100.0);
-    for (workload, single) in [
-        ("examples/paired/workloads/multi_turn.sq", "vllm"),
+    for (workload, example) in [
+        (
+            "examples/paired/workloads/multi_turn.sq",
+            "examples/multi-turn/vllm.sq",
+        ),
         (
             "examples/paired/workloads/single_turn.sq",
-            "vllm_single_turn",
+            "examples/single-turn/vllm_single_turn.sq",
         ),
-        ("examples/paired/workloads/chat.sq", "vllm_chat"),
-        ("examples/paired/workloads/subagents.sq", "vllm_subagents"),
+        (
+            "examples/paired/workloads/chat.sq",
+            "examples/multi-turn/vllm_chat.sq",
+        ),
+        (
+            "examples/paired/workloads/subagents.sq",
+            "examples/subagent/vllm_subagents.sq",
+        ),
     ] {
         let pair = run_paired(&deployment, &read(workload), ("d", "w"), &ov, None).unwrap();
-        let one = run_file(&program_path(single), &ov).unwrap();
-        assert_eq!(pair.json(), one.json(), "{workload} against {single}");
+        let one = common::run_example(example, &ov).unwrap();
+        assert_eq!(pair.json(), one.json(), "{workload} against {example}");
     }
 }
 
@@ -86,9 +97,17 @@ fn a_workload_file_has_no_main_and_declares_no_deployment() {
     );
     refused(
         DEPLOYMENT,
-        &format!("pool q {{ cap 1; }}\n{WORKLOAD}"),
-        &["w.sq: 1:1:", "`pool` is the deployment file's"],
+        &format!("server (x) {{ }}\n{WORKLOAD}"),
+        &["w.sq: 1:1:", "`server` is the deployment file's"],
     );
+    // a pool of its own is the workload's to declare
+    compile_paired(
+        DEPLOYMENT,
+        &format!("pool q {{ cap 1; }}\n{WORKLOAD}"),
+        names(),
+        &common::horizon(10.0),
+    )
+    .unwrap();
     refused(
         DEPLOYMENT,
         "let rate = 1;\n",

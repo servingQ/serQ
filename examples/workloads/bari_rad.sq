@@ -1,0 +1,21 @@
+// Bari, Hegde, de Veciana's requests (arXiv 2508.01002): Poisson arrivals, a
+// prompt of 1 .. vpmax whole tiles, an output of at most vdmax tokens
+// (examples/papers/bari_rad.sq runs it).
+use "std/args";
+
+let tile = 128;  // b_col: a tile, in tokens (the server's `bcol`)
+let vpmax = 8;  // prompts are 1 .. vpmax tiles (Assumption 3)
+let vdmax = 512;  // the largest output
+let rate = args.number("rate", 0.00002);  // requests per µs (20 per second)
+
+// --8<-- [start:workload]
+workload {
+  arrive poisson(rate);
+  init {
+    set t0 = now;
+    set vp = tile * floor(~uniform(1, vpmax + 1));
+    set vd = min(floor(~exp(200)) + 1, vdmax);
+  }
+  send (vp, vd, t0);
+}
+// --8<-- [end:workload]

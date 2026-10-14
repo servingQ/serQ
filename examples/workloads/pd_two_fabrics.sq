@@ -1,0 +1,14 @@
+// Poisson requests of a uniform prompt and an exponential output
+// (examples/pd-disaggregation/pd_two_fabrics.sq runs it).
+use "std/args";
+
+let Lambda = args.number("Lambda", 60.0);   // requests per second
+
+workload {
+  arrive poisson(Lambda);
+  turn {
+    set n = floor(~uniform(1000, 3000));
+    set o = floor(~exp(200)) + 1;
+  }
+  send (n, o);
+}

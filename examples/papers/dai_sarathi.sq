@@ -1,12 +1,12 @@
 // Dai et al., Sarathi-Serve in the basic LLM queueing model (arXiv 2504.07347),
-// as a serQ program. docs/use-cases/dai.md explains it a part at a time.
+// as a serQ program. docs/use-cases/dai.md explains it a part at a time;
+// its workload is examples/workloads/dai_periodic.sq.
 
 // --8<-- [start:settings]
 let bmax = 128;  // token budget b_max
 let c = 1128;  // t_b = c + a ceil(b / b0), 10 µs
 let a = 3547;
 let b0 = 128;  // b0 divides b_max (the paper's Assumption 1)
-let gap = 46750;  // one arrival every 467.5 ms
 let vp = 290;
 let vd = 990;
 // --8<-- [end:settings]
@@ -26,18 +26,12 @@ fn main() {
   }
   // --8<-- [end:engine]
 
-  // --8<-- [start:workload]
-  workload {
-    arrive renewal(gap);
-    init { set t0 = now; }
-    send (t0);
-  }
-
+  // --8<-- [start:server]
   server (t0) {
     sarathi (vp, vd + 1);   // the model's decode steps after the prefill's sampled token
     observe response = now - t0;
   }
-  // --8<-- [end:workload]
+  // --8<-- [end:server]
 
   // --8<-- [start:work_conserving]
   claim work_conserving: every iteration of sarathi (demand < bmax || tokens == bmax);

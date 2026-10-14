@@ -1,0 +1,14 @@
+// Six requests at once: two long prompts, one urgent, the first with four
+// output tokens (examples/vendors/ascend.sq runs it).
+
+// --8<-- [start:workload]
+workload {
+  arrive batch(6);
+  turn {
+    set prompt = serial == 1 || serial == 5 ? 256 : 64;
+    set immediate = serial == 4;
+    set out = serial == 0 ? 4 : 1;
+  }
+  send (prompt, immediate, out);
+}
+// --8<-- [end:workload]

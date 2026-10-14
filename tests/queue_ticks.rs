@@ -7,10 +7,18 @@
 
 mod common;
 
-use serq::{check_source, run_source};
+/// `n` sessions arrive at t = 0, each one turn.
+fn sessions(n: usize) -> String {
+    format!("workload {{ arrive batch({n}); session {{ turn; }} }}\n")
+}
 
-fn run(src: &str) -> serq::Report {
-    run_source(&common::main_source(src), &common::horizon(200.0), None).unwrap()
+fn run(n: usize, src: &str) -> serq::Report {
+    common::run(
+        &common::main_source(src),
+        &sessions(n),
+        &common::horizon(200.0),
+    )
+    .unwrap()
 }
 
 /// Three sessions queue at t = 0 and are let in at the tick at t = 5, the
@@ -18,16 +26,18 @@ fn run(src: &str) -> serq::Report {
 /// the next is tried: they read `free(room)` 2, 1 and 0.
 #[test]
 fn a_tick_lets_the_waiters_in_in_its_order_one_after_another() {
-    let r = run(r#"
+    let r = run(
+        3,
+        r#"
         stage svc : fifo(4);
         pool gate { queue by (-serial) every (5); }
         pool room { cap 2; }
-        workload { arrive batch(3); session { turn; } }
         server {
           hold gate (cost(gate, 1)) { observe at = now; observe who = serial; observe room_left = free(room); }
           hold room (cost(room, 1)) { run svc (cost(svc, 100)); } lease room (inf);
         }
-"#);
+"#,
+    );
     assert_eq!(r.observe("at").unwrap().samples, vec![5.0, 5.0, 5.0]);
     assert_eq!(r.observe("who").unwrap().samples, vec![2.0, 1.0, 0.0]);
     assert_eq!(r.observe("room_left").unwrap().samples, vec![2.0, 1.0, 0.0]);
@@ -39,10 +49,11 @@ fn a_tick_lets_the_waiters_in_in_its_order_one_after_another() {
 /// t = 110.
 #[test]
 fn a_waiter_that_does_not_fit_is_passed_over() {
-    let r = run(r#"
+    let r = run(
+        3,
+        r#"
         stage svc : fifo(4);
         pool gate { cap 2; queue by (-serial) every (5); }
-        workload { arrive batch(3); session { turn; } }
         server {
           hold gate (cost(gate, serial == 1 ? 2 : 1)) {
             observe who = serial;
@@ -50,7 +61,8 @@ fn a_waiter_that_does_not_fit_is_passed_over() {
             run svc (cost(svc, 101));
           }
         }
-"#);
+"#,
+    );
     assert_eq!(r.observe("who").unwrap().samples, vec![2.0, 0.0, 1.0]);
     assert_eq!(r.observe("at").unwrap().samples, vec![5.0, 5.0, 110.0]);
 }
@@ -60,10 +72,11 @@ fn a_waiter_that_does_not_fit_is_passed_over() {
 /// `while` around such a hold lets time pass, and links.
 #[test]
 fn a_hold_queued_during_a_tick_waits_for_the_next() {
-    let r = run(r#"
+    let r = run(
+        1,
+        r#"
         stage svc : fifo(1);
         pool gate { queue fifo every (5); }
-        workload { arrive batch(1); session { turn; } }
         server {
           set m = 0;
           while (m < 2) {
@@ -73,21 +86,26 @@ fn a_hold_queued_during_a_tick_waits_for_the_next() {
           }
           run svc (cost(svc, 1));
         }
-"#);
+"#,
+    );
     assert_eq!(r.observe("at").unwrap().samples, vec![5.0, 10.0]);
 }
 
 #[test]
 fn a_queue_tick_is_positive_and_no_engines() {
     let refused = |src: &str, needle: &str| {
-        let e = check_source(&common::main_source(src), &common::horizon(10.0)).unwrap_err();
+        let e = common::compile(
+            &common::main_source(src),
+            &sessions(1),
+            &common::horizon(10.0),
+        )
+        .unwrap_err();
         assert!(e.contains(needle), "{e}");
     };
     refused(
         r#"
         stage svc : fifo(1);
         pool gate { queue fifo every (0); }
-        workload { arrive batch(1); session { turn; } }
         server { hold gate (cost(gate, 1)) { run svc (cost(svc, 1)); } }
 "#,
         "a tick is a positive, finite number of seconds",
@@ -101,7 +119,6 @@ fn a_queue_tick_is_positive_and_no_engines() {
           worker { forward (1); }
         }
         pool kv on llm.gpu { queue fifo every (5); }
-        workload { arrive batch(1); session { turn; } }
         server { llm (8, 1); }
 "#,
         "`queue … every` on a pool an engine admits",
@@ -114,7 +131,9 @@ fn a_queue_tick_is_positive_and_no_engines() {
 /// let in at t = 5 and finish in the same iteration, at t = 6.
 #[test]
 fn the_waiters_of_one_tick_reach_the_same_iteration() {
-    let r = run(r#"
+    let r = run(
+        2,
+        r#"
         device gpu { kv cap 64; }
         engine llm on gpu {
           tokens cap 64;
@@ -123,13 +142,13 @@ fn the_waiters_of_one_tick_reach_the_same_iteration() {
         }
         pool kv on llm.gpu { }
         pool gate { queue fifo every (5); }
-        workload { arrive batch(2); session { turn; } }
         server {
           hold gate (cost(gate, 1)) { }
           llm (8, 1);
           observe done = now;
         }
-"#);
+"#,
+    );
     assert_eq!(r.observe("done").unwrap().samples, vec![6.0, 6.0]);
 }
 
@@ -145,7 +164,6 @@ fn the_pools_ticks_go_in_declaration_order() {
             r#"
             stage svc : fifo(3);
             {pools}
-            workload {{ arrive batch(3); session {{ turn; }} }}
             server {{
               if (serial < 2) {{
                 hold prog (cost(prog, serial == 0 ? 4 : 2)) {{ }} lease prog (inf);
@@ -158,7 +176,7 @@ fn the_pools_ticks_go_in_declaration_order() {
             }}
 "#
         );
-        run(&src).observe("seen").unwrap().samples[0]
+        run(3, &src).observe("seen").unwrap().samples[0]
     };
     let gate = "pool gate { queue fifo every (5); }";
     let prog = "pool prog { cap 10; preempt leases by (serial) every (5) suspend by (serial); }";

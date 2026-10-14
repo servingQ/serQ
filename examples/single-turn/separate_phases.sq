@@ -1,4 +1,5 @@
-// Whole-batch prefill isolation: B arrives while A is decoding.
+// Whole-batch prefill isolation: B arrives while A is decoding
+// (examples/workloads/two_prompts.sq).
 // With unit step costs the selected batches are A:p2, B:p4, A:d1, A:d1.
 // Writing `advance running` for `exclusive prefill` allows mixed A:d1+B:p3
 // and A:d1+B:p1.
@@ -19,11 +20,6 @@ fn main() {
   }
   pool reqs on llm { queue fifo; }
   pool kv on gpu { }
-  workload {
-    arrive batch(2);
-    init { set prompt = serial == 0 ? 2 : 4; }
-    send (prompt);
-  }
   server (prompt) {
     run gate (cost(gate, serial));
     set t0 = now;

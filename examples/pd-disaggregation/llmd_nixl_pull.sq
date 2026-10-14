@@ -1,5 +1,6 @@
 // Prefill/decode disaggregation as llm-d runs it on vLLM, the KV handed over by NIXL in pull mode.
-// docs/use-cases/pd.md explains it a part at a time.
+// docs/use-cases/pd.md explains it a part at a time; its workload is
+// examples/workloads/chat_reply.sq.
 use "std/args";
 use "std/kvt";
 use "std/share";
@@ -21,13 +22,10 @@ let BwP = 2e5;  // NIXL bandwidth out of a prefiller, tokens/s
 let BwD = 2e5;  // NIXL bandwidth into a decoder, tokens/s
 let x0 = 0.002;  // per-read latency (s)
 let minp = 0;  // prefix-based-pd-decider promptTokens
-let p = 0.9;  // continue after a turn
-let Z = 3.0;  // tool time (s)
 
 fn main() {
   let blocksD = args.number("blocksD", 10000);  // num_gpu_blocks on a decoder
   let thr = args.number("thr", 512);  // prefix-based-pd-decider nonCachedTokens
-  let Lambda = args.number("Lambda", 0.6);  // sessions per second
   // --8<-- [end:settings]
 
   // --8<-- [start:router]
@@ -117,27 +115,6 @@ fn main() {
   // --8<-- [start:transfer]
   kvt.nixl_pull (P, D, latency = x0, share = share.maxmin);
   // --8<-- [end:transfer]
-
-  // --8<-- [start:workload]
-  workload {
-    arrive poisson(Lambda);
-    init { set K = 0; }
-    turn {
-      set n = ceil(K == 0 ? ~uniform(1000, 3000) : ~exp(500));
-      set o = floor(~exp(200)) + 1;
-      set more = ~bernoulli(p);
-    }
-    send (input: K + n, output: o);
-    session {
-      turn;
-      while (more) {
-        set K = K + n + reply.produced;
-        tool (~exp(Z));
-        turn;
-      }
-    }
-  }
-  // --8<-- [end:workload]
 
   // --8<-- [start:server]
   server (input, hidden output) reply (produced) {

@@ -1,0 +1,18 @@
+// Poisson requests of a uniform prompt and an exponential output of at least
+// two tokens (examples/pd-disaggregation/pd_batching.sq runs it).
+use "std/args";
+
+let Lambda = args.number("Lambda", 60.0);     // requests per second
+
+// the laws, by name (`--def output='1001'`)
+def prompt_len() { floor(~uniform(1000, 3000)) }
+def output() { floor(~exp(200)) + 2 }   // at least two tokens, so a TPOT exists
+
+workload {
+  arrive poisson(Lambda);
+  turn {
+    set n = prompt_len();
+    set o = output();
+  }
+  send (n, o);
+}
