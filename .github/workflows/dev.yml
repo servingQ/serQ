@@ -1,10 +1,11 @@
 name: Dev
 
 # Every commit on main that passes CI is published to PyPI as a dev release
-# of the next patch, numbered by the commits since the release tag: three
-# commits after v0.1.0 is pyserq 0.1.1.dev3 (`pip install --pre pyserq`).
-# The number is stamped at build time and never committed; the release
-# commit itself, and a bump whose tag is not pushed yet, publish nothing.
+# of the next version, numbered by the commits since the version's tag:
+# three commits after v0.1.0 is pyserq 0.1.1.dev3, after v0.1.6-alpha.6 it
+# is 0.1.6a7.dev3 (`pip install --pre pyserq`). The number is stamped at
+# build time and never committed; the tagged commit itself, and a bump
+# whose tag is not pushed yet, publish nothing.
 
 on:
   workflow_run:

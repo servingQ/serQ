@@ -2,8 +2,11 @@ name: Release
 
 # Push an annotated tag vX.Y.Z matching Cargo.toml's version:
 #   git tag -a v0.1.0 && git push origin v0.1.0
-# A version is X.Y.Z, with no "-" (scripts/version.py); what comes between
-# two releases is a dev release, which dev.yml publishes from main.
+# A pre-release (vX.Y.Z-alpha.N, -beta.N, -rc.N) goes the same way, from a
+# commit that sets Cargo.toml to it, and its GitHub release is marked a
+# pre-release; pip takes it with --pre (0.1.6a6). What comes between two
+# tags is a dev release, which dev.yml publishes from main
+# (scripts/version.py).
 # The full CI runs first; the release carries the packaged crate and the
 # Linux CLI, and the Python binding pyserq as wheels (linux x86_64, macOS
 # arm64), which go to PyPI as pyserq X.Y.Z. Its notes are the tag
@@ -12,7 +15,7 @@ name: Release
 
 on:
   push:
-    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+    tags: ["v[0-9]+.[0-9]+.[0-9]+", "v[0-9]+.[0-9]+.[0-9]+-*"]
   workflow_dispatch:
     inputs:
       tag:
@@ -88,7 +91,9 @@ jobs:
             gh release edit "$TAG" --notes-file notes.md
             gh release upload "$TAG" dist/* --clobber
           else
-            gh release create "$TAG" dist/* --title "serQ $TAG" --notes-file notes.md --verify-tag
+            # a pre-release tag (with a "-") is not the latest release
+            pre=$([[ "$TAG" == *-* ]] && echo --prerelease || true)
+            gh release create "$TAG" dist/* --title "serQ $TAG" --notes-file notes.md --verify-tag $pre
           fi
 
   pypi:
@@ -112,9 +117,10 @@ jobs:
           skip-existing: true
 
   crates-io:
-    # Off by default: crates.io is public and permanent, and would publish
-    # the source. Enable with the repository variable PUBLISH_CRATES_IO=true
-    # and the secret CARGO_REGISTRY_TOKEN.
+    # Off by default: a version on crates.io is permanent (it can be yanked,
+    # not removed). Enable with the repository variable PUBLISH_CRATES_IO=true
+    # and the secret CARGO_REGISTRY_TOKEN. A pre-release goes too, so that a
+    # consumer pins `serq = "=0.1.6-alpha.6"` rather than a git tag.
     needs: release
     if: vars.PUBLISH_CRATES_IO == 'true'
     runs-on: ubuntu-22.04
@@ -123,6 +129,6 @@ jobs:
         with:
           ref: ${{ github.event.inputs.tag || github.ref_name }}
       - run: rustup toolchain install
-      - run: cargo publish --locked
+      - run: cargo publish -p serq --locked
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
