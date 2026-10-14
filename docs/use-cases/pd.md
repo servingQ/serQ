@@ -36,8 +36,9 @@ hardware configuration.
 One request goes like this. The llm-d router picks a decode pod, the least
 busy, and asks its prefix-cache estimate how much of the prompt that pod
 already has. A long enough uncached suffix means a remote prefill, for
-which it picks a prefill pod: a cache-warm one, then the least loaded. A
-short one means the decode pod prefills the prompt itself. On a remote
+which it picks a prefill pod: a cache-warm one, then the least loaded, and
+one of the equals in turn. A short one means the decode pod prefills the
+prompt itself. On a remote
 prefill the decode pod's sidecar sends the prompt to the prefiller with
 `max_tokens = 1`, waits for its answer, and only then sends the decode
 request to its own engine. The prefiller's scheduler frees the request's
@@ -84,7 +85,9 @@ decode pod (active-request-scorer). Then the decider: a remote prefill only
 when the prompt's uncached suffix on that pod is long enough
 (prefix-based-pd-decider: `nonCachedTokens`, `promptTokens`). The prefill
 profile then takes a pod that has the prefix (prefix-cache-affinity-filter),
-then the least loaded (token-load-scorer). The sidecar sends the prefill
+then the least loaded (token-load-scorer), and rotates among pods of equal
+score (max-score-picker), so cold prompts spread over idle prefillers
+instead of all going to the first. The sidecar sends the prefill
 with `max_tokens = 1`, waits for the answer, and then sends the decode
 request, its KV read from that prefiller.
 
@@ -96,8 +99,11 @@ and the decider between them:
 ```
 
 The gateway selects a decoder by `holders + queued`, then compares its
-uncached prompt suffix with `thr`. It runs the prefill entry before the
-decode entry. `observe lease` is how long the prefiller's blocks stayed
+uncached prompt suffix with `thr`. The prefiller is the one with the prefix,
+then the least loaded, then a draw: `choose` breaks a tie by the smallest
+index, which would send every cold prompt of a lightly loaded deployment to
+`P[0]` and leave `P[1]` idle, where llm-d's picker rotates. It runs the
+prefill entry before the decode entry. `observe lease` is how long the prefiller's blocks stayed
 leased. The router reads the model's actual cache state rather than a
 delayed or approximate cache index. The model uses `thr = 1` for
 always-remote prefill and larger thresholds to keep short uncached suffixes

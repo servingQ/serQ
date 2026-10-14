@@ -38,7 +38,7 @@ fn main() {
       set hitD = min(cachedin(D[j].kv), floor(prompt - 1, bs));
       set remote_prefill = prompt >= minp && prompt - hitD >= thr;
       if (remote_prefill) {
-        choose i in NP by (cachedin(P[i].kv) > 0 ? 0 : 1, work(P[i]) + queued(P[i].reqs));
+        choose i in NP by (cachedin(P[i].kv) > 0 ? 0 : 1, work(P[i]) + queued(P[i].reqs), ~uniform(0, 1));
         P[i].prefill (prompt);
         set t1 = now;
         D[j].decode (prompt) from P[i];
