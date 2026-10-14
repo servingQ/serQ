@@ -89,7 +89,7 @@ fn main() {
   }
 
   // A colocated engine: the prompt and the answer on one device.
-  queue E[N] : decode {
+  queue E[N] : agg {
     device gpu { compute (t) = t * a; hbm (k) = omega + beta * k; kv cap blocksE * bs; }
     engine on gpu {
       reqs cap max_seqs;

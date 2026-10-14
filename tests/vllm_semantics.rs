@@ -259,7 +259,7 @@ fn preempted_twice_in_a_queue(set_kept: &str, known_is: &str) -> String {
     format!(
         r#"
         let bs = 16;
-        queue D : decode {{
+        queue D : agg {{
           device gpu {{ kv cap 6 * bs; }}
           engine on gpu {{
             reqs cap 16;
@@ -362,7 +362,7 @@ fn a_holder_preempted_before_its_first_step_has_computed_nothing() {
     let src = r#"
         let bs = 16;
         stage svc : fifo;
-        queue llm : decode {
+        queue llm : agg {
           pool kv { cap 6 * bs; block bs; evict lru; preempt lifo; }
           device gpu { }
           engine on gpu {

@@ -961,7 +961,7 @@ fn a_declaration_cannot_share_its_name_with_a_binding() {
     // a queue's own pool is a declaration of the program too
     let e = check(
         "queue gw : gateway { route { E.decode (prompt); } }
-         queue E : decode { device gpu { kv cap 100; } pool kv on gpu { } engine on gpu { tokens cap inf; scheduler { advance running; admit waiting while (running.preempted == 0); } worker { forward (1); } }
+         queue E : agg { device gpu { kv cap 100; } pool kv on gpu { } engine on gpu { tokens cap inf; scheduler { advance running; admit waiting while (running.preempted == 0); } worker { forward (1); } }
            decode (prompt) { hold kv (cost(kv, prompt)) at admission (kv = prompt) { run E prefill (cost(E, 1)) growing kv; } } }
          workload { arrive batch(1); init { set prompt = 3; } session { turn; end; } } server { gw.route(); }
          ",

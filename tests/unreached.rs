@@ -10,10 +10,10 @@ fn check(src: &str) -> Result<Program, String> {
     compile_source(&common::main_source(src), &common::horizon(10.0))
 }
 
-/// A decode queue `name`, its entry running its engine, with `nic` in it.
+/// An aggregated queue `name`, its entry running its engine, with `nic` in it.
 fn queue(name: &str, nic: &str) -> String {
     format!(
-        "queue {name} : decode {{
+        "queue {name} : agg {{
           device gpu {{ kv cap 1000; }}
           engine on gpu {{ tokens cap 64; scheduler {{ advance running; admit waiting; }} worker {{ forward (1); }} }}
           pool kv on gpu {{ block 16; }}
@@ -42,7 +42,7 @@ fn a_stage_no_statement_runs_does_not_link() {
     assert!(e.contains("engine `E2` is run by no statement"), "{e}");
     assert!(e.contains("no request reaches it"), "{e}");
     assert!(
-        e.contains("queue E2 : decode {"),
+        e.contains("queue E2 : agg {"),
         "points at the declaration: {e}"
     );
     let e = check(&program("stage lonely : delay;")).expect_err("lonely is run by nothing");

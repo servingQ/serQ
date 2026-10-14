@@ -276,7 +276,7 @@ gateway selected by `gw.route();` in the server.
 ```
 queue gw : gateway { route { … } }                 // the router and the sidecar
 queue P[NP] : prefill { device gpu { … kv cap blocksP * bs; } engine on gpu { … } pool reqs on P { … } pool kv on gpu { … } nic ps(BwP); prefill (prompt) { … } }
-queue D[ND] : decode  { device gpu { … kv cap blocksD * bs; } engine on gpu { … } pool reqs on D { … } pool kv on D.gpu { … } nic ps(BwD); decode (prompt) { … } decode (prompt) from P { … } }
+queue D[ND] : agg, decode  { device gpu { … kv cap blocksD * bs; } engine on gpu { … } pool reqs on D { … } pool kv on D.gpu { … } nic ps(BwD); decode (prompt) { … } decode (prompt) from P { … } }
 kvt.nixl_pull (P, D, latency = x0, share = share.maxmin);   // the decoder reads the KV from the prefiller
 ```
 

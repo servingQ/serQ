@@ -500,7 +500,7 @@ fn decode_pressure_backs_into_the_prefill_pool() {
 fn a_re_executed_hold_releases_nothing_twice() {
     let src = r#"
         stage link : delay;
-        queue llm : decode {
+        queue llm : agg {
           device gpu { memD cap 20; }
           pool memP { cap 100; }
           pool memD on gpu { block 10; preempt lifo; }
@@ -547,7 +547,7 @@ fn an_engine_serves_its_queues_in_declaration_order() {
     let program = |first: &str, second: &str| {
         format!(
             r#"
-        queue llm : decode {{
+        queue llm : agg {{
           device gpu {{ }}
           engine on gpu {{
             a cap 1;

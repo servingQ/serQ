@@ -31,7 +31,7 @@ fn main() {
   // --8<-- [end:settings]
 
   // --8<-- [start:replica]
-  queue E[J] : decode {
+  queue E[J] : agg {
     device gpu { compute (t) = t * a; hbm (k) = omega + beta * k; kv cap blocks * bs; }
     engine on gpu {
       reqs cap max_seqs;

@@ -726,7 +726,7 @@ fn an_entry_keys_its_prefix_by_the_requests_serial() {
     let entry = |key: &str, units: &str| {
         format!(
             r#"
-        queue E : decode {{
+        queue E : agg {{
           device gpu {{ kv cap 640; }}
           engine on gpu {{ reqs cap 4; tokens cap 64; scheduler {{ advance running; admit waiting while (running.preempted == 0); }} worker {{ forward (1); }} }}
           pool reqs on E {{ }}

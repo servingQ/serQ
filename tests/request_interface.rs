@@ -196,7 +196,7 @@ fn an_entry_reads_the_hidden_parameters() {
     let program = |server: &str| {
         format!(
             "queue gw : gateway {{ route {{ E.decode (prompt); }} }}
-             queue E : decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }}
+             queue E : agg {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }}
                engine on gpu {{ tokens cap inf; scheduler {{ advance running; admit waiting while (running.preempted == 0); }} worker {{ forward (1); }} }}
                decode (prompt) {{ hold kv (cost(kv, prompt)) {{
                  run E prefill (cost(E, 1)) growing kv; run E decode (cost(E, o - 1)) growing kv; }} }} }}

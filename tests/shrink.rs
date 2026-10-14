@@ -46,7 +46,7 @@ fn a_shrunk_lease_lets_a_waiting_hold_in() {
 #[test]
 fn a_hold_keeps_what_it_has_computed() {
     let src = r#"
-        queue Q : decode {
+        queue Q : agg {
           device gpu { kv cap 64; }
           engine on gpu { reqs cap 1; tokens cap 8; scheduler { advance running; admit waiting while (running.preempted == 0); } worker { forward (1); } }
           pool reqs on Q { }
