@@ -2430,8 +2430,12 @@ impl Linker<'_> {
                                 .then(|| Box::new(var(&format!("{engine}.{}", RELATION_FROM)))),
                         };
                         let mut out = vec![];
-                        // the source's KV is there once its leg has ended
-                        if rel.push {
+                        // the source's KV is there once its leg has ended;
+                        // with no leg forked anywhere the source's call has
+                        // ended before the reader's, and there is nothing to
+                        // wait for (a push dispatched in order, as the
+                        // sidecar does with `concurrent = 0`)
+                        if rel.push && (forks(&self.prog.server) || forks(&self.prog.session)) {
                             out.push(Stmt::Join);
                         }
                         // the side that posts the copy waits before it: the
@@ -3088,4 +3092,15 @@ pub fn binop(op: BinOp, a: f64, b: f64) -> f64 {
 /// keeps its own.
 pub(crate) fn bind_index(e: &mut Expr, j: &str, k: f64) {
     e.substitute(&[(j.to_string(), Expr::Num(k))]);
+}
+
+/// Whether `stmts` fork a leg, in a block in them as well: whether a
+/// `join` would have anything to wait for.
+fn forks(stmts: &[Stmt]) -> bool {
+    stmts.iter().any(|s| match s {
+        Stmt::Fork(_) => true,
+        Stmt::Branch(_, a, b) => forks(a) || forks(b),
+        Stmt::Hold { body, .. } | Stmt::While(_, body) | Stmt::Loop(body) => forks(body),
+        _ => false,
+    })
 }

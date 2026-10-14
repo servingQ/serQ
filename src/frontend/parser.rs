@@ -812,16 +812,6 @@ fn transfers(stmts: &[Stmt]) -> bool {
     })
 }
 
-/// Whether `stmts` fork a leg anywhere, in a block in them as well.
-fn forks(stmts: &[Stmt]) -> bool {
-    stmts.iter().any(|s| match s {
-        Stmt::Fork(_) => true,
-        Stmt::Branch(_, a, b) => forks(a) || forks(b),
-        Stmt::Hold { body, .. } | Stmt::While(_, body) | Stmt::Loop(body) => forks(body),
-        _ => false,
-    })
-}
-
 /// An argument of the statements `def` reads the clock or live state,
 /// which the body would read where it reads the parameter.
 fn live_message(def: &str, p: &str, what: &str) -> String {
@@ -2452,41 +2442,6 @@ impl Parser {
                     t.source, q.name
                 ),
             );
-        }
-        // a push's reader waits for the source's leg (the connector's
-        // `join`): a program that forks no leg has none to wait for
-        if let Some((q, t)) = self
-            .queues
-            .iter()
-            .find_map(|q| q.takes.as_ref().filter(|t| t.push).map(|t| (q, t)))
-        {
-            let forked = self.server.iter().any(|(_, b)| forks(b))
-                || self.wl_session.iter().any(|(_, b)| forks(b))
-                || forks(&prog.session)
-                || self
-                    .queues
-                    .iter()
-                    .flat_map(|q| &q.entries)
-                    .any(|e| forks(&e.body));
-            if !forked {
-                let call = self
-                    .queues
-                    .iter()
-                    .find(|s| s.name == t.source)
-                    .and_then(|s| s.entries.iter().find(|e| e.from.is_none()))
-                    .map_or("…".to_string(), |e| e.verb.clone());
-                return self.err_at(
-                    t.at,
-                    format!(
-                        "`kvt.nixl_push ({0}, {1})`: in a push `{0}` posts the copy as its leg \
-                         ends, and `{1}`'s connector waits for that leg (`join`); no call is \
-                         forked, so there is no leg to wait for\n\
-                         help: call `{0}` in a leg beside the rest of the request: \
-                         `fork {{ {0}.{call} (…); }}`",
-                        t.source, q.name
-                    ),
-                );
-            }
         }
         Ok(())
     }
