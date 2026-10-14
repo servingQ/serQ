@@ -44,16 +44,18 @@ done
 | 2.0 | 25.173 | 33.170 | 63.421 | 126.720 | 288.270 | 0.032 |
 
 Up to 1.9 the TTFT has a level: about 0.14 s at 1.5, 0.31 s at 1.7,
-0.66 s at 1.8 and 2.3 s at 1.9. The 20 000 s runs at 1.8 and 1.9 read
-below it: the queue's long excursions are rare, and a short run may not
-sample one. The level at 1.9 is noisy: at 320 000 s, seeds 1–3 give 2.30,
+0.6 s at 1.8 and 2.0 s at 1.9 (the last two the mean of seeds 1–3 at
+320 000 s). The level at 1.9 is noisy: at 320 000 s, seeds 1–3 give 2.30,
 1.70 and 1.94 s, each with a 95 % interval of ±0.3–0.5 s within its run
-(at 1.8 they give 0.66, 0.56 and 0.57 s). Only 2.0 has no level: its TTFT
+(at 1.8 they give 0.66, 0.56 and 0.57 s). With seed 1 the 20 000 s runs
+at 1.8 and 1.9 read below the level: the queue's long excursions are
+rare, and a short run may not sample one; another seed may read above
+it. Only 2.0 has no level: its TTFT
 keeps growing with the run length, so 25.17 s is one moment of a queue
 without bound.
 
 The cliff is between 1.9 and 2.0 sessions/s, and latency rises steeply
-before it: the level doubles from 1.7 to 1.8 and grows about 3.5 times
+before it: the level doubles from 1.7 to 1.8 and grows about 3.3 times
 from 1.8 to 1.9. The share of prompt tokens from cache at 320 000 s falls
 from 0.44 at 1.5 to 0.13 at 1.9, and to 0.03 at 2.0.
 

@@ -262,13 +262,19 @@ s, seed 1, the pair and the one file agree within their CIs: chapter 4's
 `hit` 0.9995 against 0.9995 (5017 against 5035 turns), chapter 5's TTFT
 0.0186 ± 0.0033 s against 0.0175 ± 0.0008 s and its response 0.0650 ±
 0.0058 s against 0.0619 ± 0.0016 s (`serq run P --workload W --horizon
-2000`, the one file at 9a49115 without it). `replica.sq` at `--horizon 3000
---warmup 300`, seeds 1 to 12, is heavy-tailed in both: mean live is 17
-to 33 in most seeds, but two of the pair's end with a long entry queue
-(136 and 284) and one of the one file's (126), three more of which reach
-41 to 60. The medians of mean live are 26.0 (pair) and 27.4 (one file).
-Its earlier KV drop, before a last tool call, moves no statistic past
-that spread.
+2000`, the one file at 9a49115 without it). `replica.sq` is not stationary: its entry queue grows with the horizon,
+so it compares only at one horizon. Over seeds 1 to 12 the medians of mean
+live, one file against pair, are 16.9/16.8 at 1000 s, 25.9/24.7 at 3000 s
+(`--warmup 300`) and 261/269 at 20000 s, where fewer sessions end than
+arrive. Its earlier KV drop, before a last tool call where libqueuingsim
+drops after it, changes the model: an ended session's large prefix no
+longer evicts a live one under `evict by (waiting, size)`. Moving only
+the drop in the one file at 9a49115 (A, as it was; B, the drop before the
+last tool call), 12 seeds at 20000 s: the median `kv` evictions are 9946
+(A), 8038 (B) and 8766 (the pair), the median hit rate 0.806, 0.842 and
+0.831, the median TTFT 2.41 s (A) and 2.06 s (B); at `cap 20` evictions
+3574 and 2500, hit rate 0.936 and 0.951 (measured in the review of #649).
+Within the seeds' spread, but always that way.
 
 `make oracle-ir` and `make claims-ir` leave `tools/oracle/*.ir.json`,
 `tools/claims/*.ir.json` and the Lean files they generate unchanged, and

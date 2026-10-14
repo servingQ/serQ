@@ -1641,7 +1641,7 @@ file `examples/pairs.json` gives it, from `examples/workloads/`
 | Program | Deployment | Checked by |
 |---|---|---|
 | `single-turn/mg1.sq`, `single-turn/ps.sq`, `multi-turn/closed.sq` | M/G/1 FIFO, M/G/1-PS, M/M/1//N | a run against the closed form, by hand, in [getting started](getting-started.md) and the [tutorial](tutorial/01-a-queue.md); no test |
-| `multi-turn/replica.sq` | the paper's two-resource replica on the open-session scenario (`advance running decode first`; the server drops a session's KV after the request its workload sends as `final`) | — |
+| `multi-turn/replica.sq` | the paper's two-resource replica on the open-session scenario (`advance running decode first`; the server drops a session's KV after the request its workload sends as `final`, before a last tool call, where libqueuingsim drops it after: fewer evictions, a higher hit rate) | — |
 | `multi-turn/routing.sq` | four replicas, five routing policies | — |
 | `multi-turn/thunderagent.sq` | ThunderAgent's router in TR mode in front of two vLLM replicas, a fixed number of agents at once ([use case](use-cases/thunderagent.md)) | the source (ThunderAgent at 7ddc861), read; `tests/thunderagent.rs` against the router's default mode; no oracle |
 | `multi-turn/vllm.sq` | vLLM v1's engine under a multi-turn agent workload | its engine is the other vLLM workloads' (`tests/workloads.rs`) |

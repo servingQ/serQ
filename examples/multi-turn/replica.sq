@@ -11,7 +11,9 @@
 // on live sessions: examples/workloads/replica.sq. One difference from
 // `open_session_cfg`: a session's KV is dropped by the server after its last
 // request, so before a last tool call, where libqueuingsim drops it after.
-// Over 12 seeds the two agree within their spread (docs/design/paired-workload.md).
+// An ended session's prefix then evicts no live one: fewer evictions and a
+// higher hit rate, within the seeds' spread but always that way
+// (docs/design/paired-workload.md, Validation).
 
 let B = 8;           // batch cap (prefilling and decoding turns)
 let C = 6e5;         // KV pool, tokens

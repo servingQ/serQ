@@ -80,7 +80,10 @@ kv    793.4  30165.3  0.000    0.158  0.0000   49906         0         0        
 A hit rate of 0.9999, and the response time falls
 from 0.178 s to 0.063 s against chapter 3 — nearly a factor of three, from
 one clause. The pool is holding 30 165 tokens of cache against a capacity
-of 200 000, so nothing is ever evicted.
+of 200 000, so nothing is ever evicted. The five misses are no evictions:
+`K` and `cached` are sums of real-valued token counts, and in five turns
+the cached prefix reads short of `K` by a rounding error
+([#661](https://github.com/servingQ/serQ/issues/661)).
 
 ## Vary cache capacity
 
