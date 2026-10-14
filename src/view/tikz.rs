@@ -252,6 +252,14 @@ pub fn render(f: &Figure) -> String {
                 };
                 let _ = writeln!(s, "  \\draw[{opts}] {};", path.join(" -- "));
             }
+            Item::Dot { at, r } => {
+                let _ = writeln!(
+                    s,
+                    "  \\fill[seqline] {} circle ({}pt);",
+                    p(at.x, at.y),
+                    n(*r)
+                );
+            }
             Item::Text {
                 at,
                 text,

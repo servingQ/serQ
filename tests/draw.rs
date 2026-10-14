@@ -2146,3 +2146,56 @@ fn the_svg_names_stages_pools_and_roles() {
     assert!(svg.contains(r##"<g data-node="#1">"##));
     assert!(svg.contains(r##"data-role="flow" data-from="#0" data-to="#1""##));
 }
+
+/// The figure draws a pull and a push apart (`CStmt::Run::poster`): the
+/// word leads the copy's note, a dot on its bracket stands over the
+/// poster's NIC, and the bracket (and the arrow, across instances) names
+/// both. `llmd_nixl_pull.sq`'s decoder reads; `vllm_nixl_push.sq`'s
+/// prefiller writes. A `transfer on` written by hand names no poster.
+#[test]
+fn a_copy_shows_who_posts_it() {
+    use serq::view::figure::{CopyMark, Item};
+    let marks = |name: &str| -> (Vec<Option<CopyMark>>, Vec<Option<CopyMark>>, usize) {
+        let f = deployment::figure(&program(name));
+        let mut brackets = vec![];
+        let mut arrows = vec![];
+        let mut dots = 0;
+        for i in f.items {
+            match i {
+                Item::Box {
+                    style: BoxStyle::Flow,
+                    copy,
+                    ..
+                } => brackets.push(copy),
+                Item::Edge { copy: Some(c), .. } => arrows.push(Some(c)),
+                Item::Dot { .. } => dots += 1,
+                _ => {}
+            }
+        }
+        (brackets, arrows, dots)
+    };
+    let pull = CopyMark {
+        pull: true,
+        poster: "D.nic".into(),
+    };
+    assert_eq!(
+        marks("llmd_nixl_pull"),
+        (vec![Some(pull.clone())], vec![Some(pull)], 1)
+    );
+    assert!(texts("llmd_nixl_pull").contains(&"pull · P.kv[i] → D.kv[j]".to_string()));
+    // the push's two NICs are in no instance: a bracket and no arrow
+    let push = CopyMark {
+        pull: false,
+        poster: "P.nic".into(),
+    };
+    assert_eq!(marks("vllm_nixl_push"), (vec![Some(push)], vec![], 1));
+    assert!(texts("vllm_nixl_push").contains(&"push · latency (0.01)".to_string()));
+    let f = deployment::figure(&program("pd_two_fabrics"));
+    assert!(
+        !f.items.iter().any(|i| matches!(
+            i,
+            Item::Dot { .. } | Item::Box { copy: Some(_), .. } | Item::Edge { copy: Some(_), .. }
+        )),
+        "a transfer written by hand names no poster"
+    );
+}

@@ -133,6 +133,7 @@ fn ir_that_skips_the_linker_meets_its_checks() {
         also: vec![],
         share: None,
         latency: None,
+        poster: None,
     };
     refused(
         &|q| q.blocks[q.init].push(run_d.clone()),
@@ -218,8 +219,17 @@ fn ir_that_skips_the_linker_meets_its_checks() {
             also,
             share: None,
             latency: None,
+            poster: None,
         }
     };
+    let mut posted_d = run_d.clone();
+    if let CStmt::Run { poster, .. } = &mut posted_d {
+        *poster = Some(0);
+    }
+    refused(
+        &|q| q.blocks[q.session].insert(0, posted_d.clone()),
+        "a poster is one of the stages of a copy over several",
+    );
     let prefill_d = run_d_as(serq::ir::RunMode::Prefill, None);
     refused(
         &|q| q.blocks[q.session].insert(0, prefill_d.clone()),
@@ -922,4 +932,39 @@ fn a_validate_error_points_at_the_statement() {
         "{e}"
     );
     assert!(e.contains("11 |           load kv (cost(kv, 1));"), "{e}");
+}
+
+/// A KV relation's copy names its poster, the side whose worker starts it
+/// (`kvt.nixl_pull`: the reader's NIC, the run's `also`; `kvt.nixl_push`:
+/// the source's, its `stage`); a `transfer on` written by hand names none.
+#[test]
+fn a_relations_copy_names_its_poster() {
+    use serq::ir::CStmt;
+    let posters = |name: &str| -> Vec<Option<usize>> {
+        let path = serq::program_path(name);
+        let p = compile_source(&std::fs::read_to_string(&path).unwrap(), &short()).unwrap();
+        p.blocks
+            .iter()
+            .flatten()
+            .filter_map(|s| match s {
+                CStmt::Run { also, poster, .. } if !also.is_empty() => Some(*poster),
+                _ => None,
+            })
+            .collect()
+    };
+    let pull = posters("llmd_nixl_pull");
+    assert!(
+        !pull.is_empty() && pull.iter().all(|&k| k == Some(1)),
+        "{pull:?}"
+    );
+    let push = posters("vllm_nixl_push");
+    assert!(
+        !push.is_empty() && push.iter().all(|&k| k == Some(0)),
+        "{push:?}"
+    );
+    let by_hand = posters("pd_two_fabrics");
+    assert!(
+        !by_hand.is_empty() && by_hand.iter().all(Option::is_none),
+        "{by_hand:?}"
+    );
 }

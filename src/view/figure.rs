@@ -111,6 +111,24 @@ pub enum EdgeRole {
     Flow { from: String, to: String },
 }
 
+/// Who posts a copy over several stages (`CStmt::Run::poster`): the
+/// stage at the copy's head, where the bytes arrive, pulls; the one at its
+/// tail pushes. Written into the SVG (`data-copy`, `data-poster`) on the
+/// copy's bracket and arrow.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CopyMark {
+    pub pull: bool,
+    /// The poster's node (`D.nic`).
+    pub poster: String,
+}
+
+impl CopyMark {
+    /// `pull` or `push`.
+    pub fn word(&self) -> &'static str {
+        if self.pull { "pull" } else { "push" }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Anchor {
     Start,
@@ -172,6 +190,9 @@ pub enum Item {
         /// For a `Flow` bracket: the nodes one job holds at once (the SVG's
         /// `data-nodes`), between which it draws no arrow. Empty otherwise.
         nodes: Vec<String>,
+        /// For a `Flow` bracket around a copy whose poster the IR names:
+        /// who posts it.
+        copy: Option<CopyMark>,
     },
     /// A queueing station.
     Station {
@@ -204,7 +225,12 @@ pub enum Item {
         /// An arrival, a flow or an exit, which the SVG writer marks
         /// (`data-role`, `data-from`, `data-to`); `None` for a relation.
         role: Option<EdgeRole>,
+        /// For the arrow of a copy whose poster the IR names: who posts it.
+        copy: Option<CopyMark>,
     },
+    /// A filled dot: the poster of a copy, on its bracket over the
+    /// poster's station.
+    Dot { at: Point, r: f64 },
     Text {
         at: Point,
         text: String,
@@ -305,16 +331,19 @@ impl Figure {
             style,
             round,
             nodes: vec![],
+            copy: None,
         });
     }
 
-    /// The bracket around the stations one job holds at once, `nodes`.
-    pub fn bracket(&mut self, rect: Rect, nodes: Vec<String>) {
+    /// The bracket around the stations one job holds at once, `nodes`,
+    /// and who posts it when it is a copy that names its poster.
+    pub fn bracket(&mut self, rect: Rect, nodes: Vec<String>, copy: Option<CopyMark>) {
         self.push(Item::Box {
             rect,
             style: BoxStyle::Flow,
             round: 4.0,
             nodes,
+            copy,
         });
     }
 
@@ -324,6 +353,7 @@ impl Figure {
             style,
             arrow: true,
             role: None,
+            copy: None,
         });
     }
 
@@ -334,6 +364,7 @@ impl Figure {
             style: EdgeStyle::Flow,
             arrow: true,
             role: Some(EdgeRole::Arrival { to }),
+            copy: None,
         });
     }
 
@@ -344,6 +375,7 @@ impl Figure {
             style: EdgeStyle::Flow,
             arrow: true,
             role: Some(EdgeRole::Exit { from }),
+            copy: None,
         });
     }
 
@@ -355,6 +387,18 @@ impl Figure {
             style,
             arrow: true,
             role: Some(EdgeRole::Flow { from, to }),
+            copy: None,
+        });
+    }
+
+    /// The arrow of a copy from node `from` to node `to`, and who posts it.
+    pub fn copy_flow(&mut self, pts: Vec<Point>, from: String, to: String, copy: Option<CopyMark>) {
+        self.push(Item::Edge {
+            pts,
+            style: EdgeStyle::Flow,
+            arrow: true,
+            role: Some(EdgeRole::Flow { from, to }),
+            copy,
         });
     }
 
@@ -394,6 +438,7 @@ impl Figure {
                 | Item::Queue { rect, .. }
                 | Item::Drum { rect, .. } => visit(pt(rect.right(), rect.bottom())),
                 Item::Edge { pts, .. } => pts.iter().for_each(|p| visit(*p)),
+                Item::Dot { at, r } => visit(pt(at.x + r, at.y + r)),
                 Item::Text {
                     at,
                     text,

@@ -2398,6 +2398,7 @@ impl Linker<'_> {
                         also: vec![],
                         share: None,
                         latency: None,
+                        poster: None,
                     }],
                     ConnectorKind::Relation(None) => {
                         return Err(LinkError::new(format!(
@@ -2440,6 +2441,9 @@ impl Linker<'_> {
                             also: vec![nic],
                             share: Some(rel.share),
                             latency: rel.latency.clone(),
+                            // the source's NIC is the run's stage, the
+                            // reader's its `also`
+                            poster: Some(if rel.push { 0 } else { 1 }),
                         });
                         out.push(Stmt::Release(src(rel.leased.clone())));
                         out
@@ -2506,6 +2510,7 @@ impl Linker<'_> {
                             also: vec![],
                             share: None,
                             latency: None,
+                            poster: None,
                         },
                         Stmt::Load(kv.clone(), Expr::cost(one(kv), new)),
                     ],
@@ -2700,6 +2705,7 @@ impl Linker<'_> {
                     also,
                     share,
                     latency,
+                    poster,
                 } => {
                     let stage = self.stage_ref(stage)?;
                     let also = also
@@ -2714,6 +2720,7 @@ impl Linker<'_> {
                         also,
                         share: *share,
                         latency: latency.as_ref().map(|l| self.expr(l)).transpose()?,
+                        poster: *poster,
                     }
                 }
                 Stmt::Branch(p, a, b) => {

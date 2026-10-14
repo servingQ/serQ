@@ -14,6 +14,7 @@
     .rail { stroke:#b6bfcc }
     .flow { stroke:#b6bfcc }
     .back { stroke:#b6bfcc }
+    .poster { fill:#b6bfcc }
     .relation { stroke:#9aa4b2 }
   }
 </style>

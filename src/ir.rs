@@ -753,6 +753,14 @@ pub enum CStmt {
         /// ends. Read at the run's start, like `work`; absent: no wait.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         latency: Option<CExpr>,
+        /// Which of the run's stages (`stage` is 0, `also[k]` is `k + 1`)
+        /// posts the copy, for a KV relation's copy: the reader's NIC in a
+        /// NIXL pull, the source's in a push (`kvt.nixl_pull`,
+        /// `kvt.nixl_push`). It says who starts the copy, which the figure
+        /// draws; the run is the same either way. Absent: no side is named
+        /// (a `transfer on` written by hand).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        poster: Option<usize>,
     },
     Branch(CExpr, BlockId, BlockId),
     Loop(BlockId),
@@ -1592,11 +1600,21 @@ impl Program {
                     growing,
                     also,
                     share,
+                    poster,
                     ..
                 } = st
                 else {
                     continue;
                 };
+                if poster.is_some_and(|k| k > also.len()) || (poster.is_some() && also.is_empty()) {
+                    return Err(format!(
+                        "a run on `{}` names its poster as stage {} of {}: a poster is one of \
+                         the stages of a copy over several",
+                        self.stages[stage.base].name,
+                        poster.unwrap_or(0),
+                        1 + also.len()
+                    ));
+                }
                 if also.is_empty() && share.is_some() {
                     return Err(format!(
                         "a run on the one stage `{}` names a `share`: a policy divides the stages \

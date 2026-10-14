@@ -609,6 +609,9 @@ pub enum Stmt {
         /// The wait before the work starts, in seconds: a link's `serve …
         /// latency`, a relation's `latency = …` (`CStmt::Run::latency`).
         latency: Option<Expr>,
+        /// Which of the run's stages posts the copy, for a KV relation's
+        /// (`CStmt::Run::poster`); `None` for a run written in the text.
+        poster: Option<usize>,
     },
     Branch(Expr, Vec<Stmt>, Vec<Stmt>),
     Loop(Vec<Stmt>),
