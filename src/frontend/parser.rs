@@ -227,6 +227,8 @@ struct Parser {
     /// server's `end` is refused there.
     holds_open: usize,
     forks_open: usize,
+    /// Where each declaration is written, when outlining (`serq::outline`).
+    outline: Option<crate::frontend::outline::Recorder>,
 }
 
 /// What a declaration declares.
@@ -618,6 +620,15 @@ pub fn parse_with(src: &str, defs: &[(String, String)], lets: &[String]) -> PRes
         });
     }
     Ok(prog)
+}
+
+/// Parse, recording where each declaration is written (`serq::outline`).
+pub fn outline(src: &str) -> PResult<crate::frontend::outline::Outline> {
+    let toks = lex(src)?;
+    let mut p = Parser::new(toks);
+    p.outline = Some(crate::frontend::outline::Recorder::new(src));
+    p.program()?;
+    Ok(p.outline.take().expect("set above").out)
 }
 
 /// Parse an instance file (`--instance`): the values of a program's
@@ -1603,6 +1614,7 @@ impl Parser {
             takings: vec![],
             holds_open: 0,
             forks_open: 0,
+            outline: None,
         }
     }
 
@@ -1855,7 +1867,10 @@ impl Parser {
     fn program(&mut self) -> PResult<Program> {
         let mut prog = Program::default();
         let mut in_main = false;
+        // `fn` and the `{` of `fn main() {`, for the outline
+        let mut main_at = (0, 0);
         while *self.peek() != Tok::Eof {
+            let item_at = self.pos;
             if self.eat_kw("fn") {
                 if in_main || prog.has_main {
                     return self.err("a program has exactly one `fn main()`; nested or duplicate entry points are not allowed");
@@ -1868,6 +1883,7 @@ impl Parser {
                 self.expect(&Tok::LParen)?;
                 self.expect(&Tok::RParen)?;
                 self.expect(&Tok::LBrace)?;
+                main_at = (item_at, self.pos - 1);
                 prog.has_main = true;
                 in_main = true;
                 continue;
@@ -1875,6 +1891,9 @@ impl Parser {
             if in_main && *self.peek() == Tok::RBrace {
                 self.advance();
                 in_main = false;
+                if let Some(r) = self.outline.as_mut() {
+                    r.main(&self.toks, main_at.0, main_at.1, self.pos - 1);
+                }
                 continue;
             }
             if !in_main && !self.is_kw("use") && !self.is_kw("def") && !self.is_kw("let") {
@@ -1885,6 +1904,9 @@ impl Parser {
             }
             if self.is_kw("use") {
                 self.use_std()?;
+                if let Some(r) = self.outline.as_mut() {
+                    r.item(&self.toks, item_at, self.pos - 1);
+                }
                 continue;
             }
             if self.eat_kw("let") {
@@ -2021,6 +2043,9 @@ impl Parser {
                 return self.err("execution settings do not belong in a model\nhelp: supply --horizon T (and --warmup, --seed, --arrivals) or --instance FILE; `run STAGE (work);` belongs in a session or server");
             } else {
                 return self.err(format!("unexpected {} at top level", self.peek()));
+            }
+            if let Some(r) = self.outline.as_mut() {
+                r.item(&self.toks, item_at, self.pos - 1);
             }
         }
         if in_main {
@@ -3867,9 +3892,11 @@ impl Parser {
         self.declare(at + 1, &name, Kind::Queue)?;
         // `Q[n]` is a family whatever `n`, called by index, and its pools and
         // stages are arrays; `Q` is one queue
+        let bracket = self.pos;
         let array = self.array_count()?;
         let family = array.is_some();
         let count = array.unwrap_or(1);
+        let brackets = family.then(|| (bracket, self.pos - 1));
         let mut roles = vec![];
         if *self.peek() == Tok::Colon {
             self.advance();
@@ -3919,7 +3946,14 @@ impl Parser {
         });
         let qi = self.queues.len() - 1;
         self.expect(&Tok::LBrace)?;
+        let open = self.pos - 1;
+        // the member being read, recorded once the next one starts
+        let mut member: Option<usize> = None;
         while *self.peek() != Tok::RBrace {
+            if let (Some(m), Some(r)) = (member, self.outline.as_mut()) {
+                r.member(&self.toks, m, self.pos - 1);
+            }
+            member = Some(self.pos);
             // pools and devices, then the stage, then the entries: each reads
             // what is above it; a pool on a device or the engine may follow
             // the engine
@@ -4116,7 +4150,13 @@ impl Parser {
                 ));
             }
         }
+        if let (Some(m), Some(r)) = (member, self.outline.as_mut()) {
+            r.member(&self.toks, m, self.pos - 1);
+        }
         self.expect(&Tok::RBrace)?;
+        if let Some(r) = self.outline.as_mut() {
+            r.queue(&self.toks, at, &name, &roles, brackets, open, self.pos - 1);
+        }
         // a link's latency: the wait of every transfer over the link
         // (`Run.latency`), not a stage
         if self.queues[qi].latency.is_some() && self.queues[qi].entry("transfer", false).is_some() {
@@ -4823,6 +4863,7 @@ impl Parser {
         let at = self.pos;
         let span = Some(self.span());
         let name = self.ident()?;
+        let bracket = self.pos;
         let index = if *self.peek() == Tok::LBracket {
             self.advance();
             let e = self.expr()?;
@@ -4831,6 +4872,7 @@ impl Parser {
         } else {
             None
         };
+        let brackets = index.is_some().then(|| (bracket, self.pos - 1));
         if *self.peek() != Tok::Dot {
             return self.err_at(
                 at,
@@ -4874,6 +4916,26 @@ impl Parser {
             None
         };
         self.expect(&Tok::Semi)?;
+        // a call a `def`'s use expanded into is written in the `def`, not here
+        let expanded = self.expanded.iter().any(|e| e.start <= at && at < e.end);
+        let (block, owner) = match self.in_queue {
+            Some(qi) if self.entry_gateway => ("route", Some(self.queues[qi].name.as_str())),
+            Some(qi) => ("entry", Some(self.queues[qi].name.as_str())),
+            None => ("server", None),
+        };
+        if let (false, Some(r)) = (expanded, self.outline.as_mut()) {
+            let from_name = from.as_ref().map(|r| r.name.as_str());
+            r.call(
+                &self.toks,
+                at,
+                self.pos - 1,
+                brackets,
+                &verb,
+                from_name,
+                block,
+                owner,
+            );
+        }
         Ok(Stmt::Call {
             queue: Ref { span, name, index },
             verb,

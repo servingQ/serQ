@@ -79,6 +79,14 @@ fn finish(prog: frontend::ast::Program, src: &str, ov: &Overrides) -> Result<ir:
     Ok(p)
 }
 
+/// Where each declaration, relation and entry call of program text is
+/// written, as byte ranges (`frontend::outline`): for an editor that changes
+/// the text in place. It parses and does not link, so a program with a link
+/// error has an outline; a parse error is the diagnostic `check` prints.
+pub fn outline(src: &str) -> Result<frontend::outline::Outline, String> {
+    frontend::parser::outline(src).map_err(|e| e.render(src))
+}
+
 /// Parse and link only (static checks).
 pub fn check_source(src: &str, ov: &Overrides) -> Result<Linked, String> {
     compile_source(src, ov)
