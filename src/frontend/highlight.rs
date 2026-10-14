@@ -15,11 +15,14 @@
 //! cover `parser::KEYWORDS`. The docs' Pygments lexer
 //! (`docs/hooks/serq_lexer.py`) cannot read them and is held equal to them
 //! by `tests/docs_lexer.rs`.
+//!
+//! `vocabulary` is the same words read the other way, for completing them:
+//! each word the language gives, with the role it is coloured by.
 
 use crate::frontend::lexer::{Tok, Token, lex_partial};
-use crate::frontend::link::{AGGREGATES, BUILTIN_ATTRS, FOLDED, supplied};
+use crate::frontend::link::{AGGREGATES, BUILTIN_ATTRS, CONTEXT_VARS, FOLDED, INF, supplied};
 use crate::frontend::parser::ENGINE_VALUES;
-use crate::ir::Fun;
+use crate::ir::{DistKind, Fun};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Role {
@@ -341,6 +344,50 @@ fn roles(toks: &[Token]) -> Vec<Role> {
     out
 }
 
+/// Every word the language gives a program, once, with the role it is
+/// coloured by: the keywords, what a program reads (a context variable,
+/// `inf`, an engine's value as `running.count`, a function, a folded call,
+/// a built-in attribute, an aggregate), and a draw as `~exp`. Arithmetic
+/// (`min`, `ln`) is a `Name`. For an editor to complete words from; it
+/// reads the tables, so a word the language gains is offered with it.
+pub fn vocabulary() -> Vec<(Role, String)> {
+    let mut out: Vec<(Role, String)> = Vec::new();
+    let mut add = |role: Role, w: &str| {
+        if !out.iter().any(|(_, x)| x == w) {
+            out.push((role, w.to_string()));
+        }
+    };
+    for w in STRUCTURE {
+        add(Role::Structure, w);
+    }
+    for w in STATEMENTS {
+        add(Role::Statement, w);
+    }
+    for w in OPTIONS {
+        add(Role::Option, w);
+    }
+    for (w, _) in CONTEXT_VARS {
+        add(Role::Observable, w);
+    }
+    add(Role::Observable, INF);
+    for (w, ..) in ENGINE_VALUES {
+        add(Role::Observable, w);
+    }
+    for w in Fun::names() {
+        add(word_role(w, true), w);
+    }
+    for w in FOLDED.into_iter().chain(BUILTIN_ATTRS) {
+        add(Role::Observable, w);
+    }
+    for (w, _) in AGGREGATES {
+        add(Role::Observable, w);
+    }
+    for d in DistKind::names() {
+        add(Role::Random, &format!("~{d}"));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -432,6 +479,29 @@ mod tests {
         let r = roles_of("let a = 1; let s = \"open");
         assert_eq!(r[0].0, Role::Structure);
         assert_eq!(r.last().unwrap(), &(Role::Unlexed, "\"open".to_string()));
+    }
+
+    /// Each word is offered with the role it is coloured by, written as a
+    /// call (which an aggregate needs to be one); every keyword that is
+    /// coloured is offered, and a distribution as a draw. A keyword left
+    /// plain (`budget`, kept to say what replaced it) is not.
+    #[test]
+    fn the_vocabulary_is_coloured_as_offered() {
+        let v = vocabulary();
+        let offered = |w: &str| v.iter().any(|(_, x)| x == w);
+        for (role, w) in &v {
+            assert_eq!(highlight(&format!("{w}(x)"))[0].0, *role, "{w}");
+        }
+        for k in crate::frontend::parser::KEYWORDS {
+            if highlight(&format!("{k}(x)"))[0].0 != Role::Name {
+                assert!(offered(k), "{k} is coloured, not offered");
+            }
+        }
+        for d in DistKind::names() {
+            assert!(offered(&format!("~{d}")), "~{d}");
+        }
+        assert!(!offered("budget"));
+        assert!(v.iter().any(|(r, w)| *r == Role::Name && w == "min"));
     }
 
     /// Every example reads whole, and is its pieces again.
