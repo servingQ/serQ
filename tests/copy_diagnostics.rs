@@ -5,19 +5,31 @@
 //! refusal: the reader's `join` waits for a leg only where one is forked
 //! (#653 refused it, from the `join` the linker added).
 
-use serq::{Overrides, check_source, run_source};
+use serq::Overrides;
+use std::path::{Path, PathBuf};
 
 mod common;
 
-fn example(path: &str) -> String {
-    std::fs::read_to_string(path).unwrap()
+/// An example's deployment, and the workload file `examples/pairs.json`
+/// pairs it with.
+fn example(path: &str) -> (String, PathBuf) {
+    let workload = serq::paired_workload(Path::new(path)).expect("a pair");
+    (std::fs::read_to_string(path).unwrap(), workload)
 }
 
-fn refused(src: &str) -> String {
-    match check_source(src, &Overrides::default()) {
+fn refused(src: &str, workload: &Path) -> String {
+    let w = std::fs::read_to_string(workload).unwrap();
+    match common::inspected(src, &w, &Overrides::default()) {
         Err(e) => e.to_string(),
         Ok(_) => panic!("accepted:\n{src}"),
     }
+}
+
+/// Run a deployment under the workload file `workload`, its trace read
+/// beside that file.
+fn run(src: &str, workload: &Path, ov: &Overrides) -> serq::Report {
+    let w = std::fs::read_to_string(workload).unwrap();
+    serq::run_paired(src, &w, common::NAMES, ov, workload.parent()).unwrap()
 }
 
 /// `vllm_nixl_push.sq` with its reader's connector taken out.
@@ -30,7 +42,7 @@ const CONNECTOR: &str =
 /// reaches is still written.
 #[test]
 fn a_push_dispatched_in_order_runs_as_concurrent_0() {
-    let src = example("examples/pd-disaggregation/vllm_nixl_push.sq");
+    let (src, workload) = example("examples/pd-disaggregation/vllm_nixl_push.sq");
     let forked = "      if (concurrent) {
         fork { P.prefill (prompt); }     // asyncio.create_task: the prefill leg runs beside
       } else {
@@ -40,9 +52,8 @@ fn a_push_dispatched_in_order_runs_as_concurrent_0() {
     assert!(src.contains(forked) && src.contains(one));
     let in_order = src.replace(forked, "      P.prefill (prompt);");
     let ov = common::horizon(300.0);
-    let base = Some(std::path::Path::new("examples/pd-disaggregation"));
-    let unforked = run_source(&in_order, &ov, base).unwrap();
-    let sequential = run_source(&src.replace(one, "let concurrent = 0;"), &ov, base).unwrap();
+    let unforked = run(&in_order, &workload, &ov);
+    let sequential = run(&src.replace(one, "let concurrent = 0;"), &workload, &ov);
     assert!(unforked.stages_named("D").iter().any(|d| d.completed > 0));
     assert_eq!(unforked.text(), sequential.text());
 }
@@ -78,19 +89,20 @@ fn a_push_read_by_transfer_without_a_fork_runs() {
         }
       }
       use \"std/kvt\"; use \"std/share\"; kvt.nixl_push (P, D, latency = x0, share = share.maxmin);
-      workload { arrive batch(1); init { set prompt = 32; set o = 4; set i = 1; set j = 0; } send (prompt, o, i, j); session { turn; end; } } server (prompt, hidden o, i, j) { gw.route(); }
+      server (prompt, hidden o, i, j) { gw.route(); }
       ",
     );
-    let r = run_source(&src, &common::horizon(100.0), None).unwrap();
+    let workload = "workload { arrive batch(1); init { set prompt = 32; set o = 4; set i = 1; set j = 0; } send (prompt, o, i, j); session { turn; end; } }";
+    let r = common::run(&src, workload, &common::horizon(100.0)).unwrap();
     assert!(r.text().contains("response"), "{}", r.text());
 }
 
 #[test]
 fn a_push_whose_reader_has_no_connector_names_the_connector() {
-    let src = example("examples/pd-disaggregation/vllm_nixl_push.sq");
+    let (src, workload) = example("examples/pd-disaggregation/vllm_nixl_push.sq");
     let parked = "      observe parked = D.load_done - D.admitted;   // how long the decoder's blocks waited for the KV\n";
     assert!(src.contains(CONNECTOR) && src.contains(parked));
-    let e = refused(&src.replace(CONNECTOR, "").replace(parked, ""));
+    let e = refused(&src.replace(CONNECTOR, "").replace(parked, ""), &workload);
     // not the `fork` the program wrote, which the missing `join` left alone
     assert!(!e.contains("never joins"), "{e}");
     assert!(e.contains("`D`'s engine has no `connector P`"), "{e}");
@@ -102,10 +114,10 @@ fn a_push_whose_reader_has_no_connector_names_the_connector() {
 
 #[test]
 fn a_pull_whose_reader_has_no_connector_names_the_connector() {
-    let src = example("examples/pd-disaggregation/llmd_nixl_pull.sq");
+    let (src, workload) = example("examples/pd-disaggregation/llmd_nixl_pull.sq");
     let lease = "        observe lease = D.load_done - t1;\n";
     assert!(src.contains(CONNECTOR) && src.contains(lease));
-    let e = refused(&src.replace(CONNECTOR, "").replace(lease, ""));
+    let e = refused(&src.replace(CONNECTOR, "").replace(lease, ""), &workload);
     // not "declare `kvt.nixl_pull`", which the program declares
     assert!(!e.contains("carries no copy"), "{e}");
     assert!(
