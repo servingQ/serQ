@@ -115,7 +115,7 @@ pub struct QueueDecl {
     /// Names `mark`ed in some entry.
     pub marks: Vec<String>,
     /// A link's `serve … latency x;`: every transfer over it first waits
-    /// `x` at the generated delay stage `Q.latency`.
+    /// `x` (the transfer run's `latency`).
     pub latency: Option<Expr>,
     /// `nic kind;`: the queue's NIC, the stage `Q.nic`.
     pub nic: bool,
@@ -130,8 +130,8 @@ pub struct QueueDecl {
 pub struct Takes {
     /// The queue the entries take the KV `from`.
     pub source: String,
-    /// The wait before each copy (the constant's name), at the delay stage
-    /// `X.nic.latency` of the side that posts it: the reader in a pull, the
+    /// The wait before each copy (the constant's name), the copy's run's
+    /// `latency`: the side that posts it waits, the reader in a pull, the
     /// source in a push.
     pub latency: Option<Expr>,
     pub push: bool,
@@ -433,8 +433,8 @@ impl Ctx<'_> {
         let Some(Takes {
             source,
             latency,
-            push,
             share,
+            ..
         }) = &self.q.takes
         else {
             return err(
@@ -460,27 +460,8 @@ impl Ctx<'_> {
             index: self.index.clone().map(Box::new),
         };
         let mut out = vec![];
-        if let Some(l) = latency {
-            // the side that posts the copy waits: the reader's worker posts
-            // a READ, the source's a WRITE
-            let stage = if *push {
-                Ref {
-                    span: Some(self.at),
-                    name: format!("{source}.nic.latency"),
-                    index: src.index.clone(),
-                }
-            } else {
-                own(format!("{}.nic.latency", self.q.name))
-            };
-            out.push(Stmt::Run {
-                stage: stage.clone(),
-                mode: crate::ir::RunMode::Plain,
-                work: Expr::cost(std::slice::from_ref(&stage), l.clone()),
-                growing: None,
-                also: vec![],
-                share: None,
-            });
-        }
+        // the side that posts the copy waits before it: the reader's worker
+        // posts a READ, the source's a WRITE; the wait is the copy's run's
         out.push(Stmt::Run {
             stage: Ref {
                 span: Some(self.at),
@@ -502,6 +483,7 @@ impl Ctx<'_> {
             growing: None,
             also: vec![own(format!("{}.nic", self.q.name))],
             share: Some(*share),
+            latency: latency.clone(),
         });
         Ok(out)
     }
@@ -571,6 +553,7 @@ impl Ctx<'_> {
                 growing,
                 also,
                 share,
+                latency,
             } => Stmt::Run {
                 stage: self.reference(stage)?,
                 mode: *mode,
@@ -581,6 +564,7 @@ impl Ctx<'_> {
                     .map(|r| self.reference(r))
                     .collect::<Result<_, _>>()?,
                 share: *share,
+                latency: latency.as_ref().map(|l| self.expr(l)).transpose()?,
             },
             Stmt::Branch(p, a, b) => Stmt::Branch(self.expr(p)?, self.stmts(a)?, self.stmts(b)?),
             Stmt::Loop(b) => Stmt::Loop(self.stmts(b)?),

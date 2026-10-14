@@ -19,9 +19,11 @@ kvt.nixl_push (SOURCE, READER, latency = x, share = POLICY);
 NIXL's two modes of one copy between two queues with a `nic`, declared
 above the call. `kvt.nixl_pull` is the *pull relation*: the KV goes from
 `SOURCE` to `READER`, and the reader's worker starts each read, waiting
-`x` before it (`READER.nic.latency`). `kvt.nixl_push` is the same copy
+`x` before it. `kvt.nixl_push` is the same copy
 written by the source (NIXL push): the source's worker posts the write
-and waits `x` before it (`SOURCE.nic.latency`). In both, an entry of the
+and waits `x` before it. In both, the wait is the copy's run's `latency`,
+at both NICs and taking none of their bandwidth, and the stage report
+counts it as the run's wait. An entry of the
 reader called `from SOURCE[i]` reads with a `transfer` without `on`,
 over both NICs.
 

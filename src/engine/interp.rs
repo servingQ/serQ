@@ -41,6 +41,13 @@ enum Ev {
         job: u64,
         epoch: u64,
     },
+    /// A run's `latency` is over: its job, at `stage` (the first of a
+    /// flow's) since the run began, starts its work. A job gone meanwhile
+    /// (its session ended) is not there, and the event passes.
+    Start {
+        stage: usize,
+        job: u64,
+    },
     IterEnd {
         stage: usize,
         epoch: u64,
@@ -1300,6 +1307,7 @@ impl<'p> Interp<'p> {
                 self.spawn();
             }
             Ev::Finish { stage, job, epoch } => self.on_finish(stage, job, epoch),
+            Ev::Start { stage, job } => self.on_start(stage, job),
             Ev::IterEnd { stage, epoch } => self.on_iter_end(stage, epoch),
             Ev::LeaseEnd { sid, serial, id } => {
                 // a leg's lease has passed to its session when the leg ended
@@ -1553,8 +1561,9 @@ impl<'p> Interp<'p> {
                         .sum::<f64>()
                         / cap
                 }
+                // a job in its run's wait is present, not served
                 _ => {
-                    if n > 0.0 {
+                    if st.jobs.values().any(|j| j.started.is_some()) {
                         1.0
                     } else {
                         0.0
@@ -2402,6 +2411,7 @@ impl<'p> Interp<'p> {
                     work,
                     growing,
                     also,
+                    latency,
                     ..
                 } => {
                     let st = self.session_index(stage, sid);
@@ -2413,19 +2423,22 @@ impl<'p> Interp<'p> {
                     };
                     let what = format!("run {}{m}", self.p.stages[st].name);
                     let w = self.amount(work, sid, &what);
+                    let wait = latency
+                        .as_ref()
+                        .map_or(0.0, |l| self.amount(l, sid, &format!("{what} latency")));
                     if matches!(self.stages[st].kind, Kind::Shared { .. }) {
                         let mut stages = vec![st];
                         for r in also {
                             stages.push(self.session_index(r, sid));
                         }
-                        self.start_flow(stages, Some(sid), w);
+                        self.start_flow(stages, Some(sid), w, wait);
                         return;
                     }
                     let g = growing.as_ref().map(|r| self.session_index(r, sid));
                     if *mode == RunMode::Decode {
                         self.decode_starts(sid);
                     }
-                    self.start_job(st, Some(sid), w, *mode, g);
+                    self.start_job(st, Some(sid), w, *mode, g, wait);
                     return;
                 }
             }
@@ -2669,7 +2682,7 @@ impl<'p> Interp<'p> {
             Phase::Admitted | Phase::Loading | Phase::Waiting if r.known > 0.0 => {
                 let work = r.known - self.request_pos(sid);
                 self.sessions[sid].req.as_mut().unwrap().phase = Phase::Prefill;
-                self.start_job(r.stage, Some(sid), work, RunMode::Prefill, grow);
+                self.start_job(r.stage, Some(sid), work, RunMode::Prefill, grow, 0.0);
                 return false;
             }
             // nothing to prefill: it decodes from its first iteration
@@ -2714,7 +2727,7 @@ impl<'p> Interp<'p> {
         if work > 0.0 {
             self.decode_starts(sid);
         }
-        self.start_job(stage, Some(sid), work, RunMode::Decode, grow);
+        self.start_job(stage, Some(sid), work, RunMode::Decode, grow, 0.0);
         false
     }
 
@@ -3436,7 +3449,7 @@ impl<'p> Interp<'p> {
         );
         self.pools[to].cached += added;
         self.pools[pl].spills += 1;
-        self.start_job(sp.via, None, work, RunMode::Plain, None);
+        self.start_job(sp.via, None, work, RunMode::Plain, None, 0.0);
     }
 
     /// A preempted or ended hold gives everything back at once.
@@ -4289,6 +4302,8 @@ impl<'p> Interp<'p> {
 
     // -------------------------------------------------------- stages ----
 
+    /// A job at stage `st`: it waits `wait` seconds there first, present
+    /// and taking no capacity (a run's `latency`), then its work starts.
     fn start_job(
         &mut self,
         st: usize,
@@ -4296,11 +4311,12 @@ impl<'p> Interp<'p> {
         work: f64,
         mode: RunMode,
         growing: Option<usize>,
+        wait: f64,
     ) {
         let id = self.next_job;
         self.next_job += 1;
         let now = self.now;
-        if work <= 0.0 {
+        if work <= 0.0 && wait <= 0.0 {
             // nothing to do: the run completes at once (a decode of zero
             // tokens, a transfer of zero bytes)
             if let Some(sid) = owner {
@@ -4311,7 +4327,7 @@ impl<'p> Interp<'p> {
         }
         if matches!(self.stages[st].kind, Kind::Shared { .. }) {
             self.next_job -= 1;
-            self.start_flow(vec![st], owner, work);
+            self.start_flow(vec![st], owner, work, wait);
             return;
         }
         if let Some(sid) = owner {
@@ -4329,18 +4345,38 @@ impl<'p> Interp<'p> {
                 .expect("a growing run is inside a hold of its pool");
             (pl, self.sessions[sid].holds[hi].pools[k].pos + work)
         });
+        self.stages[st].jobs.insert(
+            id,
+            Job {
+                owner,
+                work,
+                mode,
+                growing,
+                enqueued: now,
+                started: None,
+            },
+        );
+        if wait > 0.0 {
+            self.at(now + wait, Ev::Start { stage: st, job: id });
+            return;
+        }
+        self.begin_job(st, id);
+    }
+
+    /// The work of job `id`, in `st`'s jobs since its run began, starts
+    /// now: it joins the stage's queue, its share or its residents. Work of
+    /// none (a transfer of zero bytes after its wait) is done at once.
+    fn begin_job(&mut self, st: usize, id: u64) {
+        let now = self.now;
         let stage = &mut self.stages[st];
-        let job = Job {
-            owner,
-            work,
-            mode,
-            growing,
-            enqueued: now,
-            started: None,
-        };
+        let work = stage.jobs[&id].work;
+        if work <= 0.0 {
+            let job = stage.jobs.remove(&id).unwrap();
+            self.job_done(st, job);
+            return;
+        }
         match &mut stage.kind {
             Kind::Fifo { queue, .. } => {
-                stage.jobs.insert(id, job);
                 queue.push_back(id);
                 self.fifo_fill(st);
             }
@@ -4355,17 +4391,14 @@ impl<'p> Interp<'p> {
                 *v += *rate * (now - *v_last);
                 *v_last = now;
                 let tag = *v + work;
-                let mut job = job;
+                let job = stage.jobs.get_mut(&id).unwrap();
                 job.work = tag;
                 job.started = Some(now);
-                stage.jobs.insert(id, job);
                 set.insert((OrdF64(tag), id));
                 *dirty = true;
             }
             Kind::Delay => {
-                let mut job = job;
-                job.started = Some(now);
-                stage.jobs.insert(id, job);
+                stage.jobs.get_mut(&id).unwrap().started = Some(now);
                 self.at(
                     now + work,
                     Ev::Finish {
@@ -4377,9 +4410,9 @@ impl<'p> Interp<'p> {
             }
             Kind::Shared { .. } => unreachable!("`start_job` hands a shared stage to `start_flow`"),
             Kind::Step { residents, .. } => {
-                let mut job = job;
+                let job = stage.jobs.get_mut(&id).unwrap();
                 job.started = Some(now);
-                stage.jobs.insert(id, job);
+                let owner = job.owner;
                 // residents in order of their sessions' hold admissions
                 let key = owner.map_or(u64::MAX, |sid| self.sessions[sid].adm_seq);
                 let sessions = &self.sessions;
@@ -4393,15 +4426,44 @@ impl<'p> Interp<'p> {
         }
     }
 
+    /// A run's wait is over: the job starts its work, if it is still there.
+    fn on_start(&mut self, st: usize, id: u64) {
+        if !self.stages[st].jobs.contains_key(&id) {
+            return;
+        }
+        if matches!(self.stages[st].kind, Kind::Shared { .. }) {
+            self.flows_advance();
+            let now = self.now;
+            let Some(f) = self.flows.get(&id) else {
+                return;
+            };
+            let stages = f.stages.clone();
+            for &s in &stages {
+                if let Some(job) = self.stages[s].jobs.get_mut(&id) {
+                    job.started = Some(now);
+                }
+            }
+            if f.remaining <= 0.0 {
+                self.flow_done(id);
+                return;
+            }
+            self.flows_touched.extend(&stages);
+            self.flows_dirty = true;
+            return;
+        }
+        self.begin_job(st, id);
+    }
+
     // ------------------------------------------------ shared stages ----
 
     /// A job on shared stages: it holds every one of `stages` until its work
-    /// is done at the rate the program's `share` gives it.
-    fn start_flow(&mut self, stages: Vec<usize>, owner: Option<usize>, work: f64) {
+    /// is done at the rate the program's `share` gives it, after `wait`
+    /// seconds at them taking no share (a run's `latency`).
+    fn start_flow(&mut self, stages: Vec<usize>, owner: Option<usize>, work: f64, wait: f64) {
         let id = self.next_job;
         self.next_job += 1;
         let now = self.now;
-        if work <= 0.0 {
+        if work <= 0.0 && wait <= 0.0 {
             if let Some(sid) = owner {
                 self.sessions[sid].status = Status::Ready;
                 self.ready.push_back(sid);
@@ -4417,6 +4479,7 @@ impl<'p> Interp<'p> {
             });
         }
         self.flows_advance();
+        let waiting = wait > 0.0;
         for (k, &s) in stages.iter().enumerate() {
             self.stages[s].jobs.insert(
                 id,
@@ -4427,9 +4490,28 @@ impl<'p> Interp<'p> {
                     mode: RunMode::Plain,
                     growing: None,
                     enqueued: now,
-                    started: Some(now),
+                    started: (!waiting).then_some(now),
                 },
             );
+        }
+        if waiting {
+            // present at its stages, at rate 0 until its wait is over
+            self.at(
+                now + wait,
+                Ev::Start {
+                    stage: stages[0],
+                    job: id,
+                },
+            );
+            self.flows.insert(
+                id,
+                Flow {
+                    stages,
+                    remaining: work,
+                    rate: 0.0,
+                },
+            );
+            return;
         }
         self.flows_touched.extend(&stages);
         self.flows.insert(
@@ -4441,6 +4523,13 @@ impl<'p> Interp<'p> {
             },
         );
         self.flows_dirty = true;
+    }
+
+    /// Whether flow `id` is past its wait: a waiting flow is present at its
+    /// stages, with no share of them (`Job::started` is `None`).
+    fn flow_started(&self, id: u64) -> bool {
+        let s = self.flows[&id].stages[0];
+        self.stages[s].jobs[&id].started.is_some()
     }
 
     /// Bring every flow's remaining work to now, at the rates it had.
@@ -4501,7 +4590,11 @@ impl<'p> Interp<'p> {
             let ids: Vec<u64> = ids
                 .iter()
                 .copied()
-                .filter(|id| policy(&self.stages[self.flows[id].stages[0]]) == share)
+                // a flow still in its wait takes no share
+                .filter(|id| {
+                    policy(&self.stages[self.flows[id].stages[0]]) == share
+                        && self.flow_started(*id)
+                })
                 .collect();
             let comp_stages: Vec<usize> = comp_stages
                 .iter()
@@ -4542,12 +4635,15 @@ impl<'p> Interp<'p> {
         };
         match policy {
             crate::ir::Share::Bottleneck => {
-                // each flow's equal share at the tightest of its stages
+                // each flow's equal share at the tightest of its stages,
+                // among the flows past their wait
+                let sharing =
+                    |st: &StageState| st.jobs.values().filter(|j| j.started.is_some()).count();
                 for &id in ids {
                     let r = self.flows[&id]
                         .stages
                         .iter()
-                        .map(|&s| cap(&self.stages[s]) / self.stages[s].jobs.len() as f64)
+                        .map(|&s| cap(&self.stages[s]) / sharing(&self.stages[s]) as f64)
                         .fold(f64::INFINITY, f64::min);
                     self.flows.get_mut(&id).unwrap().rate = r;
                 }
@@ -5823,7 +5919,12 @@ impl<'p> Interp<'p> {
                     Kind::Step { iter, .. } => {
                         iter.as_ref().map_or(0.0, |it| it.assign.len() as f64)
                     }
-                    _ => self.stages[s].jobs.len() as f64,
+                    // a job in its run's wait is present, not served
+                    _ => self.stages[s]
+                        .jobs
+                        .values()
+                        .filter(|j| j.started.is_some())
+                        .count() as f64,
                 }
             }
             Fun::Work => {
@@ -5834,8 +5935,18 @@ impl<'p> Interp<'p> {
                     Kind::Ps {
                         v, v_last, rate, ..
                     } => {
+                        // a job in its run's wait has its work whole, not a tag
                         let vv = v + rate * (now - v_last);
-                        st.jobs.values().map(|j| (j.work - vv).max(0.0)).sum()
+                        st.jobs
+                            .values()
+                            .map(|j| {
+                                if j.started.is_some() {
+                                    (j.work - vv).max(0.0)
+                                } else {
+                                    j.work
+                                }
+                            })
+                            .sum()
                     }
                     Kind::Fifo { active, .. } => st
                         .jobs
@@ -5851,7 +5962,7 @@ impl<'p> Interp<'p> {
                     Kind::Delay => st
                         .jobs
                         .values()
-                        .map(|j| (j.work - (now - j.started.unwrap())).max(0.0))
+                        .map(|j| j.started.map_or(j.work, |t| (j.work - (now - t)).max(0.0)))
                         .sum(),
                     Kind::Shared { .. } => {
                         let dt = now - self.flows_last;

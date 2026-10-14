@@ -977,11 +977,13 @@ fn stmt_reads(s: &Stmt, n: &str) -> bool {
             work,
             growing,
             also,
+            latency,
             ..
         } => {
             ref_reads(stage, n)
                 || also.iter().any(|r| ref_reads(r, n))
                 || expr_reads(work, n)
+                || latency.as_ref().is_some_and(|l| expr_reads(l, n))
                 || growing.as_ref().is_some_and(|g| ref_reads(g, n))
         }
         Stmt::Branch(c, a, b) => expr_reads(c, n) || block(a) || block(b),
@@ -1450,6 +1452,7 @@ fn split_reads<'a>(
                 work,
                 growing,
                 also,
+                latency,
                 ..
             } => {
                 index(stage, indices);
@@ -1458,6 +1461,7 @@ fn split_reads<'a>(
                     index(g, indices);
                 }
                 bodies.push(work);
+                bodies.extend(latency.iter());
             }
             // a branch sets after it what both arms set; a pass of a loop,
             // or a fork beside the session, may not have run
@@ -4095,27 +4099,16 @@ impl Parser {
             }
         }
         self.expect(&Tok::RBrace)?;
-        // a link's latency: a delay stage of its own, which a transfer over
-        // the link runs first
-        if self.queues[qi].latency.is_some() {
-            if self.queues[qi].entry("transfer", false).is_some() {
-                return self.err_at(
-                    at,
-                    format!(
-                        "queue `{name}` has a `transfer` entry and a `latency`: a called link's \
-                         time is its entry's; write the latency in the entry body"
-                    ),
-                );
-            }
-            let lname = format!("{name}.latency");
-            self.stages.push(lname.clone());
-            prog.stages.push(StageDecl {
-                span,
-                name: lname,
-                count,
-                array: family,
-                kind: StageKind::Delay,
-            });
+        // a link's latency: the wait of every transfer over the link
+        // (`Run.latency`), not a stage
+        if self.queues[qi].latency.is_some() && self.queues[qi].entry("transfer", false).is_some() {
+            return self.err_at(
+                at,
+                format!(
+                    "queue `{name}` has a `transfer` entry and a `latency`: a called link's \
+                     time is its entry's; write the latency in the entry body"
+                ),
+            );
         }
         // every role has one of its entries (a link may instead be its
         // serve), and nothing else is there
@@ -5075,6 +5068,7 @@ impl Parser {
                     growing,
                     also,
                     share,
+                    latency: None,
                 })
             }
             "if" => {
@@ -5361,7 +5355,6 @@ impl Parser {
         latency: Option<(usize, Expr)>,
         share: crate::ir::Share,
     ) -> PResult<()> {
-        let span = Some(self.span_at(s_at));
         let verb = if push { "push" } else { "pull" };
         let written = format!("`kvt.nixl_{verb} ({source}, {reader})`");
         for (q, q_at) in [(&source, s_at), (&reader, r_at)] {
@@ -5427,11 +5420,6 @@ impl Parser {
         }
         // the side that posts the copy waits before each one
         let poster = if push { &source } else { &reader };
-        let pi = self
-            .queues
-            .iter()
-            .position(|d| d.name == *poster)
-            .expect("checked above");
         let latency = if let Some((l_at, e)) = latency {
             let v = match self.const_or_clash(&e) {
                 Err(clash) => return self.err_at(l_at, clash),
@@ -5444,33 +5432,23 @@ impl Parser {
                      side that posts each copy",
                 );
             };
-            // a constant of its own (see the link's `latency`), and a delay
-            // stage of the side that posts, one per member; the constant
-            // keeps the name of the relation it came from (`D.pull.time`)
+            // a constant of its own (see the link's `latency`), the wait of
+            // each copy's run (`Run.latency`); the constant keeps the name
+            // of the relation it came from (`D.pull.time`)
             let lname = format!("{poster}.{verb}.time");
-            let sname = format!("{poster}.nic.latency");
-            // the wait is the poster's, one delay stage per poster
+            // the wait is the poster's: one per poster
             if self.posters.contains(poster) {
                 return self.err_at(
                     l_at,
                     format!(
                         "{written}: `{poster}` waits before the copies of another relation \
-                         already, at `{sname}`: one `latency` per poster"
+                         already: one `latency` per poster"
                     ),
                 );
             }
             self.posters.push(poster.clone());
             self.consts.push((lname.clone(), v));
             prog.lets.push((lname.clone(), e));
-            let count = self.queues[pi].count;
-            self.stages.push(sname.clone());
-            prog.stages.push(StageDecl {
-                span,
-                name: sname,
-                count,
-                array: self.queues[pi].family,
-                kind: StageKind::Delay,
-            });
             Some(Expr::Var(lname))
         } else {
             None
@@ -5591,33 +5569,19 @@ impl Parser {
             let to = self.own_pool("transfer … to")?;
             let units = self.paren_expr()?;
             self.expect(&Tok::Semi)?;
-            // each link with a latency is waited at first, in the order named
-            let mut out: Vec<Stmt> = std::iter::once(&stage)
+            // the links' latencies are waited first, as one wait: their
+            // sum, in the order named
+            let latency = std::iter::once(&stage)
                 .chain(also.iter())
                 .filter_map(|r| {
-                    let q = self.queues.iter().find(|q| q.name == r.name)?;
-                    Some(Stmt::Run {
-                        stage: Ref {
-                            span: r.span,
-                            name: format!("{}.latency", q.name),
-                            index: r.index.clone(),
-                        },
-                        mode: RunMode::Plain,
-                        work: Expr::cost(
-                            &[Ref {
-                                span: r.span,
-                                name: format!("{}.latency", q.name),
-                                index: None,
-                            }],
-                            q.latency.clone()?,
-                        ),
-                        growing: None,
-                        also: vec![],
-                        share: None,
-                    })
+                    self.queues
+                        .iter()
+                        .find(|q| q.name == r.name)?
+                        .latency
+                        .clone()
                 })
-                .collect();
-            out.extend([
+                .reduce(|a, b| Expr::Binary(BinOp::Add, Box::new(a), Box::new(b)));
+            return Ok(vec![
                 Stmt::Run {
                     stage,
                     mode: RunMode::Plain,
@@ -5625,11 +5589,11 @@ impl Parser {
                     growing: None,
                     also,
                     share,
+                    latency,
                 },
                 Stmt::Load(to.clone(), Expr::cost(&[to], units)),
                 Stmt::Release(from),
             ]);
-            return Ok(out);
         }
         // A KV transfer leaves one hold and enters another; a link that
         // only takes time is the kernel's `run`, and says so.
@@ -5655,6 +5619,7 @@ impl Parser {
             growing,
             also,
             share,
+            latency: None,
         }])
     }
 

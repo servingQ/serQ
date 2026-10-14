@@ -496,16 +496,30 @@ impl Program {
                         }
                     }
                     CStmt::Run {
-                        stage, also, work, ..
-                    } => amount(
+                        stage,
+                        also,
                         work,
-                        CostTarget::joint(
-                            std::iter::once(stage)
-                                .chain(also)
-                                .map(CostTarget::stage)
-                                .collect(),
-                        ),
-                    )?,
+                        latency,
+                        ..
+                    } => {
+                        amount(
+                            work,
+                            CostTarget::joint(
+                                std::iter::once(stage)
+                                    .chain(also)
+                                    .map(CostTarget::stage)
+                                    .collect(),
+                            ),
+                        )?;
+                        // seconds of the clock, like a lease's time
+                        if let Some(l) = latency
+                            && expression(l)?.is_some()
+                        {
+                            return Err(at(
+                                "a run's latency is seconds, not a resource cost".into()
+                            ));
+                        }
+                    }
                     CStmt::Hold {
                         pools,
                         reuse,
@@ -704,7 +718,12 @@ impl Program {
                     | CStmt::Grow(_, e)
                     | CStmt::Shrink(_, e)
                     | CStmt::Load(_, e) => read(e, ready)?,
-                    CStmt::Run { work, .. } => read(work, ready)?,
+                    CStmt::Run { work, latency, .. } => {
+                        read(work, ready)?;
+                        if let Some(l) = latency {
+                            read(l, ready)?;
+                        }
+                    }
                     CStmt::Hold {
                         pools,
                         reuse,

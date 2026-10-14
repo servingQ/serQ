@@ -478,8 +478,9 @@ or a constant over `let`s; `latency = …` may be left out), and concurrent
 reads divide the two NICs by its `share` (*Stages*), which the relation
 must name: it is not left to a default. The decoder's engine reads the KV
 with its `connector P` (*An engine's request*): for a request its entry
-was called `from P[i]` with, the kernel's `run D.nic.latency[j] (x0); run
-P.nic[i], D.nic[j] (…); load D.kv[j] (…); release P.kv[i];`, and nothing
+was called `from P[i]` with, the kernel's `run P.nic[i], D.nic[j] (…)`
+waiting `x0` first (the run's `latency`), then `load D.kv[j] (…); release
+P.kv[i];`, and nothing
 for a request its entry took from no source. Inside an entry of `D` called
 `from P[i]`, a `transfer` without `on` is the same read written by the
 entry. Both queues
@@ -492,8 +493,7 @@ named `kvt`.
 
 `kvt.nixl_push (P, D, latency = x0);` is the same copy written by the
 other side (NIXL push): the bytes cross the same two NICs, and the source's
-worker posts the write, so the wait before each copy is `P`'s, the delay
-stage `P.nic.latency`, indexed by the source member. A push says who moves
+worker posts the write, so the wait before each copy is `P`'s. A push says who moves
 the bytes, not when the decoder is asked for its blocks: that is the
 dispatch, written where it happens, with `fork` (below,
 `examples/pd-disaggregation/vllm_nixl_push.sq`); the decoder's connector
@@ -535,9 +535,10 @@ for why the entry is the session's (*Known limitations*).
 
 `transfer on L[k], M[l] (n) from S to P (m)` names the stages itself, as
 a `server` does: link queues, or any `ps` stages. `latency x` on a link's
-`serve` is the wait before such a transfer: a delay stage
-`L.latency` of the link's own, which every `transfer on` naming the link
-runs first, one wait per link named, in the order named. A number or a
+`serve` is the wait before such a transfer: every `transfer on` naming the
+link waits it first, at the stages it names and taking none of their
+capacity (the kernel's `run … latency`), the links' waits summed in the
+order named. A number or a
 `let` constant; only a link without an entry takes one. A link with a `transfer (n)` entry is called
 instead, `nic[self].transfer (n) from P to kv (m);`, and runs its body on
 its own stage. Arguments are substituted like an `at admission` binding, so

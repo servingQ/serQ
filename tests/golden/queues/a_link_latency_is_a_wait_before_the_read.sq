@@ -1,9 +1,7 @@
 
         let x0 = 0.5; let x1 = 0.25;
         stage egress : ps(100);
-        stage egressL : delay;
         stage ingress[2] : ps(200);
-        stage ingressL[2] : delay;
         pool kvP[2] { cap 1000; }
         stage P[2] : fifo;
         device gpu[2] { kvD cap 1000; } pool kvD on gpu { block 16; }
@@ -12,8 +10,7 @@
         server {
           hold kvP[i] (cost(kvP, prompt)) { run P[i] (cost(P, prompt)); } cache (cost(kvP, prompt)) lease kvP[i] (inf);
           hold kvD[j] (cost(kvD, prompt)) {
-            run egressL (cost(egressL, x1));
-            run ingressL[j] (cost(ingressL, x0));
+            // the wait x1 + x0 is the transfer run's `latency` in the IR (14), which no flat program spells
             transfer on egress, ingress[j] (prompt, share = share.maxmin) from kvP[i] to kvD[j] (prompt - 1);
             run D[j] decode (cost(D, o - 1)) growing kvD[j];
           }

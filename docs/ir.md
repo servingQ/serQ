@@ -17,7 +17,7 @@ than host-language code, and every input passes `Program::validate`.
 The source model and externally supplied execution settings resolve to one
 complete `Program`; its JSON records the experiment as well as the deployment.
 
-Source: `src/ir.rs`. Current version: `IR_VERSION = 13`.
+Source: `src/ir.rs`. Current version: `IR_VERSION = 14`.
 
 ## Format
 
@@ -108,8 +108,8 @@ at `Request` (after `Hit`) or at `Release`, stored in the attribute
 `loaded` or `saved`, and the block run while the request holds its pools —
 an L2's load is a `Run` on the L2's stage and a `Load` into the request's
 hold on the engine's memory; a KV relation's (`from?` present) is `Join`
-in a push, the poster's latency `Run`, a `Run` over the source's NIC and
-the reader's, the `Load`, and the `Release` of the source's lease, the
+in a push, a `Run` over the source's NIC and the reader's with the
+relation's `latency`, the `Load`, and the `Release` of the source's lease, the
 source member being the attribute `from?`, which the request's entry sets
 (-1: no source, nothing loaded); a save is an L2's `Hold` on its pool that
 grows by what its entry lacks, copies it and caches the whole. `record` is
@@ -163,7 +163,7 @@ between simulation checks and proofs.
 | `Grow(pool, e)`, `Shrink(pool, e)`, `Drop(pool)` | grow, or give `e` back from, the current hold, or outside every hold of the pool the session's lease of it (a hold keeps what it computed); drop the session's own cached entry |
 | `Release(pool)` | give the innermost enclosing hold's allocation on the pool back now, or end the session's lease of it, caching per the hold's `cache`; nothing held or leased there is a no-op. A KV transfer between instances is `Run` (the link), `Load` (the destination) and `Release` (the source's lease) |
 | `Load(pool, e)` | the KV of `e` tokens arrived from outside the engine (a NIXL read): the innermost enclosing hold's computed position on the pool advances by `e`, within its allocation |
-| `Run {stage, mode, work, growing?, also?, share?}` | work at a stage; `mode` `Plain`, `Prefill`, `Decode` (step stages); `growing` the pool that grows with the tokens computed, whose innermost hold's position, when the run ends, is its position at the run's start plus `work`; `also` further stages the same job holds at once, a flow, omitted when empty; `share` `MaxMin` or `Bottleneck`, how the flows of its fabric divide the stages' capacity, present exactly when `also` is not empty |
+| `Run {stage, mode, work, growing?, also?, share?, latency?}` | work at a stage; `mode` `Plain`, `Prefill`, `Decode` (step stages); `growing` the pool that grows with the tokens computed, whose innermost hold's position, when the run ends, is its position at the run's start plus `work`; `also` further stages the same job holds at once, a flow, omitted when empty; `share` `MaxMin` or `Bottleneck`, how the flows of its fabric divide the stages' capacity, present exactly when `also` is not empty; `latency` seconds the job waits at its stages before its work starts, present there and taking no capacity (a NIXL READ posted and polled before the bytes move), read at the run's start like `work`, not on a step stage, omitted when none: the stage report counts it as the run's wait |
 | `While(guard, body)` | test `guard` before each pass (exactly 0 or 1); run `body` for 1, continue after the loop for 0; reevaluate after each completed body |
 | `Branch(e, then, else)`, `Loop(body)`, `Choose {var, count, key}` (`key` a list, compared in order), `End` | control; `End` ends the session |
 | `Fork(body)`, `Join` | `Fork` runs `body` beside the session as a leg of the request: from now, with a copy of the attributes, its own holds and stream; the leases it leaves pass to the session when it ends. `Join` waits until every leg the session forked has ended |

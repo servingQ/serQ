@@ -66,9 +66,10 @@ allocates before the prefill instance frees. `on a, b` names several stages
 the transfer uses at once, the sender's link and the receiver's
 ([`run`](statements.md#run)): `transfer on egress[i], ingress[j] (X) from P to Q (n);`
 is `run egress[i], ingress[j] (cost(egress, ingress, X)); load Q (cost(Q, n)); release P;`. A link queue with
-a `latency` (`serve ps(BwD) latency x0;`) is waited first: each named link
-that has one adds `run L.latency[k] (cost(L.latency, x0));` before the `run`, in the order
-named.
+a `latency` (`serve ps(BwD) latency x0;`) is waited first, at the named
+stages and taking none of their capacity: the `run`'s `latency`, the
+named links' summed in the order named. The stage report counts it as the
+run's wait.
 
 ### Example
 

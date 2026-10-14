@@ -218,7 +218,7 @@ fn exprs_of(s: &CStmt) -> Vec<&CExpr> {
             .chain(cache.iter())
             .chain(lease.iter().map(|(_, t)| t))
             .collect(),
-        CStmt::Run { work, .. } => vec![work],
+        CStmt::Run { work, latency, .. } => std::iter::once(work).chain(latency.iter()).collect(),
         CStmt::Request { input, output, .. } => vec![input, output],
         CStmt::Branch(g, _, _) | CStmt::While(g, _) => vec![g],
         CStmt::Choose { count, key, .. } => std::iter::once(count).chain(key.iter()).collect(),

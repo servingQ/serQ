@@ -446,7 +446,7 @@ pub struct Relation {
     pub leased: String,
     /// The engine's queue, which reads.
     pub reader: String,
-    /// The wait before each copy, at the poster's `X.nic.latency`.
+    /// The wait before each copy: the copy's run's `latency`, the poster's.
     pub latency: Option<Expr>,
     pub push: bool,
     pub share: crate::ir::Share,
@@ -606,6 +606,9 @@ pub enum Stmt {
         /// How the flows on `also`'s fabric divide it: given exactly when
         /// `also` is not empty.
         share: Option<crate::ir::Share>,
+        /// The wait before the work starts, in seconds: a link's `serve …
+        /// latency`, a relation's `latency = …` (`CStmt::Run::latency`).
+        latency: Option<Expr>,
     },
     Branch(Expr, Vec<Stmt>, Vec<Stmt>),
     Loop(Vec<Stmt>),
@@ -721,11 +724,13 @@ where
                 work,
                 growing,
                 also,
+                latency,
                 ..
             } => {
                 (parts.reference)(stage);
                 also.iter_mut().for_each(&mut parts.reference);
                 (parts.expr)(work);
+                latency.iter_mut().for_each(&mut parts.expr);
                 growing.iter_mut().for_each(&mut parts.reference);
             }
             Stmt::Branch(e, a, b) => {

@@ -50,9 +50,9 @@ fn story(log: &serq::engine::log::Log, who: Who) -> Vec<(String, String)> {
 /// `llmd_nixl_pull.sq`'s first session, on its first turn: the router sends
 /// a cold prompt (`prompt - hitD >= thr`) to a prefiller, whose request
 /// waits in `P.reqs` (the first pool of its hold) and prefills; the
-/// decoder's `decode … from P` holds `D.kv` before the read, which is the
-/// link's latency and then the transfer over both NICs (`kvt.nixl_pull`:
-/// `D.nic.latency`, then `P.nic` and `D.nic` as one flow); the decoder's
+/// decoder's `decode … from P` holds `D.kv` before the read, the transfer
+/// over both NICs (`kvt.nixl_pull`: `P.nic` and `D.nic` as one flow, its
+/// latency waited at them first, inside the one run); the decoder's
 /// request then waits in `D.reqs`, computes its last token again (a
 /// prefill of one token: `load_ended`) and decodes; the session goes to
 /// its tool. Every step is one event, in order, and nothing is logged twice.
@@ -80,8 +80,6 @@ fn a_session_is_logged_through_prefiller_link_and_decoder() {
         ("done", "P[0]"),
         ("wait", "D.kv[0]"),
         ("admit", "D.kv[0]"),
-        ("run", "D.nic.latency[0]"),
-        ("done", "D.nic.latency[0]"),
         ("run", "P.nic[0]+D.nic[0]"),
         ("done", "P.nic[0]"),
         ("wait", "D.reqs[0]"),
