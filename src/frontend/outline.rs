@@ -228,6 +228,18 @@ impl Outline {
             })
             .collect();
         wl.workload = self.workload.take().filter(|r| own(*r)).map(shift);
+        let (theirs, ours): (Vec<_>, Vec<_>) = std::mem::take(&mut self.workload_items)
+            .into_iter()
+            .partition(|w| own(w.range));
+        self.workload_items = ours;
+        wl.workload_items = theirs
+            .into_iter()
+            .map(|w| WorkloadItem {
+                value: w.value.map(shift),
+                range: shift(w.range),
+                ..w
+            })
+            .collect();
         (self, wl)
     }
 }
