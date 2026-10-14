@@ -219,6 +219,10 @@ struct Linker<'a> {
     /// many members named without an index is the member that admits
     /// (`request_member` writes it).
     member_of: Cell<Option<usize>>,
+    /// Which side reads the expression being linked, under a server's
+    /// signature: a statement's side, the server for the scheduler's
+    /// declarations, and neither for a gauge or a claim.
+    reader: Cell<Option<crate::ir::Side>>,
 }
 
 /// The context variables by their source names (`docs/api/context.md`). A
@@ -472,6 +476,7 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
         prog,
         terms_written: Cell::new(0),
         member_of: Cell::new(None),
+        reader: Cell::new(None),
         registers: vec![],
         reg_index: HashMap::new(),
     };
@@ -593,6 +598,9 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
         }
         stage_base += s.count;
     }
+    // Pools and stages are the scheduler's: under a signature they read
+    // what the server reads.
+    lk.reader.set(Some(crate::ir::Side::Server));
     // Pools.
     let mut pools = vec![];
     for p in &prog.pools {
@@ -794,6 +802,7 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
             });
         }
     }
+    lk.reader.set(None);
     // Workload.
     let (arrival, trace, trace_ordered, init, turn) = match wl {
         None => (CArrival::None, None, false, vec![], vec![]),
@@ -2193,7 +2202,14 @@ impl Linker<'_> {
                 self.expr(body)?
             }
             Expr::Num(x) => CExpr::Num(*x),
-            Expr::Var(n) => match self.resolve(n) {
+            Expr::Var(n) if n.starts_with("reply.") => {
+                let field = &n["reply.".len()..];
+                match self.attr_index.get(field) {
+                    Some(&i) => CExpr::Attr(i),
+                    None => return Err(self.unknown("name", n)),
+                }
+            }
+            Expr::Var(n) => match self.cross(n).map(|()| self.resolve(n))? {
                 Some(Meaning::Attr(i)) => CExpr::Attr(i),
                 Some(Meaning::Const(v)) => CExpr::Num(v),
                 Some(Meaning::Reg(r)) => CExpr::Reg(r),
@@ -2593,9 +2609,11 @@ impl Linker<'_> {
         self.spans.push(vec![]);
         self.sides.push(vec![]);
         let initial_side = self.side;
+        let reader = self.reader.get();
         let mut side_stack = vec![];
         let mut out = vec![];
         for s in stmts {
+            self.reader.set(Some(self.side));
             if let Stmt::Declare(name, kind) = s {
                 self.declarations.push((self.attr_index[name], *kind));
                 continue;
@@ -2746,7 +2764,49 @@ impl Linker<'_> {
         }
         self.blocks[id] = out;
         self.side = initial_side;
+        self.reader.set(reader);
         Ok(id)
+    }
+
+    /// Under a server's signature, refuse a read across it: the server
+    /// (and the scheduler) of what the workload keeps, the workload of
+    /// what the server keeps (`docs/design/request-interface.md`).
+    fn cross(&self, n: &str) -> LResult<()> {
+        let (Some(i), Some(side)) = (&self.prog.interface, self.reader.get()) else {
+            return Ok(());
+        };
+        let names = |v: &[String]| {
+            if v.is_empty() {
+                "nothing".to_string()
+            } else {
+                v.iter()
+                    .map(|n| format!("`{n}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            }
+        };
+        match side {
+            crate::ir::Side::Server if i.client.iter().any(|c| c == n) => {
+                Err(LinkError::new(format!(
+                    "the server reads `{n}`, which the workload sets; a request carries {}\n\
+                     help: add `{n}` to `server (…)` and bind it in the workload's `send (…)`",
+                    names(&i.params)
+                )))
+            }
+            crate::ir::Side::Workload if i.server.iter().any(|c| c == n) => {
+                let help = if i.reply.iter().any(|r| r == n) {
+                    format!("read the reply: `reply.{n}`")
+                } else {
+                    format!("add `{n}` to the server's `reply (…)` and read `reply.{n}`")
+                };
+                Err(LinkError::new(format!(
+                    "the workload reads `{n}`, which the server sets; the reply carries {}\n\
+                     help: {help}",
+                    names(&i.reply)
+                )))
+            }
+            _ => Ok(()),
+        }
     }
 }
 

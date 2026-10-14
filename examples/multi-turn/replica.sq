@@ -51,6 +51,7 @@ fn main() {
                    : (doc ? ~exp(500) : ~exp(800));
       set o = ~exp(300);
     }
+    send (K, n, o, cold);
     // A session waits to enter and then holds a live slot for its whole
     // conversation. libqueuingsim frees a finished session's KV: `drop kv;`
     // before every `end;`
@@ -72,7 +73,7 @@ fn main() {
   }
 
   // the replica: one turn's prefill and decode
-  server {
+  server (K, n, o, cold) {
     hold reqs (cost(reqs, 1)), kv (cost(kv, K + n + o)) {
       set warm = !cold && cached >= K;
       // prefill work in tokens: the overhead and the attention term are

@@ -139,7 +139,11 @@ workload {
   trace "file.csv" [ordered];
   init { … }                // once, at arrival
   turn { … }                // at every `turn` statement
-  hidden o;                 // the scheduler may not read these (headers, keys, budgets)
+  send (input: K + n, output: o);   // what each request carries
+}
+
+server (input, hidden output) reply (done) {   // hidden: the scheduler may not read it
+  …                         // reads the parameters; sets `done`, read as `reply.done`
 }
 ```
 

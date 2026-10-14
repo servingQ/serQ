@@ -112,8 +112,8 @@ read it has ended, and keeps the second per program
 ### The agents
 
 The agent is a task's first prompt, then a tool call and a short
-observation per step. Nothing here is ThunderAgent's. `hidden o` says the
-router knows the prompt, not the length of the answer.
+observation per step. Nothing here is ThunderAgent's. `server (K, n, hidden
+o)` says the router knows the prompt, not the length of the answer.
 
 ```serq
 --8<-- "examples/multi-turn/thunderagent.sq:workload"

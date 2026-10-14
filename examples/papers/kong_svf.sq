@@ -15,6 +15,7 @@ fn main() {
       set s = floor(~uniform(100, 2000));
       set o = floor(~uniform(10, 500));
     }
+    send (s, o);
   }
   // --8<-- [end:workload]
 
@@ -34,7 +35,7 @@ fn main() {
   // --8<-- [end:engine]
 
   // --8<-- [start:server]
-  server {
+  server (s, o) {
     observe output_tokens = o;
     observe vol = s * o + floor((o * o + o) / 2);
     hold kv (cost(kv, s + o)) { llm (0, o); }   // no prefill: o decode steps

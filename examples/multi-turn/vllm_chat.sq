@@ -49,13 +49,13 @@ fn main() {
   // the gap between turns is a person, not a tool.
   workload {
     arrive poisson(Lambda);
-    hidden o;              // the scheduler knows max_tokens, not the length (sched/utils.py:98-119)
     init { set K = 0; }
     turn {
       set n = ceil(K == 0 ? ~uniform(200, 1000) : ~exp(100));
       set o = floor(~exp(300)) + 1;
       set more = ~bernoulli(p);
     }
+    send (input: K + n, output: o);
     session {
       turn;
       while (more) {
@@ -67,7 +67,8 @@ fn main() {
   }
   // --8<-- [end:workload]
 
-  server {
-    vllm (K + n, o);
+  // the scheduler knows max_tokens, not the length (sched/utils.py:98-119)
+  server (input, hidden output) {
+    vllm (input, output);
   }
 }

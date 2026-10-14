@@ -67,7 +67,6 @@ fn main() {
   // context K and the turn's n new tokens.
   workload {
     arrive poisson(Lambda);
-    hidden o;              // the scheduler knows max_tokens, not the length (sched/utils.py:98-119)
     init {
       set K = 0;
       set product = floor(~uniform(0, M));
@@ -77,6 +76,7 @@ fn main() {
       set o = floor(~exp(200)) + 1;
       set more = ~bernoulli(p);
     }
+    send (input: K + n, output: o, product);
     session {
       turn;
       while (more) {
@@ -88,7 +88,8 @@ fn main() {
   }
 
   // A turn is one request to the engine.
-  server {
-    vllm (S + K + n, o);
+  // the scheduler knows max_tokens, not the length (sched/utils.py:98-119)
+  server (input, hidden output, product) {
+    vllm (S + input, output);
   }
 }

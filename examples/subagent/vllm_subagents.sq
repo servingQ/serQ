@@ -63,7 +63,6 @@ fn main() {
   // copies is not shared across sessions (docs/language.md §9).
   workload {
     arrive poisson(Lambda * (1 + kids));
-    hidden o;              // the scheduler knows max_tokens, not the length (sched/utils.py:98-119)
     init {
       set sub = ~bernoulli(kids / (1 + kids));
       set K = sub ? floor(~uniform(2000, 6000)) : 0;
@@ -75,6 +74,7 @@ fn main() {
       set more = ~bernoulli(sub ? pc : p);
       set fan = sub ? 0 : ~bernoulli(q);
     }
+    send (input: K + n, output: o);
     session {
       loop {
         turn;
@@ -90,7 +90,8 @@ fn main() {
   }
   // --8<-- [end:workload]
 
-  server {
-    vllm (K + n, o);
+  // the scheduler knows max_tokens, not the length (sched/utils.py:98-119)
+  server (input, hidden output) {
+    vllm (input, output);
   }
 }

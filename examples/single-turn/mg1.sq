@@ -27,9 +27,10 @@ fn main() {
       set t0 = now;
       set s = service();
     }
+    send (s, t0);
   }
 
-  server {
+  server (s, t0) {
     run svc (cost(svc, s));
     observe wait = now - t0 - s;
     observe service_time = s;

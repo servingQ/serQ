@@ -100,7 +100,7 @@ scheduler reads when it admits: `request.known` is every token the request
 has, the generated ones kept across a preemption, and `request.hit` the
 cached full blocks of `request.known − 1` it reuses. A request needs no
 procedure of its own: the server calls the engine with its input and
-output, `vllm (K + n, o);`, and the engine prefills what the cache does not
+output, `vllm (input, output);`, and the engine prefills what the cache does not
 hold, then decodes, allocating a block at a time as `allocate_slots` does.
 The admission below says what is reused (`reuse`) and what a finished
 request leaves cached for the next turn (`cache`).
@@ -166,8 +166,10 @@ arrival order:
 
 Nothing in the workload is vLLM. Sessions arrive, each turn brings a prompt
 of `n` new tokens on a context of `K` and wants `o` back, and after a turn
-the session calls a tool and returns with probability `p`. `hidden o` says
-the scheduler cannot read the output length: it knows `max_tokens`, not
+the session calls a tool and returns with probability `p`. The workload
+sends each request its prompt and its output, `send (input: K + n, output:
+o)`, and the server takes the output `hidden`, `server (input, hidden
+output)`: the scheduler cannot read the output length: it knows `max_tokens`, not
 when EOS comes (`sched/utils.py:98-119`).
 
 ```serq

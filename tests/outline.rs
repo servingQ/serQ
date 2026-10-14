@@ -76,7 +76,7 @@ fn a_pull_relation_its_queues_and_its_calls_are_found_in_the_text() {
     assert!(
         text(&src, route.body)
             .trim()
-            .starts_with("set prompt = K + n;")
+            .starts_with("choose j in ND by")
     );
 
     let calls: Vec<_> = o
@@ -87,9 +87,9 @@ fn a_pull_relation_its_queues_and_its_calls_are_found_in_the_text() {
     assert_eq!(
         calls,
         [
-            ("P[i].prefill (prompt);", "route", Some("gw")),
-            ("D[j].decode (prompt) from P[i];", "route", Some("gw")),
-            ("D[j].decode (prompt);", "route", Some("gw")),
+            ("P[i].prefill (input);", "route", Some("gw")),
+            ("D[j].decode (input) from P[i];", "route", Some("gw")),
+            ("D[j].decode (input);", "route", Some("gw")),
             ("gw.route();", "server", None),
         ]
     );
@@ -105,7 +105,9 @@ fn a_pull_relation_its_queues_and_its_calls_are_found_in_the_text() {
     );
 
     let server = o.server.as_ref().unwrap();
-    assert!(text(&src, server.range).starts_with("server {"));
+    assert!(
+        text(&src, server.range).starts_with("server (input, hidden output) reply (produced) {")
+    );
     assert!(text(&src, o.workload.unwrap()).starts_with("workload {"));
 }
 
@@ -159,7 +161,7 @@ fn an_engine_outside_a_queue_is_a_declaration() {
     assert!(o.queues.is_empty() && o.calls.is_empty());
     assert_eq!(
         text(&src, o.server.unwrap().body).trim(),
-        "vllm (K + n, o);"
+        "vllm (input, output);"
     );
 }
 
@@ -174,14 +176,14 @@ fn ranges_are_bytes_after_a_wide_character() {
 
 #[test]
 fn a_program_that_does_not_link_has_an_outline() {
-    let src =
-        read("examples/multi-turn/vllm.sq").replace("vllm (K + n, o);", "vllm (K + n, nowhere);");
+    let src = read("examples/multi-turn/vllm.sq")
+        .replace("vllm (input, output);", "vllm (input, nowhere);");
     let ov = serq::Overrides::default();
     assert!(serq::compile_inspected(&src, &ov).is_err());
     let o = outline(&src);
     assert_eq!(
         text(&src, o.server.unwrap().body).trim(),
-        "vllm (K + n, nowhere);"
+        "vllm (input, nowhere);"
     );
 }
 

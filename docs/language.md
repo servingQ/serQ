@@ -335,9 +335,9 @@ completed turn. From `examples/multi-turn/vllm.sq`:
 ```serq
 workload {
   arrive poisson(Lambda);
-  hidden o;
   init { set K = 0; }
   turn { … }
+  send (input: K + n, output: o);
   session {
     turn;
     while (more) {
@@ -348,8 +348,8 @@ workload {
   }
 }
 
-server {
-  vllm (K + n, o);
+server (input, hidden output) {
+  vllm (input, output);
 }
 ```
 
@@ -360,9 +360,54 @@ sees](#what-the-client-sees)); the program observes what else it needs.
 The end of the session block ends the session. `end;` is only needed for
 an early exit, including an exit from an unconditional `loop`.
 
-The parser expands each source `turn;` into the IR's attribute-drawing
-`Turn` followed by the server's statements. Client and server attributes
-remain shared; this expansion introduces no extra scope or dispatch.
+#### What crosses
+
+The server's signature is the deployment's interface, as an API's provider
+writes one: `server (input, hidden output)` is what a request carries, and
+`reply (R, …)` after it what its reply carries. The workload binds the
+parameters once, `send (input: K + n, output: o);`, and each `turn;`
+evaluates the binding after the `turn` block's draws; `send (s)` sends the
+attribute `s` as it is. After `turn;` the workload reads the reply as
+`reply.R`. Nothing else crosses:
+
+- the server, its gateways' routes, the queues' entries and the scheduler's
+  expressions (queue, preempt and eviction keys, an engine's schedule) read
+  the parameters, never an attribute the workload keeps (`K` above);
+- the workload reads the reply, never an attribute the server or the
+  scheduler sets;
+- `serial`, the session's number, every request carries.
+
+A parameter may be `hidden` ([`hidden`](api/workload.md#hidden)), and may
+have a constant default, `server (input, context = 0)`, which a workload
+that does not send it gets. The server sets each reply attribute on every
+path that completes the request. What the server sets stays the session's
+from one request to the next (a sticky `home` in
+`examples/multi-turn/routing.sq`); the parameters are bound anew at each.
+`examples/pd-disaggregation/llmd_nixl_pull.sq` replies with the tokens the
+decoder produced, which `max_model_len` can cut short, and its client adds
+them to its context:
+
+```serq
+send (input: K + n, output: o);
+session { turn; while (more) { set K = K + n + reply.produced; … } }
+
+server (input, hidden output) reply (produced) {
+  if (input >= max_model_len) { end; }
+  gw.route();
+  set produced = D.produced;
+}
+```
+
+A bare `server { … }` has no signature, and its two sides share every
+attribute, as before the signature; it is refused once every program has
+one ([the design](design/request-interface.md)).
+
+The parser puts what `send` binds at the end of the `turn` block, a
+default in `init`, and a hidden parameter in the IR's `hidden`; it expands
+each source `turn;` into the IR's attribute-drawing `Turn` followed by the
+server's statements. The interface is the frontend's: it adds no IR
+construct, scope or dispatch, and a parameter sent as it is (`send (s)`)
+leaves the IR as it was.
 
 The IR retains statement sides and attribute types to enforce workload size
 ownership. The parser and IR validator enforce these boundaries:
@@ -1144,8 +1189,8 @@ queue's stage, named after the queue, so its pool is `pool reqs on Q`.
 
 An engine keeps a request's state, as vLLM's scheduler keeps a `Request`
 ([the design](design/scheduler-worker.md)), and the server calls it:
-`vllm (K + n, o);` is a request of `K + n` tokens of prompt that generates
-`o`. From `examples/multi-turn/vllm.sq`, its comments elided:
+`vllm (input, output);` is a request of `input` tokens of prompt that
+generates `output`. From `examples/multi-turn/vllm.sq`, its comments elided:
 
 ```serq
 engine vllm on gpu {
@@ -1296,8 +1341,9 @@ whose work reads them has ended. This also applies to attributes derived
 from hidden ones; both branch arms must reveal an attribute before it is
 known after the branch. See [the full rule](api/workload.md#hidden).
 
-`hidden o;` in a workload prevents scheduler expressions, such as a hold's
-header, queue keys or a budget, from reading `o`. Session statements,
+A `hidden` parameter, `server (input, hidden output)`, prevents scheduler
+expressions, such as a hold's header, queue keys or a budget, from reading
+`output` (`hidden o;` in the workload, under a bare `server`). Session statements,
 run work, a hold's `cache` and a claim's `given` may read it. Attributes
 set by the scheduler (`cached`, `computed`) cannot be hidden.
 See [Workload](api/workload.md#hidden) for the permitted positions.

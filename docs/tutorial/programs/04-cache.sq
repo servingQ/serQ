@@ -25,6 +25,7 @@ fn main() {
       set n = K == 0 ? ~uniform(1000, 3000) : ~exp(500);
       set o = ~exp(200);
     }
+    send (K, n, o);
 
     session {
       loop {
@@ -35,7 +36,7 @@ fn main() {
     }
   }
 
-  server {
+  server (K, n, o) {
     hold kv (cost(kv, K + n + o)) {
       // `cached` is how much of this session's own prefix survived,
       // decided at the moment the hold is admitted

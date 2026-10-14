@@ -18,9 +18,10 @@ fn main() {
       Size work_size = ~exp(1);
       Size items = ceil(~uniform(1, 5));   // request items
     }
+    send (work_size, items);
   }
 
-  server {
+  server (work_size, items) {
     Cost processing = {
       svc: S * work_size,
       mem: items

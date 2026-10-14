@@ -44,7 +44,7 @@ variants as strings, `"Lru"`). JSON has no infinity: an infinite constant
 | `init`, `turn`, `session` | block indices: the workload's `init` and `turn` blocks and the session program |
 | `blocks` | the statement blocks (an arena; bodies of holds, branches and loops refer to blocks by index) |
 | `horizon`, `warmup`, `seed`, `arrivals` | the run; `arrivals` requires exactly N open arrivals and draining by `horizon` |
-| `hidden` | attribute slots the scheduler may not read (`hidden o;`): legal at `Session` and `Given`, below |
+| `hidden` | attribute slots the scheduler may not read (a `hidden` parameter, `server (hidden output)`; `hidden o;` under a bare `server`): legal at `Session` and `Given`, below |
 | `gauges` | `[{name, expr}]`: functions of the state whose time average the report gives, each read at the `Gauge` moment after every instant; omitted when empty. They read and do not act, so a reader that ignores them runs the same program |
 | `claims` | `[{name, given?, kind, expr}]`; read-only properties checked on the simulated path; omitted when empty |
 | `registers` | `[{name, stage, init}]`; persistent stage registers, below; omitted when empty |

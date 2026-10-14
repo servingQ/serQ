@@ -97,28 +97,27 @@ fn main() {
   // more than `lpm_queue` wait (schedule_policy.py `_sort_by_longest_prefix`,
   // `_determine_active_policy`)
   pool reqs on sglang { queue by (lpm == 1 && queued(reqs) <= lpm_queue ? -cachedin(kv) : 0); }
-  pool kv on gpu { evict lru; preempt by (1 - decoding, position - prompt, -prompt) requeue tail; }
+  pool kv on gpu { evict lru; preempt by (1 - decoding, position - input, -input) requeue tail; }
 
   workload {
     arrive poisson(Lambda);
-    hidden o;
     init { set K = 0; }
     turn {
       set n = ceil(K == 0 ? ~uniform(1000, 3000) : ~exp(500));
       set o = min(M, floor(~exp(200)) + 1);
       set more = ~bernoulli(p);
     }
+    send (input: K + n, output: o);
     session {
       loop {
         turn;
-        set K = prompt + o;
+        set K = K + n + o;
         if (more) { tool (~exp(Z)); } else { end; }
       }
     }
   }
 
-  server {
-    set prompt = K + n;
-    sglang (prompt, o);
+  server (input, hidden output) {
+    sglang (input, output);
   }
 }

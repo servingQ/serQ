@@ -62,13 +62,13 @@ fn main() {
   // --8<-- [start:workload]
   workload {
     arrive closed(N);
-    hidden o;
     init { set K = 0; }
     turn {
       set n = ceil(K == 0 ? ~uniform(4000, 8000) : ~exp(1000));
       set o = floor(~exp(300)) + 1;
       set more = ~bernoulli(p);
     }
+    send (K, n, o);
     session {
       turn;
       while (more) {
@@ -101,7 +101,7 @@ fn main() {
   // --8<-- [end:helpers]
 
   // --8<-- [start:charge]
-  server {
+  server (K, n, hidden o) {
     set prompt = K + n;
     set charged = min(floor(prompt * (est > 0 ? ~uniform(1 - est, 1 + est) : 1)) + buffer
                       - (count_shared ? 0 : S), room);

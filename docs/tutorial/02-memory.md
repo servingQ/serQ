@@ -22,8 +22,10 @@ hold mem (processing.mem) {
 }
 ```
 
-The workload draws `work_size` and `items`. The server converts them to
-service work and memory demand; here each item needs one memory unit.
+The workload draws `work_size` and `items` and sends both, `send
+(work_size, items)`, to `server (work_size, items)`. The server converts
+them to service work and memory demand; here each item needs one memory
+unit.
 
 `hold` joins the pool's queue, waits for `processing.mem` units and reserves them for the
 body. When the body finishes, the units are released automatically.

@@ -22,8 +22,9 @@ fn main() {
   workload {
     arrive batch(2);
     init { set prompt = serial == 0 ? 2 : 4; }
+    send (prompt);
   }
-  server {
+  server (prompt) {
     run gate (cost(gate, serial));
     set t0 = now;
     // A decodes two tokens after its prefill's; B only prefills

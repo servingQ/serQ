@@ -803,6 +803,25 @@ pub struct Program {
     pub gauges: Vec<(String, Expr)>,
     /// `claim NAME …;`, in order.
     pub claims: Vec<ClaimDecl>,
+    /// What crosses between the workload and a `server (…)` with a
+    /// signature; `None` for a bare `server { … }`, whose sides share
+    /// every attribute.
+    pub interface: Option<Interface>,
+}
+
+/// The attributes each side keeps to itself under a server's signature
+/// (`docs/design/request-interface.md`): the linker refuses a read of one
+/// from the other side. The parameters and the reply are what crosses.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct Interface {
+    /// `server (P, …)`, in order.
+    pub params: Vec<String>,
+    /// `reply (R, …)`, in order; the workload reads each as `reply.R`.
+    pub reply: Vec<String>,
+    /// What the workload sets and does not send: its own state.
+    pub client: Vec<String>,
+    /// What the server and the scheduler set: the server's own state.
+    pub server: Vec<String>,
 }
 
 /// `claim NAME [given (e)] : every iteration of STAGE (e) ;`, `… some

@@ -28,9 +28,10 @@ fn main() {
   workload {
     arrive renewal(gap);
     init { set t0 = now; }
+    send (t0);
   }
 
-  server {
+  server (t0) {
     fastertransformer (vp, vd + 1);   // the model's decode steps after the prefill's sampled token
     observe response = now - t0;
   }

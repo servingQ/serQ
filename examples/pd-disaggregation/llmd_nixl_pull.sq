@@ -33,18 +33,17 @@ fn main() {
   // --8<-- [start:router]
   queue gw : gateway {
     route {
-      set prompt = K + n;
       choose j in ND by (holders(D[j].kv) + queued(D[j].kv));
-      set hitD = min(cachedin(D[j].kv), floor(prompt - 1, bs));
-      set remote_prefill = prompt >= minp && prompt - hitD >= thr;
+      set hitD = min(cachedin(D[j].kv), floor(input - 1, bs));
+      set remote_prefill = input >= minp && input - hitD >= thr;
       if (remote_prefill) {
         choose i in NP by (cachedin(P[i].kv) > 0 ? 0 : 1, work(P[i]) + queued(P[i].reqs), ~uniform(0, 1));
-        P[i].prefill (prompt);
+        P[i].prefill (input);
         set t1 = now;
-        D[j].decode (prompt) from P[i];
+        D[j].decode (input) from P[i];
         observe lease = D.load_done - t1;
       } else {
-        D[j].decode (prompt);
+        D[j].decode (input);
       }
       observe remote = remote_prefill;
     }
@@ -102,14 +101,14 @@ fn main() {
 
     // --8<-- [start:local]
     decode (prompt) {
-      set produced = min(o, max_model_len - prompt);
+      set produced = min(output, max_model_len - prompt);
       D (prompt, produced);
     }
     // --8<-- [end:local]
 
     // --8<-- [start:remote]
     decode (prompt) from P {
-      set produced = min(o, max_model_len - prompt);
+      set produced = min(output, max_model_len - prompt);
       D (prompt, produced);
     }
   }
@@ -122,17 +121,17 @@ fn main() {
   // --8<-- [start:workload]
   workload {
     arrive poisson(Lambda);
-    hidden o;
     init { set K = 0; }
     turn {
       set n = ceil(K == 0 ? ~uniform(1000, 3000) : ~exp(500));
       set o = floor(~exp(200)) + 1;
       set more = ~bernoulli(p);
     }
+    send (input: K + n, output: o);
     session {
       turn;
       while (more) {
-        set K = prompt + D.produced;
+        set K = K + n + reply.produced;
         tool (~exp(Z));
         turn;
       }
@@ -141,10 +140,11 @@ fn main() {
   // --8<-- [end:workload]
 
   // --8<-- [start:server]
-  server {
-    observe too_long = K + n >= max_model_len;
-    if (K + n >= max_model_len) { end; }
+  server (input, hidden output) reply (produced) {
+    observe too_long = input >= max_model_len;
+    if (input >= max_model_len) { end; }
     gw.route();
+    set produced = D.produced;
   }
   // --8<-- [end:server]
 
