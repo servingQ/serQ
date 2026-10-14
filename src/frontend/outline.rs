@@ -200,47 +200,79 @@ impl Outline {
     /// file's and the workload file's: what is written at or after `at`
     /// (the workload's text in the pair's) is the workload's, with its
     /// ranges into its own text. A workload file writes `use`s, `let`s,
-    /// `def`s, stages and its `workload`, so nothing else moves.
-    pub fn split(mut self, at: usize) -> (Outline, Outline) {
+    /// `def`s, stages and its `workload`, so nothing else moves. Every
+    /// field is named here, so a new one is not left behind unnoticed
+    /// (#650): it does not compile until it is given to one side or both.
+    pub fn split(self, at: usize) -> (Outline, Outline) {
         let own = |r: Range| r.0 >= at;
         let shift = |r: Range| Range(r.0 - at, r.1 - at);
-        let mut wl = Outline::default();
-        let (theirs, ours): (Vec<_>, Vec<_>) = std::mem::take(&mut self.uses)
-            .into_iter()
-            .partition(|u| own(u.range));
-        self.uses = ours;
-        wl.uses = theirs
-            .into_iter()
-            .map(|u| Use {
-                range: shift(u.range),
-                ..u
-            })
-            .collect();
-        let (theirs, ours): (Vec<_>, Vec<_>) = std::mem::take(&mut self.decls)
-            .into_iter()
-            .partition(|d| own(d.range));
-        self.decls = ours;
-        wl.decls = theirs
-            .into_iter()
-            .map(|d| Decl {
-                range: shift(d.range),
-                ..d
-            })
-            .collect();
-        wl.workload = self.workload.take().filter(|r| own(*r)).map(shift);
-        let (theirs, ours): (Vec<_>, Vec<_>) = std::mem::take(&mut self.workload_items)
-            .into_iter()
-            .partition(|w| own(w.range));
-        self.workload_items = ours;
-        wl.workload_items = theirs
-            .into_iter()
-            .map(|w| WorkloadItem {
-                value: w.value.map(shift),
-                range: shift(w.range),
-                ..w
-            })
-            .collect();
-        (self, wl)
+        let Outline {
+            main,
+            uses,
+            decls,
+            queues,
+            relations,
+            routes,
+            server,
+            signature,
+            workload,
+            calls,
+            chooses,
+            workload_items,
+        } = self;
+        let (wl_uses, uses): (Vec<_>, Vec<_>) = uses.into_iter().partition(|u| own(u.range));
+        let (wl_decls, decls): (Vec<_>, Vec<_>) = decls.into_iter().partition(|d| own(d.range));
+        let (wl_items, workload_items): (Vec<_>, Vec<_>) =
+            workload_items.into_iter().partition(|w| own(w.range));
+        let wl = Outline {
+            uses: wl_uses
+                .into_iter()
+                .map(|u| Use {
+                    range: shift(u.range),
+                    ..u
+                })
+                .collect(),
+            decls: wl_decls
+                .into_iter()
+                .map(|d| Decl {
+                    range: shift(d.range),
+                    ..d
+                })
+                .collect(),
+            workload: workload.filter(|r| own(*r)).map(shift),
+            workload_items: wl_items
+                .into_iter()
+                .map(|w| WorkloadItem {
+                    value: w.value.map(shift),
+                    range: shift(w.range),
+                    ..w
+                })
+                .collect(),
+            // the deployment's alone: a workload file writes none of them
+            main: None,
+            queues: Vec::new(),
+            relations: Vec::new(),
+            routes: Vec::new(),
+            server: None,
+            signature: None,
+            calls: Vec::new(),
+            chooses: Vec::new(),
+        };
+        let deployment = Outline {
+            main,
+            uses,
+            decls,
+            queues,
+            relations,
+            routes,
+            server,
+            signature,
+            workload: workload.filter(|r| !own(*r)),
+            calls,
+            chooses,
+            workload_items,
+        };
+        (deployment, wl)
     }
 }
 
