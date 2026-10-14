@@ -155,6 +155,41 @@ impl Outline {
     pub fn to_json(&self) -> String {
         serde_json::to_string(self).expect("an outline serializes")
     }
+
+    /// A pair's outline (`parser::outline_paired`), into the deployment
+    /// file's and the workload file's: what is written at or after `at`
+    /// (the workload's text in the pair's) is the workload's, with its
+    /// ranges into its own text. A workload file writes `use`s, `let`s,
+    /// `def`s, stages and its `workload`, so nothing else moves.
+    pub fn split(mut self, at: usize) -> (Outline, Outline) {
+        let own = |r: Range| r.0 >= at;
+        let shift = |r: Range| Range(r.0 - at, r.1 - at);
+        let mut wl = Outline::default();
+        let (theirs, ours): (Vec<_>, Vec<_>) = std::mem::take(&mut self.uses)
+            .into_iter()
+            .partition(|u| own(u.range));
+        self.uses = ours;
+        wl.uses = theirs
+            .into_iter()
+            .map(|u| Use {
+                range: shift(u.range),
+                ..u
+            })
+            .collect();
+        let (theirs, ours): (Vec<_>, Vec<_>) = std::mem::take(&mut self.decls)
+            .into_iter()
+            .partition(|d| own(d.range));
+        self.decls = ours;
+        wl.decls = theirs
+            .into_iter()
+            .map(|d| Decl {
+                range: shift(d.range),
+                ..d
+            })
+            .collect();
+        wl.workload = self.workload.take().filter(|r| own(*r)).map(shift);
+        (self, wl)
+    }
 }
 
 /// The parser's recorder: the source, to turn a token's line and column

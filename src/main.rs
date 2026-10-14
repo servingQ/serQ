@@ -136,6 +136,8 @@ fn main() {
     let mut inline = false;
     let mut format = String::from("tikz");
     let mut out: Option<String> = None;
+    // a workload file the deployment FILE is paired with
+    let mut workload: Option<String> = None;
     let mut i = 2;
     while i < args.len() {
         let flag = args[i].as_str();
@@ -162,7 +164,7 @@ fn main() {
             continue;
         }
         let allowed: &[&str] = match flag {
-            "--def" | "--instance" => &["run", "check", "ir", "draw", "target"],
+            "--def" | "--instance" | "--workload" => &["run", "check", "ir", "draw", "target"],
             "--seed" | "--horizon" | "--warmup" | "--arrivals" | "--trace" => &["run", "ir"],
             "--json" | "--dump" | "--log" => &["run"],
             "--inline-trace" => &["ir"],
@@ -199,6 +201,7 @@ fn main() {
             "--horizon" => ov.horizon = Some(time_arg(cmd, flag, &next(&mut i), true)),
             "--warmup" => ov.warmup = Some(time_arg(cmd, flag, &next(&mut i), false)),
             "--trace" => ov.trace = Some(next(&mut i)),
+            "--workload" => workload = Some(next(&mut i)),
             "--instance" => {
                 let path = next(&mut i);
                 let text = std::fs::read_to_string(&path)
@@ -245,15 +248,29 @@ fn main() {
         i += 1;
     }
     // Checking, target extraction and drawing do not execute or export this IR.
-    let load = if matches!(cmd, "check" | "target" | "draw") {
-        serq::load_inspected
-    } else {
-        serq::load
+    let inspect = matches!(cmd, "check" | "target" | "draw");
+    let paired = workload.as_deref().map(Path::new);
+    let load = |file: &Path, ov: &Overrides| match paired {
+        // a pair's message names its file itself
+        Some(w) => {
+            let f = if inspect {
+                serq::load_paired_inspected
+            } else {
+                serq::load_paired
+            };
+            f(file, w, ov).map_err(|e| {
+                eprintln!("{e}");
+                exit(1)
+            })
+        }
+        None if inspect => serq::load_inspected(file, ov),
+        None => serq::load(file, ov),
     };
+    // a trace is the workload's, next to the file that declares it
     let base = if ov.trace.is_some() {
         None
     } else {
-        file.parent()
+        paired.unwrap_or(file).parent()
     };
     if cmd == "target" {
         let prog = load(file, &ov).unwrap_or_else(|e| fail(file, e));

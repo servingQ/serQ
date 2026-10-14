@@ -17,7 +17,7 @@ cargo test --release --locked
 # invariant and conservation at every instant (src/engine/interp.rs, #277)
 cargo test --locked --quiet
 cargo build --release --locked --quiet
-./target/release/serq fmt --check examples/*/*.sq docs/tutorial/programs/*.sq tests/lean-regress/*.sq
+./target/release/serq fmt --check examples/*/*.sq examples/paired/*/*.sq docs/tutorial/programs/*.sq tests/lean-regress/*.sq
 # the interpreter's answers the Lean regressions state (lean/Serq/Regress.lean)
 python3 scripts/lean_regress.py
 n=0
@@ -28,6 +28,18 @@ for f in examples/*/*.sq; do
       || { echo "FAIL: $f does not draw ($fmt)"; exit 1; }
   done
   n=$((n + 1))
+done
+# every deployment under every workload: they meet only at the server's
+# signature (docs/design/paired-workload.md)
+pairs=0
+for d in examples/paired/deployments/*.sq; do
+  for w in examples/paired/workloads/*.sq; do
+    ./target/release/serq check "$d" --workload "$w" >/dev/null \
+      || { echo "FAIL: $d with $w does not link"; exit 1; }
+    ./target/release/serq draw "$d" --workload "$w" --format svg >/dev/null \
+      || { echo "FAIL: $d with $w does not draw"; exit 1; }
+    pairs=$((pairs + 1))
+  done
 done
 for f in tools/oracle/*.ir.json; do
   ./target/release/serq draw "$f" >/dev/null \
@@ -55,4 +67,4 @@ python3 scripts/metrics.py --check
 # only tests reach. A change that moves the list regenerates
 # tools/unused.json (`make unused`) and says why in its PR.
 python3 scripts/unused.py --check
-echo "OK: serq, $n programs link and draw, $t tutorial programs link, $(ls tools/oracle/*.out.json | wc -l) vLLM oracle scenarios + 2 prefix-cache traces (CPU oracle = A100 engine = serQ; the shared-prompt trace, CPU oracle = serQ)"
+echo "OK: serq, $n programs link and draw, $pairs paired, $t tutorial programs link, $(ls tools/oracle/*.out.json | wc -l) vLLM oracle scenarios + 2 prefix-cache traces (CPU oracle = A100 engine = serQ; the shared-prompt trace, CPU oracle = serQ)"

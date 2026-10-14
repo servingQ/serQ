@@ -1,0 +1,28 @@
+// A person chatting (examples/multi-turn/vllm_chat.sq's workload): each turn
+// resends the conversation so far (`K`) with a short message, and the gap
+// between turns is the person reading and typing, on a stage of the
+// workload's own.
+let Lambda = 0.3;  // conversations per second
+let p = 0.8;  // the person asks again
+let Z = 20.0;  // reading and typing time (s)
+
+stage user : delay;
+
+workload {
+  arrive poisson(Lambda);
+  init { set K = 0; }
+  turn {
+    set n = ceil(K == 0 ? ~uniform(200, 1000) : ~exp(100));
+    set o = floor(~exp(300)) + 1;
+    set more = ~bernoulli(p);
+  }
+  send (input: K + n, output: o);
+  session {
+    turn;
+    while (more) {
+      set K = K + n + o;
+      run user (cost(user, ~exp(Z)));
+      turn;
+    }
+  }
+}

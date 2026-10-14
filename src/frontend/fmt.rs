@@ -64,7 +64,13 @@ fn format_with(
     src: &str,
     parse: &dyn Fn(&str) -> Result<crate::frontend::ast::Program, parser::ParseError>,
 ) -> Result<String, String> {
-    parse(src).map_err(|e| e.render(src))?;
+    // half of a pair (a deployment file, a workload file) parses only with
+    // its other half (`frontend::paired`): it keeps its tokens, below
+    let whole = match parse(src) {
+        Ok(_) => true,
+        Err(_) if crate::frontend::paired::half(src) => false,
+        Err(e) => return Err(e.render(src)),
+    };
     let tokens = lex(src).map_err(|e| e.to_string())?;
     let lines: Vec<&str> = src.lines().collect();
     let mut by_line: Vec<Vec<&Token>> = vec![vec![]; lines.len() + 1];
@@ -172,7 +178,10 @@ fn format_with(
     if src.is_empty() {
         out.clear();
     }
-    parse(&out).map_err(|e| format!("formatter produced invalid syntax: {}", e.render(&out)))?;
+    if whole {
+        parse(&out)
+            .map_err(|e| format!("formatter produced invalid syntax: {}", e.render(&out)))?;
+    }
     let formatted = lex(&out).map_err(|e| e.to_string())?;
     let before: Vec<&Tok> = tokens.iter().map(|t| &t.tok).collect();
     let after: Vec<&Tok> = formatted.iter().map(|t| &t.tok).collect();

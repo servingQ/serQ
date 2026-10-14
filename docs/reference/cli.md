@@ -1,14 +1,14 @@
 # CLI reference
 
 ```
-serq run   FILE [--seed N] [--horizon T] [--warmup T] [--arrivals N] [--instance F]
+serq run   FILE [--workload W] [--seed N] [--horizon T] [--warmup T] [--arrivals N] [--instance F]
                     [--def name=expr]... [--trace F] [--json] [--dump DIR] [--log FILE] [--name value]...
-serq check FILE [--instance F] [--def name=expr]... [--name value]...
-serq ir    FILE [--instance F] [--def name=expr]... [--seed N] [--horizon T] [--warmup T]
+serq check FILE [--workload W] [--instance F] [--def name=expr]... [--name value]...
+serq ir    FILE [--workload W] [--instance F] [--def name=expr]... [--seed N] [--horizon T] [--warmup T]
                     [--arrivals N] [--trace F] [--inline-trace] [--name value]...
-serq draw  FILE [--instance F] [--def name=expr]... [--format tikz|svg] [--out PATH]
+serq draw  FILE [--workload W] [--instance F] [--def name=expr]... [--format tikz|svg] [--out PATH]
                     [--name value]...   (experimental)
-serq target FILE [--instance F] [--def name=expr]... [--name value]...
+serq target FILE [--workload W] [--instance F] [--def name=expr]... [--name value]...
 serq fmt   [--check] FILE...
 serq --version
 ```
@@ -20,6 +20,11 @@ interpreter's below is such an input, in any order among them:
 An input may not be named like an interpreter option (`seed`, `horizon`, …).
 
 `FILE` is program text (`.sq`) or IR (`.json`, as written by `serq ir`).
+With `--workload W`, `FILE` is a deployment file and `W` a workload file,
+which the tool pairs ([paired files](../language.md#paired-files)):
+`serq run examples/paired/deployments/vllm.sq --workload examples/paired/workloads/chat.sq --horizon 3000`.
+A message names the file it is about; a trace the workload reads is read
+next to `W`.
 
 Source models contain no execution settings. `run` and `ir` require
 `--horizon T` or an explicit `--instance F` that supplies it. `warmup` defaults

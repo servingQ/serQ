@@ -404,6 +404,40 @@ server (input, hidden output) reply (produced) {
 A bare `server { … }` takes nothing and replies nothing: it reads no
 attribute of the workload ([the design](design/request-interface.md)).
 
+#### Paired files
+
+Since the signature is all the two sides share, a workload and a
+deployment can be written apart and paired by the tool:
+`serq run DEPLOYMENT --workload WORKLOAD` ([the design](design/paired-workload.md)).
+The deployment file is a program without its `workload`. The workload file
+has no `fn main()`: its `use`s, its constants and inputs (`let`, an
+`args.number` among them), its definitions (`def`), the stages it runs on
+itself (`stage user : delay;`) and `workload { … }`.
+`examples/paired/` has vLLM's engine as a deployment and four workloads for
+it, each the workload of a single-file example, with the same report:
+
+```serq
+// examples/paired/workloads/chat.sq
+let Lambda = 0.3;  // conversations per second
+let p = 0.8;  // the person asks again
+let Z = 20.0;  // reading and typing time (s)
+
+stage user : delay;
+
+workload {
+  arrive poisson(Lambda);
+  …
+  send (input: K + n, output: o);
+  …
+}
+```
+
+Each file reads its own names: the server and the scheduler read no
+constant of the workload file, the workload none of the deployment's, and a
+name both declare is refused. The inputs of both are the program's
+(`--Lambda 0.5 --max_seqs 32`). A single-file program is the same program
+written in one file.
+
 The parser puts what `send` binds at the end of the `turn` block, a
 hidden parameter in the IR's `hidden`; it expands
 each source `turn;` into the IR's attribute-drawing `Turn` followed by the

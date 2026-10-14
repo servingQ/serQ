@@ -180,6 +180,9 @@ struct Parser {
     sent_as_is: Vec<String>,
     /// The position of the workload's first `hidden`.
     hidden_at: Option<usize>,
+    /// The tokens of a paired workload file (`frontend::paired`), at the
+    /// head of `fn main()`'s body.
+    paired: Option<std::ops::Range<usize>>,
     /// Header bindings the body of their hold reads, with the position of
     /// the name: `set` at the top of the body, checked once the program's
     /// attributes are known (`check_body_bindings`).
@@ -655,6 +658,45 @@ pub fn parse_with(src: &str, defs: &[(String, String)], lets: &[String]) -> PRes
         });
     }
     Ok(prog)
+}
+
+/// Parse a deployment file and a workload file as one program
+/// (`frontend::paired`): positions are into `p.combined`.
+pub fn parse_paired(
+    p: &crate::frontend::paired::Paired,
+    defs: &[(String, String)],
+    lets: &[String],
+) -> Result<Program, String> {
+    let (toks, range) = p.tokens()?;
+    let mut parser = Parser::new(toks);
+    parser.paired = Some(range);
+    parser.def_overrides = defs
+        .iter()
+        .map(|(n, e)| (n.clone(), e.clone(), false))
+        .collect();
+    parser.supplied_inputs = lets.to_vec();
+    let mut prog = parser
+        .program()
+        .map_err(|e| crate::frontend::paired::parse_error(p, &e))?;
+    prog.paired = Some(p.workload_names()?);
+    if let Some(name) = parser.def_overrides.iter().find(|d| !d.2).map(|d| &d.0) {
+        return Err(format!("unknown `def` override `{name}`"));
+    }
+    Ok(prog)
+}
+
+/// `outline` of a pair: positions are into `p.combined`.
+pub fn outline_paired(
+    p: &crate::frontend::paired::Paired,
+) -> Result<crate::frontend::outline::Outline, String> {
+    let (toks, range) = p.tokens()?;
+    let mut parser = Parser::new(toks);
+    parser.paired = Some(range);
+    parser.outline = Some(crate::frontend::outline::Recorder::new(&p.combined));
+    parser
+        .program()
+        .map_err(|e| crate::frontend::paired::parse_error(p, &e))?;
+    Ok(parser.outline.take().expect("set above").out)
 }
 
 /// Parse, recording where each declaration is written (`serq::outline`).
@@ -1654,6 +1696,7 @@ impl Parser {
             turned: false,
             sent_as_is: vec![],
             hidden_at: None,
+            paired: None,
             body_binds: vec![],
             header_binds: vec![],
             bind_at: vec![],
@@ -1961,6 +2004,9 @@ impl Parser {
                     r.main(&self.toks, main_at.0, main_at.1, self.pos - 1);
                 }
                 continue;
+            }
+            if let Some(range) = self.paired.clone() {
+                self.paired_item(range.contains(&item_at))?;
             }
             if !in_main && !self.is_kw("use") && !self.is_kw("def") && !self.is_kw("let") {
                 return self.err("executable declarations belong inside `fn main() { … }`; only `use`, `def` and constants belong outside it");
@@ -2307,6 +2353,11 @@ impl Parser {
     }
 
     fn assemble(&mut self, prog: &mut Program, served: &mut Served) -> PResult<()> {
+        if let Some(range) = &self.paired
+            && prog.workload.is_none()
+        {
+            return self.err_at(range.start, "a workload file declares `workload { … }`");
+        }
         if self.wl_session.is_none() && self.server.is_some() {
             if prog.workload.is_none() {
                 return self.err("`server` needs a `workload`: its default session is one turn");
@@ -4862,6 +4913,28 @@ impl Parser {
             header_refused,
             at,
         });
+        Ok(())
+    }
+
+    /// Under a pairing: the workload file declares its constants and inputs,
+    /// definitions, stages and `workload`; the deployment file all else.
+    fn paired_item(&self, in_workload: bool) -> PResult<()> {
+        let Tok::Ident(kw) = self.peek().clone() else {
+            return Ok(());
+        };
+        let own = ["let", "def", "stage", "workload"];
+        if in_workload && !own.contains(&kw.as_str()) && KEYWORDS.contains(&kw.as_str()) {
+            return self.err(format!(
+                "`{kw}` is the deployment file's: a workload file declares its constants and \
+                 inputs (`let`), definitions (`def`), its own stages and `workload {{ … }}`"
+            ));
+        }
+        if !in_workload && kw == "workload" {
+            return self.err(
+                "the workload is the workload file's: this deployment is paired with one, so it \
+                 declares none",
+            );
+        }
         Ok(())
     }
 

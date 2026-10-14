@@ -807,6 +807,11 @@ pub struct Program {
     /// What crosses between the workload and the server; `None` without a
     /// workload or a server.
     pub interface: Option<Interface>,
+    /// The names a paired workload file declares (`frontend::paired`):
+    /// its constants, inputs, definitions and stages, which the deployment
+    /// file does not read, as the workload reads none of the deployment's.
+    /// `None` for one file.
+    pub paired: Option<Vec<String>>,
 }
 
 /// The attributes each side keeps to itself

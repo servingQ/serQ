@@ -1,0 +1,43 @@
+// Agents that delegate to subagents (examples/subagent/vllm_subagents.sq's
+// workload): an arrival is a subagent with probability kids / (1 + kids), and
+// a parent waits for its subagents at a stage of the workload's own for `W`.
+use "std/args";
+
+let Lambda = 0.1;  // agent sessions per second
+let p = 0.9;  // the agent continues after a turn
+let Z = 3.0;  // tool time (s)
+let k = 3;  // subagents per delegation
+let pc = 0.7;  // a subagent continues after a turn
+let q = args.number("q", 0.3);  // a turn delegates instead of calling a tool
+let W = args.number("W", 15.4);  // the wait for the subagents (s)
+let kids = q * k * p / (1 - p);  // subagents per agent session
+
+stage delegate : delay;
+
+workload {
+  arrive poisson(Lambda * (1 + kids));
+  init {
+    set sub = ~bernoulli(kids / (1 + kids));
+    set K = sub ? floor(~uniform(2000, 6000)) : 0;
+    set t_s = now;
+  }
+  turn {
+    set n = ceil(K == 0 ? ~uniform(1000, 3000) : ~exp(500));
+    set o = floor(~exp(200)) + 1;
+    set more = ~bernoulli(sub ? pc : p);
+    set fan = sub ? 0 : ~bernoulli(q);
+  }
+  send (input: K + n, output: o);
+  session {
+    loop {
+      turn;
+      set K = K + n + o;
+      if (more) {
+        if (fan) { run delegate (cost(delegate, W)); } else { tool (~exp(Z)); }
+      } else {
+        if (sub) { observe subagent = now - t_s; }
+        end;
+      }
+    }
+  }
+}
