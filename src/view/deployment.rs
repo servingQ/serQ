@@ -2179,8 +2179,25 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
             if let Some(t) = wait {
                 f.note(pt(mid, y + 15.0), t, Anchor::Middle);
             }
-        } else if let Some(t) = wait {
-            f.note(pt(r.centre().x, r.bottom() + pad + 24.0), t, Anchor::Middle);
+        } else {
+            // side by side under the bracket (`adjacent_flows`): an arrow
+            // from each station to the next the run names, so that every
+            // station of the job has an arrow in and one out, as any other
+            // station has; a copy's mark goes on its one arrow
+            for w in group.windows(2) {
+                let (a, b) = (rects[w[0]], rects[w[1]]);
+                let y = a.centre().y;
+                let pts = if a.x < b.x {
+                    vec![pt(a.right(), y), pt(b.x, y)]
+                } else {
+                    vec![pt(a.x, y), pt(b.right(), y)]
+                };
+                let mark = if group.len() == 2 { copy.clone() } else { None };
+                f.copy_flow(pts, net.name(p, w[0]), net.name(p, w[1]), mark);
+            }
+            if let Some(t) = wait {
+                f.note(pt(r.centre().x, r.bottom() + pad + 24.0), t, Anchor::Middle);
+            }
         }
     }
 

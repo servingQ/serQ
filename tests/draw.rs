@@ -141,6 +141,82 @@ fn no_self_edges() {
     }
 }
 
+/// Every station of every program's figure has an arrow in (the arrival, or
+/// a flow to it) and an arrow out (a flow from it, or an exit). A station no
+/// request reaches does not link (#617), and a request that reaches one
+/// goes on from it; the figure shows both. A run over two NICs
+/// (`vllm_nixl_push.sq`, whose NICs are in no instance) was a bracket with
+/// no arrow between its stations, so the source's NIC had none out and the
+/// reader's none in.
+#[test]
+fn every_station_has_an_arrow_in_and_out() {
+    use serq::view::figure::{EdgeRole, Item};
+    let mut files = vec![];
+    let mut dirs = vec![
+        std::path::PathBuf::from("examples"),
+        "docs/tutorial/programs".into(),
+    ];
+    while let Some(d) = dirs.pop() {
+        for e in std::fs::read_dir(&d).unwrap() {
+            let path = e.unwrap().path();
+            // an instance file sets a program's inputs; it is no program
+            if path.is_dir() && path.file_name().is_some_and(|n| n != "instances") {
+                dirs.push(path);
+            } else if path.extension().is_some_and(|x| x == "sq") {
+                files.push(path);
+            }
+        }
+    }
+    files.sort();
+    assert!(files.len() > 30, "found {} programs", files.len());
+    for path in files {
+        let src = std::fs::read_to_string(&path).unwrap();
+        let p = compile_source(&src, &common::horizon(10.0))
+            .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        let f = deployment::figure(&p);
+        let (mut ins, mut outs) = (vec![], vec![]);
+        for i in &f.items {
+            match i {
+                Item::Edge {
+                    role: Some(EdgeRole::Arrival { to }),
+                    ..
+                } => ins.push(to.clone()),
+                Item::Edge {
+                    role: Some(EdgeRole::Exit { from }),
+                    ..
+                } => outs.push(from.clone()),
+                Item::Edge {
+                    role: Some(EdgeRole::Flow { from, to }),
+                    ..
+                } => {
+                    outs.push(from.clone());
+                    ins.push(to.clone());
+                }
+                _ => {}
+            }
+        }
+        for i in &f.items {
+            if let Item::Station {
+                node,
+                stage: Some(_),
+                ..
+            } = i
+            {
+                assert!(
+                    ins.contains(node),
+                    "{}: station {node} has no arrow in",
+                    path.display()
+                );
+                assert!(
+                    outs.contains(node),
+                    "{}: station {node} has no arrow out",
+                    path.display()
+                );
+            }
+        }
+    }
+}
+
 /// A chain of guards that moves nobody must not multiply the paths out.
 /// `routing.sq` has five sibling `if (policy == k)` blocks.
 #[test]
@@ -2129,12 +2205,13 @@ fn the_svg_names_stages_pools_and_roles() {
     assert!(svg.contains(r##"data-role="flow" data-from="#0" data-to="P""##));
     assert!(svg.contains(r##"data-role="flow" data-from="#0" data-to="D""##));
     assert!(!svg.contains(r#"data-from="D" data-to="#));
-    // a transfer whose NICs sit side by side has a bracket and no arrow
-    // between them: the push mode's prefiller and decoder share a box
+    // a transfer whose NICs sit side by side has a bracket and an arrow
+    // inside it, in the order the run names them: the push mode's NICs are
+    // in no instance, and each still has an arrow in and one out
     let p = program("vllm_nixl_push");
     let svg = serq::view::render(&deployment::figure(&p), "svg").unwrap();
     assert!(svg.contains(r#"data-role="bracket" data-nodes="P.nic D.nic""#));
-    assert!(!svg.contains(r#"data-from="P.nic" data-to="D.nic""#));
+    assert!(svg.contains(r#"data-role="flow" data-from="P.nic" data-to="D.nic""#));
     // thunderagent: its queue `waiting_queue` is drawn as a queue glyph and a
     // drum, one pool under two roles, and its tick is a station of no stage
     let p = program("thunderagent");
@@ -2149,8 +2226,7 @@ fn the_svg_names_stages_pools_and_roles() {
 
 /// The figure draws a pull and a push apart (`CStmt::Run::poster`): the
 /// word leads the copy's note, a dot on its bracket stands over the
-/// poster's NIC, and the bracket (and the arrow, across instances) names
-/// both. `llmd_nixl_pull.sq`'s decoder reads; `vllm_nixl_push.sq`'s
+/// poster's NIC, and the bracket and the arrow name both. `llmd_nixl_pull.sq`'s decoder reads; `vllm_nixl_push.sq`'s
 /// prefiller writes. A `transfer on` written by hand names no poster.
 #[test]
 fn a_copy_shows_who_posts_it() {
@@ -2183,12 +2259,16 @@ fn a_copy_shows_who_posts_it() {
         (vec![Some(pull.clone())], vec![Some(pull)], 1)
     );
     assert!(texts("llmd_nixl_pull").contains(&"pull · P.kv[i] → D.kv[j]".to_string()));
-    // the push's two NICs are in no instance: a bracket and no arrow
+    // the push's two NICs are in no instance: the arrow under the bracket
+    // carries the mark as the arrow across a gap does
     let push = CopyMark {
         pull: false,
         poster: "P.nic".into(),
     };
-    assert_eq!(marks("vllm_nixl_push"), (vec![Some(push)], vec![], 1));
+    assert_eq!(
+        marks("vllm_nixl_push"),
+        (vec![Some(push.clone())], vec![Some(push)], 1)
+    );
     assert!(texts("vllm_nixl_push").contains(&"push · latency (0.01)".to_string()));
     let f = deployment::figure(&program("pd_two_fabrics"));
     assert!(
