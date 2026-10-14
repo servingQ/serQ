@@ -159,7 +159,7 @@ resolves to nothing wherever it is read, in an expression, a capacity or a
 family's size, and a message says whose it is in place of "unknown"; the
 names a message shows are as written. Stages and pools keep their names (a
 report and a figure show them): the linker checks, by the side running or
-holding one, that it is its file's (`Linker::paired_stage`). The workload's lines are numbered after
+holding one, that it is its file's (`Linker::paired_station`). The workload's lines are numbered after
 the deployment's, in one text (`Paired::combined`), so every position the
 parser, the linker and the IR's check record, and each one a message quotes
 (`declared at 6:5`), maps back to its file (`Paired::render`), and the
