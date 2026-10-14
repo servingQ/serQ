@@ -1989,6 +1989,15 @@ fn groups(net: &Net) -> Vec<Group> {
 }
 
 /// Lay a projected network out as a figure.
+/// What the SVG calls node `i` of the net: its stage's name, or, for a
+/// decision or a tick, which is no stage, its place among the nodes (`#0`).
+fn node_name(p: &Program, net: &Net, i: usize) -> String {
+    match net.nodes[i].stage {
+        Some(st) => p.stages[st].name.clone(),
+        None => format!("#{i}"),
+    }
+}
+
 pub fn layout(p: &Program, net: &Net) -> Figure {
     let mut f = Figure {
         title: String::new(),
@@ -2210,7 +2219,12 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
             // through the gap, in the order the stages are named
             let (a, b) = (rects[group[0]], rects[*group.last().unwrap()]);
             let y = a.centre().y;
-            f.edge(vec![pt(a.right(), y), pt(b.x, y)], EdgeStyle::Flow);
+            f.flow(
+                vec![pt(a.right(), y), pt(b.x, y)],
+                EdgeStyle::Flow,
+                node_name(p, net, group[0]),
+                node_name(p, net, *group.last().unwrap()),
+            );
             let mid = (a.right() + b.x) / 2.0;
             if let Some(t) = moves {
                 f.note(pt(mid, y - 8.0), t, Anchor::Middle);
@@ -2456,7 +2470,7 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
                 if arrivals == 1 && i == 0 {
                     // The arrow starts at the margin and the label rides above
                     // it, clear of the pool glyphs it passes.
-                    f.arrival(vec![pt(MARGIN, y), pt(r.x, y)]);
+                    f.arrival(vec![pt(MARGIN, y), pt(r.x, y)], node_name(p, net, i));
                     f.note(pt(MARGIN, y - 10.0), arrival_text.clone(), Anchor::Start);
                 } else {
                     // A session that opens with a branch has more than one entry
@@ -2468,17 +2482,20 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
                     }
                     let ly = lane(&mut lanes);
                     let x = r.x + r.w * 0.25;
-                    f.arrival(vec![
-                        pt(MARGIN, y),
-                        pt(MARGIN, ly),
-                        pt(x, ly),
-                        pt(x, frames[i].bottom()),
-                    ]);
+                    f.arrival(
+                        vec![
+                            pt(MARGIN, y),
+                            pt(MARGIN, ly),
+                            pt(x, ly),
+                            pt(x, frames[i].bottom()),
+                        ],
+                        node_name(p, net, i),
+                    );
                 }
             }
             (End::Node(i), End::Exit) => {
                 let r = rects[i];
-                let from = net.nodes[i].stage.map(|st| p.stages[st].name.clone());
+                let from = node_name(p, net, i);
                 // a request leaving the deployment, or a session that ends
                 // inside it: both go out, and only the second has a guard
                 let text = label.map_or("out".into(), |l| format!("out ({l})"));
@@ -2519,17 +2536,17 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
                 // clear of the 0.25 a return leaves and enters by and the
                 // 0.75 an early exit leaves by
                 let (ax, bx) = (ra.x + ra.w * 0.625, rb.x + rb.w * 0.5);
-                f.push(Item::Edge {
-                    pts: vec![
+                f.flow(
+                    vec![
                         pt(ax, frames[a].bottom()),
                         pt(ax, y),
                         pt(bx, y),
                         pt(bx, frames[b].bottom()),
                     ],
-                    style: EdgeStyle::Flow,
-                    arrow: true,
-                    role: None,
-                });
+                    EdgeStyle::Flow,
+                    node_name(p, net, a),
+                    node_name(p, net, b),
+                );
                 if let Some(l) = label {
                     f.note(
                         pt((ra.centre().x + rb.centre().x) / 2.0, y - 5.0),
@@ -2540,9 +2557,11 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
             }
             (End::Node(a), End::Node(b)) if !e.back => {
                 let (ra, rb) = (rects[a], rects[b]);
-                f.edge(
+                f.flow(
                     vec![pt(ra.right(), ra.centre().y), pt(rb.x, rb.centre().y)],
                     EdgeStyle::Flow,
+                    node_name(p, net, a),
+                    node_name(p, net, b),
                 );
                 if let Some(l) = label {
                     // by the station it leaves: the pool glyphs before the
@@ -2558,17 +2577,17 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
                 let (ra, rb) = (rects[a], rects[b]);
                 let y = lane(&mut lanes);
                 let (ax, bx) = (ra.x + ra.w * 0.25, rb.x + rb.w * 0.25);
-                f.push(Item::Edge {
-                    pts: vec![
+                f.flow(
+                    vec![
                         pt(ax, frames[a].bottom()),
                         pt(ax, y),
                         pt(bx, y),
                         pt(bx, frames[b].bottom()),
                     ],
-                    style: EdgeStyle::Back,
-                    arrow: true,
-                    role: None,
-                });
+                    EdgeStyle::Back,
+                    node_name(p, net, a),
+                    node_name(p, net, b),
+                );
                 if let Some(l) = label {
                     f.note(
                         pt((ra.centre().x + rb.centre().x) / 2.0, y - 5.0),

@@ -71,9 +71,15 @@ TikZ writer ignores the ids.
 |---|---|---|
 | `queue` | `<g data-pool>` | the queue glyph where holds of the pool wait |
 | `drum` | `<g data-pool>` | the pool's drum |
-| `arrival` | a `<path>` | the arrow sessions arrive by |
-| `exit` | a `<path>` | an arrow sessions leave by; `data-from` names the stage it leaves, absent from a decision |
+| `arrival` | a `<path>` | the arrow sessions arrive by; `data-to` names the node it reaches |
+| `flow` | a `<path>` | an arrow sessions take from `data-from` to `data-to`: the next station, a loop's return, a transfer between two NICs |
+| `exit` | a `<path>` | an arrow sessions leave by, from `data-from` |
 | `budget` | a `<rect>` inside `<g data-stage>` | the used part of an engine's budget bar |
+
+An arrow's ends name a station by its stage, and a decision or a tick, which
+is no stage, by its place among the figure's nodes: `#0` is the first. A
+page can so walk a request from one station to the next along the arrows
+it would take, through the decision between them.
 
 ## Glyphs
 

@@ -401,11 +401,17 @@ pub fn render(f: &Figure) -> String {
                     ""
                 };
                 let r = match role {
-                    Some(EdgeRole::Arrival) => r#" data-role="arrival""#.to_string(),
-                    Some(EdgeRole::Exit { from: Some(st) }) => {
-                        format!(r#" data-role="exit" data-from="{}""#, esc(st))
+                    Some(EdgeRole::Arrival { to }) => {
+                        format!(r#" data-role="arrival" data-to="{}""#, esc(to))
                     }
-                    Some(EdgeRole::Exit { from: None }) => r#" data-role="exit""#.to_string(),
+                    Some(EdgeRole::Exit { from }) => {
+                        format!(r#" data-role="exit" data-from="{}""#, esc(from))
+                    }
+                    Some(EdgeRole::Flow { from, to }) => format!(
+                        r#" data-role="flow" data-from="{}" data-to="{}""#,
+                        esc(from),
+                        esc(to)
+                    ),
                     None => String::new(),
                 };
                 let _ = writeln!(s, r#"<path {}{r} d="{d}"{m}/>"#, paint(edge_class(*style)));

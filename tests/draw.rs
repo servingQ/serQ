@@ -2072,10 +2072,29 @@ fn the_svg_names_stages_pools_and_roles() {
     // ends a session at the router when the context is full (`end` under
     // `K + n >= max_model_len`), an exit from the decision, with no stage
     let p = program("llmd_nixl_pull");
-    let svg = serq::view::render(&deployment::figure(&p), "svg").unwrap();
+    let net = deployment::project(&p);
+    let svg = serq::view::render(&deployment::layout(&p, &net), "svg").unwrap();
     assert!(svg.contains(r#"data-role="exit" data-from="D""#));
+    assert!(svg.contains(r##"data-role="exit" data-from="#0""##));
     assert_eq!(svg.matches(r#"data-role="exit""#).count(), 2);
-    assert_eq!(svg.matches("data-from=").count(), 1);
+    // sessions arrive at the router's decision, the first node
+    assert!(svg.contains(r##"data-role="arrival" data-to="#0""##));
+    // every arrow between two nodes says which: as many as the net has
+    // edges between nodes, plus the transfer's arrow across the gap
+    // (`P.nic` to `D.nic`, the flow's stages in the order they are named)
+    let between = net
+        .edges
+        .iter()
+        .filter(|e| matches!((e.from, e.to), (End::Node(_), End::Node(_))))
+        .count();
+    assert_eq!(svg.matches(r#"data-role="flow""#).count(), between + 1);
+    assert!(svg.contains(r#"data-role="flow" data-from="P.nic" data-to="D.nic""#));
+    // the decision to the prefiller (`remote_prefill`), and to the decoder
+    // alone (`else`); the next turn goes through the workload, which the
+    // figure omits, so no arrow returns from `D`
+    assert!(svg.contains(r##"data-role="flow" data-from="#0" data-to="P""##));
+    assert!(svg.contains(r##"data-role="flow" data-from="#0" data-to="D""##));
+    assert!(!svg.contains(r#"data-from="D" data-to="#));
     // thunderagent: its queue `waiting_queue` is drawn as a queue glyph and a
     // drum, one pool under two roles, and its tick is a station of no stage
     let p = program("thunderagent");

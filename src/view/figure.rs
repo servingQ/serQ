@@ -94,16 +94,21 @@ pub enum EdgeStyle {
     Relation,
 }
 
-/// What an edge is, beyond its style: where sessions enter the figure and
-/// where they leave it. Written into the SVG (`data-role`) so that a page
-/// animating the figure knows where a request comes from and goes to.
+/// What an edge is, beyond its style: where sessions enter the figure, how
+/// they go from one station to the next, and where they leave. Written into
+/// the SVG (`data-role`, `data-from`, `data-to`) so that a page animating a
+/// run over the figure can move a request along the arrows. A station is
+/// named by its stage; a decision or a tick, which is no stage, by its place
+/// among the net's nodes (`#0`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EdgeRole {
-    Arrival,
-    /// An exit, from the stage it leaves (`None` from a decision).
-    Exit {
-        from: Option<String>,
-    },
+    /// Sessions arrive by it, at `to`.
+    Arrival { to: String },
+    /// Sessions leave by it, from `from`.
+    Exit { from: String },
+    /// Sessions go from `from` to `to` by it: the next station, a loop's
+    /// return, a transfer between two NICs.
+    Flow { from: String, to: String },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -300,23 +305,34 @@ impl Figure {
         });
     }
 
-    /// The arrow sessions arrive by.
-    pub fn arrival(&mut self, pts: Vec<Point>) {
+    /// The arrow sessions arrive by, at node `to`.
+    pub fn arrival(&mut self, pts: Vec<Point>, to: String) {
         self.push(Item::Edge {
             pts,
             style: EdgeStyle::Flow,
             arrow: true,
-            role: Some(EdgeRole::Arrival),
+            role: Some(EdgeRole::Arrival { to }),
         });
     }
 
-    /// An arrow sessions leave by, from stage `from` (`None`: from a decision).
-    pub fn exit(&mut self, pts: Vec<Point>, from: Option<String>) {
+    /// An arrow sessions leave by, from node `from`.
+    pub fn exit(&mut self, pts: Vec<Point>, from: String) {
         self.push(Item::Edge {
             pts,
             style: EdgeStyle::Flow,
             arrow: true,
             role: Some(EdgeRole::Exit { from }),
+        });
+    }
+
+    /// An arrow sessions take from node `from` to node `to`, drawn in
+    /// `style` (a loop's return is `Back`).
+    pub fn flow(&mut self, pts: Vec<Point>, style: EdgeStyle, from: String, to: String) {
+        self.push(Item::Edge {
+            pts,
+            style,
+            arrow: true,
+            role: Some(EdgeRole::Flow { from, to }),
         });
     }
 
