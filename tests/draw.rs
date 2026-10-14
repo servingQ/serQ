@@ -2394,3 +2394,76 @@ fn an_instance_is_drawn_once_per_member() {
             .any(|i| matches!(i, Item::Text { text, .. } if text == "8 of 10 members drawn"))
     );
 }
+
+/// A KV copy between a family of one and a single queue (#645 A2): the
+/// linker indexed the source's NIC only past one member, so `P[1]` with one
+/// `D` did not link ("stage `P.nic` is a family of 1; index it"), and the
+/// view drew a copy out of a stacked instance into none as a bracket named
+/// `P.nic`, leaving `P.nic[0]` with no arrow out. Each way it links, draws,
+/// and runs as the program with two single queues does.
+#[test]
+fn a_copy_between_a_family_of_one_and_one_queue_links_draws_and_runs_alike() {
+    let src = std::fs::read_to_string(program_path("vllm_nixl_push")).unwrap();
+    let edit = |pairs: &[(&str, &str)]| {
+        pairs.iter().fold(src.clone(), |s, (a, b)| {
+            assert!(s.contains(a), "{a}");
+            s.replace(a, b)
+        })
+    };
+    let source_family = edit(&[
+        ("  queue P : prefill {", "  queue P[1] : prefill {"),
+        (
+            "fork { P.prefill (prompt); }",
+            "fork { P[i].prefill (prompt); }",
+        ),
+        (
+            "        P.prefill (prompt);  ",
+            "        P[i].prefill (prompt);  ",
+        ),
+        (
+            "      D.decode (prompt) from P;",
+            "      D.decode (prompt) from P[i];",
+        ),
+        (
+            "      set prompt = new;\n",
+            "      set prompt = new;\n      choose i in 1 by (work(P[i]));\n",
+        ),
+    ]);
+    let reader_family = edit(&[
+        ("  queue D : decode {", "  queue D[1] : decode {"),
+        (
+            "      D.decode (prompt) from P;",
+            "      D[j].decode (prompt) from P;",
+        ),
+        (
+            "      set prompt = new;\n",
+            "      set prompt = new;\n      choose j in 1 by (work(D[j]));\n",
+        ),
+    ]);
+    // under the workload `examples/pairs.json` pairs the example with, its
+    // trace read beside it
+    let wpath = serq::paired_workload(&program_path("vllm_nixl_push")).expect("a pair");
+    let workload = std::fs::read_to_string(&wpath).unwrap();
+    let ov = common::horizon(200.0);
+    let parked = |s: &str| {
+        let p = common::compile(s, &workload, &ov).unwrap_or_else(|e| panic!("{e}"));
+        deployment::checked_figure(&p).unwrap_or_else(|e| panic!("{e}"));
+        serq::run_ir(&p, wpath.parent())
+            .unwrap()
+            .observe("parked")
+            .unwrap()
+            .samples
+            .clone()
+    };
+    let single = parked(&src);
+    assert!(!single.is_empty());
+    assert_eq!(parked(&source_family), single);
+    assert_eq!(parked(&reader_family), single);
+    // the view's half is no matter of size: two prefillers and one decoder
+    // drew `P.nic[0]` with no arrow out as well
+    let two = source_family
+        .replace("queue P[1] : prefill {", "queue P[2] : prefill {")
+        .replace("choose i in 1 by", "choose i in 2 by");
+    let p = common::compile(&two, &workload, &ov).unwrap_or_else(|e| panic!("{e}"));
+    deployment::checked_figure(&p).unwrap_or_else(|e| panic!("{e}"));
+}
