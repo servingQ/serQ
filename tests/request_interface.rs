@@ -269,46 +269,57 @@ fn hiding_is_a_parameters_under_a_signature() {
 }
 
 #[test]
-fn send_and_reply_need_a_signature() {
+fn a_bare_server_takes_nothing() {
+    refused(
+        &with("", "server { run svc (cost(svc, s)); }"),
+        &["the server reads `s`, which the workload sets; a request carries nothing"],
+    );
     refused(
         &with("send (s);", "server { run svc (cost(svc, s)); }"),
-        &["`send` binds the server's parameters, and `server { … }` declares none"],
+        &["`send` binds `s`, which the server does not take; it takes nothing"],
     );
     refused(
         &with(
             "session { turn; observe x = reply.done; }",
-            "server { run svc (cost(svc, s)); set done = 1; }",
+            "server { run svc (cost(svc, 1)); set done = 1; }",
         ),
-        &["`reply.…` reads what the server's `reply (…)` declares"],
+        &["`reply.done`: the server's reply carries nothing"],
     );
+    compile(&with("", "server { run svc (cost(svc, 1)); }")).unwrap();
 }
 
 /// A parameter sent as the workload's attribute of the same name is that
-/// attribute: the IR is the bare server's.
+/// attribute: the `turn` block keeps only its draw.
 #[test]
 fn sending_an_attribute_as_it_is_adds_nothing_to_the_ir() {
-    let bare = compile(&with("hidden s;", "server { run svc (cost(svc, s)); }")).unwrap();
-    let signed = compile(&with(
-        "send (s);",
-        "server (hidden s) { run svc (cost(svc, s)); }",
-    ))
-    .unwrap();
+    let turn = |workload: &str, server: &str| {
+        let p = compile(&with(workload, server)).unwrap();
+        p.blocks[p.turn].len()
+    };
     assert_eq!(
-        serde_json::to_value(&bare).unwrap(),
-        serde_json::to_value(&signed).unwrap()
+        turn("send (s);", "server (hidden s) { run svc (cost(svc, s)); }"),
+        1
+    );
+    assert_eq!(
+        turn(
+            "send (w: s);",
+            "server (hidden w) { run svc (cost(svc, w)); }"
+        ),
+        2
     );
 }
 
 /// A parameter bound to an expression is set at the turn, from the turn's
-/// draws, where the bare server read the expression: the run is the same.
+/// draws: the run is the one of a server reading the expression of
+/// parameters sent as they are.
 #[test]
-fn a_sent_expression_is_the_value_the_bare_server_read() {
+fn a_sent_expression_is_its_value_at_the_turn() {
     let session = "session { turn; while (K < 3) { set K = K + 1; turn; } }";
-    let bare = with(
-        session,
-        "server { run svc (cost(svc, s + K)); observe w = s + K; }",
+    let as_is = with(
+        &format!("send (s, K); {session}"),
+        "server (s, K) { run svc (cost(svc, s + K)); observe w = s + K; }",
     );
-    let signed = with(
+    let bound = with(
         &format!("send (work: s + K); {session}"),
         "server (work) { run svc (cost(svc, work)); observe w = work; }",
     );
@@ -317,5 +328,5 @@ fn a_sent_expression_is_the_value_the_bare_server_read() {
             .unwrap()
             .json()
     };
-    assert_eq!(run(&bare), run(&signed));
+    assert_eq!(run(&as_is), run(&bound));
 }

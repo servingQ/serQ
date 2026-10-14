@@ -803,9 +803,8 @@ pub struct Program {
     pub gauges: Vec<(String, Expr)>,
     /// `claim NAME …;`, in order.
     pub claims: Vec<ClaimDecl>,
-    /// What crosses between the workload and a `server (…)` with a
-    /// signature; `None` for a bare `server { … }`, whose sides share
-    /// every attribute.
+    /// What crosses between the workload and the server; `None` for a
+    /// program without them.
     pub interface: Option<Interface>,
 }
 

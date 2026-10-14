@@ -165,7 +165,7 @@ struct Parser {
     /// position of its keyword, until `assemble` puts them together.
     wl_session: Option<(usize, Vec<Stmt>)>,
     server: Option<(usize, Vec<Stmt>)>,
-    /// `server (…) reply (…)`: the server's signature, when it has one.
+    /// `server (…) reply (…)`: the server's signature, once it is read.
     signature: Option<Signature>,
     /// The workload's `send (P: e, …);`, with the position of `send` and
     /// of each parameter's name.
@@ -2067,7 +2067,7 @@ impl Parser {
                 if self.server.is_some() {
                     return self.err_at(at, "duplicate server");
                 }
-                self.signature = self.signature()?;
+                self.signature = Some(self.signature()?);
                 self.side = Side::Server;
                 let body = self.block()?;
                 self.side = Side::Session;
@@ -2487,27 +2487,12 @@ impl Parser {
         }
     }
 
-    /// Under a server's signature: what `send` binds goes at the end of
-    /// the `turn` block, so a request carries it from the turn's draws on;
-    /// a default goes in `init`; a `hidden` parameter is hidden as the
-    /// workload's `hidden` was. Without one, `send` and `reply.…` have
-    /// nothing to answer them.
+    /// What `send` binds goes at the end of the `turn` block, so a request
+    /// carries it from the turn's draws on, and a `hidden` parameter is
+    /// hidden from the scheduler. Without a server, `assemble` says what is
+    /// missing.
     fn lower_send(&mut self, prog: &mut Program) -> PResult<()> {
         let Some(sig) = &self.signature else {
-            if let Some((at, _)) = &self.send {
-                return self.err_at(
-                    *at,
-                    "`send` binds the server's parameters, and `server { … }` declares none\n\
-                     help: name them: `server (P, …) { … }`",
-                );
-            }
-            if let Some((at, ..)) = self.reply_reads.first() {
-                return self.err_at(
-                    *at,
-                    "`reply.…` reads what the server's `reply (…)` declares, and \
-                     `server { … }` declares none",
-                );
-            }
             return Ok(());
         };
         let Some(w) = prog.workload.as_mut() else {
@@ -4864,14 +4849,13 @@ impl Parser {
         Ok(())
     }
 
-    /// `(P, hidden Q, R = 0) reply (S)` after `server`, either part
-    /// optional: `None` for a bare `server { … }`.
-    fn signature(&mut self) -> PResult<Option<Signature>> {
+    /// `(P, hidden Q) reply (S)` after `server`, either part optional: a
+    /// bare `server { … }` takes nothing and replies nothing.
+    fn signature(&mut self) -> PResult<Signature> {
         let mut sig = Signature {
             params: vec![],
             reply: vec![],
         };
-        let has_params = *self.peek() == Tok::LParen;
         if self.eat(&Tok::LParen) {
             while *self.peek() != Tok::RParen {
                 let hidden = self.eat_kw("hidden");
@@ -4913,7 +4897,7 @@ impl Parser {
             }
             self.expect(&Tok::RParen)?;
         }
-        Ok((has_params || has_reply).then_some(sig))
+        Ok(sig)
     }
 
     /// `send (P: e, …);` in `workload`, after `send`.
