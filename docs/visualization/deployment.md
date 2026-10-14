@@ -7,14 +7,18 @@ The program as a queueing network.
 That is `examples/pd-disaggregation/llmd_nixl_pull.sq`: two prefill and two decode
 instances, the KV read over NIXL. Each filled panel is an instance: what the
 router's `choose` picks, a pod with its engine, its NIC and its pools; the
-engine's slots and KV blocks are drawn in the engine's frame. The
-read crosses from the prefiller's box to the decoder's: it holds the
-prefiller's NIC and the decoder's at once, so its two stations are bracketed
-as one job, and what it moves (`P.kv[i] → D.kv[j]`: the prefiller's blocks
-stay leased until it ends, the decoder's are allocated before it starts) and
-the link's latency are written on it. It is a `pull`: the decoder's worker
-starts each read, so the dot on the bracket stands over `D.nic[j]`. In
-`vllm_nixl_push.sq` the same copy is a `push`, the dot over `P.nic`.
+engine's slots and KV blocks are drawn in the engine's frame. The router
+picks one of `NP` prefillers and one of `ND` decoders, and the figure draws
+all of them, a panel per member stacked down from the first (`P[0]`,
+`P[1]`), the router's arrow turning down to each. The
+read crosses from a prefiller's box to a decoder's, from each to each: it
+holds the prefiller's NIC and the decoder's at once, and what it moves
+(`P.kv[i] → D.kv[j]`: the prefiller's blocks stay leased until it ends, the
+decoder's are allocated before it starts) and the link's latency are written
+over the arrows. It is a `pull`: the decoder's worker starts each read, so a
+dot stands over each `D.nic[j]`. In `vllm_nixl_push.sq` the same copy is a
+`push`, its two NICs in no panel and bracketed as one job, the dot on the
+bracket over `P.nic`.
 
 ## Request flow
 
@@ -38,10 +42,11 @@ every way through holds it, whichever hold took it on each.
 | Arrow | Request flow between stages, including branches and loop returns. Guards label alternatives; `out` marks an exit. Every station has an arrow in and one out: a stage nothing runs does not link, and a request goes on from every station it reaches. `serq check` and `serq draw` check it on every program (`deployment::checked_figure`) and refuse a figure that cuts a station off, naming it, as the view's fault; `tests/draw.rs` checks it over every example and tutorial program. |
 | Decision diamond | A branch or routing decision before the first station. |
 | Filled panel | An instance selected by `choose`, grouping the engine, NIC and pools indexed by exactly its variable. One the session also indexes otherwise (`E[j]`, `E[0]`) is in no panel; a panel takes in a dashed enclosure only when all of it stands inside. An instance's pool is drawn only inside its panel, so a station outside it does not show that hold; a run between stations the panels would pull apart is drawn outside them. |
+| Stacked panels | An instance's members, one panel each (`choose i in NP`: `NP` of them, its families' smallest size), stacked down from the first; past eight, the figure says how many it drew. An arrow into the instance turns down beside the stack to each member, one out of it from each; an arrow between two stacked instances goes from each member to each. |
 | Dashed enclosure | A pool held across several stations. |
 | Unfilled frame | Pools held at one station, listed below its glyph. |
 | Transfer bracket | A job using both endpoints' NICs, an arrow inside it from each station to the next the run names; its label names the source and destination KV. |
-| `pull` / `push`, a dot on the bracket | Who posts a KV relation's copy (`kvt.nixl_pull`, `kvt.nixl_push`): the dot stands over the poster's NIC, and the word leads the copy's label. A pull is posted at the arrow's head, where the bytes arrive; a push at its tail. A `transfer on` written by hand names no poster and has neither. |
+| `pull` / `push`, a dot on the bracket | Who posts a KV relation's copy (`kvt.nixl_pull`, `kvt.nixl_push`): the dot stands over the poster's NIC, and the word leads the copy's label. A pull is posted at the arrow's head, where the bytes arrive; a push at its tail. Between two stacked instances the copy has no bracket, and a dot stands over each member's NIC. A `transfer on` written by hand names no poster and has neither. |
 | Latency label | A delay before a single transfer. A delay leading to several transfers remains a station. |
 
 The diagram simplifies control flow. Consecutive visits to one station do
@@ -60,10 +65,13 @@ neither: a request arrives at `vllm` and goes out.
 ## Addressing the figure
 
 The SVG is a picture that a page can also address. Each station's shapes
-are grouped under the name the arrows call it by, `<g data-node="P"
-data-stage="P">` (an array's members share the name: `P[0]` and `P[1]`
-are one station, `P`); a queue glyph and a drum carry their pool and which
-of the two they are, `<g data-pool="P.reqs" data-role="queue">`. A
+are grouped under the name the arrows call it by, `<g data-node="E"
+data-stage="E">`: an array's members share the name (`E[0]` and `E[1]`
+are one station, `E`), except in a stacked instance, whose stations and
+pools are named by their member, `<g data-node="P[1]" data-stage="P[1]">`
+(the run log's `name` and `index`, written `P[1]`); a queue glyph and a
+drum carry their pool and which of the two they are, `<g
+data-pool="P.reqs[0]" data-role="queue">`. A
 decision diamond and a pool's tick are no stage: they have a node name
 (`<g data-node="#0">`) and no `data-stage`. That is what
 [serq-lar](https://github.com/servingQ/serq-lar) animates a
@@ -84,7 +92,7 @@ TikZ writer ignores the ids.
 A KV relation's copy also says who posts it, on its bracket and on its
 `flow` arrow:
 `data-copy="pull"` or `"push"`, and `data-poster` the poster's node
-(`D.nic`). The dot is a `<circle class="poster">`.
+(`D.nic[1]`). The dot is a `<circle class="poster">`.
 
 An arrow's ends name a station by its stage, and a decision or a tick, which
 is no stage, by its place among the figure's nodes: `#0` is the first. The

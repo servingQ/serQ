@@ -82,9 +82,13 @@ fn a_step_stage_is_drawn_in_an_engines_words() {
     ] {
         assert!(has(s), "no {s:?} in {t:?}");
     }
+    // `D.kv`, once in each of the two decoders' boxes
     let admitted: Vec<&String> = t.iter().filter(|x| x.contains("admitted by")).collect();
-    assert_eq!(admitted.len(), 1, "{admitted:?}");
-    assert!(admitted[0].ends_with("admitted by D"), "{admitted:?}");
+    assert_eq!(admitted.len(), 2, "{admitted:?}");
+    assert!(
+        admitted.iter().all(|a| a.ends_with("admitted by D")),
+        "{admitted:?}"
+    );
     assert!(
         !t.iter()
             .any(|x| x.contains("admit via") || x.starts_with("budget"))
@@ -311,6 +315,27 @@ fn disjoint_holds_of_one_pool_get_separate_enclosures() {
     );
 }
 
+/// A name with the member indices a stacked instance writes taken out:
+/// `P.nic[1]` is `P.nic`.
+fn family(name: &str) -> String {
+    let mut out = String::new();
+    let mut rest = name;
+    while let Some(k) = rest.find('[') {
+        let close = rest[k..].find(']').map(|c| k + c);
+        match close {
+            Some(c) if c > k + 1 && rest[k + 1..c].bytes().all(|b| b.is_ascii_digit()) => {
+                out.push_str(&rest[..k]);
+                rest = &rest[c + 1..];
+            }
+            _ => {
+                out.push_str(&rest[..=k]);
+                rest = &rest[k + 1..];
+            }
+        }
+    }
+    out + rest
+}
+
 /// Feedback edges, early exits and second entry points all need a lane below
 /// the station row, and must not be given the same one.
 #[test]
@@ -318,14 +343,20 @@ fn lanes_below_the_row_do_not_collide() {
     for name in PROGRAMS {
         let p = program(name);
         let f = deployment::figure(&p);
-        let mut ys: Vec<f64> = f
+        // an arrow drawn for each member of a stacked instance is one arrow
+        // (`P[0]`, `P[1]` are `P`'s), and its members share its lane
+        let mut keyed: Vec<(String, f64)> = f
             .items
             .iter()
             .filter_map(|i| match i {
-                serq::view::figure::Item::Edge { pts, .. } if pts.len() >= 3 => Some(pts[1].y),
+                serq::view::figure::Item::Edge { pts, role, .. } if pts.len() >= 3 => {
+                    Some((family(&format!("{role:?}")), pts[1].y))
+                }
                 _ => None,
             })
             .collect();
+        keyed.dedup();
+        let mut ys: Vec<f64> = keyed.into_iter().map(|(_, y)| y).collect();
         ys.sort_by(f64::total_cmp);
         for w in ys.windows(2) {
             assert!(w[1] - w[0] > 1.0 || w[1] == w[0], "{name}: lanes at {w:?}");
@@ -776,13 +807,11 @@ fn a_transfer_between_instances_is_drawn_between_their_boxes() {
     let f = deployment::layout(&p, &net);
     let boxes = f.boxes(BoxStyle::Instance);
     let st = f.stations();
-    assert_eq!(boxes.len(), 2);
+    // a box per member: `P[0]`, `P[1]`, `D[0]`, `D[1]` (`NP = ND = 2`)
+    assert_eq!(boxes.len(), 4);
     let inside = |b: &serq::view::figure::Rect, k: usize| b.contains(&st[k].0);
-    let (pbox, dbox) = if inside(&boxes[0], pf) {
-        (boxes[0], boxes[1])
-    } else {
-        (boxes[1], boxes[0])
-    };
+    let pbox = *boxes.iter().find(|b| inside(b, pf)).unwrap();
+    let dbox = *boxes.iter().find(|b| inside(b, d)).unwrap();
     assert!(inside(&pbox, pf) && inside(&pbox, eg) && !inside(&pbox, ing));
     assert!(inside(&dbox, ing) && inside(&dbox, d) && !inside(&dbox, eg));
     assert!(!pbox.overlaps(&dbox), "the read is between the boxes");
@@ -1309,11 +1338,20 @@ fn enclosures_contain_their_stations_and_nest() {
         let net = deployment::project(&p);
         let f = deployment::layout(&p, &net);
         no_overlapping_enclosures(&f, name);
-        // `layout` pushes one station per node, in node order.
+        // `layout` pushes one station per node, in node order, then those
+        // of a stacked instance's members past the first
         let boxes = f.boxes(BoxStyle::Enclosure);
         let stations = f.stations();
+        let members = f
+            .items
+            .iter()
+            .filter(|i| {
+                matches!(i, serq::view::figure::Item::Station { node, .. }
+                    if node.ends_with(']') && !node.ends_with("[0]"))
+            })
+            .count();
         assert_eq!(
-            stations.len(),
+            stations.len() - members,
             net.nodes.len(),
             "{name}: a station per node"
         );
@@ -2120,16 +2158,18 @@ fn the_svg_names_stages_pools_and_roles() {
                 }
             }
         }
-        assert_eq!(got, want, "{name}");
+        // a stacked instance's stations are named by their members'
+        let families: std::collections::BTreeSet<String> = got.iter().map(|s| family(s)).collect();
+        assert_eq!(families, want, "{name}");
         let svg = serq::view::render(&f, "svg").unwrap();
-        for st in &want {
+        for st in &got {
             assert!(
                 svg.contains(&format!(r#"<g data-node="{st}" data-stage="{st}">"#)),
                 "{name}: {st}"
             );
         }
         // one group per station, every group closed
-        assert_eq!(svg.matches(" data-stage=").count(), want.len(), "{name}");
+        assert_eq!(svg.matches(" data-stage=").count(), got.len(), "{name}");
         assert_eq!(svg.matches("<g data-").count(), svg.matches("</g>").count());
         // a pool's groups are told apart by their role
         for m in svg.match_indices("<g data-pool=") {
@@ -2145,32 +2185,33 @@ fn the_svg_names_stages_pools_and_roles() {
         assert!(!tikz.contains("data-"), "{name}");
     }
     // llmd_nixl_pull: the last station is `D`, and the session leaves from
-    // it (`docs/use-cases/pd.md`: the decoder answers); the program also
-    // ends a session at the router when the context is full (`end` under
-    // `K + n >= max_model_len`), an exit from the decision, with no stage
+    // it (`docs/use-cases/pd.md`: the decoder answers), from each of the
+    // `ND = 2` decoders drawn; the program also ends a session at the
+    // router when the context is full (`end` under `K + n >=
+    // max_model_len`), an exit from the decision, with no stage
     let p = program("llmd_nixl_pull");
     let net = deployment::project(&p);
     let svg = serq::view::render(&deployment::layout(&p, &net), "svg").unwrap();
-    assert!(svg.contains(r#"data-role="exit" data-from="D""#));
+    assert!(svg.contains(r#"data-role="exit" data-from="D[0]""#));
+    assert!(svg.contains(r#"data-role="exit" data-from="D[1]""#));
     assert!(svg.contains(r##"data-role="exit" data-from="#0""##));
-    assert_eq!(svg.matches(r#"data-role="exit""#).count(), 2);
+    assert_eq!(svg.matches(r#"data-role="exit""#).count(), 3);
     // sessions arrive at the router's decision, the first node
     assert!(svg.contains(r##"data-role="arrival" data-to="#0""##));
-    // every arrow between two nodes says which: as many as the net has
-    // edges between nodes, plus one across the gap per run that spans two
-    // instances (`P.nic` to `D.nic`, the flow's stages in the order they
-    // are named)
+    // every arrow between two nodes says which: the net's four edges
+    // between nodes (the decision to `P` and to `D`, `P` to its NIC, the
+    // decoder's NIC to `D`) for each member, two each, and the run that
+    // spans the two instances (`P.nic` to `D.nic`, the flow's stages in the
+    // order they are named) from each prefiller to each decoder, four
     let between = net
         .edges
         .iter()
         .filter(|e| matches!((e.from, e.to), (End::Node(_), End::Node(_))))
         .count();
+    assert_eq!(between, 4);
     let spanning = net.flows.iter().filter(|g| net.spans(g)).count();
     assert_eq!(spanning, 1);
-    assert_eq!(
-        svg.matches(r#"data-role="flow""#).count(),
-        between + spanning
-    );
+    assert_eq!(svg.matches(r#"data-role="flow""#).count(), 2 * between + 4);
     // every name an arrow uses is a node in the figure, and the bracket
     // names the two NICs the transfer holds at once
     for m in svg
@@ -2184,14 +2225,25 @@ fn the_svg_names_stages_pools_and_roles() {
             "{name} is not a node"
         );
     }
-    assert!(svg.contains(r#"data-role="bracket" data-nodes="P.nic D.nic""#));
-    assert!(svg.contains(r#"data-role="flow" data-from="P.nic" data-to="D.nic""#));
-    // the decision to the prefiller (`remote_prefill`), and to the decoder
+    // and a copy between two stacked instances has no bracket
+    assert!(!svg.contains(r#"data-role="bracket""#));
+    for (i, j) in [(0, 0), (0, 1), (1, 0), (1, 1)] {
+        assert!(svg.contains(&format!(
+            r#"data-role="flow" data-from="P.nic[{i}]" data-to="D.nic[{j}]""#
+        )));
+    }
+    // the decision to each prefiller (`remote_prefill`), and to each decoder
     // alone (`else`); the next turn goes through the workload, which the
     // figure omits, so no arrow returns from `D`
-    assert!(svg.contains(r##"data-role="flow" data-from="#0" data-to="P""##));
-    assert!(svg.contains(r##"data-role="flow" data-from="#0" data-to="D""##));
-    assert!(!svg.contains(r#"data-from="D" data-to="#));
+    for m in 0..2 {
+        assert!(svg.contains(&format!(
+            r##"data-role="flow" data-from="#0" data-to="P[{m}]""##
+        )));
+        assert!(svg.contains(&format!(
+            r##"data-role="flow" data-from="#0" data-to="D[{m}]""##
+        )));
+        assert!(!svg.contains(&format!(r#"data-from="D[{m}]" data-to="#)));
+    }
     // a transfer whose NICs sit side by side has a bracket and an arrow
     // inside it, in the order the run names them: the push mode's NICs are
     // in no instance, and each still has an arrow in and one out
@@ -2237,13 +2289,17 @@ fn a_copy_shows_who_posts_it() {
         }
         (brackets, arrows, dots)
     };
-    let pull = CopyMark {
-        pull: true,
-        poster: "D.nic".into(),
+    // between two stacked instances: no bracket, an arrow from each
+    // prefiller to each decoder posted by its decoder, a dot over each
+    let pull = |j: usize| {
+        Some(CopyMark {
+            pull: true,
+            poster: format!("D.nic[{j}]"),
+        })
     };
     assert_eq!(
         marks("llmd_nixl_pull"),
-        (vec![Some(pull.clone())], vec![Some(pull)], 1)
+        (vec![], vec![pull(0), pull(1), pull(0), pull(1)], 2)
     );
     assert!(texts("llmd_nixl_pull").contains(&"pull · P.kv[i] → D.kv[j]".to_string()));
     // the push's two NICs are in no instance: the arrow under the bracket
@@ -2264,5 +2320,76 @@ fn a_copy_shows_who_posts_it() {
             Item::Dot { .. } | Item::Box { copy: Some(_), .. } | Item::Edge { copy: Some(_), .. }
         )),
         "a transfer written by hand names no poster"
+    );
+}
+
+// --- an instance drawn once per member --------------------------------------
+
+/// `llmd_nixl_pull.sq` with `NP` and `ND` as given.
+fn pd_with(np: usize, nd: usize) -> serq::view::figure::Figure {
+    let src = std::fs::read_to_string(program_path("llmd_nixl_pull"))
+        .unwrap()
+        .replace("let NP = 2;", &format!("let NP = {np};"))
+        .replace("let ND = 2;", &format!("let ND = {nd};"));
+    deployment::figure(&compile_source(&src, &common::horizon(10.0)).unwrap())
+}
+
+/// `choose i in NP` picks one of `NP` pods, and the figure draws the `NP`:
+/// a box per member, stacked, each station named by its member (`P[2]`),
+/// an arrow from the router to each, and the copy from each prefiller to
+/// each decoder. Past eight the figure says how many it left out rather
+/// than run on down the page.
+#[test]
+fn an_instance_is_drawn_once_per_member() {
+    use serq::view::figure::{EdgeRole, Item};
+    let f = pd_with(3, 1);
+    assert_eq!(
+        f.boxes(BoxStyle::Instance).len(),
+        4,
+        "three prefillers, one decoder"
+    );
+    let flows: Vec<(String, String)> = f
+        .items
+        .iter()
+        .filter_map(|i| match i {
+            Item::Edge {
+                role: Some(EdgeRole::Flow { from, to }),
+                ..
+            } => Some((from.clone(), to.clone())),
+            _ => None,
+        })
+        .collect();
+    for m in 0..3 {
+        let has = |a: String, b: String| flows.contains(&(a, b));
+        assert!(has("#0".into(), format!("P[{m}]")), "{flows:?}");
+        assert!(has(format!("P[{m}]"), format!("P.nic[{m}]")), "{flows:?}");
+        assert!(has(format!("P.nic[{m}]"), "D.nic[0]".into()), "{flows:?}");
+    }
+    // the members stand one under another, apart
+    let station = |name: String| {
+        f.items
+            .iter()
+            .find_map(|i| match i {
+                Item::Station { node, rect, .. } if *node == name => Some(*rect),
+                _ => None,
+            })
+            .unwrap()
+    };
+    let p: Vec<_> = (0..3).map(|m| station(format!("P[{m}]"))).collect();
+    assert_eq!(p[0].x, p[1].x);
+    assert!(p[0].bottom() < p[1].y && p[1].bottom() < p[2].y);
+    let boxes = f.boxes(BoxStyle::Instance);
+    for (k, a) in boxes.iter().enumerate() {
+        for b in &boxes[k + 1..] {
+            assert!(!a.overlaps(b), "{a:?} {b:?}");
+        }
+    }
+
+    let f = pd_with(10, 2);
+    assert_eq!(f.boxes(BoxStyle::Instance).len(), 8 + 2);
+    assert!(
+        f.items
+            .iter()
+            .any(|i| matches!(i, Item::Text { text, .. } if text == "8 of 10 members drawn"))
     );
 }
