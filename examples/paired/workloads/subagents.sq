@@ -12,6 +12,7 @@ let q = args.number("q", 0.3);  // a turn delegates instead of calling a tool
 let W = args.number("W", 15.4);  // the wait for the subagents (s)
 let kids = q * k * p / (1 - p);  // subagents per agent session
 
+stage tool : delay;  // declared, though a workload's `tool` needs none: it keeps its IR index before `delegate`
 stage delegate : delay;
 
 workload {

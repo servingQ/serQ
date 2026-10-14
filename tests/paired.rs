@@ -37,6 +37,25 @@ fn a_pair_compiles() {
     compile_paired(DEPLOYMENT, WORKLOAD, names(), &common::horizon(10.0)).unwrap();
 }
 
+/// A deployment's `def`, expanded where it is used, moves the workload's
+/// tokens in the stream; they stay the workload's.
+#[test]
+fn an_expansion_keeps_the_workload_its_own() {
+    let deployment = "def twice(x) { x * 2 + x * 0 + x * 0 + x * 0 }
+fn main() {
+  stage svc : fifo;
+  server (work) { run svc (cost(svc, twice(work))); }
+}
+";
+    compile_paired(
+        deployment,
+        "workload { arrive poisson(1); turn { set s = 1; } send (work: s); }\n",
+        names(),
+        &common::horizon(10.0),
+    )
+    .unwrap();
+}
+
 /// The paired example runs as the single file it was cut from.
 #[test]
 fn a_pair_runs_as_its_one_file() {
@@ -49,6 +68,8 @@ fn a_pair_runs_as_its_one_file() {
             "examples/paired/workloads/single_turn.sq",
             "vllm_single_turn",
         ),
+        ("examples/paired/workloads/chat.sq", "vllm_chat"),
+        ("examples/paired/workloads/subagents.sq", "vllm_subagents"),
     ] {
         let pair = run_paired(&deployment, &read(workload), ("d", "w"), &ov, None).unwrap();
         let one = run_file(&program_path(single), &ov).unwrap();

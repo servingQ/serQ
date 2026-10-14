@@ -9,8 +9,8 @@
 //! and `workload { … }`. The two meet only at the server's signature.
 //!
 //! The parser reads the pair as one program: the workload file's tokens go
-//! at the head of `fn main()`'s body (its `use`s before the deployment's), so
-//! its inputs are the program's inputs. Each file's constants and
+//! at the end of `fn main()`'s body (its `use`s before the deployment's), so
+//! its inputs are the program's inputs and each declaration keeps its index. Each file's constants and
 //! definitions are its own: the pair renames them apart (`w·Z`, `d·B`), so a
 //! name of the other file resolves to nothing, wherever it is read, and both
 //! may declare `p`. Messages show the names as written. Positions stay each
@@ -51,8 +51,10 @@ pub struct Paired<'a> {
 /// The tokens the parser reads for a pair, and what it needs to know of them.
 pub struct Spliced {
     pub toks: Vec<Token>,
-    /// The workload file's tokens, at the head of `fn main()`'s body.
-    pub range: std::ops::Range<usize>,
+    /// The last line of the deployment's in the pair's text: a token on a
+    /// later line is the workload file's, wherever the parser's expansions
+    /// (a `def`'s use) move it in the token stream.
+    pub split: usize,
     /// The stages the workload file declares: what it runs on itself.
     pub stages: Vec<String>,
     /// The definitions of the deployment file and of the workload file, as
@@ -207,7 +209,10 @@ impl<'a> Paired<'a> {
                 i += 1;
             }
         }
-        if rest.is_empty() {
+        let declares = rest
+            .iter()
+            .any(|t| matches!(&t.tok, Tok::Ident(w) if w == "workload"));
+        if !declares {
             return Err(at_line(
                 self.lines + 1,
                 1,
@@ -252,16 +257,29 @@ impl<'a> Paired<'a> {
         rename(&mut uses, &wl_own, WORKLOAD);
         rename(&mut rest, &wl_own, WORKLOAD);
         rename(&mut dep, &dep_own, DEPLOYMENT);
-        let body = main + 5;
+        // the `}` that closes `fn main()`: the workload goes before it, after
+        // the deployment's items, so each declaration keeps the index it has
+        // in the one file the pair would make (the oracle's and the claims'
+        // IR among them); an unclosed `fn main()` is the parser's to say
+        let mut depth = 0usize;
+        let close = dep[main + 4..]
+            .iter()
+            .position(|t| {
+                match t.tok {
+                    Tok::LBrace => depth += 1,
+                    Tok::RBrace => depth -= 1,
+                    _ => {}
+                }
+                depth == 0
+            })
+            .map_or(dep.len() - 1, |k| main + 4 + k);
         let mut toks = uses;
-        toks.extend(dep[..body].iter().cloned());
-        let start = toks.len();
+        toks.extend(dep[..close].iter().cloned());
         toks.extend(rest);
-        let end = toks.len();
-        toks.extend(dep[body..].iter().cloned());
+        toks.extend(dep[close..].iter().cloned());
         Ok(Spliced {
             toks,
-            range: start..end,
+            split: self.lines,
             stages,
             defs,
         })

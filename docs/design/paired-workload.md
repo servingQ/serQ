@@ -4,8 +4,7 @@ A deployment and a workload can be written in two files and paired by the
 tool: `serq run DEPLOYMENT --workload WORKLOAD`, `serq::compile_paired`.
 The workload file has no `fn main()`. The two meet only at the server's
 signature ([request interface](request-interface.md)). The IR does not
-change: a pair compiles to the program the two files would make as one, up
-to the order of their declarations (the workload's own stages first).
+change: a pair compiles to the program the two files would make as one.
 
 ## Before and after
 
@@ -21,7 +20,7 @@ serq run examples/paired/deployments/vllm.sq --workload examples/paired/workload
 ```
 
 reports what `serq run examples/multi-turn/vllm_chat.sq --horizon 200` does
-(stages and pools by name: a pair declares the workload's own stage first).
+as JSON, byte for byte.
 
 ## The rules
 
@@ -42,9 +41,11 @@ reports what `serq run examples/multi-turn/vllm_chat.sq --horizon 200` does
 
 ## How
 
-The tool lexes both files and puts the workload file's tokens at the head
+The tool lexes both files and puts the workload file's tokens at the end
 of the deployment's `fn main()` body (its `use`s before the deployment's),
-then parses one program. Each file's constants and definitions are
+then parses one program. At the end, each declaration keeps the index it has
+in the one file the pair would make, so a program split into a pair keeps
+its IR (the oracle's and the claims' among them). Each file's constants and definitions are
 renamed apart inside the pair (`w·Z`, `d·B`), so a name of the other file
 resolves to nothing wherever it is read, in an expression, a capacity or a
 family's size, and a message says whose it is in place of "unknown"; the
@@ -83,7 +84,7 @@ outline splits into the two files' (`Outline::split`, `serq::outline_paired`).
 ## Validation
 
 Measured 2026-10-14 against 9a49115, `serq run … --horizon 200 --json`: each
-of the four pairs reports what its single-file example does, stages and
-pools compared by name (`tests/paired.rs` holds two of them equal as JSON).
+of the four pairs reports what its single-file example does, as JSON
+byte for byte (`tests/paired.rs`).
 `scripts/check_rust.sh` links and draws every deployment under every
 workload. No IR, oracle, claim or Lean file moves.

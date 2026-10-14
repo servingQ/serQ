@@ -181,8 +181,9 @@ struct Parser {
     /// The position of the workload's first `hidden`.
     hidden_at: Option<usize>,
     /// The tokens of a paired workload file (`frontend::paired`), at the
-    /// head of `fn main()`'s body.
-    paired: Option<std::ops::Range<usize>>,
+    /// end of `fn main()`'s body.
+    /// (the last line of the deployment's: a later token is the workload's)
+    paired: Option<usize>,
     /// Check the syntax alone: half of a pair (`parse_half`).
     syntax_only: bool,
     /// Header bindings the body of their hold reads, with the position of
@@ -672,7 +673,7 @@ pub fn parse_paired(
     use crate::frontend::paired::{DEPLOYMENT, WORKLOAD};
     let spliced = p.tokens()?;
     let mut parser = Parser::new(spliced.toks);
-    parser.paired = Some(spliced.range);
+    parser.paired = Some(spliced.split);
     // an override names a definition as its file writes it
     parser.def_overrides = defs
         .iter()
@@ -711,7 +712,7 @@ pub fn parse_half(src: &str, half: crate::frontend::paired::File) -> Result<(), 
     };
     let spliced = p.tokens()?;
     let mut parser = Parser::new(spliced.toks);
-    parser.paired = Some(spliced.range);
+    parser.paired = Some(spliced.split);
     parser.syntax_only = true;
     parser
         .program()
@@ -725,7 +726,7 @@ pub fn outline_paired(
 ) -> Result<crate::frontend::outline::Outline, String> {
     let spliced = p.tokens()?;
     let mut parser = Parser::new(spliced.toks);
-    parser.paired = Some(spliced.range);
+    parser.paired = Some(spliced.split);
     parser.outline = Some(crate::frontend::outline::Recorder::new(&p.combined));
     parser
         .program()
@@ -2040,8 +2041,8 @@ impl Parser {
                 }
                 continue;
             }
-            if let Some(range) = self.paired.clone() {
-                self.paired_item(range.contains(&item_at))?;
+            if let Some(split) = self.paired {
+                self.paired_item(self.toks[item_at].line > split)?;
             }
             if !in_main && !self.is_kw("use") && !self.is_kw("def") && !self.is_kw("let") {
                 return self.err("executable declarations belong inside `fn main() { … }`; only `use`, `def` and constants belong outside it");
@@ -2391,10 +2392,8 @@ impl Parser {
     }
 
     fn assemble(&mut self, prog: &mut Program, served: &mut Served) -> PResult<()> {
-        if let Some(range) = &self.paired
-            && prog.workload.is_none()
-        {
-            return self.err_at(range.start, "a workload file declares `workload { … }`");
+        if self.paired.is_some() && prog.workload.is_none() {
+            return self.err("a workload file declares `workload { … }`");
         }
         if self.wl_session.is_none() && self.server.is_some() {
             if prog.workload.is_none() {
@@ -4960,7 +4959,7 @@ impl Parser {
         let Tok::Ident(kw) = self.peek().clone() else {
             return Ok(());
         };
-        let own = ["let", "def", "stage", "workload"];
+        let own = ["use", "let", "def", "stage", "workload"];
         if in_workload && !own.contains(&kw.as_str()) && KEYWORDS.contains(&kw.as_str()) {
             return self.err(format!(
                 "`{kw}` is the deployment file's: a workload file declares its constants and \
