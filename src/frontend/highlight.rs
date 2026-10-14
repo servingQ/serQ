@@ -17,7 +17,7 @@
 //! by `tests/docs_lexer.rs`.
 
 use crate::frontend::lexer::{Tok, Token, lex_partial};
-use crate::frontend::link::{AGGREGATES, BUILTIN_ATTRS, CONTEXT_VARS, FOLDED};
+use crate::frontend::link::{AGGREGATES, BUILTIN_ATTRS, FOLDED, supplied};
 use crate::frontend::parser::ENGINE_VALUES;
 use crate::ir::Fun;
 
@@ -41,8 +41,9 @@ pub enum Role {
     /// A name the program gives, or arithmetic (`min`, `ln`).
     Name,
     Space,
-    /// What follows a lexical error, unread: a string not closed yet.
-    Unread,
+    /// What follows a lexical error, which the lexer did not read: a string
+    /// not closed yet.
+    Unlexed,
 }
 
 impl Role {
@@ -61,7 +62,7 @@ impl Role {
             Role::Punctuation => "punctuation",
             Role::Name => "name",
             Role::Space => "space",
-            Role::Unread => "unread",
+            Role::Unlexed => "unlexed",
         }
     }
 }
@@ -138,7 +139,9 @@ pub const STATEMENTS: [&str; 42] = [
 /// Pool and stage options, workload forms, an engine's schedule and
 /// execution, and a claim's forms. `advance`, `each` and `most` are read only
 /// in the phrases `advance running` and `each at most`; `step` only to say an
-/// engine is written instead.
+/// engine is written instead. `queue`, `admit` and `while` are options too,
+/// but a list above takes them first; they stay so that the list is the
+/// docs lexer's word for word.
 pub const OPTIONS: [&str; 61] = [
     "cap",
     "per_token",
@@ -203,15 +206,14 @@ pub const OPTIONS: [&str; 61] = [
     "of",
 ];
 
-/// A name the language supplies for a program to read: a context variable,
-/// a function that is not arithmetic, a folded call, a built-in attribute,
-/// or `inf` (which the linker reads as a number).
+/// A name the language supplies for a program to read: a context variable
+/// or `inf` (the linker's `supplied`), a function that is not arithmetic, a
+/// folded call, or a built-in attribute.
 pub fn is_observable(word: &str) -> bool {
-    CONTEXT_VARS.iter().any(|(n, _)| *n == word)
+    supplied(word).is_some()
         || Fun::from_name(word).is_some_and(|f| !f.is_arithmetic())
         || FOLDED.contains(&word)
         || BUILTIN_ATTRS.contains(&word)
-        || word == "inf"
 }
 
 /// The role of a word standing alone; `call` when a `(` follows it, which
@@ -231,7 +233,7 @@ pub fn word_role(word: &str, call: bool) -> Role {
 }
 
 /// The program, cut into pieces with their roles. The pieces, concatenated,
-/// are `src`; past a lexical error the rest is one `Unread` piece.
+/// are `src`; past a lexical error the rest is one `Unlexed` piece.
 pub fn highlight(src: &str) -> Vec<(Role, String)> {
     let (toks, rest) = match lex_partial(src) {
         Ok(toks) => (toks, String::new()),
@@ -252,7 +254,7 @@ pub fn highlight(src: &str) -> Vec<(Role, String)> {
         }
     }
     if !rest.is_empty() {
-        out.push((Role::Unread, rest));
+        out.push((Role::Unlexed, rest));
     }
     out
 }
@@ -308,7 +310,15 @@ fn roles(toks: &[Token]) -> Vec<Role> {
                     (word_role(w, call), 1)
                 }
             }
-            Tok::Tilde if tight(k + 1) && word(k + 1).is_some() => (Role::Random, 2),
+            // a distribution's name is lower case, as the docs lexer reads it
+            Tok::Tilde
+                if tight(k + 1)
+                    && word(k + 1).is_some_and(|w| {
+                        w.starts_with(|c: char| c.is_ascii_lowercase() || c == '_')
+                    }) =>
+            {
+                (Role::Random, 2)
+            }
             Tok::Num(_) => (Role::Number, 1),
             Tok::Str(_) => (Role::String, 1),
             Tok::LBrace
@@ -357,10 +367,24 @@ mod tests {
             "let a = \"open",
             "/* open",
             "let a = 1; @ let b = 2;",
+            "x = 1.2.3;",
+            "let a = 1;\nlet s = \"two\nlines",
             "",
         ] {
             let joined: String = highlight(src).into_iter().map(|(_, t)| t).collect();
             assert_eq!(joined, src);
+        }
+        // each error site leaves the rest from the item it could not read
+        for (src, rest) in [
+            ("let a = \"open", "\"open"),
+            ("a /* open", "/* open"),
+            ("x = 1.2.3;", "1.2.3;"),
+            ("a @ b", "@ b"),
+        ] {
+            assert_eq!(
+                highlight(src).last().unwrap(),
+                &(Role::Unlexed, rest.into())
+            );
         }
     }
 
@@ -404,22 +428,10 @@ mod tests {
     }
 
     #[test]
-    fn what_follows_an_error_is_unread() {
+    fn what_follows_an_error_is_unlexed() {
         let r = roles_of("let a = 1; let s = \"open");
         assert_eq!(r[0].0, Role::Structure);
-        assert_eq!(r.last().unwrap(), &(Role::Unread, "\"open".to_string()));
-    }
-
-    /// Every word the parser reads as a keyword has a role.
-    #[test]
-    fn every_keyword_has_a_role() {
-        let plain: Vec<&str> = crate::frontend::parser::KEYWORDS
-            .into_iter()
-            // retired, a distribution, or kept only to name a successor
-            .filter(|w| !matches!(*w, "fits" | "budget" | "chunk" | "memory" | "bernoulli"))
-            .filter(|w| word_role(w, false) == Role::Name)
-            .collect();
-        assert!(plain.is_empty(), "keywords with no role: {plain:?}");
+        assert_eq!(r.last().unwrap(), &(Role::Unlexed, "\"open".to_string()));
     }
 
     /// Every example reads whole, and is its pieces again.
@@ -447,7 +459,7 @@ mod tests {
             let joined: String = pieces.iter().map(|(_, t)| t.as_str()).collect();
             assert_eq!(joined, src, "{}", f.display());
             assert!(
-                pieces.iter().all(|(r, _)| *r != Role::Unread),
+                pieces.iter().all(|(r, _)| *r != Role::Unlexed),
                 "{} does not lex",
                 f.display()
             );

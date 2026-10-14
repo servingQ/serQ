@@ -215,7 +215,7 @@ fn the_docs_lexer_leaves_exactly_the_arithmetic_functions_plain() {
 /// nor a declaration an attribute's (#470).
 #[test]
 fn the_docs_lexer_knows_every_name_the_language_supplies() {
-    use serq::frontend::link::{AGGREGATES, BUILTIN_ATTRS, CONTEXT_VARS, FOLDED};
+    use serq::frontend::link::{AGGREGATES, BUILTIN_ATTRS, CONTEXT_VARS, FOLDED, INF};
     let supplied = CONTEXT_VARS
         .iter()
         .map(|(n, _)| *n)
@@ -223,7 +223,7 @@ fn the_docs_lexer_knows_every_name_the_language_supplies() {
         .chain(AGGREGATES.iter().map(|(n, _)| *n))
         .chain(FOLDED)
         .chain(BUILTIN_ATTRS)
-        .chain(["inf"]);
+        .chain([INF]);
 
     let mut listed = coloured();
     listed.extend(lexer_list("ARITHMETIC"));
@@ -255,7 +255,7 @@ fn the_docs_lexer_gives_the_keywords_the_roles_highlight_does() {
 #[test]
 fn the_docs_lexer_colours_as_read_what_highlight_does() {
     use serq::frontend::highlight::{Role, word_role};
-    use serq::frontend::link::{BUILTIN_ATTRS, CONTEXT_VARS, FOLDED};
+    use serq::frontend::link::{BUILTIN_ATTRS, CONTEXT_VARS, FOLDED, INF};
     let read = |w: &str| !w.contains('.') && word_role(w, false) == Role::Observable;
     let rust: BTreeSet<String> = CONTEXT_VARS
         .iter()
@@ -263,7 +263,7 @@ fn the_docs_lexer_colours_as_read_what_highlight_does() {
         .chain(serq::ir::Fun::names())
         .chain(FOLDED)
         .chain(BUILTIN_ATTRS)
-        .chain(["inf"])
+        .chain([INF])
         .filter(|w| read(w))
         .map(String::from)
         .collect();
@@ -284,4 +284,15 @@ fn the_docs_lexer_colours_as_read_what_highlight_does() {
         py.difference(&rust).collect::<Vec<_>>(),
         rust.difference(&py).collect::<Vec<_>>()
     );
+}
+
+/// A run's aggregates are coloured only as a call, in both: the lexer's list
+/// is the linker's `AGGREGATES`, both ways.
+#[test]
+fn the_docs_lexer_knows_exactly_the_aggregates() {
+    let rust: BTreeSet<String> = serq::frontend::link::AGGREGATES
+        .iter()
+        .map(|(n, _)| n.to_string())
+        .collect();
+    assert_eq!(lexer_list("AGGREGATES"), rust, "{LEXER}: AGGREGATES");
 }

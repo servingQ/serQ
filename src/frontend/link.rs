@@ -290,11 +290,14 @@ pub(crate) enum Supplied {
     Inf,
 }
 
+/// The name a program reads infinity by.
+pub const INF: &str = "inf";
+
 /// Whether the language supplies `name` as a value, and as what: the one
 /// place `CONTEXT_VARS` and `inf` are read together. An engine's lists
 /// (`LISTS`) are the language's too, but read as `name.…`, not as a value.
 pub(crate) fn supplied(name: &str) -> Option<Supplied> {
-    if name == "inf" {
+    if name == INF {
         return Some(Supplied::Inf);
     }
     CONTEXT_VARS
