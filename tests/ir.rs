@@ -100,7 +100,7 @@ fn ir_that_skips_the_linker_meets_its_checks() {
           session { turn; end;
           }
         }
-        server { hold m (cost(m, 1)) { llm (8, 1); }
+        server { hold m (cost(m, 1)) { llm (8, 1); } run d (cost(d, 1));
         }
         ";
     let p = compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap();
@@ -344,7 +344,10 @@ fn budget_left_needs_a_step_stage() {
         .replace("budget_left(d)", "budget_left(F[serial])");
     let e = compile_source(&common::main_source(&fam), &common::horizon(10.0)).unwrap_err();
     assert!(e.contains("a member of `F` is a fifo stage"), "{e}");
-    let ok = src.replace("budget_left(d)", "budget_left(llm)");
+    // the engine is run too, or a stage no statement runs would not link
+    let ok = src
+        .replace("budget_left(d)", "budget_left(llm)")
+        .replace("run d (cost(d, 1));", "run d (cost(d, 1)); llm (8, 1);");
     let mut p = compile_source(&common::main_source(&ok), &common::horizon(10.0)).unwrap();
     // the same refusal from IR: point the call at the delay stage
     use serq::ir::{CArg, CExpr, CStmt, Fun};
@@ -833,8 +836,7 @@ fn numbers_read_as_written() {
 fn choose_compares_its_keys_in_order() {
     let pick = |by: &str| {
         let src = format!(
-            "stage s : delay;
-        workload {{ arrive batch(1);
+            "workload {{ arrive batch(1);
           session {{ turn; end;
           }}
         }}
@@ -860,7 +862,7 @@ fn choose_compares_its_keys_in_order() {
 /// no text can write, is refused too.
 #[test]
 fn an_old_or_keyless_choose_is_refused_plainly() {
-    let src = "stage s : delay; workload { arrive batch(1);
+    let src = "workload { arrive batch(1);
           session { turn; end;
           }
         }

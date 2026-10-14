@@ -5,13 +5,23 @@ mod common;
 use serq::{Program, compile_source, run_ir};
 
 fn compile(server: &str, turn: &str) -> Result<Program, String> {
+    // a stage no statement runs does not link: declare those the program names
+    let stage = |name: &str, kind: &str| {
+        let named = server.contains(name) || turn.contains(name);
+        if named {
+            format!("stage {name} : {kind};")
+        } else {
+            String::new()
+        }
+    };
+    let (svc, tool) = (stage("svc", "fifo"), stage("tool", "delay"));
     compile_source(
         &format!(
             r#"fn main() {{
         pool mem {{ cap 10; }}
         pool other {{ cap 10; }}
-        stage svc : fifo;
-        stage tool : delay;
+        {svc}
+        {tool}
         workload {{ arrive batch(1); turn {{ {turn} }}
             session {{ turn; end; }} }}
         server {{ {server} }}

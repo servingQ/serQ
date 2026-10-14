@@ -925,6 +925,16 @@ name two do not link, while two fabrics that share no stage may name two
 RDMA between nodes).
 Every other `ps` stage serves as above.
 
+Every stage is some request's: the stage of a `run` (or one of its
+stages, in a flow), of an engine's request, or the link a pool spills
+`via`. A stage nothing runs — a queue whose entries no call reaches, a
+`nic` no relation or `transfer` copies over, a `stage` left from an
+earlier version of the program — does not link, the error pointing at its
+declaration. No request reaches it, so it is a station with no arrow in
+or out, and the deployment view, which draws the stations a request
+reaches, would leave it out in silence; the report's row for it would be
+zeros that read like an idle station.
+
 ### Engines
 
 An [engine](api/engine.md) runs iterations. A plain `run`'s work is time

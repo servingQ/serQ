@@ -303,7 +303,7 @@ fn a_context_variable_outside_its_moment_is_rejected() {
           session {  turn; end;
           }
         }
-        server { set t = now; hold kv[0] (cost(kv, n)) { run svc (cost(svc, n)); }
+        server { set t = now; hold kv[0] (cost(kv, n)) { run svc (cost(svc, n)); } llm (1, 1);
         }
         ";
     check(src).expect("links");
@@ -600,12 +600,13 @@ fn cache_server(taking: &str, pool: &str, server: &str) -> String {
 const CACHE_ENGINE_WORKLOAD: &str = "arrive closed(1);";
 
 /// The server's hold of the device's pool, which no engine admits, around
-/// `body`, with `clause` after it.
+/// `body`, with `clause` after it; then a request of the engine, which a
+/// stage no statement runs would not link without.
 fn holding(body: &str, clause: &str) -> String {
     cache_server(
         "",
         "",
-        &format!("hold kv (cost(kv, 1000)) {{ {body} }}{clause}"),
+        &format!("hold kv (cost(kv, 1000)) {{ {body} }}{clause} llm (1, 1);"),
     )
 }
 
@@ -1087,17 +1088,28 @@ fn a_declaration_cannot_share_its_name_with_another() {
         )),
         "{e}"
     );
-    for decl in [
-        format!("{QUEUE} queue D {{ pool kv {{ cap 1; }} serve fifo; }}"),
-        format!("pool kv {{ cap 1; }} {QUEUE}"),
-        format!("stage kv : fifo; {QUEUE}"),
-        "device gpu { kv cap 4; } pool kv on gpu { }".to_string(),
+    // each with the runs that reach its stages, or it would not link
+    let queue = "run Q (cost(Q, 1));";
+    for (decl, runs) in [
+        (
+            format!("{QUEUE} queue D {{ pool kv {{ cap 1; }} serve fifo; }}"),
+            format!("{queue} run D (cost(D, 1));"),
+        ),
+        (format!("pool kv {{ cap 1; }} {QUEUE}"), queue.to_string()),
+        (
+            format!("stage kv : fifo; {QUEUE}"),
+            format!("{queue} run kv (cost(kv, 1));"),
+        ),
+        (
+            "device gpu { kv cap 4; } pool kv on gpu { }".to_string(),
+            String::new(),
+        ),
         // nor a stage, which a schedule's `each at most` does not read
-        schedule_let("svc"),
+        (schedule_let("svc"), "Q (1, 1);".to_string()),
     ] {
         check(
             &SRC.replace("DECL", &decl)
-                .replace("OBSERVE", "observe response = 1;"),
+                .replace("OBSERVE", &format!("{runs} observe response = 1;")),
         )
         .expect(&decl);
     }

@@ -577,8 +577,14 @@ fn a_pool_both_arms_hold_stays_held_whichever_hold_took_it() {
         "if (turn_no > 1) { hold p (cost(p, 1)) { run s1 (cost(s1, 1)); } lease p (inf); } else { hold p (cost(p, 2)) { run s3 (cost(s3, 1)); } lease p (inf); }",
     ];
     for shape in shapes {
+        // a stage no statement runs does not link: `s3` only where it runs
+        let s3 = if shape.contains("s3") {
+            "stage s3 : delay;"
+        } else {
+            ""
+        };
         let p = compile(&format!(
-            "pool p {{ cap 10; }} stage s1 : delay; stage s2 : delay; stage s3 : delay;
+            "pool p {{ cap 10; }} stage s1 : delay; stage s2 : delay; {s3}
             workload {{ arrive batch(1); session {{ turn; turn; }} }}
             server {{ {shape} run s2 (cost(s2, 1)); }}
             "
@@ -869,11 +875,16 @@ fn requests_that_run_different_things_draw_the_session() {
 #[test]
 fn requests_that_differ_in_the_ir_draw_the_session() {
     let mut p = compile(
-        "stage A : fifo; stage B : fifo; stage C : delay;
+        "stage A : fifo; stage C : delay;
         workload { arrive poisson(1); session { turn; run C (cost(C, 1)); turn; } }
         server { run A (cost(A, 1)); }
         ",
     );
+    // `B`, which no statement of the text runs (it would not link), is
+    // added to the IR with the run that reaches it
+    let mut stage_b = p.stages[stage(&p, "A")].clone();
+    stage_b.name = "B".into();
+    p.stages.push(stage_b);
     let b = stage(&p, "B");
     let server_runs: Vec<(usize, usize)> = (0..p.blocks.len())
         .flat_map(|k| (0..p.blocks[k].len()).map(move |i| (k, i)))
@@ -989,8 +1000,14 @@ fn a_guard_on_constants_draws_both_arms() {
 
 /// A session program over stages `A`, `B`, `C`, projected.
 fn shape(session: &str) -> (Program, deployment::Net) {
+    // a stage no statement runs does not link: declare those the session names
+    let stages: String = ["A", "B", "C"]
+        .iter()
+        .filter(|s| session.contains(&format!("run {s} ")))
+        .map(|s| format!("stage {s} : delay; "))
+        .collect();
     let src = format!(
-        "stage A : delay; stage B : delay; stage C : delay;
+        "{stages}
         workload {{ arrive poisson(1); session {{ turn; {session} }} }}
         server {{}}
         "

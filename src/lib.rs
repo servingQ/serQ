@@ -59,7 +59,18 @@ fn finish(prog: frontend::ast::Program, src: &str, ov: &Overrides) -> Result<ir:
     // `tokens` in a queue key), so a text program meets it too. An error
     // about a statement points at it in the text (#279).
     p.validate_located().map_err(|e| {
-        let span = e.at.and_then(|(b, k)| spans.get(b)?.get(k)?.of(&e.message));
+        // a stage no statement runs is about its declaration, not a statement
+        let declared = p
+            .unreached_stage()
+            .filter(|&k| e.message == p.unreached_message(k))
+            .and_then(|k| {
+                prog.stages
+                    .iter()
+                    .find(|s| s.name == p.stages[k].name)?
+                    .span
+            });
+        let span =
+            declared.or_else(|| e.at.and_then(|(b, k)| spans.get(b)?.get(k)?.of(&e.message)));
         match span {
             Some(span) => span.render(src, &e.message),
             None => e.message,
