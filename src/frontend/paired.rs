@@ -300,7 +300,7 @@ impl<'a> Paired<'a> {
 fn word(name: &str) -> bool {
     use crate::frontend::link::{BUILTIN_ATTRS, SCHEDULER_ATTRS};
     use crate::frontend::parser::{is_reserved, retired};
-    matches!(name, "args" | "kvt" | "share")
+    crate::frontend::parser::STD_MODULES.contains(&name)
         || BUILTIN_ATTRS.contains(&name)
         || SCHEDULER_ATTRS.contains(&name)
         || is_reserved(name)

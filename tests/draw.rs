@@ -30,7 +30,7 @@ fn program(name: &str) -> Program {
 }
 
 /// The program at `path` with the workload `examples/pairs.json` runs it
-/// with (`docs/design/workload-file.md`).
+/// with (`docs/design/paired-workload.md`).
 fn example(path: &std::path::Path) -> Program {
     let ov = common::horizon(10.0);
     let src = common::main_source(&std::fs::read_to_string(path).unwrap());

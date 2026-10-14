@@ -896,6 +896,9 @@ fn is_pure(name: &str) -> bool {
 
 /// The words #136 took out of the language, with what a program writes
 /// instead: one spelling for one admission.
+/// The modules `use "std/NAME";` imports, by the name a program calls them.
+pub(crate) const STD_MODULES: [&str; 3] = ["args", "kvt", "share"];
+
 pub(crate) fn retired(word: &str) -> Option<&'static str> {
     RETIRED
         .iter()
@@ -2139,15 +2142,6 @@ impl Parser {
                 prog.gauges.push((name, e));
             } else if self.eat_kw("pool") {
                 let (d, on) = self.pool(true)?;
-                if on.is_some() && self.paired.is_some_and(|l| self.toks[item_at].line > l) {
-                    // the workload's own capacity (a session cap), not the
-                    // deployment's memory
-                    return self.err_at(
-                        item_at,
-                        "a workload file's pool is its own: `pool NAME { cap …; }`, on no \
-                         device or engine, which are the deployment file's",
-                    );
-                }
                 if let Some(on) = on {
                     self.pool_on(prog.pools.len(), d.name.clone(), on)?;
                 }
@@ -2170,7 +2164,7 @@ impl Parser {
                     return self.err_at(
                         item_at,
                         "a workload is a file of its own, given when the program runs: \
-                         `serq run FILE --workload W.sq` (pyserq: `workload=`)\n\
+                         `--workload W.sq` (pyserq: `workload=`)\n\
                          help: move `workload { … }`, with the `let`s, `def`s, stages and pools \
                          only it reads, to a file of its own",
                     );
@@ -2477,7 +2471,7 @@ impl Parser {
                 return self.err_at(
                     at,
                     "the server needs a workload to run: give the workload's file, \
-                     `serq run FILE --workload W.sq` (pyserq: `workload=`)",
+                     `--workload W.sq` (pyserq: `workload=`)",
                 );
             }
             self.wl_session = Some((self.pos, vec![Stmt::Turn, Stmt::Request]));
@@ -3023,7 +3017,7 @@ impl Parser {
 
     /// `use "std/args";`, the program's inputs, `use "std/kvt";`, the
     /// KV-transfer vocabulary, and `use "std/share";`, the sharing policies.
-    /// A program is one file, so no other `use` reads anything.
+    /// The std modules (`STD_MODULES`); a file imports no other file.
     fn use_std(&mut self) -> PResult<()> {
         let at = self.pos;
         self.advance();
@@ -3038,7 +3032,7 @@ impl Parser {
                     at,
                     format!(
                         "`use \"{path}\"`: `use` reads only `std/args`, `std/kvt` and \
-                         `std/share`; a program is one file, so write its definitions in it"
+                         `std/share`; a file imports no other, so write its definitions in it"
                     ),
                 );
             }
@@ -4034,6 +4028,15 @@ impl Parser {
         if self.is_kw("on") {
             if !on_ok {
                 return self.err("a queue's pool is its own: `pool NAME on …` is a deployment's");
+            }
+            if self.paired.is_some_and(|l| self.toks[at].line > l) {
+                // the workload's own capacity (a session cap), not the
+                // deployment's memory
+                return self.err_at(
+                    at,
+                    "a workload file's pool is its own: `pool NAME { cap …; }`, on no \
+                     device or engine, which are the deployment file's",
+                );
             }
             if array.is_some() {
                 return self.err_at(
@@ -7286,10 +7289,12 @@ mod tests {
                 .contains("would draw 2 times")
         );
         assert!(err("def f(x) { f(x) }\nserver {\n}").contains("uses itself"));
-        // a def named after a word of the language, read by the parser
-        // (a pair renames it `d·min` before that check: a gap in #639)
+        // a def named after a word of the language, in either file of a
+        // pair: the pair keeps the word's spelling, so the parser sees it
         for src in ["def min(x) { x }\n", "def uniform(x) { x }\n"] {
-            let e = parse(&main_source(src)).unwrap_err();
+            let e = pair(src, TURN).unwrap_err();
+            assert!(e.msg.contains("a word of the language"), "{e}");
+            let e = pair("", &format!("{src}{TURN}")).unwrap_err();
             assert!(e.msg.contains("a word of the language"), "{e}");
         }
         assert!(err("def f(on) { on }\nserver {\n}").contains("a word of the language"));
@@ -7445,8 +7450,7 @@ mod tests {
             assert!(e.contains("a pool and a stage share one name space"), "{e}");
         }
         // `engine` is the keyword of an engine's declaration
-        // (read by the parser alone: a pair renames the def first, a gap in #639)
-        let e = parse(&main_source("def engine(x) { x }\n")).unwrap_err();
+        let e = pair("def engine(x) { x }\n", TURN).unwrap_err();
         assert!(e.msg.contains("a word of the language"), "{e}");
         // the name of a statement body's attribute is not a use, but an
         // attribute may not take its definition's name (#470)
@@ -7751,11 +7755,11 @@ mod tests {
         }
         // and none of them names anything, so a name never means two things
         const END: &str = "workload { session { turn; end; \n} }";
-        // (a def's own name, read by the parser alone: a pair renames the
-        // def first, a gap in #639)
-        let e = parse(&main_source(
+        // a def's own name
+        let e = pair(
             "pool kv { cap 1; } def keep(n) { observe k = n; }\nserver {\n}",
-        ))
+            TURN,
+        )
         .unwrap_err();
         assert!(e.msg.contains("is a retired word"), "{e}");
         for src in [
@@ -7834,7 +7838,7 @@ mod tests {
         ] {
             let e = parse(&main_source(body)).unwrap_err();
             assert!(e.msg.contains("a workload is a file of its own"), "{e}");
-            assert!(e.msg.contains("`serq run FILE --workload W.sq`"), "{e}");
+            assert!(e.msg.contains("`--workload W.sq`"), "{e}");
             assert!(e.msg.contains("help: move `workload { … }`"), "{e}");
             assert_eq!(e.col, 1, "{e}");
             assert!(e.line == 2 || e.line == 3, "{e}");
@@ -7983,5 +7987,55 @@ mod tests {
         ] {
             refused(&format!("{decl} server {{ }}"), WL, "`step` is an engine's");
         }
+    }
+
+    /// The pair renames each file's own constants and definitions apart
+    /// (`frontend::paired`), never a word of the language: a name the
+    /// language supplies, a built-in attribute or a std module is refused
+    /// in a pair as in one file, and an option's word (`cap cap;`) stays an
+    /// option.
+    #[test]
+    fn a_pair_renames_no_word_of_the_language() {
+        for (body, workload, needle) in [
+            ("let self = 2;\nserver {\n}", TURN, "`self`"),
+            (
+                "server {\n}",
+                "let self = 2;\nworkload { session { turn; } }",
+                "`self`",
+            ),
+            ("def more(x) { x }\nserver {\n}", TURN, "`more`"),
+            (
+                "server {\n}",
+                "def think(x) { x }\nworkload { session { turn; } }",
+                "`think`",
+            ),
+        ] {
+            let e = crate::compile_paired(
+                &main_source(body),
+                workload,
+                ("deployment.sq", "workload.sq"),
+                &crate::Overrides {
+                    horizon: Some(10.0),
+                    ..Default::default()
+                },
+            )
+            .unwrap_err();
+            assert!(e.contains(needle), "{body} | {workload}\n  {e}");
+        }
+        // a constant named like a pool's option
+        let p = pair(
+            "stage s : fifo;\nserver { run s (cost(s, 1)); }",
+            "let cap = 3;\npool live { cap cap; }\n\
+             workload { session { hold live (cost(live, 1)) { turn; } } }",
+        )
+        .unwrap();
+        assert!(p.pools.iter().any(|d| d.name == "live"));
+        // and a workload's pool is on nothing of the deployment's
+        let e = pair(
+            "device gpu { kv cap 10; }\nstage s : fifo;\nserver { run s (cost(s, 1)); }",
+            "pool live on gpu { cap 3; }\nworkload { session { turn; } }",
+        )
+        .unwrap_err();
+        assert!(e.msg.contains("a workload file's pool is its own"), "{e}");
     }
 }

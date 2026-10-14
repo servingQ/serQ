@@ -8,7 +8,10 @@
 // fluid `TwoStage` server of `libqueuingsim::models::batch` at iteration
 // granularity. Batch cap `B`, a KV pool of `C` tokens with shortest-first
 // eviction (tool calls before waiting turns). The sessions, and their cap
-// on live sessions: examples/workloads/replica.sq.
+// on live sessions: examples/workloads/replica.sq. One difference from
+// `open_session_cfg`: a session's KV is dropped by the server after its last
+// request, so before a last tool call, where libqueuingsim drops it after.
+// Over 12 seeds the two agree within their spread (docs/design/paired-workload.md).
 
 let B = 8;           // batch cap (prefilling and decoding turns)
 let C = 6e5;         // KV pool, tokens

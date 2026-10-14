@@ -7,7 +7,7 @@
 mod common;
 
 /// A deployment and the workload's file beside it
-/// (`docs/design/workload-file.md`).
+/// (`docs/design/paired-workload.md`).
 type Pair = (String, String);
 
 fn compile((deployment, workload): &Pair) -> Result<serq::Program, String> {

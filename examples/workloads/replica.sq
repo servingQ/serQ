@@ -23,12 +23,14 @@ workload {
     set n = cold ? (doc ? ~uniform(15000, 30000) : ~uniform(4000, 8000))
                  : (doc ? ~exp(500) : ~exp(800));
     set o = ~exp(300);
-    // whether the session continues after this turn's tool call
+    // the session ends past `maxctx` tokens of context, or after this
+    // turn's tool call when it does not continue
+    set full = K + n + o > maxctx;
     set more = ~bernoulli(p);
   }
-  // libqueuingsim frees a finished session's KV: the server drops it after
-  // the session's last request
-  send (K, n, o, cold, final: K + n + o > maxctx || more == 0);
+  // the session's last request: the server drops its KV after it, before
+  // a last tool call (libqueuingsim's session drops it after that call)
+  send (K, n, o, cold, final: full || more == 0);
   // A session waits to enter and then holds a live slot for its whole
   // conversation.
   session {
@@ -39,7 +41,7 @@ workload {
         turn;
         set K = K + n + o;
         set cold = 0;
-        if (K > maxctx) { end; }
+        if (full) { end; }
         tool (~exp(Z));
         if (more == 0) { end; }
       }

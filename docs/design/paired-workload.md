@@ -101,7 +101,7 @@ workload {
 
 ```
 $ serq run examples/multi-turn/vllm.sq --horizon 200
-examples/multi-turn/vllm.sq: 57:3: the server needs a workload to run: give the workload's file, `serq run FILE --workload W.sq` (pyserq: `workload=`)
+examples/multi-turn/vllm.sq: 57:3: the server needs a workload to run: give the workload's file, `--workload W.sq` (pyserq: `workload=`)
 57 |   server (input, hidden output) {
    |   ^
 $ serq run examples/multi-turn/vllm.sq --workload examples/workloads/chat.sq --horizon 200
@@ -112,7 +112,7 @@ and the Before file, unchanged, is refused:
 
 ```
 $ serq run vllm.sq   # origin/main's examples/multi-turn/vllm.sq
-vllm.sq: 59:3: a workload is a file of its own, given when the program runs: `serq run FILE --workload W.sq` (pyserq: `workload=`)
+vllm.sq: 59:3: a workload is a file of its own, given when the program runs: `--workload W.sq` (pyserq: `workload=`)
 59 |   workload {
    |   ^
 help: move `workload { … }`, with the `let`s, `def`s, stages and pools only it reads, to a file of its own
@@ -256,6 +256,19 @@ are identical. The 7 that differ are the ones this change means to move:
 | `docs/tutorial/programs/05-engine.sq` | differs | differs | the same |
 | `examples/multi-turn/replica.sq` | differs | differs | the same, and its `live` pool, now the workload's, declared after the deployment's |
 | `examples/replay/vllm_replay.sq` | the trace path only | identical | the trace is read beside the workload file: `data/short_base.csv` is now `../replay/data/short_base.csv` |
+
+The three that move change the order of the draws, not the model. At 2000
+s, seed 1, the pair and the one file agree within their CIs: chapter 4's
+`hit` 0.9995 against 0.9995 (5017 against 5035 turns), chapter 5's TTFT
+0.0186 ± 0.0033 s against 0.0175 ± 0.0008 s and its response 0.0650 ±
+0.0058 s against 0.0619 ± 0.0016 s (`serq run P --workload W --horizon
+2000`, the one file at 9a49115 without it). `replica.sq` at `--horizon 3000
+--warmup 300`, seeds 1 to 12, is heavy-tailed in both: mean live is 17
+to 33 in most seeds, but two of the pair's end with a long entry queue
+(136 and 284) and one of the one file's (126), three more of which reach
+41 to 60. The medians of mean live are 26.0 (pair) and 27.4 (one file).
+Its earlier KV drop, before a last tool call, moves no statistic past
+that spread.
 
 `make oracle-ir` and `make claims-ir` leave `tools/oracle/*.ir.json`,
 `tools/claims/*.ir.json` and the Lean files they generate unchanged, and

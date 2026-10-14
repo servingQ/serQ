@@ -240,6 +240,9 @@ pub fn load_paired(
     workload: &Path,
     ov: &Overrides,
 ) -> Result<ir::Program, String> {
+    if deployment.extension().is_some_and(|e| e == "json") {
+        return Err(IR_HAS_ITS_WORKLOAD.into());
+    }
     let read = |path: &Path| {
         std::fs::read_to_string(path).map_err(|e| format!("cannot read {}: {e}", path.display()))
     };
@@ -250,6 +253,11 @@ pub fn load_paired(
     );
     compile_paired(&d, &w, (&names.0, &names.1), ov)
 }
+
+/// Why a workload is not paired with IR (`.json`): the IR is the whole
+/// program, workload included.
+pub const IR_HAS_ITS_WORKLOAD: &str =
+    "--workload pairs a .sq deployment with a workload file; an IR is a whole program already";
 
 /// `load_paired`, for inspection (`load_inspected`).
 pub fn load_paired_inspected(

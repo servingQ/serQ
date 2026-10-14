@@ -180,7 +180,7 @@ fn version_is_printed_on_request() {
 }
 
 /// `--workload W` gives the deployment its workload's file on every command
-/// that compiles program text (`docs/design/workload-file.md`); a server
+/// that compiles program text (`docs/design/paired-workload.md`); a server
 /// given none is refused.
 #[test]
 fn the_workload_is_given_on_every_command_that_compiles() {

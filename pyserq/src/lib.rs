@@ -423,6 +423,8 @@ fn compile(
 struct Workload {
     name: String,
     text: String,
+    /// Its file, read by `serq::load_paired`, when it has one.
+    path: Option<PathBuf>,
     /// The file's directory, where its trace is read.
     dir: Option<PathBuf>,
 }
@@ -439,11 +441,13 @@ impl Workload {
                     name: p.display().to_string(),
                     text,
                     dir: p.parent().map(Path::to_path_buf),
+                    path: Some(p),
                 }))
             }
             (None, Some(text)) => Ok(Some(Workload {
                 name: "workload".into(),
                 text: text.into(),
+                path: None,
                 dir: None,
             })),
             _ => Err(PyValueError::new_err(
@@ -483,24 +487,30 @@ impl<'a> Deployment<'a> {
             (Deployment::Path(p), None) => serq::load(p, ov),
             (Deployment::Source(src), None) if inspected => serq::compile_inspected(src, ov),
             (Deployment::Source(src), None) => serq::compile_source(src, ov),
-            (Deployment::Path(p), Some(_)) if p.extension().is_some_and(|e| e == "json") => Err(
-                "a workload pairs with a .sq deployment; an IR is a whole program already".into(),
-            ),
-            (deployment, Some(w)) => {
-                let (name, text) = match deployment {
-                    Deployment::Path(p) => (
-                        p.display().to_string(),
-                        std::fs::read_to_string(p)
-                            .map_err(|e| format!("cannot read {}: {e}", p.display()))
-                            .map_err(PyValueError::new_err)?,
-                    ),
-                    Deployment::Source(src) => ("deployment".into(), src.to_string()),
-                };
-                let names = (name.as_str(), w.name.as_str());
+            (Deployment::Path(p), Some(w)) => match &w.path {
+                Some(wp) if inspected => serq::load_paired_inspected(p, wp, ov),
+                Some(wp) => serq::load_paired(p, wp, ov),
+                None if p.extension().is_some_and(|e| e == "json") => {
+                    Err(serq::IR_HAS_ITS_WORKLOAD.into())
+                }
+                None => std::fs::read_to_string(p)
+                    .map_err(|e| format!("cannot read {}: {e}", p.display()))
+                    .and_then(|text| {
+                        let names = (p.display().to_string(), w.name.clone());
+                        let f = if inspected {
+                            serq::compile_paired_inspected
+                        } else {
+                            serq::compile_paired
+                        };
+                        f(&text, &w.text, (&names.0, &names.1), ov)
+                    }),
+            },
+            (Deployment::Source(src), Some(w)) => {
+                let names = ("deployment", w.name.as_str());
                 if inspected {
-                    serq::compile_paired_inspected(&text, &w.text, names, ov)
+                    serq::compile_paired_inspected(src, &w.text, names, ov)
                 } else {
-                    serq::compile_paired(&text, &w.text, names, ov)
+                    serq::compile_paired(src, &w.text, names, ov)
                 }
             }
         };
