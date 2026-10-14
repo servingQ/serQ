@@ -3779,6 +3779,11 @@ impl DistKind {
     pub fn from_name(name: &str) -> Option<DistKind> {
         DISTS.into_iter().find(|d| d.name() == name)
     }
+
+    /// The names a draw may use, in the table's order.
+    pub fn names() -> impl Iterator<Item = &'static str> {
+        DISTS.into_iter().map(DistKind::name)
+    }
 }
 
 /// A number as a person would write it in a program: `16`, `2e-5`, `inf`.
