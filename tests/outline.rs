@@ -173,8 +173,11 @@ fn a_routers_chooses_their_counts_and_keys_are_found_in_the_text() {
 
 #[test]
 fn a_workloads_statements_are_found_in_the_text() {
-    let src = read("examples/pd-disaggregation/llmd_nixl_pull.sq");
-    let o = outline(&src);
+    // the workload's statements are its file's, outlined beside the
+    // deployment it runs against
+    let deployment = read("examples/pd-disaggregation/llmd_nixl_pull.sq");
+    let src = read("examples/workloads/chat_reply.sq");
+    let (_, o) = serq::outline_paired(&deployment, &src).unwrap();
     let items: Vec<_> = o
         .workload_items
         .iter()
