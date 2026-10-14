@@ -21,11 +21,11 @@ engine llm on gpu {
   scheduler { SCHEDULE }
   worker { forward (c + a * ceil(batch.tokens / b0)); }
 }
-workload { arrive renewal(46750); init { set t0 = now; }
+workload { arrive renewal(46750); init { set t0 = now; } send (t0);
   session { turn; end;
   }
 }
-server { llm (290, 991); observe response = now - t0;
+server (t0) { llm (290, 991); observe response = now - t0;
 }
 claim work_conserving: every iteration of llm (demand < bmax || tokens == bmax);
 claim token_rate: every iteration of llm (served * (c + a * ceil(bmax / b0)) <= bmax * now);
@@ -123,11 +123,11 @@ const BATCH: &str = "
           scheduler { advance running; admit waiting while (running.preempted == 0); }
           worker { forward (1); }
         }
-        workload { arrive batch(3); init { set n = serial == 0 ? 3 : serial; }
+        workload { arrive batch(3); init { set n = serial == 0 ? 3 : serial; } send (n);
           session { turn; end;
           }
         }
-        server { llm (n, 1); observe x = n;
+        server (n) { llm (n, 1); observe x = n;
         }
 
 ";

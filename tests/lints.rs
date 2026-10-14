@@ -40,9 +40,9 @@ const CACHED_PREFIX: &str = "reqs (1), kv (c + min(request.input - c, budget_lef
 fn a_stale_header_read_is_rejected() {
     let llm = engine(CACHED_PREFIX);
     let src = format!(
-        "{llm} workload {{ {ENGINE_WORKLOAD} session {{ loop {{ turn; set K = prompt + o; end; }}
+        "{llm} workload {{ {ENGINE_WORKLOAD} send (K, n, o); session {{ loop {{ turn; set K = K + n + o; end; }}
         }} }}
-        server {{
+        server (K, n, o) {{
           set prompt = K + n;
           set c = min(cachedin(kv), prompt - 1);
           llm (prompt, o);
@@ -60,9 +60,9 @@ fn the_request_s_hit_is_the_way_through() {
          reuse (request.input - 1) cache (request.input + request.output)",
     );
     let src = format!(
-        "{llm} workload {{ {ENGINE_WORKLOAD} session {{ loop {{ turn; set K = prompt + o; end; }}
+        "{llm} workload {{ {ENGINE_WORKLOAD} send (K, n, o); session {{ loop {{ turn; set K = K + n + o; end; }}
         }} }}
-        server {{
+        server (K, n, o) {{
           set prompt = K + n;
           llm (prompt, o);
         }}"
@@ -76,9 +76,9 @@ fn the_request_s_hit_is_the_way_through() {
 fn a_reassignment_clears_the_lint() {
     let llm = engine("reqs (1), kv (c + request.input) cache (request.input)");
     let src = format!(
-        "{llm} workload {{ {ENGINE_WORKLOAD} session {{ loop {{ turn; set K = prompt + o; end; }}
+        "{llm} workload {{ {ENGINE_WORKLOAD} send (K, n, o); session {{ loop {{ turn; set K = K + n + o; end; }}
         }} }}
-        server {{
+        server (K, n, o) {{
           set prompt = K + n;
           set c = min(cachedin(kv), prompt - 1);
           set c = 0;
@@ -93,9 +93,9 @@ fn a_reassignment_clears_the_lint() {
 fn a_read_after_the_request_is_fine() {
     let llm = engine("reqs (1), kv (request.input) cache (request.input)");
     let src = format!(
-        "{llm} workload {{ {ENGINE_WORKLOAD} session {{ loop {{ turn; set K = prompt + o; end; }}
+        "{llm} workload {{ {ENGINE_WORKLOAD} send (K, n, o); session {{ loop {{ turn; set K = K + n + o; end; }}
         }} }}
-        server {{
+        server (K, n, o) {{
           set prompt = K + n;
           llm (prompt, 1);
           set c = min(cachedin(kv), prompt - 1);
@@ -110,11 +110,11 @@ fn a_read_after_the_request_is_fine() {
 #[test]
 fn a_constant_probability_guard_is_rejected() {
     let src = "stage tool : delay;
-        workload { arrive poisson(1); turn { set Z = ~exp(3); }
+        workload { arrive poisson(1); turn { set Z = ~exp(3); } send (Z);
           session {  loop { if (0.8) { turn;  } else { end; } }
           }
         }
-        server { run tool (cost(tool, Z));
+        server (Z) { run tool (cost(tool, Z));
         }
         ";
     let e = check(src).expect_err("rejected");
@@ -136,11 +136,11 @@ fn zero_and_one_are_tests() {
     for g in ["0", "1"] {
         let src = format!(
             "stage tool : delay;
-        workload {{ arrive poisson(1); turn {{ set Z = ~exp(3); }}
+        workload {{ arrive poisson(1); turn {{ set Z = ~exp(3); }} send (Z);
           session {{  loop {{ if ({g}) {{ turn;  }} else {{ end; }} }}
           }}
         }}
-        server {{ run tool (cost(tool, Z));
+        server (Z) {{ run tool (cost(tool, Z));
         }}
         "
         );
@@ -156,9 +156,9 @@ fn zero_and_one_are_tests() {
 fn a_context_variable_outside_its_moment_is_rejected() {
     let llm = engine("reqs (1), kv (request.input)");
     let src = format!(
-        "{llm} workload {{ {ENGINE_WORKLOAD} session {{  turn; end;
+        "{llm} workload {{ {ENGINE_WORKLOAD} send (n); session {{  turn; end;
         }} }}
-        server {{ set x = tokens;
+    server (n) {{ set x = tokens;
           llm (n, 1);
         }}"
     );
@@ -184,11 +184,12 @@ fn a_context_variable_outside_its_moment_is_rejected() {
         stage svc : ps (4);
         workload {{ arrive poisson(0.3); init {{ set K = 0; }}
           turn {{ set m = ~exp(500); set o = ~exp(200) + 1; }}
+          send (m);
           session {{  turn; end;
           }}
         }}
 
-        server {{ {session} llm (m, 1);
+        server (m) {{ {session} llm (m, 1);
         }}"
         )
     };
@@ -299,11 +300,11 @@ fn a_context_variable_outside_its_moment_is_rejected() {
           }
           worker { forward (1e-3 * batch.tokens + batch.prefilled * 0 + batch.attention * 0 + now * 0); }
         }
-        workload { arrive poisson(0.3); turn { set n = ~exp(500); }
+        workload { arrive poisson(0.3); turn { set n = ~exp(500); } send (n);
           session {  turn; end;
           }
         }
-        server { set t = now; hold kv[0] (cost(kv, n)) { run svc (cost(svc, n)); } llm (1, 1);
+        server (n) { set t = now; hold kv[0] (cost(kv, n)) { run svc (cost(svc, n)); } llm (1, 1);
         }
         ";
     check(src).expect("links");
@@ -392,17 +393,17 @@ fn a_hidden_attribute_is_not_read_by_the_scheduler() {
         "
         )
     };
-    let wl_workload = "arrive poisson(0.3); hidden o; init { set K = 0; }
-                   turn { set n = ~exp(500); set o = ~exp(200) + 1; }";
+    let wl_workload = "arrive poisson(0.3); init { set K = 0; }
+                   turn { set n = ~exp(500); set o = ~exp(200) + 1; } send (n, o);";
     // the request's output may be it, and its release may cache by it
     let ok = format!(
-        "{} workload {{ {wl_workload} session {{  turn; end; \n}} }}\nserver {{ llm (n, o);\n}}",
+        "{} workload {{ {wl_workload} session {{  turn; end; \n}} }}\nserver (n, hidden o) {{ llm (n, o);\n}}",
         wl("reqs (1), kv (request.input) cache (request.input + request.output)")
     );
     check(&ok).expect("links");
     // the admission may not: the reservation is the scheduler's
     let bad = format!(
-        "{} workload {{ {wl_workload} session {{  turn; end; \n}} }}\nserver {{ llm (n, o);\n}}",
+        "{} workload {{ {wl_workload} session {{  turn; end; \n}} }}\nserver (n, hidden o) {{ llm (n, o);\n}}",
         wl("reqs (1), kv (request.input) reserve (n + o)")
     );
     let e = check(&bad).expect_err("rejected");
@@ -410,7 +411,7 @@ fn a_hidden_attribute_is_not_read_by_the_scheduler() {
     assert!(e.contains("admits the request"), "{e}");
     // nor through the request's output, which the call passes it as
     let bad = format!(
-        "{} workload {{ {wl_workload} session {{  turn; end; \n}} }}\nserver {{ llm (n, o);\n}}",
+        "{} workload {{ {wl_workload} session {{  turn; end; \n}} }}\nserver (n, hidden o) {{ llm (n, o);\n}}",
         wl("reqs (1), kv (request.input) reserve (request.input + request.output)")
     );
     let e = check(&bad).expect_err("rejected");
@@ -424,12 +425,12 @@ fn a_hidden_attribute_is_not_read_by_the_scheduler() {
           worker { forward (1e-3); }
         }
         pool kv on gpu { block bs; evict lru; queue by (o); }
-        workload { arrive poisson(0.3); hidden o; turn { set n = ~exp(500); set o = ~exp(200) + 1; }
+        workload { arrive poisson(0.3); turn { set n = ~exp(500); set o = ~exp(200) + 1; } send (n, o);
           session {  turn; end;
           }
         }
 
-        server { llm (n, 1);
+        server (n, hidden o) { llm (n, 1);
         }";
     let e = check(bad).expect_err("rejected");
     assert!(e.contains("pool `kv`"), "{e}");
@@ -443,12 +444,12 @@ fn a_hidden_attribute_is_not_read_by_the_scheduler() {
           worker { forward (1e-3); }
         }
         pool kv on gpu { block bs; evict lru; }
-        workload { arrive poisson(0.3); hidden o; turn { set n = ~exp(500); set o = ~exp(200) + 1; }
+        workload { arrive poisson(0.3); turn { set n = ~exp(500); set o = ~exp(200) + 1; } send (n, o);
           session {  turn; end;
           }
         }
 
-        server { llm (n, 1);
+        server (n, hidden o) { llm (n, 1);
         }";
     let e = check(bad).expect_err("rejected");
     assert!(e.contains("engine `llm`"), "{e}");
@@ -456,29 +457,34 @@ fn a_hidden_attribute_is_not_read_by_the_scheduler() {
     // a name nothing sets is not an attribute
     let bad = "pool kv { cap 1e5; }
         stage svc : fifo;
-        workload { arrive poisson(0.3); hidden nothing;
+        workload { arrive poisson(0.3); send (nothing);
           session { turn; end;
           }
         }
 
-        server { hold kv (cost(kv, 1)) { run svc (cost(svc, 1)); }
+        server (hidden nothing) { hold kv (cost(kv, 1)) { run svc (cost(svc, 1)); }
         }";
     let e = check(bad).expect_err("rejected");
-    assert!(e.contains("hidden `nothing`"), "{e}");
+    assert!(
+        e.contains("`send (nothing)` sends the workload's `nothing`, which nothing sets"),
+        "{e}"
+    );
     // what the scheduler sets cannot be hidden from it, and a name is hidden once
     let one_pool = format!(
-        "{} workload {{ {wl_workload} session {{  turn; end; \n}} }}\nserver {{ llm (n, 1);\n}}",
+        "{} workload {{ {wl_workload} session {{  turn; end; \n}} }}\nserver (n, hidden o) {{ llm (n, 1);\n}}",
         wl("kv (request.input)")
     );
-    let bad = one_pool.replace("hidden o;", "hidden computed;");
+    let bad = one_pool
+        .replace("send (n, o);", "send (n, computed: 0);")
+        .replace("hidden o)", "hidden computed)");
     let e = check(&bad).expect_err("rejected");
     assert!(
         e.contains("hidden `computed`: the scheduler sets it"),
         "{e}"
     );
-    let bad = one_pool.replace("hidden o;", "hidden o, o;");
+    let bad = one_pool.replace("hidden o)", "hidden o, hidden o)");
     let e = check(&bad).expect_err("rejected");
-    assert!(e.contains("hidden `o` twice"), "{e}");
+    assert!(e.contains("duplicate parameter `o`"), "{e}");
 }
 
 /// A stage's capacity, budget and cost, and an iteration body's guard, are
@@ -487,8 +493,8 @@ fn a_hidden_attribute_is_not_read_by_the_scheduler() {
 #[test]
 fn a_stage_reads_no_session_attribute() {
     let ps = "stage svc : ps(1 + prompt);
-        workload { arrive poisson(0.5); init { set prompt = 2; } }
-        server { run svc (cost(svc, 1)); }";
+        workload { arrive poisson(0.5); init { set prompt = 2; } send (prompt); }
+        server (prompt) { run svc (cost(svc, 1)); }";
     let e = check(ps).expect_err("rejected");
     assert!(e.contains("`prompt` is a session attribute"), "{e}");
     assert!(e.contains("a ps stage's capacity"), "{e}");
@@ -501,8 +507,8 @@ fn a_stage_reads_no_session_attribute() {
               worker {{ forward ({execute}); }}
             }}
             pool kv on gpu {{ }}
-            workload {{ arrive poisson(0.5); init {{ set prompt = 2; }} }}
-            server {{ llm (prompt, 1); }}"
+            workload {{ arrive poisson(0.5); init {{ set prompt = 2; }} send (prompt); }}
+            server (prompt) {{ llm (prompt, 1); }}"
         )
     };
     let vllm = "advance running; admit waiting while (running.preempted == 0) taking kv (prompt);";
@@ -807,8 +813,8 @@ fn a_declaration_cannot_take_a_name_the_language_supplies() {
 #[test]
 fn a_schedules_let_cannot_take_a_name_the_language_supplies() {
     let src = format!(
-        "{} workload {{ {ENGINE_WORKLOAD} session {{ turn; }} }}
-        server {{ llm (n, 1); }}",
+        "{} workload {{ {ENGINE_WORKLOAD} send (n); session {{ turn; }} }}
+        server (n) {{ llm (n, 1); }}",
         engine("reqs (1)").replace("scheduler { ", "scheduler { let inf = 1; ")
     );
     let e = check(&src).expect_err("rejected");

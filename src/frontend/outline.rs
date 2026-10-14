@@ -116,6 +116,22 @@ pub struct Call {
     pub owner: Option<String>,
 }
 
+/// A parameter of the server's signature: what a request carries.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Param {
+    pub name: String,
+    /// The scheduler may not read it (`server (hidden o)`).
+    pub hidden: bool,
+}
+
+/// The server's signature, `server (P, hidden Q) reply (R)`: what crosses
+/// between the workload and the server.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct Signature {
+    pub params: Vec<Param>,
+    pub reply: Vec<String>,
+}
+
 /// The outline of a program's text (`serq::outline`).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct Outline {
@@ -129,6 +145,8 @@ pub struct Outline {
     pub relations: Vec<Relation>,
     pub routes: Vec<Route>,
     pub server: Option<Block>,
+    /// The server's signature; empty for a bare `server { … }`.
+    pub signature: Option<Signature>,
     pub workload: Option<Range>,
     pub calls: Vec<Call>,
 }

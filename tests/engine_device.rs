@@ -360,8 +360,8 @@ fn sglang_and_tgi_as_engines_are_bodies() {
 /// A small engine, for the forms below: its `reqs` admitted by it, its
 /// memory `kv` on its device.
 const WORKLOAD: &str = "
-workload { arrive batch(3); init { set prompt = 2; } }
-server { vllm (prompt, 3); }
+workload { arrive batch(3); init { set prompt = 2; } send (prompt); }
+server (prompt) { vllm (prompt, 3); }
 ";
 
 /// `scheduler` with the request's admission on each `admit waiting`: a slot
@@ -1146,8 +1146,8 @@ workload { arrive batch(4); init { set prompt = 2; } }",
   pool kv on {on} {{ }}
   decode (prompt) {{ hold kv (cost(kv, prompt)) {{ run vllm prefill (cost(vllm, prompt)) growing kv; }} }}
 }}
-workload {{ arrive batch(4); init {{ set prompt = 2; set j = serial < 2 ? 0 : 1; }} }}
-server {{ vllm[j].decode (prompt); }}"
+workload {{ arrive batch(4); init {{ set prompt = 2; set j = serial < 2 ? 0 : 1; }} send (prompt, j); }}
+server (prompt, j) {{ vllm[j].decode (prompt); }}"
         )
     };
     let ok = "advance running; admit waiting while (running.preempted == 0);";
@@ -1220,8 +1220,8 @@ engine llm on gpu {
 }
 pool kv on gpu { }
 pool reqs on llm { }
-workload { arrive poisson(1); init { set n = 10; set t = ~bernoulli(0.5); } session { turn; end; } }
-server { hold reqs[t] (cost(reqs[t], 1)), kv (cost(kv, n)) { run llm prefill (cost(llm, n)) growing kv; } }";
+workload { arrive poisson(1); init { set n = 10; set t = ~bernoulli(0.5); } send (n, t); session { turn; end; } }
+server (n, t) { hold reqs[t] (cost(reqs[t], 1)), kv (cost(kv, n)) { run llm prefill (cost(llm, n)) growing kv; } }";
 
 #[test]
 fn an_engine_admits_no_family_of_capacities() {
@@ -1250,8 +1250,8 @@ fn a_queues_engine_holds_no_family_capacity() {
   pool reqs on Q { }
   entry prefill(n) { hold reqs (cost(reqs, 1)), kv (cost(kv, n)) { run Q prefill (cost(Q, n)) growing kv; } }
 }
-workload { arrive poisson(1); init { set n = 10; } session { turn; end; } }
-server { call Q.prefill(n); }",
+workload { arrive poisson(1); init { set n = 10; } send (n); session { turn; end; } }
+server (n) { call Q.prefill(n); }",
         "`reqs[2]` in queue `Q`'s engine",
     );
 }
@@ -1317,8 +1317,8 @@ fn a_queues_engine_is_its_stage() {
     hold kv (cost(kv, prompt)) {{ run E prefill (cost(E, prompt)) growing kv; }}
   }}
 }}
-workload {{ arrive batch(1); init {{ set prompt = 2; }} }}
-server {{ E.prefill (prompt); }}
+workload {{ arrive batch(1); init {{ set prompt = 2; }} send (prompt); }}
+server (prompt) {{ E.prefill (prompt); }}
 "
         )
     };
@@ -1558,8 +1558,8 @@ fn a_name_passed_as_a_number_is_read_as_written() {
 def h(x) {{ 1 }}
 device gpu[2] {{ kv cap 100; }} pool kv on gpu {{ }}
 stage E[2] : fifo;
-workload {{ arrive batch(1); init {{ set prompt = 32; set j = 0; }} }}
-server {{ hold kv[j] (cost(kv, {size})) {{ run E[j] (cost(E, 1)); }} }}"
+workload {{ arrive batch(1); init {{ set prompt = 32; set j = 0; }} send (prompt, j); }}
+server (prompt, j) {{ hold kv[j] (cost(kv, {size})) {{ run E[j] (cost(E, 1)); }} }}"
         )
     };
     let ov = common::horizon(10.0);
@@ -1621,8 +1621,8 @@ fn a_name_is_a_number_only_where_its_function_takes_one() {
             "{pre}
 device gpu {{ kv cap 100; }} pool kv on gpu {{ }}
 engine E on gpu {{ tokens cap inf; scheduler {{ advance running; admit waiting while (running.preempted == 0); }} worker {{ forward (1); }} }}
-workload {{ arrive batch(1); init {{ set prompt = 32; }} }}
-server {{ hold kv (cost(kv, {size})) {{ E (1, 1); }} }}"
+workload {{ arrive batch(1); init {{ set prompt = 32; }} send (prompt); }}
+server (prompt) {{ hold kv (cost(kv, {size})) {{ E (1, 1); }} }}"
         )
     };
     refused(

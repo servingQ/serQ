@@ -28,8 +28,8 @@ fn queue(name: &str, nic: &str) -> String {
 fn program(decls: &str) -> String {
     format!(
         "{}{decls}
-        workload {{ arrive poisson(1); turn {{ set n = 100; }} }}
-        server {{ E1.decode (n); }}
+        workload {{ arrive poisson(1); turn {{ set n = 100; }} send (n); }}
+        server (n) {{ E1.decode (n); }}
         ",
         queue("E1", "")
     )
@@ -69,8 +69,8 @@ fn a_nic_no_copy_crosses_does_not_link() {
 #[test]
 fn ir_with_a_stage_no_statement_runs_is_refused() {
     let mut p = check(&program("stage tool : delay;").replace(
-        "server { E1.decode (n); }",
-        "server { E1.decode (n); run tool (cost(tool, 1)); }",
+        "server (n) { E1.decode (n); }",
+        "server (n) { E1.decode (n); run tool (cost(tool, 1)); }",
     ))
     .unwrap();
     let tool = p.stages.iter().position(|s| s.name == "tool").unwrap();

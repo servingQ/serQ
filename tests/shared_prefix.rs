@@ -27,10 +27,10 @@ fn program(cap: u32, n: u32, stagger: &str, prefix: &str) -> String {
         stage llm : delay;
         pool kv on gpu {{ block 16; evict lru; }}
         stage user : delay;
-        workload {{ arrive batch({n}); init {{ set sys = 7; }}
+        workload {{ arrive batch({n}); init {{ set sys = 7; }} send (sys);
           session {{ turn; }}
         }}
-        server {{
+        server (sys) {{
           run user (cost(user, {stagger}));
           hold kv (cost(kv, 1600)) {prefix} {{
             observe got = cached;
@@ -175,8 +175,8 @@ fn two_requests(reuse: &str, inner: &str) -> String {
         stage llm : delay;
         pool kv on gpu {{ block 16; evict lru; }}
         stage user : delay;
-        workload {{ arrive batch(3); init {{ set sys = 7; }} session {{ turn; }} }}
-        server {{
+        workload {{ arrive batch(3); init {{ set sys = 7; }} send (sys); session {{ turn; }} }}
+        server (sys) {{
           run user (cost(user, serial * 10));
           hold kv (cost(kv, 1600)) {CHAIN} {reuse} {{
             run llm (cost(llm, 1));
@@ -252,8 +252,8 @@ fn a_hold_reads_at_most_what_it_allocates() {
         device gpu { kv cap 100000; }
         pool kv on gpu { block 16; evict lru; }
         stage user : delay;
-        workload { arrive batch(3); init { set sys = 7; } session { turn; } }
-        server {
+        workload { arrive batch(3); init { set sys = 7; } send (sys); session { turn; } }
+        server (sys) {
           run user (cost(user, serial == 0 ? 0 : 10));
           hold kv (cost(kv, serial == 0 ? 1600 : 160)) prefix (sys: 1200, serial: inf) {
             observe got = cached;
@@ -288,8 +288,8 @@ fn a_key_is_its_attribute_and_its_value() {
         stage llm : delay;
         pool kv on gpu {{ block 16; evict lru; }}
         stage user : delay;
-        workload {{ arrive batch(3); init {{ set sys = 1; }} session {{ turn; }} }}
-        server {{
+        workload {{ arrive batch(3); init {{ set sys = 1; }} send (sys); session {{ turn; }} }}
+        server (sys) {{
           run user (cost(user, serial * 10));
           if (serial == 1) {{
             hold kv (cost(kv, 1600)) {{
@@ -325,8 +325,8 @@ fn deployment(cap: u32, n: u32, pools: &str, server: &str) -> String {
         pool kv on gpu {{ block 16; evict lru; preempt lifo; }}
         {pools}
         stage user : delay;
-        workload {{ arrive batch({n}); init {{ set sys = 7; }} session {{ turn; }} }}
-        server {{ {server} }}
+        workload {{ arrive batch({n}); init {{ set sys = 7; }} send (sys); session {{ turn; }} }}
+        server (sys) {{ {server} }}
 "#
     )
 }
@@ -558,8 +558,8 @@ fn serial_is_not_set() {
         device gpu { kv cap 100000; }
         pool kv on gpu { block 16; evict lru; }
         stage user : delay;
-        workload { arrive batch(3); init { set d = serial; set serial = 0; } session { turn; } }
-        server {
+        workload { arrive batch(3); init { set d = serial; set serial = 0; } send (d); session { turn; } }
+        server (d) {
           run user (cost(user, d * 10));
           hold kv (cost(kv, 1600)) prefix (serial: 1e12) {
             observe got = cached;
@@ -591,8 +591,8 @@ fn a_request_s_chain_reads_nothing_the_admission_reads() {
           }
           worker { forward (batch.tokens * 1e-5 + 1e-4); }
         }
-        workload { arrive batch(1); init { set sys = 7; } session { turn; } }
-        server { llm (1600, 1); }
+        workload { arrive batch(1); init { set sys = 7; } send (sys); session { turn; } }
+        server (sys) { llm (1600, 1); }
 "#;
     let error = run_source(&common::main_source(src), &options(10.0), None).unwrap_err();
     assert!(
@@ -647,8 +647,8 @@ fn an_engine_s_request_takes_a_chain() {
           worker {{ forward (batch.tokens * 1e-5 + 1e-4); }}
         }}
         stage user : delay;
-        workload {{ arrive batch(4); init {{ set sys = 7; }} session {{ turn; }} }}
-        server {{
+        workload {{ arrive batch(4); init {{ set sys = 7; }} send (sys); session {{ turn; }} }}
+        server (sys) {{
           run user (cost(user, serial * 10));
           llm (1600, 1);
         }}
@@ -680,8 +680,8 @@ fn lpm_admits_the_longest_cached_chain_first() {
         device gpu {{ kv cap 2000; }}
         pool kv on gpu {{ block 16; evict lru; {queue} }}
         stage user : delay;
-        workload {{ arrive batch(3); init {{ set sys = serial == 1 ? 9 : 7; }} session {{ turn; }} }}
-        server {{
+        workload {{ arrive batch(3); init {{ set sys = serial == 1 ? 9 : 7; }} send (sys); session {{ turn; }} }}
+        server (sys) {{
           run user (cost(user, serial == 0 ? 0 : 1));
           hold kv (cost(kv, 1600)) {CHAIN} {{
             observe start = now;
@@ -756,7 +756,8 @@ fn an_entry_keys_its_prefix_by_the_requests_serial() {
     };
     let e = refused("other", "prompt");
     assert!(
-        e.contains("the header reads `other`") && e.contains("mark `other` `hidden`"),
+        e.contains("the header reads `other`")
+            && e.contains("take `other` `hidden` in `server (…, hidden other)`"),
         "{e}"
     );
     let e = refused("serial", "prompt + serial");

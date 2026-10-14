@@ -130,8 +130,8 @@ fn an_argument_its_definition_does_not_read_is_still_resolved() {
         };
         let src = format!(
             "def one(x) {{ 1 }}\n{svc}\n{f}\npool kv {{ cap 10; }}\n\
-             pool g[2] {{ cap 10; }}\nworkload {{ arrive batch(1); session {{ set s = 1; turn; \
-             end; }} }}\nserver {{ hold kv (cost(kv, 1)) at admission (need = {need}) {{ {body} \
+             pool g[2] {{ cap 10; }}\nworkload {{ arrive batch(1); send (s); session {{ set s = 1; turn; \
+             end; }} }}\nserver (s) {{ hold kv (cost(kv, 1)) at admission (need = {need}) {{ {body} \
              }} }}\n"
         );
         compile_source(&common::main_source(&src), &common::horizon(1.0))

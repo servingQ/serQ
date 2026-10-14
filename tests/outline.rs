@@ -108,6 +108,15 @@ fn a_pull_relation_its_queues_and_its_calls_are_found_in_the_text() {
     assert!(
         text(&src, server.range).starts_with("server (input, hidden output) reply (produced) {")
     );
+    // what crosses, for an editor that writes calls and entries
+    let sig = o.signature.as_ref().unwrap();
+    let params: Vec<_> = sig
+        .params
+        .iter()
+        .map(|p| (p.name.as_str(), p.hidden))
+        .collect();
+    assert_eq!(params, [("input", false), ("output", true)]);
+    assert_eq!(sig.reply, ["produced"]);
     assert!(text(&src, o.workload.unwrap()).starts_with("workload {"));
 }
 

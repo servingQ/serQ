@@ -21,9 +21,10 @@ fn two(preempt: &str) -> String {
         stage svc : fifo(2);
         pool prog {{ cap 10; preempt leases by (serial) {preempt}; }}
         workload {{ arrive batch(2);
+          send (turn_no);
           session {{ turn; tool (serial == 0 ? 10 : 1); turn; tool 4; turn; }}
         }}
-        server {{
+        server (turn_no) {{
           if (serial == 1 && turn_no == 3) {{ release prog; end; }}
           if (allocated(prog) > 0) {{
             if (turn_no == 2) {{
@@ -134,9 +135,10 @@ fn a_lease_set_aside_lets_go_of_the_prefix_it_read() {
         stage svc : fifo(2);
         pool prog { cap 10; preempt leases by (serial) every (5) suspend by (serial); }
         workload { arrive batch(2);
+          send (turn_no);
           session { turn; tool 1; turn; tool (serial == 0 ? 10 : 1); turn; tool 4; turn; }
         }
-        server {
+        server (turn_no) {
           if (serial == 1 && turn_no == 4) { release prog; end; }
           if (serial == 0 && turn_no == 1) {
             hold prog (cost(prog, 4)) { run svc (cost(svc, 1)); } cache (cost(prog, 4));
@@ -164,9 +166,10 @@ fn a_pool_over_its_cap_between_ticks_caches_within_it() {
         stage slow : fifo(1);
         pool prog { cap 10; preempt leases by (serial) every (5); }
         workload { arrive batch(2);
+          send (turn_no);
           session { turn; tool 1; turn; tool 10; turn; }
         }
-        server {
+        server (turn_no) {
           if (serial == 0 && turn_no == 1) {
             hold prog (cost(prog, 4)) { run slow (cost(slow, 3)); } cache (cost(prog, 4));
           }
@@ -198,9 +201,10 @@ fn a_holds_growth_sets_a_lease_aside_as_a_tick_does() {
             stage svc : fifo(2);
             pool prog {{ cap 10; preempt leases by (serial) {preempt}; }}
             workload {{ arrive batch(2);
+              send (turn_no);
               session {{ turn; tool (serial == 0 ? 10 : 2); turn; }}
             }}
-            server {{
+            server (turn_no) {{
               if (serial == 0 && turn_no == 1) {{ hold prog (cost(prog, 4)) {{ }} lease prog (inf); }}
               if (serial == 1 && turn_no == 2) {{
                 hold prog (cost(prog, 4)) {{ grow prog (cost(prog, 4)); }}
@@ -234,9 +238,10 @@ fn suspend_by_orders_the_leases_given_back() {
             stage svc : fifo(3);
             pool prog {{ cap 10; preempt leases by (serial) every (5) suspend by ({keys}); }}
             workload {{ arrive batch(3);
+              send (turn_no);
               session {{ turn; tool (serial == 2 ? 1 : 10); turn; tool (serial == 2 ? 4 : 1); turn; tool 20; turn; }}
             }}
-            server {{
+            server (turn_no) {{
               if (turn_no == 1) {{ hold prog (cost(prog, 3)) {{ }} lease prog (inf); }}
               if (serial == 2 && turn_no == 2) {{ grow prog (cost(prog, 7)); }}
               if (serial == 2 && turn_no == 3) {{ shrink prog (cost(prog, 4)); }}

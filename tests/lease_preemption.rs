@@ -19,9 +19,10 @@ fn two(preempt: &str) -> String {
         stage svc : fifo(2);
         pool prog {{ cap 10; {preempt} }}
         workload {{ arrive batch(2);
+          send (turn_no);
           session {{ turn; tool (serial == 0 ? 10 : 1); turn; }}
         }}
-        server {{
+        server (turn_no) {{
           if (allocated(prog) > 0) {{
             grow prog (cost(prog, 4));
             observe grown = allocated(prog);
@@ -154,8 +155,8 @@ fn a_grow_after_the_lease_ended_says_why() {
     let src = r#"
         stage svc : fifo;
         pool prog { cap 10; }
-        workload { arrive batch(1); session { turn; turn; } }
-        server {
+        workload { arrive batch(1); send (turn_no); session { turn; turn; } }
+        server (turn_no) {
           if (turn_no > 1) { grow prog (cost(prog, 1)); }
           hold prog (cost(prog, 4)) { } lease prog (0.5);
           run svc (cost(svc, 1));

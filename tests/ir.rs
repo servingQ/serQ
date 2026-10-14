@@ -384,11 +384,11 @@ fn explicit_sessions_preset_attributes() {
     // two sessions with different service times through a delay stage
     let src = r#"
         stage d : delay;
-        workload { arrive batch(1); init { set w = 1; }
+        workload { arrive batch(1); init { set w = 1; } send (w);
           session { turn; end;
           }
         }
-        server { run d (cost(d, w)); observe done = now;
+        server (w) { run d (cost(d, w)); observe done = now;
         }
 
 "#;
@@ -450,7 +450,8 @@ fn serving_forms_compile_to_the_kernel_ir() {
     "#;
     let deployment_workload = r#"arrive poisson(0.5);
           init { set K = 0; }
-          turn { set n = ~exp(100); set o = ~exp(20); set Z = ~exp(3); set T = K + n; }"#;
+          turn { set n = ~exp(100); set o = ~exp(20); set Z = ~exp(3); set T = K + n; }
+          send (K, n, o, T);"#;
     let serving = format!(
         "{deployment} workload {{ {deployment_workload} session {{
             loop {{ turn; set K = T;
@@ -458,7 +459,7 @@ fn serving_forms_compile_to_the_kernel_ir() {
             }}
 
         }} }}
-        server {{
+        server (K, n, o, T) {{
           hold memP (cost(memP, T)) {{ run prefill (cost(prefill, n + K)); }} cache (cost(memP, T)) lease memP (inf);
           hold memD (cost(memD, T)) {{ transfer (T / 100) from memP to memD (T); run decode (cost(decode, o)); }}
         }}"
@@ -470,7 +471,7 @@ fn serving_forms_compile_to_the_kernel_ir() {
             }}
 
         }} }}
-        server {{
+        server (K, n, o, T) {{
           hold memP (cost(memP, T)) {{ run prefill (cost(prefill, n + K)); }} cache (cost(memP, T)) lease memP (inf);
           hold memD (cost(memD, T)) {{ run link (cost(link, T / 100)); load memD (cost(memD, T)); release memP; run decode (cost(decode, o)); }}
         }}"
@@ -577,8 +578,8 @@ fn delay_is_ps_of_present() {
     let ir = |kind: &str| {
         let src = format!(
             "stage d : {kind}; stage f : fifo(1);
-            workload {{ arrive renewal(1); init {{ set s = floor(~uniform(1, 4)); }} }}
-            server {{ run d (cost(d, s)); run f (cost(f, 0.5)); }}"
+            workload {{ arrive renewal(1); init {{ set s = floor(~uniform(1, 4)); }} send (s); }}
+            server (s) {{ run d (cost(d, s)); run f (cost(f, 0.5)); }}"
         );
         compile_source(&common::main_source(&src), &common::horizon(10.0)).unwrap()
     };
@@ -684,16 +685,16 @@ fn at_admission_bindings_are_sequential() {
     let head = "pool kv { cap 1000; } stage s : fifo;
 
         ";
-    let head_workload = "arrive poisson(1); init { set n = 10; }";
+    let head_workload = "arrive poisson(1); init { set n = 10; } send (n);";
     let steps = format!(
         "{head} workload {{ {head_workload} session {{ turn; end;
         }} }}
-        server {{ hold kv (cost(kv, need)) at admission (half = n / 2, need = half + 1)
+        server (n) {{ hold kv (cost(kv, need)) at admission (half = n / 2, need = half + 1)
           {{ run s (cost(s, 1)); }}
         }}"
     );
     let flat = format!(
-        "{head} workload {{ {head_workload} session {{ turn; end; \n}} }}\nserver {{ hold kv (cost(kv, n / 2 + 1)) {{ run s (cost(s, 1)); }}\n}}"
+        "{head} workload {{ {head_workload} session {{ turn; end; \n}} }}\nserver (n) {{ hold kv (cost(kv, n / 2 + 1)) {{ run s (cost(s, 1)); }}\n}}"
     );
     let ov = common::horizon(10.0);
     assert_eq!(
@@ -763,7 +764,8 @@ fn the_request_boundary_preserves_size_ownership() {
         stage tool : delay;
         ";
     let client = "arrive poisson(0.3); init { set K = 0; }
-        turn { set n = ~exp(500); set o = ~exp(200) + 1; set more = ~bernoulli(0.9); }";
+        turn { set n = ~exp(500); set o = ~exp(200) + 1; set more = ~bernoulli(0.9); }
+        send (K, n, o);";
     let split = format!(
         "{head}
         workload {{ {client}
@@ -771,12 +773,12 @@ fn the_request_boundary_preserves_size_ownership() {
 
             loop {{
               turn;
-              set K = prompt + o;
+              set K = reply.prompt + o;
               if (more) {{ tool (~exp(3));  }} else {{ end; }}
             }}
           }}
         }}
-        server {{
+        server (K, n, o) reply (prompt) {{
           set t0 = now;
           set prompt = K + n;
           llm (prompt, o);
@@ -795,7 +797,7 @@ fn the_request_boundary_preserves_size_ownership() {
 
           }}
         }}
-        server {{
+        server (K, n, o) {{
           set t0 = now;
           set prompt = K + n;
           llm (prompt, o);

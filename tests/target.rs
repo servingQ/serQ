@@ -98,11 +98,11 @@ fn another_policy_is_refused_with_its_construct() {
           worker { forward (1); }
         }
         pool reqs on llm { }
-        workload { arrive batch(1); init { set n = 8; }
+        workload { arrive batch(1); init { set n = 8; } send (n);
           session { turn; end;
           }
         }
-        server { llm (n, 1);
+        server (n) { llm (n, 1);
         } ";
     let p = serq::compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap();
     let e = serq::target::vllm(&p).unwrap_err();
@@ -128,11 +128,11 @@ fn observable_serve_keys_name_the_programmable_scheduler() {
           worker { forward (1); }
         }
         pool reqs on llm { }
-        workload { arrive batch(1); init { set n = 8; }
+        workload { arrive batch(1); init { set n = 8; } send (n);
           session { turn; end;
           }
         }
-        server { llm (n, 1);
+        server (n) { llm (n, 1);
         } ";
     let p = serq::compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap();
     let t = serq::target::vllm(&p).unwrap();
@@ -265,11 +265,11 @@ fn the_newer_constructs_are_refused_and_vllms_schedule_taken() {
         }
         pool kv on gpu { block 16; evict lru; preempt lifo; }
         pool reqs on llm { RESERVE }
-        workload { arrive batch(1); init { set n = 8; }
+        workload { arrive batch(1); init { set n = 8; } send (n);
           session { turn; end;
           }
         }
-        server { HOLD
+        server (n) { HOLD
         } ";
     let hold = "llm (n, 1);";
     let vllm =

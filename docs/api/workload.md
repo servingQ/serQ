@@ -22,11 +22,11 @@ only `set` and `observe`. Random draws in the workload use their own stream.
 | [`turn`](#turn) | Set attributes whenever the session executes `turn;`. |
 | [`send`](#send) | Bind what each request carries: the server's parameters. |
 | [`session`](#session) | Describe how completed turns lead to the next; default: one turn. |
-| [`hidden`](#hidden) | Restrict scheduler access to future attributes: a parameter's, `server (hidden o)`. |
+| [`hidden`](#hidden) | Refused here: the server hides a parameter, `server (hidden o)`. |
 
 Workload assignments produce [`Size`](attributes.md#sizes-values-and-costs)
-attributes. A server with a signature reads only what the workload sends
-it; a bare `server { … }` reads them all, and overwrites none. `init` and `turn`
+attributes. The server reads only what the workload sends it, and
+overwrites none. `init` and `turn`
 produce no resource costs. The server interprets request quantities with
 [`cost`](functions.md#cost); the session may use costs of client resources.
 
@@ -102,8 +102,8 @@ send (s);
 | `NAME: expr` | a parameter of the [server](program.md#server), `expr` | The value a request carries for the parameter. |
 | `NAME` | a parameter named as a workload attribute | The attribute, as it is. |
 
-What each request carries, for a server with a signature, `server (input,
-hidden output) { … }`: its parameters, which the server, its gateways'
+What each request carries to the server, `server (input, hidden output) {
+… }`: its parameters, which the server, its gateways'
 routes and the scheduler's expressions read instead of
 the workload's attributes. Each `turn;` evaluates the binding after the
 `turn` block's draws, at moment `Session`, with the attributes as they are
@@ -115,7 +115,8 @@ that attribute, sent as it is, `send (s)`, and `s: s` is refused as a
 second spelling of it. The workload reads the reply after `turn;` as
 `reply.R` ([Program](program.md#server)), and no other attribute the server,
 the scheduler or an engine sets; a parameter bound to an expression is the
-server's name, which the workload does not read. `send` without a signature is an error.
+server's name, which the workload does not read. `send ()` is refused: a
+workload whose server takes nothing sends nothing.
 
 ## `session`
 
@@ -136,9 +137,7 @@ server (input, hidden output) { … }
 |---|---|---|
 | `NAME` | a parameter of the server | The scheduler may not read it. |
 
-Under a signature hiding is a parameter's, and a `hidden` clause in the
-workload is refused. A workload whose server is a bare `server { … }`
-still writes `hidden o;` (or `hidden o, think;`) in `workload`.
+Hiding is a parameter's: a `hidden` clause in the workload is refused.
 
 Hidden attributes may be read in session expressions and a claim's `given`
 condition. They are forbidden in scheduler expressions, including hold

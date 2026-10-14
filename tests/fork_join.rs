@@ -232,7 +232,7 @@ fn the_decode_leg_holds_its_blocks_during_the_prefill() {
           }}
         }}
         use "std/kvt"; use "std/share"; kvt.nixl_push (P, D, latency = 1, share = share.maxmin);
-        workload {{ arrive batch(1); init {{ set prompt = 10; }} session {{ turn; end; }} }} server {{ gw.route(); }}
+        workload {{ arrive batch(1); init {{ set prompt = 10; }} send (prompt); session {{ turn; end; }} }} server (prompt) {{ gw.route(); }}
 
     "#
         )
@@ -281,8 +281,9 @@ fn legs_that_wait_for_each_other_fail_the_run() {
         workload {
           arrive batch(2);
           init { set prompt = 8; }
+          send (prompt);
           session { run client_gate (cost(client_gate, serial == 0 ? 0.5 : 0)); turn; end; }
-        } server { gw.route(); }
+        } server (prompt) { gw.route(); }
 
     "#,
     );
@@ -470,8 +471,9 @@ fn a_lease_that_expires_is_not_a_deadlock() {
         workload {
           arrive batch(2);
           init { set prompt = 8; }
+          send (prompt);
           session { run client_gate (cost(client_gate, serial == 0 ? 0.5 : 0)); turn; end; }
-        } server { gw.route(); }
+        } server (prompt) { gw.route(); }
 
     "#,
         &common::horizon(30.0),

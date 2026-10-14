@@ -542,7 +542,8 @@ pub struct Workload {
     pub trace_ordered: bool,
     pub init: Vec<Stmt>,
     pub turn: Vec<Stmt>,
-    /// Attributes the scheduler may not read (`hidden o;`): legal in
+    /// Attributes the scheduler may not read, the server's hidden
+    /// parameters (`server (…, hidden o)`): legal in
     /// session statements, rejected at every other moment (a hold's header, a queue or
     /// eviction key, a spill clause, a ps capacity, a step stage's budget, cost, chunk or serve keys).
     pub hidden: Vec<String>,
@@ -803,13 +804,12 @@ pub struct Program {
     pub gauges: Vec<(String, Expr)>,
     /// `claim NAME …;`, in order.
     pub claims: Vec<ClaimDecl>,
-    /// What crosses between the workload and a `server (…)` with a
-    /// signature; `None` for a bare `server { … }`, whose sides share
-    /// every attribute.
+    /// What crosses between the workload and the server; `None` without a
+    /// workload or a server.
     pub interface: Option<Interface>,
 }
 
-/// The attributes each side keeps to itself under a server's signature
+/// The attributes each side keeps to itself
 /// (`docs/design/request-interface.md`): the linker refuses a read of one
 /// from the other side. The parameters and the reply are what crosses.
 #[derive(Clone, Debug, PartialEq, Default)]

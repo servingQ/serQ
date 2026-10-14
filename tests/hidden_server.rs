@@ -25,10 +25,11 @@ fn program_with(taking: &str, server: &str) -> String {
           scheduler {{ advance running; admit waiting while (running.preempted == 0) taking {taking}; }}
           worker {{ forward (1); }} }}
         pool kv on gpu {{ block 16; }}
-        workload {{ arrive batch(1); hidden o;
+        workload {{ arrive batch(1);
           init {{ set prompt = 32; set o = 4; }}
+          send (prompt, o);
           session {{ turn; end; }} }}
-        server {{ {server} }}
+        server (prompt, hidden o) {{ {server} }}
         "
     )
 }
@@ -83,10 +84,11 @@ fn the_server_may_not_decide_on_a_hidden_attribute() {
 #[test]
 fn the_server_is_checked_when_the_requests_differ() {
     let src = "pool live { cap 2; } stage A : fifo; stage B : fifo;
-        workload { arrive poisson(1); hidden o;
+        workload { arrive poisson(1);
           turn { set o = ~exp(10); }
+          send (o);
           session { turn; hold live (cost(live, 1)) { turn; } } }
-        server { if (o > 5) { run A (cost(A, 1)); } else { run B (cost(B, 1)); } }
+        server (hidden o) { if (o > 5) { run A (cost(A, 1)); } else { run B (cost(B, 1)); } }
         ";
     let err = compile_source(&common::main_source(src), &common::horizon(100.0)).unwrap_err();
     assert!(
@@ -160,7 +162,7 @@ fn a_top_level_session_cannot_bypass_the_server_check() {
                  scheduler { advance running; admit waiting while (running.preempted == 0) taking kv (request.input); }
                  worker { forward (1); } }
                pool kv on gpu { block 16; }
-               workload { arrive batch(1); hidden o; init { set prompt = 32; set o = 4; } }
+               workload { arrive batch(1); init { set prompt = 32; set o = 4; } send (prompt, o); }
                session { if (o > 2) { E (prompt, 1); } else { } end; }
                ";
     let err = compile_source(&common::main_source(src), &common::horizon(100.0)).unwrap_err();
@@ -212,8 +214,8 @@ fn a_reveal_on_one_arm_only_does_not_reveal() {
 #[test]
 fn hidden_values_propagate_through_every_loop_pass() {
     let source = "stage svc : delay;
-      workload { arrive batch(1); hidden secret; turn { set secret = 2; } }
-      server {
+      workload { arrive batch(1); turn { set secret = 2; } send (secret); }
+      server (hidden secret) {
         set a = 0; set b = 0;
         while (a == 0) { run svc (cost(svc, 1)); set a = b; set b = secret; }
         observe done = now;
@@ -264,8 +266,8 @@ fn hidden_values_propagate_through_every_loop_pass() {
 #[test]
 fn loop_join_preserves_origins_of_reassigned_hidden_names() {
     let src = "stage svc : delay;
-      workload { arrive batch(1); hidden a, b; init { set a = 1; set b = 2; set flag = 0; } }
-      server { while (1) {
+      workload { arrive batch(1); init { set a = 1; set b = 2; set flag = 0; } send (a, b, flag); }
+      server (hidden a, hidden b, flag) { while (1) {
         if (flag) { set a = b; }
         run svc (cost(svc, b));
         if (a > 0) {}
@@ -282,8 +284,8 @@ fn a_run_reveals_only_origins_present_on_every_path() {
     let model = |body: &str| {
         common::main_source(&format!(
             "stage svc : delay;
-         workload {{ arrive batch(1); hidden a, b; init {{ set a = 1; set b = 2; }} }}
-         server {{ {body} }}"
+         workload {{ arrive batch(1); init {{ set a = 1; set b = 2; }} send (a, b); }}
+         server (hidden a, hidden b) {{ {body} }}"
         ))
     };
     for body in [
@@ -315,8 +317,8 @@ fn a_run_reveals_only_origins_present_on_every_path() {
 #[test]
 fn a_cost_family_annotation_does_not_reveal_its_index() {
     let source = "fn main() { stage svc[2] : delay;
-      workload { arrive batch(1); hidden secret; turn { set secret = 0; } }
-      server { run svc[0] (cost(svc[secret], 1)); if (secret > 0) {} }
+      workload { arrive batch(1); turn { set secret = 0; } send (secret); }
+      server (hidden secret) { run svc[0] (cost(svc[secret], 1)); if (secret > 0) {} }
     }";
     let e = compile_source(source, &common::horizon(10.0)).unwrap_err();
     assert!(e.contains("hidden"), "{e}");
@@ -337,10 +339,11 @@ fn a_stage_passed_bare_does_not_reveal_an_attribute_of_its_name() {
           scheduler {{ advance running; admit waiting while (running.preempted == 0) taking kv (request.input); }}
           worker {{ forward (1); }} }}
         pool kv on gpu {{ block 16; }}
-        workload {{ arrive batch(1); hidden {attribute};
+        workload {{ arrive batch(1);
           init {{ set prompt = 32; set {attribute} = 4; }}
+          send (prompt, {attribute});
           session {{ turn; end; }} }}
-        server {{ E (prompt, {work});
+        server (prompt, hidden {attribute}) {{ E (prompt, {work});
           if ({attribute} > 2) {{ observe big = 1; }} else {{ observe small = 1; }} }}
         }}"
         )
@@ -370,11 +373,12 @@ fn what_the_workload_sets_from_a_hidden_attribute_before_the_request_is_hidden()
     let src = |init: &str, turn: &str, session: &str| {
         format!(
             "stage A : fifo; stage B : fifo;
-            workload {{ arrive poisson(1); hidden o;
+            workload {{ arrive poisson(1);
               init {{ {init} }}
               turn {{ {turn} }}
+              send (x, o);
               session {{ {session} }} }}
-            server {{ if (x > 5) {{ run A (cost(A, o)); }} else {{ run B (cost(B, o)); }} }}
+            server (x, hidden o) {{ if (x > 5) {{ run A (cost(A, o)); }} else {{ run B (cost(B, o)); }} }}
             "
         )
     };

@@ -26,9 +26,10 @@ fn main() {
   workload {
     arrive batch(2);
     init { set n = 0; set o = 0; set t0 = 0; }
+    send (n, o, t0);
   }
 
-  server {
+  server (n, o, t0) {
     run gate (cost(gate, t0));
     llm (n, o + 1);                     // `o` tokens decoded after the prefill's
     observe ttft = llm.first - t0;

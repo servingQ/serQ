@@ -176,7 +176,7 @@ fn selection_rejects_random_hidden_and_wrong_moment_keys_in_source_and_ir() {
         ("secret", "hidden"),
     ] {
         let src = format!(
-            "pool reqs {{ cap 1; queue by ({key}); }} workload {{ hidden secret; init {{ set secret = 1; }} \n  session {{ turn; end; \n  }}\n}} server {{\n}} "
+            "pool reqs {{ cap 1; queue by ({key}); }} workload {{ init {{ set secret = 1; }} send (secret); \n  session {{ turn; end; \n  }}\n}} server (hidden secret) {{\n}} "
         );
         let error = compile_source(&common::main_source(&src), &common::horizon(1.0))
             .unwrap_err()

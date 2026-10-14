@@ -165,7 +165,7 @@ struct Parser {
     /// position of its keyword, until `assemble` puts them together.
     wl_session: Option<(usize, Vec<Stmt>)>,
     server: Option<(usize, Vec<Stmt>)>,
-    /// `server (…) reply (…)`: the server's signature, when it has one.
+    /// `server (…) reply (…)`: the server's signature, once it is read.
     signature: Option<Signature>,
     /// The workload's `send (P: e, …);`, with the position of `send` and
     /// of each parameter's name.
@@ -1403,16 +1403,20 @@ fn collect_entry(
 /// How an entry that reads `n` from outside it gets it: as a parameter, or,
 /// when the entry is its role's and the role fixes the parameters, from a
 /// `hidden` attribute; a `prefix` key reads the `KEY_ATTRS` as they are.
-fn pass_help(q: &QueueDecl, e: &queue::Entry, n: &str, header: bool, signed: bool) -> String {
-    // under a server's signature, hiding is a parameter's
-    let hide = if signed {
-        format!("take `{n}` `hidden` in `server (…, hidden {n})`")
-    } else {
-        format!("mark `{n}` `hidden`")
-    };
+fn pass_help(q: &QueueDecl, e: &queue::Entry, n: &str, header: bool) -> String {
+    // the session's number is no parameter: a `prefix` key reads it as it is
+    if KEY_ATTRS.contains(&n) {
+        let a = if header { "A" } else { "a" };
+        return format!(
+            "{a} `prefix` key reads `{n}` as it is; anywhere else `{}` reads what it is passed",
+            e.verb
+        );
+    }
+    // hiding is a parameter's
+    let hide = format!("take `{n}` `hidden` in `server (…, hidden {n})`");
     let fixed = queue::role_of_verb(&e.verb, e.from.is_some())
         .is_some_and(|r| q.roles.iter().any(|x| x == r.name));
-    let mut help = match (fixed, header) {
+    match (fixed, header) {
         (false, true) => format!("Pass `{n}` as a parameter"),
         (false, false) => {
             format!("pass `{n}` as a parameter or `mark` a moment for the caller to read")
@@ -1425,11 +1429,7 @@ fn pass_help(q: &QueueDecl, e: &queue::Entry, n: &str, header: bool, signed: boo
             "`{}`'s parameters are its role's: {hide} or `mark` a moment for the caller to read",
             e.verb
         ),
-    };
-    if KEY_ATTRS.contains(&n) {
-        help.push_str(&format!(". A `prefix` key reads `{n}` as it is"));
     }
-    help
 }
 
 /// The expressions of an entry's body, the holds' headers apart from the
@@ -2067,7 +2067,22 @@ impl Parser {
                 if self.server.is_some() {
                     return self.err_at(at, "duplicate server");
                 }
-                self.signature = self.signature()?;
+                let sig = self.signature()?;
+                if let Some(r) = self.outline.as_mut() {
+                    use crate::frontend::outline;
+                    r.out.signature = Some(outline::Signature {
+                        params: sig
+                            .params
+                            .iter()
+                            .map(|p| outline::Param {
+                                name: p.name.clone(),
+                                hidden: p.hidden,
+                            })
+                            .collect(),
+                        reply: sig.reply.iter().map(|(_, r)| r.clone()).collect(),
+                    });
+                }
+                self.signature = Some(sig);
                 self.side = Side::Server;
                 let body = self.block()?;
                 self.side = Side::Session;
@@ -2323,7 +2338,7 @@ impl Parser {
                                      parameters and the queue's pools and stage. {}",
                                     q.name,
                                     e.verb,
-                                    pass_help(q, e, n, true, self.signature.is_some())
+                                    pass_help(q, e, n, true)
                                 )
                             });
                         return self.err_at(e.at, message);
@@ -2371,7 +2386,7 @@ impl Parser {
                                  request's `hidden` attributes; {}",
                                 q.name,
                                 e.verb,
-                                pass_help(q, e, n, false, self.signature.is_some())
+                                pass_help(q, e, n, false)
                             ),
                         );
                     }
@@ -2487,27 +2502,12 @@ impl Parser {
         }
     }
 
-    /// Under a server's signature: what `send` binds goes at the end of
-    /// the `turn` block, so a request carries it from the turn's draws on;
-    /// a default goes in `init`; a `hidden` parameter is hidden as the
-    /// workload's `hidden` was. Without one, `send` and `reply.…` have
-    /// nothing to answer them.
+    /// What `send` binds goes at the end of the `turn` block, so a request
+    /// carries it from the turn's draws on, and a `hidden` parameter is
+    /// hidden from the scheduler. Without a server, `assemble` says what is
+    /// missing.
     fn lower_send(&mut self, prog: &mut Program) -> PResult<()> {
         let Some(sig) = &self.signature else {
-            if let Some((at, _)) = &self.send {
-                return self.err_at(
-                    *at,
-                    "`send` binds the server's parameters, and `server { … }` declares none\n\
-                     help: name them: `server (P, …) { … }`",
-                );
-            }
-            if let Some((at, ..)) = self.reply_reads.first() {
-                return self.err_at(
-                    *at,
-                    "`reply.…` reads what the server's `reply (…)` declares, and \
-                     `server { … }` declares none",
-                );
-            }
             return Ok(());
         };
         let Some(w) = prog.workload.as_mut() else {
@@ -2518,8 +2518,8 @@ impl Parser {
             return self.err_at(
                 at,
                 format!(
-                    "`hidden {hidden};` in `workload`: under a server's signature, hiding is a \
-                     parameter's\nhelp: `server (…, hidden {hidden}, …)`"
+                    "`hidden {hidden};` in `workload`: the server hides a parameter in its \
+                     signature\nhelp: `server (…, hidden {hidden}, …)`"
                 ),
             );
         }
@@ -2637,8 +2637,7 @@ impl Parser {
         Ok(())
     }
 
-    /// Under a server's signature, once the queues' entries are in place:
-    /// the server sets its reply on every way it completes a request, and
+    /// Once the queues' entries are in place: the server sets its reply on every way it completes a request, and
     /// the linker learns what each side keeps to itself.
     fn interface(&self, prog: &mut Program) -> PResult<()> {
         let Some(sig) = &self.signature else {
@@ -2674,7 +2673,9 @@ impl Parser {
                 .filter(|a| turn_attr(a))
                 .map(|a| a.to_string()),
         );
-        client.retain(|n| !params.contains(n));
+        // `serial` every request carries: a workload that sets it is refused
+        // for that (`Program::validate`), not for a read across
+        client.retain(|n| !params.contains(n) && !KEY_ATTRS.contains(&n.as_str()));
         client.sort();
         client.dedup();
         // what the workload reads: its own, what it sends as it is, and
@@ -4864,15 +4865,17 @@ impl Parser {
         Ok(())
     }
 
-    /// `(P, hidden Q, R = 0) reply (S)` after `server`, either part
-    /// optional: `None` for a bare `server { … }`.
-    fn signature(&mut self) -> PResult<Option<Signature>> {
+    /// `(P, hidden Q) reply (S)` after `server`, either part optional: a
+    /// bare `server { … }` takes nothing and replies nothing.
+    fn signature(&mut self) -> PResult<Signature> {
         let mut sig = Signature {
             params: vec![],
             reply: vec![],
         };
-        let has_params = *self.peek() == Tok::LParen;
         if self.eat(&Tok::LParen) {
+            if *self.peek() == Tok::RParen {
+                return self.err("`server ()` takes nothing, as `server { … }` does: write that");
+            }
             while *self.peek() != Tok::RParen {
                 let hidden = self.eat_kw("hidden");
                 let at = self.pos;
@@ -4913,7 +4916,7 @@ impl Parser {
             }
             self.expect(&Tok::RParen)?;
         }
-        Ok((has_params || has_reply).then_some(sig))
+        Ok(sig)
     }
 
     /// `send (P: e, …);` in `workload`, after `send`.
@@ -4922,6 +4925,9 @@ impl Parser {
             return self.err_at(at, "duplicate `send` in workload");
         }
         self.expect(&Tok::LParen)?;
+        if *self.peek() == Tok::RParen {
+            return self.err_at(at, "`send ()` sends nothing: leave it out");
+        }
         let mut binds: Binds = vec![];
         while *self.peek() != Tok::RParen {
             let n_at = self.pos;
