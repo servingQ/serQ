@@ -14,13 +14,8 @@ fn programs() -> Vec<std::path::PathBuf> {
         .unwrap()
         .map(|g| g.unwrap().path())
         // the workloads' files are not programs: `examples/pairs.json` pairs
-        // them with the programs that run them; `examples/paired/` pairs its
-        // own deployments and workloads (`tests/paired.rs`)
-        .filter(|g| {
-            g.is_dir()
-                && g.file_name()
-                    .is_some_and(|n| n != "workloads" && n != "paired")
-        })
+        // them with the programs that run them
+        .filter(|g| g.is_dir() && g.file_name().is_some_and(|n| n != "workloads"))
         .flat_map(|g| std::fs::read_dir(g).unwrap())
         .map(|e| e.unwrap().path())
         .filter(|p| p.extension().is_some_and(|e| e == "sq"))
@@ -875,7 +870,7 @@ fn the_request_boundary_preserves_size_ownership() {
 #[test]
 fn numbers_read_as_written() {
     use serq::ir::{show_num, show_num_exact};
-    assert_eq!(show_num(0.9100000000000001), "0.91"); // vllm_subagents.sq's folded arrival rate
+    assert_eq!(show_num(0.9100000000000001), "0.91"); // subagents.sq's folded arrival rate
     assert_eq!(show_num(1e-5 * 3.0), "3e-5");
     assert_eq!(show_num(-0.91), "-0.91");
     assert_eq!(show_num(2e-9), "2e-9");

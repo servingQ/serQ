@@ -15,6 +15,7 @@ import json
 import math
 import os
 import subprocess
+import sys
 import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -29,8 +30,13 @@ MG1 = ROOT / "examples" / "single-turn" / "mg1.sq"
 VLLM = ROOT / "examples" / "multi-turn" / "vllm.sq"
 REPLAY = ROOT / "examples" / "replay" / "vllm_replay.sq"
 KONG = ROOT / "examples" / "papers" / "kong_svf.sq"
-# each example's workload file (examples/pairs.json, repo-root-relative)
-PAIRS = {ROOT / d: ROOT / w for d, w in json.loads((ROOT / "examples" / "pairs.json").read_text()).items()}
+# each example's workload files (examples/pairs.json, read by scripts/pairs.py):
+# the one it starts with, and every one it runs under
+sys.path.insert(0, str(ROOT / "scripts"))
+import pairs  # noqa: E402
+
+PAIRS = {ROOT / d: pairs.workload(ROOT / d) for d in pairs.load()}
+EVERY = [(ROOT / d, w) for d in pairs.load() for w in pairs.workloads(ROOT / d)]
 ARRAYS = """fn main() { pool kv[2] { cap 10; } pool reqs { cap 4; } stage svc[2] : fifo;
 server { set j = ~bernoulli(0.5); hold reqs (cost(reqs, 1)) { hold kv[j] (cost(kv, 1)) { run svc[j] (cost(svc, ~exp(0.5))); } } }
  }"""
@@ -238,7 +244,7 @@ def test_draw_is_serq_draw():
     # Every example program under its workload (examples/pairs.json), both
     # formats, as in scripts/check_rust.sh. A program split into a workload
     # and a server draws what one request runs, from its text or its IR alike.
-    for f, w in sorted(PAIRS.items()):
+    for f, w in sorted(EVERY):
         for fmt in ["svg", "tikz"]:
             want = subprocess.run([CLI, "draw", str(f), "--workload", str(w), "--format", fmt],
                                   capture_output=True, text=True, check=True).stdout

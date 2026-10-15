@@ -1,6 +1,9 @@
-// Agents that delegate to subagents, the subagents arriving as sessions of
-// their own in the same Poisson stream (examples/subagent/vllm_subagents.sq
-// runs it).
+// Agents that delegate to subagents, approximated: serQ has no statement
+// that creates a session (docs/design/subagents.md), so the subagents arrive
+// as sessions of their own in the same Poisson stream, and a parent waits for
+// them at a delay stage for `W`, the time the slowest of its subagents took
+// in a previous run. `--q 0` is the same agents without subagents
+// (examples/multi-turn/vllm.sq runs it, docs/use-cases/workloads.md).
 use "std/args";
 
 let Lambda = 0.1;      // agent sessions per second

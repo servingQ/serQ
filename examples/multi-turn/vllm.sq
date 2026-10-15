@@ -1,5 +1,6 @@
 // vLLM v1 on one device (ref/vllm at 0c87a197), as a serQ program.
-// docs/use-cases/vllm.md explains it a part at a time.
+// docs/use-cases/vllm.md explains it a part at a time. It runs under several
+// workloads (examples/pairs.json, docs/use-cases/workloads.md).
 use "std/args";
 
 // --8<-- [start:settings]

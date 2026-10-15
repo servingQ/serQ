@@ -4,10 +4,12 @@
 A program is a deployment; its workload is a file of its own, given when it
 runs (`serq run D --workload W`, docs/design/paired-workload.md).
 `examples/pairs.json` maps each example and tutorial program to its
-workload, both paths relative to the repository's root.
+workload, or to a list of the workloads it runs under, the one it starts
+with first (one deployment under several loads); paths relative to the
+repository's root.
 
     scripts/pairs.py --check   # every program has a workload; every path exists
-    scripts/pairs.py FILE      # print FILE's workload (nothing when it has none)
+    scripts/pairs.py FILE      # print FILE's workloads, one a line, the first its own
 
 The tools that run a program import `workload_args` from here.
 """
@@ -33,13 +35,24 @@ def rel(path):
     return Path(path).resolve().relative_to(ROOT).as_posix()
 
 
-def workload(path):
-    """The workload file of the program at `path` (absolute), or None."""
+def listed(w):
+    """A pair's workloads, as a list: one, or several."""
+    return [w] if isinstance(w, str) else list(w)
+
+
+def workloads(path):
+    """Every workload file of the program at `path` (absolute), its first first."""
     try:
         w = load().get(rel(path))
     except ValueError:  # outside the repository
-        return None
-    return ROOT / w if w else None
+        return []
+    return [ROOT / x for x in listed(w)] if w else []
+
+
+def workload(path):
+    """The workload file the program at `path` (absolute) starts with, or None."""
+    ws = workloads(path)
+    return ws[0] if ws else None
 
 
 def workload_args(path):
@@ -57,18 +70,22 @@ def programs():
 def problems():
     pairs = load()
     out = []
-    for d, w in pairs.items():
-        for p in (d, w):
+    for d, ws in pairs.items():
+        for p in [d, *listed(ws)]:
             if not (ROOT / p).is_file():
                 out.append(f"examples/pairs.json: {p} does not exist")
         if (ROOT / d).parent in WORKLOAD_DIRS:
             out.append(f"examples/pairs.json: {d} is a workload, not a program")
-        if (ROOT / w).parent not in WORKLOAD_DIRS:
-            out.append(f"examples/pairs.json: {w} is not under a workloads/ directory")
+        # one spelling: one workload is a string, a list names two or more
+        if isinstance(ws, list) and len(ws) < 2:
+            out.append(f"examples/pairs.json: {d}: a list names two workloads or more; one is a string")
+        for w in listed(ws):
+            if (ROOT / w).parent not in WORKLOAD_DIRS:
+                out.append(f"examples/pairs.json: {w} is not under a workloads/ directory")
     for p in programs():
         if rel(p) not in pairs:
             out.append(f"{rel(p)}: no workload in examples/pairs.json")
-    used = set(pairs.values())
+    used = {w for ws in pairs.values() for w in listed(ws)}
     for d in WORKLOAD_DIRS:
         for w in sorted(d.glob("*.sq")):
             if rel(w) not in used:
@@ -85,8 +102,7 @@ def main():
             sys.exit(1)
         print(f"OK: {len(load())} programs paired with their workloads (examples/pairs.json)")
     elif len(sys.argv) == 2:
-        w = workload(Path(sys.argv[1]))
-        if w:
+        for w in workloads(Path(sys.argv[1])):
             print(w.relative_to(ROOT).as_posix())
     else:
         sys.exit(__doc__)

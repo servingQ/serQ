@@ -605,7 +605,7 @@ fn a_growth_left_waiting_is_noted() {
 }
 
 /// The note is a line of text, not a lint error, because a shipped program
-/// may earn it by design (`vllm_single_turn.sq` earned it for its `hit`,
+/// may earn it by design (vllm.sq under `single_turn.sq` earned it for its `hit`,
 /// which it no longer observes: the engine records what each admission
 /// reused, `vllm.reused`, a count and no test). Every example and tutorial
 /// program runs without a note; a new one that earns it shows up here, to
@@ -632,7 +632,7 @@ fn the_corpus_earns_one_note() {
     // a workload's file is not a program: it runs beside the one it is paired with
     let workloads: Vec<_> = programs
         .iter()
-        .filter_map(|p| serq::paired_workload(p))
+        .flat_map(|p| serq::paired_workloads(p))
         .collect();
     programs.retain(|p| p.extension().is_some_and(|e| e == "sq") && !workloads.contains(p));
     programs.sort();
@@ -641,12 +641,21 @@ fn the_corpus_earns_one_note() {
     // nor does any reject a session (the `rej:` note, #271), nor end with an
     // engine idle with work (the `idle:` note, #355)
     let mut rejected = vec![];
-    for p in &programs {
-        let w = serq::paired_workload(p).unwrap_or_else(|| panic!("{}: no workload", p.display()));
+    // each under every workload it runs
+    let runs = programs.iter().flat_map(|p| {
+        let ws = serq::paired_workloads(p);
+        assert!(!ws.is_empty(), "{}: no workload", p.display());
+        ws.into_iter().map(move |w| (p, w))
+    });
+    for (p, w) in runs {
         let r = serq::load_paired(p, &w, &common::horizon(100.0))
             .and_then(|ir| run_ir(&ir, w.parent()))
-            .unwrap_or_else(|e| panic!("{}: {e}", p.display()));
-        let name = p.strip_prefix(root).unwrap().to_string_lossy().into_owned();
+            .unwrap_or_else(|e| panic!("{} with {}: {e}", p.display(), w.display()));
+        let name = format!(
+            "{} with {}",
+            p.strip_prefix(root).unwrap().display(),
+            w.strip_prefix(root).unwrap().display()
+        );
         for o in r.observes.iter().filter(|o| o.never_held()) {
             noted.push((name.clone(), o.name.clone()));
         }

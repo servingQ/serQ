@@ -172,13 +172,12 @@ fn every_station_has_an_arrow_in_and_out() {
     while let Some(d) = dirs.pop() {
         for e in std::fs::read_dir(&d).unwrap() {
             let path = e.unwrap().path();
-            // an instance file sets a program's inputs, a workload's file is
-            // the client a program runs with, and half of a pair is a
-            // program only with its other half (below): no programs
+            // an instance file sets a program's inputs, and a workload's
+            // file is the client a program runs with: no programs
             if path.is_dir()
                 && path
                     .file_name()
-                    .is_some_and(|n| n != "instances" && n != "workloads" && n != "paired")
+                    .is_some_and(|n| n != "instances" && n != "workloads")
             {
                 dirs.push(path);
             } else if path.extension().is_some_and(|x| x == "sq") {
@@ -188,30 +187,22 @@ fn every_station_has_an_arrow_in_and_out() {
     }
     files.sort();
     assert!(files.len() > 30, "found {} programs", files.len());
+    // each under every workload it runs (`examples/pairs.json`): one
+    // deployment under several loads (vllm.sq)
+    let read = |p: &std::path::Path| std::fs::read_to_string(p).unwrap();
     for path in files {
-        let p = example(&path);
-        if let Some((node, which)) = deployment::figure(&p).unjoined() {
-            panic!("{}: station {node} has no arrow {which}", path.display());
-        }
-        deployment::checked_figure(&p).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-    }
-    // every deployment under every workload (docs/design/paired-workload.md)
-    let sq = |d: &str| {
-        let mut v: Vec<_> = std::fs::read_dir(d)
-            .unwrap()
-            .map(|e| e.unwrap().path())
-            .filter(|p| p.extension().is_some_and(|x| x == "sq"))
-            .collect();
-        v.sort();
-        v
-    };
-    for d in sq("examples/paired/deployments") {
-        for w in sq("examples/paired/workloads") {
-            let read = |p: &std::path::Path| std::fs::read_to_string(p).unwrap();
-            let p = serq::compile_paired(&read(&d), &read(&w), ("d", "w"), &common::horizon(10.0))
-                .unwrap_or_else(|e| panic!("{} with {}: {e}", d.display(), w.display()));
+        for w in serq::paired_workloads(&path) {
+            let p = common::compile(&read(&path), &read(&w), &common::horizon(10.0))
+                .unwrap_or_else(|e| panic!("{} with {}: {e}", path.display(), w.display()));
+            if let Some((node, which)) = deployment::figure(&p).unjoined() {
+                panic!(
+                    "{} with {}: station {node} has no arrow {which}",
+                    path.display(),
+                    w.display()
+                );
+            }
             deployment::checked_figure(&p)
-                .unwrap_or_else(|e| panic!("{} with {}: {e}", d.display(), w.display()));
+                .unwrap_or_else(|e| panic!("{} with {}: {e}", path.display(), w.display()));
         }
     }
 }

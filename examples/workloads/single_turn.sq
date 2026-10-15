@@ -1,5 +1,5 @@
-// Single-turn requests: a session is one request (examples/single-turn/
-// vllm_single_turn.sq runs it).
+// Single-turn requests: a session is one request, a prompt, an answer,
+// gone (examples/multi-turn/vllm.sq runs it, docs/use-cases/workloads.md).
 
 let Lambda = 3.0;      // requests per second
 

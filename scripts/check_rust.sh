@@ -18,7 +18,6 @@ cargo test --release --locked
 cargo test --locked --quiet
 cargo build --release --locked --quiet
 ./target/release/serq fmt --check examples/*/*.sq docs/tutorial/programs/*.sq docs/tutorial/programs/workloads/*.sq tests/lean-regress/*.sq
-if [ -d examples/paired ]; then ./target/release/serq fmt --check examples/paired/*/*.sq; fi
 # the interpreter's answers the Lean regressions state (lean/Serq/Regress.lean)
 python3 scripts/lean_regress.py
 # every program with its workload (examples/pairs.json): a program is the
@@ -26,31 +25,22 @@ python3 scripts/lean_regress.py
 # (docs/design/paired-workload.md)
 python3 scripts/pairs.py --check
 n=0
+# each under every workload it runs: one deployment under several loads
+# meets them only at the server's signature (vllm.sq)
+pairs=0
 for f in examples/*/*.sq; do
   [ "$(dirname "$f")" = examples/workloads ] && continue
-  w=$(python3 scripts/pairs.py "$f")
-  ./target/release/serq check "$f" --workload "$w" >/dev/null \
-    || { echo "FAIL: $f with $w does not link"; exit 1; }
-  for fmt in tikz svg; do
-    ./target/release/serq draw "$f" --workload "$w" --format "$fmt" >/dev/null \
-      || { echo "FAIL: $f with $w does not draw ($fmt)"; exit 1; }
+  for w in $(python3 scripts/pairs.py "$f"); do
+    ./target/release/serq check "$f" --workload "$w" >/dev/null \
+      || { echo "FAIL: $f with $w does not link"; exit 1; }
+    for fmt in tikz svg; do
+      ./target/release/serq draw "$f" --workload "$w" --format "$fmt" >/dev/null \
+        || { echo "FAIL: $f with $w does not draw ($fmt)"; exit 1; }
+    done
+    pairs=$((pairs + 1))
   done
   n=$((n + 1))
 done
-# every deployment under every workload: they meet only at the server's
-# signature (docs/design/paired-workload.md)
-pairs=0
-if [ -d examples/paired ]; then
-  for d in examples/paired/deployments/*.sq; do
-    for w in examples/paired/workloads/*.sq; do
-      ./target/release/serq check "$d" --workload "$w" >/dev/null \
-        || { echo "FAIL: $d with $w does not link"; exit 1; }
-      ./target/release/serq draw "$d" --workload "$w" --format svg >/dev/null \
-        || { echo "FAIL: $d with $w does not draw"; exit 1; }
-      pairs=$((pairs + 1))
-    done
-  done
-fi
 for f in tools/oracle/*.ir.json; do
   ./target/release/serq draw "$f" >/dev/null \
     || { echo "FAIL: $f does not draw"; exit 1; }
@@ -60,7 +50,7 @@ done
 # one that has stopped linking after a change to the language.
 t=0
 for f in docs/tutorial/programs/*.sq; do
-  w=$(python3 scripts/pairs.py "$f")
+  w=$(python3 scripts/pairs.py "$f" | head -1)
   ./target/release/serq check "$f" --workload "$w" >/dev/null \
     || { echo "FAIL: $f with $w does not link"; exit 1; }
   t=$((t + 1))
@@ -79,4 +69,4 @@ python3 scripts/metrics.py --check
 # only tests reach. A change that moves the list regenerates
 # tools/unused.json (`make unused`) and says why in its PR.
 python3 scripts/unused.py --check
-echo "OK: serq, $n programs link and draw with their workloads, $pairs examples/paired pairs, $t tutorial programs link, $(ls tools/oracle/*.out.json | wc -l) vLLM oracle scenarios + 2 prefix-cache traces (CPU oracle = A100 engine = serQ; the shared-prompt trace, CPU oracle = serQ)"
+echo "OK: serq, $n programs link and draw under their $pairs workloads, $t tutorial programs link, $(ls tools/oracle/*.out.json | wc -l) vLLM oracle scenarios + 2 prefix-cache traces (CPU oracle = A100 engine = serQ; the shared-prompt trace, CPU oracle = serQ)"
