@@ -66,3 +66,4 @@ the pair compiles as `serq check` compiles it, else a
 | `E-connector-untaken` | What an engine's connector loads goes into the engine's memory, the KV pool on its device, so its `taking` takes that pool | none (how much of it a request takes is the program's) |
 | `E-nic-unused` | A queue's `nic` carries a copy: a KV relation or a `transfer` runs on it | none (removing it leaves what reads `Q.nic`, and a relation names another queue) |
 | `E-reserved-word` | A name the language uses for itself (a keyword, a function, a distribution) is not a name the program can give a constant, a parameter, a queue, a device or a pool | none (the name is the program's) |
+| `E-device-two-pools` | The device an engine runs on holds one pool, the engine's KV (its memory): a second would leave which is the KV unsaid | none (which pool is the KV is the program's) |

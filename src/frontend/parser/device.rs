@@ -1221,10 +1221,18 @@ impl Parser {
             if let Some(m) = &s.memory {
                 return self.err_at(
                     po.on.at,
+                    // which of the two is the KV is the program's to say:
+                    // the help names both and the one way the other goes
                     format!(
-                        "`{}` and `{name}` are both on `{}`: which is `{}`'s KV would be a \
-                         choice the program did not make",
-                        m.name, po.on.owner, engine.name
+                        "{}\nhelp: the device an engine runs on holds one pool, its KV: keep \
+                         `{}` or `{name}` there, and declare the other on no device, above the \
+                         engine (`pool NAME {{ cap …; }}`)",
+                        Code::DeviceTwoPools.message(format_args!(
+                            "`{}` and `{name}` are both on `{}`: which is `{}`'s KV would be a \
+                             choice the program did not make",
+                            m.name, po.on.owner, engine.name
+                        )),
+                        m.name
                     ),
                 );
             }

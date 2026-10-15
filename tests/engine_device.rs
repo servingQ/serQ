@@ -1730,3 +1730,43 @@ server (prompt) {{ hold kv (cost(kv, {size})) {{ E (1, 1); }} }}"
         "`queued` with 1 argument(s) is not a constant function",
     );
 }
+
+/// A device holds one pool, its engine's KV (#645 A3): a second is refused
+/// at its `on`, with a code, and the help's way out (the pool on no device,
+/// above the engine) links.
+#[test]
+fn a_second_pool_on_a_device_is_refused_with_its_way_out() {
+    let path = root().join("examples/pd-disaggregation/vllm_nixl_push.sq");
+    let src = std::fs::read_to_string(&path).unwrap();
+    let workload = std::fs::read_to_string(serq::paired_workload(&path).unwrap()).unwrap();
+    let kv = "    pool kv on D.gpu { block bs; evict lru; preempt lifo; }\n";
+    let device = "    device gpu { kv cap blocksD * bs; }";
+    assert!(src.contains(kv) && src.contains(device));
+    let two = src
+        .replace(kv, &format!("{kv}    pool kv2 on D.gpu {{ block bs; }}\n"))
+        .replace(
+            device,
+            "    device gpu { kv cap blocksD * bs; kv2 cap 160; }",
+        );
+    let e = common::compile(&two, &workload, &common::horizon(10.0)).unwrap_err();
+    assert!(
+        e.contains("error[E-device-two-pools]: `D.kv` and `D.kv2` are both on `D.gpu`"),
+        "{e}"
+    );
+    // which is the KV is the program's: the help names both, and the
+    // order they are written in chooses neither
+    let help = "help: the device an engine runs on holds one pool, its KV: keep";
+    assert!(e.contains(help) && e.contains("`D.kv` or `D.kv2`"), "{e}");
+    let ahead = src
+        .replace(kv, &format!("    pool kv2 on D.gpu {{ block bs; }}\n{kv}"))
+        .replace(
+            device,
+            "    device gpu { kv cap blocksD * bs; kv2 cap 160; }",
+        );
+    let e = common::compile(&ahead, &workload, &common::horizon(10.0)).unwrap_err();
+    assert!(e.contains(help) && e.contains("`D.kv2` or `D.kv`"), "{e}");
+    let open = "  queue D : decode {\n";
+    assert!(src.contains(open));
+    let out = src.replace(open, &format!("{open}    pool kv2 {{ cap 160; }}\n"));
+    common::compile(&out, &workload, &common::horizon(10.0)).unwrap_or_else(|e| panic!("{e}"));
+}

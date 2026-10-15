@@ -73,6 +73,8 @@ codes! {
     /// A name the language uses for itself, given to something the program
     /// declares.
     ReservedWord => "E-reserved-word",
+    /// Two pools on the device an engine runs on, which holds one: the engine's KV.
+    DeviceTwoPools => "E-device-two-pools",
 }
 
 impl Code {
