@@ -2541,3 +2541,58 @@ fn an_instances_panel_names_its_stations() {
         ]
     );
 }
+
+/// A choose is an instance of its own (#685): `pd_batching.sq` chooses `j`
+/// once in each arm of an `if`, an `E[j]` in one and a `D[j]` in the other,
+/// and no instance holds both, as no request is at both. (`E[j]` alone is
+/// one station, which is drawn in no box: the decoder's is the one left.)
+#[test]
+fn a_variable_chosen_twice_is_two_instances() {
+    let p = common::example(
+        "examples/pd-disaggregation/pd_batching.sq",
+        &common::horizon(10.0),
+    )
+    .unwrap();
+    let net = deployment::project(&p);
+    let names = |g: &deployment::Instance| -> Vec<String> {
+        g.nodes
+            .iter()
+            .filter_map(|&i| net.nodes[i].stage.map(|s| p.stages[s].name.clone()))
+            .collect()
+    };
+    let js: Vec<Vec<String>> = net
+        .instances
+        .iter()
+        .filter(|g| g.label.starts_with("choose j"))
+        .map(names)
+        .collect();
+    assert_eq!(js, [vec!["D.nic".to_string(), "D".to_string()]]);
+}
+
+/// But two chooses of one variable that pick for the same stations are one
+/// instance (#692 review): a choose in a `while`'s body, which the view
+/// walks twice, and a `j` chosen in each arm of an `if` and read after it.
+#[test]
+fn chooses_of_one_variable_over_the_same_stations_are_one_instance() {
+    for src in [
+        "stage A[2] : delay; stage B[2] : delay; server { set k = 0; while (k < 2) { \
+         choose j in 2 by (0); run A[j] (cost(A, 1)); run B[j] (cost(B, 1)); set k = k + 1; } }",
+        "stage A[2] : delay; stage B[2] : delay; server { set c = ~bernoulli(0.5); if (c) { \
+         choose j in 2 by (0); run A[j] (cost(A, 1)); } else { choose j in 2 by (1); \
+         run A[j] (cost(A, 1)); } run B[j] (cost(B, 1)); }",
+    ] {
+        let p = compile(src, ONE);
+        let net = deployment::project(&p);
+        let boxes: Vec<Vec<String>> = net
+            .instances
+            .iter()
+            .map(|g| {
+                g.nodes
+                    .iter()
+                    .filter_map(|&i| net.nodes[i].stage.map(|s| p.stages[s].name.clone()))
+                    .collect()
+            })
+            .collect();
+        assert_eq!(boxes, [vec!["A".to_string(), "B".to_string()]], "{src}");
+    }
+}
