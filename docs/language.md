@@ -541,6 +541,11 @@ Six roles are built into the parser, and a queue declares which it plays:
 | `link` | `transfer (n)`, or none | the NIC: the body is the time to read `n` tokens; without one, the `serve` is the cost, and its `latency` a wait before it |
 | `l2` | none | an L2 KV cache (an LMCache server, a Mooncake store): one pool, the KV it holds, and a `serve`, the bandwidth its copies divide; an engine's `connector` copies through it (below) |
 
+An editor reads this table, each role's entry verb, how many parameters
+it takes and whether it is written `from Q`, from
+`serq::frontend::highlight::queue_roles()` (the parser's `queue::ROLES`);
+a test holds the two equal.
+
 The server selects a gateway with `gw.route();`. The parser checks the
 queue and its entry, then expands the route at the call site. Declarations
 may follow the server and several gateways may coexist. Declaring a gateway
