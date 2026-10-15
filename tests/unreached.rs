@@ -59,11 +59,27 @@ fn a_stage_no_statement_runs_does_not_link() {
 fn a_nic_no_copy_crosses_does_not_link() {
     let e = check(&program("").replacen("decode (p) {", "nic ps(1e5); decode (p) {", 1))
         .expect_err("E1's NIC carries nothing");
-    assert!(e.contains("the NIC `E1.nic` carries no copy"), "{e}");
+    assert!(
+        e.contains("error[E-nic-unused]: the NIC `E1.nic` carries no copy"),
+        "{e}"
+    );
     assert!(
         e.contains("kvt.nixl_pull"),
         "names the relation to write: {e}"
     );
+    // at the `nic` (the `decode` line of `queue` above, its 11th column),
+    // not at the queue's name `E1` (1:7) (#645 A1)
+    assert!(
+        e.contains(" 6:11: error[E-nic-unused]"),
+        "points at the NIC: {e}"
+    );
+    // no fix-it: an expression may read `E1.nic` (`queue(E1.nic)`), which
+    // removing it would leave unknown
+    assert!(
+        e.contains("help: remove the `nic` of `E1` (and what reads `E1.nic`)"),
+        "{e}"
+    );
+    assert!(!e.contains("fix-it"), "{e}");
 }
 
 /// The IR's own check, for IR read from JSON or built by a tool: a stage
