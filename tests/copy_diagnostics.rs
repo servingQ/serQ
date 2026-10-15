@@ -185,3 +185,95 @@ fn a_pull_whose_reader_has_no_connector_names_the_connector() {
     );
     assert!(e.contains("`D`'s engine has no `connector P`"), "{e}");
 }
+
+/// The other way round (#645 A7): a connector whose queue copies no KV
+/// from the queue it names. `vllm_nixl_push.sq` without its relation keeps
+/// `connector P`, and the help names both relations, which is a choice.
+#[test]
+fn a_connector_no_relation_copies_for_names_the_relation() {
+    let (src, workload) = example("examples/pd-disaggregation/vllm_nixl_push.sq");
+    let relation = "  kvt.nixl_push (P, D, latency = x0, share = share.maxmin);\n";
+    assert!(src.contains(relation));
+    let e = refused(&src.replace(relation, ""), &workload);
+    assert!(
+        e.contains(
+            "error[E-connector-no-copy]: engine `D`'s `connector P`: queue `D` reads KV from no `P`"
+        ),
+        "{e}"
+    );
+    assert!(
+        e.contains("`kvt.nixl_pull (P, D, …);` or `kvt.nixl_push (P, D, …);`"),
+        "{e}"
+    );
+    assert!(!e.contains("fix-it"), "{e}");
+}
+
+/// `vllm_nixl_push.sq` with `edits`, each `(from, to)` written once.
+fn push_with(edits: &[(&str, &str)]) -> (String, PathBuf) {
+    let (src, workload) = example("examples/pd-disaggregation/vllm_nixl_push.sq");
+    let src = edits.iter().fold(src, |s, (a, b)| {
+        assert!(s.contains(a), "no {a:?}");
+        s.replacen(a, b, 1)
+    });
+    (src, workload)
+}
+
+/// A reader with no entry `… from` its source, the relation the right way
+/// round (#645 A6): its code, and no fix-it, the entry's body being the
+/// program's.
+#[test]
+fn a_reader_without_its_entry_from_the_source_has_no_fix() {
+    let (src, w) = push_with(&[
+        (
+            "      D.decode (prompt) from P;",
+            "      D.decode (prompt);",
+        ),
+        ("  queue D : decode {", "  queue D : agg {"),
+        ("    decode (prompt) from P {", "    decode (prompt) {"),
+    ]);
+    let e = refused(&src, &w);
+    assert!(
+        e.contains("error[E-copy-no-entry]: `kvt.nixl_push (P, D)`"),
+        "{e}"
+    );
+    assert!(!e.contains("fix-it") && !e.contains("comes first"), "{e}");
+}
+
+/// A swapped copy of a relation written the right way: the swap would be
+/// the same relation twice (E-reader-two-sources), so no E-copy-swapped
+/// and no fix-it.
+#[test]
+fn a_swapped_second_relation_is_not_swapped() {
+    let rel = "  kvt.nixl_push (P, D, latency = x0, share = share.maxmin);\n";
+    let two = format!("{rel}  kvt.nixl_push (D, P, share = share.maxmin);\n");
+    let (src, w) = push_with(&[(rel, &two)]);
+    let e = refused(&src, &w);
+    assert!(e.contains("error[E-copy-no-entry]"), "{e}");
+    assert!(!e.contains("fix-it"), "{e}");
+}
+
+/// The reader's engine with an L2's connector and a relation: which
+/// connector the engine keeps is a choice, so a help that names both ways
+/// and no fix-it.
+#[test]
+fn a_reader_whose_connector_is_an_l2s_has_no_fix() {
+    let l2 = "  queue lmc : l2 {\n    device host { kv cap 1e6; }\n    pool kv on host { block bs; \
+              evict lru; }\n    serve ps(1);\n  }\n\n  queue D : decode {";
+    let (src, w) = push_with(&[
+        ("  queue D : decode {", l2),
+        (
+            "      connector P { load (",
+            "      connector lmc { per_token (1e-6); load (",
+        ),
+    ]);
+    let e = refused(&src, &w);
+    assert!(e.contains("error[E-copy-no-connector]"), "{e}");
+    assert!(
+        e.contains(
+            "help: an engine has one connector: replace `connector lmc` with `connector P { load \
+             (…); }`, or keep it and give `D` an entry that `transfer`s the KV `from P`"
+        ),
+        "{e}"
+    );
+    assert!(!e.contains("fix-it"), "{e}");
+}

@@ -90,6 +90,8 @@ pub fn fixes(code: Code, src: &str, line: usize, col: usize) -> Vec<Fix> {
         let k = t.at(line, col)?;
         match code {
             Code::PullForked => unfork(&t, k),
+            Code::CopySwapped => swap(&t, k),
+            Code::ConnectorMisnamed => rename(&t, k),
             _ => None,
         }
     });
@@ -129,6 +131,57 @@ fn unfork(t: &Text, k: usize) -> Option<Fix> {
         edits: vec![Edit {
             range: Range(t.start(open - 1), t.end(close)),
             text: call.to_string(),
+        }],
+    })
+}
+
+/// `E-copy-swapped`, at the relation: `kvt.nixl_pull (S, R, …)` written
+/// `(R, S, …)`, the two queues' names exchanged.
+fn swap(t: &Text, k: usize) -> Option<Fix> {
+    let open = (k..t.toks.len()).find(|&j| t.toks[j].tok == Tok::LParen)?;
+    let (a, b) = (open + 1, open + 3);
+    if t.toks.get(open + 2)?.tok != Tok::Comma {
+        return None;
+    }
+    let (first, second) = (t.word(a)?, t.word(b)?);
+    Some(Fix {
+        label: format!("swap `{first}` and `{second}`: the source first, then the reader"),
+        edits: vec![
+            Edit {
+                range: Range(t.start(a), t.end(a)),
+                text: second.to_string(),
+            },
+            Edit {
+                range: Range(t.start(b), t.end(b)),
+                text: first.to_string(),
+            },
+        ],
+    })
+}
+
+/// `E-connector-misnamed`, at the connector's name in queue `R`'s engine:
+/// the name of the queue `R`'s relation reads from, `S` in
+/// `kvt.nixl_pull (S, R, …)` or `kvt.nixl_push`.
+fn rename(t: &Text, k: usize) -> Option<Fix> {
+    // the queue the engine is in: the last `queue R` above
+    let q = (0..k)
+        .rev()
+        .find(|&j| t.word(j) == Some("queue"))
+        .and_then(|j| t.word(j + 1))?;
+    // its relation, `nixl_pull (S, R` or `nixl_push (S, R`
+    let source = (0..t.toks.len().saturating_sub(5)).find_map(|j| {
+        let relation = matches!(t.word(j), Some("nixl_pull" | "nixl_push"))
+            && t.toks[j + 1].tok == Tok::LParen
+            && t.toks[j + 3].tok == Tok::Comma
+            && t.word(j + 4) == Some(q);
+        relation.then(|| t.word(j + 2)).flatten()
+    })?;
+    let wrong = t.word(k)?;
+    Some(Fix {
+        label: format!("rename `connector {wrong}` to `connector {source}`"),
+        edits: vec![Edit {
+            range: Range(t.start(k), t.end(k)),
+            text: source.to_string(),
         }],
     })
 }

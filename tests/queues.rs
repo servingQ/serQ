@@ -1746,7 +1746,24 @@ fn std_kvt_names_the_relation() {
     refused(
         &program("use \"std/kvt\"; use \"std/share\"; kvt.nixl_pull (D, P, share = share.maxmin);"),
         workload,
-        "`kvt.nixl_pull (D, P)`: `P` has no entry `… from D`, so nothing reads what this copies; the source comes first",
+        "error[E-copy-swapped]: `kvt.nixl_pull (D, P)`: `P` has no entry `… from D`, and `D` has one `… from P`: the source comes first, then the reader",
+    );
+    // a reader has one source: a second relation into it is refused, with
+    // its code (#645 A5)
+    refused(
+        &program(
+            "use \"std/kvt\"; use \"std/share\"; kvt.nixl_pull (P, D, share = share.maxmin); \
+             kvt.nixl_push (P, D, share = share.maxmin);",
+        ),
+        workload,
+        "error[E-reader-two-sources]: `D` takes the KV from `P` already: one relation per reader",
+    );
+    // `D` reads from `P`: swapping the two is the fix, and makes no choice
+    // (#645 A6)
+    refused(
+        &program("use \"std/kvt\"; use \"std/share\"; kvt.nixl_pull (D, P, share = share.maxmin);"),
+        workload,
+        "help: fix-it: swap the two: `kvt.nixl_pull (P, D, …)`, the source first, then the reader",
     );
     refused(
         &program("D pull P latency 1 share maxmin;"),
