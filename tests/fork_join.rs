@@ -486,6 +486,6 @@ fn a_queue_posts_the_copies_of_one_relation() {
         server {
         } ",
         ONE,
-        "`P` waits before the copies of another relation already",
+        "error[E-copy-latency]: `kvt.nixl_push (P, E)`: `P` waits before the copies of another relation already",
     );
 }

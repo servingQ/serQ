@@ -4869,16 +4869,21 @@ impl Parser {
     fn source_queue(&self, qi: usize, verb: &str, s: &str, at: usize) -> PResult<()> {
         let qname = &self.queues[qi].name;
         let header = format!("`{qname}.{verb} (…) from {s}`");
+        // the relation's rules, said of an entry's header: the same codes
         if *s == *qname {
-            return self.err_at(at, format!("{header}: a queue takes the KV from another"));
+            return self.err_at(
+                at,
+                Code::CopySameQueue
+                    .message(format_args!("{header}: a queue takes the KV from another")),
+            );
         }
         let Some(src) = self.queues.iter().find(|q| q.name == s) else {
             return self.err_at(
                 at,
-                format!(
+                Code::CopyNoQueue.message(format_args!(
                     "{header}: no queue `{s}` is declared above; `from` names the queue \
                      whose entry leased the KV"
-                ),
+                )),
             );
         };
         let Some(leased) = &src.leased else {
@@ -6245,20 +6250,39 @@ impl Parser {
         let written = format!("`kvt.nixl_{verb} ({source}, {reader})`");
         for (q, q_at) in [(&source, s_at), (&reader, r_at)] {
             let Some(d) = self.queues.iter().find(|d| d.name == *q) else {
-                return self.err_at(q_at, format!("{written}: no queue `{q}` is declared above"));
-            };
-            if !d.nic {
                 return self.err_at(
                     q_at,
                     format!(
-                        "{written}: queue `{q}` has no `nic`; a copy runs over \
-                         the source's NIC and the reader's"
+                        "{}\nhelp: declare `queue {q}` above the relation, or name a queue \
+                         that is",
+                        Code::CopyNoQueue
+                            .message(format_args!("{written}: no queue `{q}` is declared above"))
+                    ),
+                );
+            };
+            if !d.nic {
+                // its bandwidth is the program's: a help, no fix-it
+                return self.err_at(
+                    q_at,
+                    format!(
+                        "{}\nhelp: give `{q}` a NIC, `nic ps(…);` above its entries",
+                        Code::CopyNoNic.message(format_args!(
+                            "{written}: queue `{q}` has no `nic`; a copy runs over the source's \
+                             NIC and the reader's"
+                        ))
                     ),
                 );
             }
         }
         if reader == source {
-            return self.err_at(r_at, format!("{written}: a queue copies the KV to another"));
+            return self.err_at(
+                r_at,
+                format!(
+                    "{}\nhelp: a relation names the source, then another queue that reads its KV",
+                    Code::CopySameQueue
+                        .message(format_args!("{written}: a queue copies the KV to another"))
+                ),
+            );
         }
         let qi = self
             .queues
@@ -6353,8 +6377,10 @@ impl Parser {
             let Some(v) = v else {
                 return self.err_at(
                     l_at,
-                    "`latency` is a number or a constant over `let`s: the fixed wait of the \
-                     side that posts each copy",
+                    Code::CopyLatency.message(
+                        "`latency` is a number or a constant over `let`s: the fixed wait of the \
+                         side that posts each copy",
+                    ),
                 );
             };
             // a constant of its own (see the link's `latency`), the wait of
@@ -6365,10 +6391,10 @@ impl Parser {
             if self.posters.contains(poster) {
                 return self.err_at(
                     l_at,
-                    format!(
+                    Code::CopyLatency.message(format_args!(
                         "{written}: `{poster}` waits before the copies of another relation \
                          already: one `latency` per poster"
-                    ),
+                    )),
                 );
             }
             self.posters.push(poster.clone());

@@ -12,6 +12,7 @@
 //! it saw before queues existed.
 
 use crate::frontend::ast::{Arg, Expr, Ref, Span, Stmt};
+use crate::frontend::diagnostic::Code;
 
 /// A role of the serving vocabulary: its entry's verb, its number of
 /// parameters, and whether it is written with `from`. A queue of the role
@@ -790,11 +791,24 @@ fn call(
     if let (Some(s), Some(r), false) = (&entry.from, from, is_transfer)
         && r.name.split('.').next() != Some(s.as_str())
     {
+        // the call or the entry may be the one meant: a help, no fix-it
+        // a family's member is called by index, one queue without
+        let call = if queues.iter().any(|d| d.name == *s && d.family) {
+            format!("{s}[…]")
+        } else {
+            s.clone()
+        };
+        let other = r.name.split('.').next().unwrap_or(&r.name);
         return err(
             at,
             format!(
-                "`{}.{verb} (…) from {}`: the entry takes the KV `from {s}`",
-                q.name, r.name
+                "{}\nhelp: call it `from {call}`; or, to take the KV from `{other}`, write the \
+                 entry `{verb} (…) from {other}` and the relation from `{other}` to `{}`",
+                Code::CallFrom.message(format_args!(
+                    "`{}.{verb} (…) from {}`: the entry takes the KV `from {s}`",
+                    q.name, r.name
+                )),
+                q.name
             ),
         );
     }

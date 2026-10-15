@@ -1618,7 +1618,7 @@ fn a_pull_relation_says_what_it_couples() {
             "P",
         ),
         workload,
-        "queue `P` has no `nic`",
+        "error[E-copy-no-nic]: `kvt.nixl_pull (P, D)`: queue `P` has no `nic`",
     );
     refused(
         &program("nic ps(1);", "use \"std/kvt\"; kvt.nixl_pull (P, D);", "P"),
@@ -1664,15 +1664,31 @@ fn a_pull_relation_says_what_it_couples() {
     );
     // the call takes from the queue the entry names, and the entry from the
     // relation's source
-    refused(
-        &program(
-            "nic ps(1);",
-            "use \"std/kvt\"; use \"std/share\"; kvt.nixl_pull (P, D, share = share.maxmin);",
-            "Q",
-        ),
-        workload,
-        "`D.decode (…) from Q`: the entry takes the KV `from P`",
+    let call_from = program(
+        "nic ps(1);",
+        "use \"std/kvt\"; use \"std/share\"; kvt.nixl_pull (P, D, share = share.maxmin);",
+        "Q",
     );
+    refused(
+        &call_from,
+        workload,
+        "error[E-call-from]: `D.decode (…) from Q`: the entry takes the KV `from P`",
+    );
+    // `P` is one queue: called `from P`, no index; the other way out moves
+    // the entry and the relation together (#691 review)
+    refused(
+        &call_from,
+        workload,
+        "help: call it `from P`; or, to take the KV from `Q`, write the entry `decode (…) from Q` \
+         and the relation from `Q` to `D`",
+    );
+    let r = serq::diagnose(
+        &common::main_source(&call_from),
+        Some(workload),
+        &Default::default(),
+    )
+    .expect("refused");
+    assert!(r.fixes.is_empty(), "{}", r.message);
     let two_sources = program(
         "nic ps(1);",
         "use \"std/kvt\"; use \"std/share\"; kvt.nixl_pull (P, D, share = share.maxmin);",
@@ -1706,7 +1722,7 @@ fn a_pull_relation_says_what_it_couples() {
             "P",
         ),
         workload,
-        "`latency` is a number or a constant over `let`s",
+        "error[E-copy-latency]: `latency` is a number or a constant over `let`s",
     );
     refused(
         &format!(
@@ -1714,7 +1730,17 @@ fn a_pull_relation_says_what_it_couples() {
             program("nic ps(1);", "", "P")
         ),
         workload,
-        "no queue `P` is declared above",
+        "error[E-copy-no-queue]: `kvt.nixl_pull (P, D)`: no queue `P` is declared above",
+    );
+    // a queue copies the KV to another (#645)
+    refused(
+        &program(
+            "nic ps(1);",
+            "use \"std/kvt\"; use \"std/share\"; kvt.nixl_pull (D, D, share = share.maxmin);",
+            "P",
+        ),
+        workload,
+        "error[E-copy-same-queue]: `kvt.nixl_pull (D, D)`: a queue copies the KV to another",
     );
 }
 
