@@ -270,3 +270,35 @@ fn a_pair_has_two_outlines() {
         ]
     );
 }
+
+/// An override's body reads its definition's file's names, as the
+/// definition it replaces would (#703): a deployment's `def` overridden
+/// with its `let`, and a workload's with its own; the other file's name is
+/// still the other file's.
+#[test]
+fn an_override_reads_its_definitions_file() {
+    let deployment = "let a = 2;\ndef size_of(x) { x }\nfn main() {\n  stage svc : fifo;\n  server (w) { run svc (cost(svc, size_of(w))); }\n}\n";
+    let written = deployment.replace("def size_of(x) { x }", "def size_of(x) { a * x }");
+    let workload = "let b = 3;\ndef draw() { 1 }\nworkload { arrive poisson(1); turn { set w = draw(); } send (w); }\n";
+    let ov = |defs: &[(&str, &str)]| {
+        let mut ov = common::horizon(5.0);
+        for (n, e) in defs {
+            ov.define(n, e).unwrap();
+        }
+        ov
+    };
+    let ir =
+        |d: &str, w: &str, o: &serq::Overrides| compile_paired(d, w, names(), o).unwrap().to_json();
+    assert_eq!(
+        ir(deployment, workload, &ov(&[("size_of", "a * x")])),
+        ir(&written, workload, &ov(&[]))
+    );
+    let drawn = workload.replace("def draw() { 1 }", "def draw() { b }");
+    assert_eq!(
+        ir(deployment, workload, &ov(&[("draw", "b")])),
+        ir(deployment, &drawn, &ov(&[]))
+    );
+    let e =
+        compile_paired(deployment, workload, names(), &ov(&[("size_of", "b * x")])).unwrap_err();
+    assert!(e.contains("`b` is the workload file's"), "{e}");
+}

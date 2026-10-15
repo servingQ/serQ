@@ -208,6 +208,9 @@ struct Parser {
     /// The `def` overrides: the body an expression definition has instead of
     /// its own, and whether the program defined it.
     def_overrides: Vec<(String, String, bool)>,
+    /// A pair's files' own names (`frontend::paired`): an override's body
+    /// is renamed as its definition's file is.
+    paired_own: Option<crate::frontend::paired::Own>,
     /// The queues declared so far; their entries are expanded in `assemble`.
     queues: Vec<QueueDecl>,
     /// `let` constants with a constant value, for a family's size.
@@ -693,6 +696,8 @@ pub fn parse_paired(
             (format!("{prefix}{n}"), e.clone(), false)
         })
         .collect();
+    // an override's body reads its definition's file's names (#703)
+    parser.paired_own = Some(spliced.own);
     parser.supplied_inputs = lets.to_vec();
     let mut prog = parser
         .program()
@@ -1799,6 +1804,7 @@ impl Parser {
             expanded: vec![],
             deferred: vec![],
             def_overrides: vec![],
+            paired_own: None,
             queues: vec![],
             consts: vec![],
             structural_overrides: vec![],
@@ -3674,6 +3680,9 @@ impl Parser {
                 .filter(|t| t.tok != Tok::Eof)
                 .map(|t| Token { line, col, ..t })
                 .collect();
+            if let Some(own) = &self.paired_own {
+                crate::frontend::paired::rename_override(own, &name, &mut body);
+            }
         }
         if body.is_empty() && !stmts {
             return self.err_at(at, format!("`def {name}` has no expression"));
