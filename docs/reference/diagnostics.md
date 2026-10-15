@@ -72,5 +72,5 @@ the pair compiles as `serq check` compiles it, else a
 | `E-copy-no-entry` | A KV relation (`kvt.nixl_pull (S, R, …)`) is read by an entry of `R` written `… from S` | none (the entry's body is the program's) |
 | `E-copy-swapped` | A KV relation names the source first, then the reader: `(S, R)`, written `(R, S)` when `R` has the entry `… from S` and no relation into it | swap the two queues of the relation |
 | `E-connector-misnamed` | An engine's `connector` names the queue its queue's relation reads from (`kvt.nixl_pull (S, R, …)`: `connector S`) | rename the connector to `S` |
-| `E-reader-two-sources` | A reader takes its KV from one source: one relation per reader | none (which relation stays is the program's) |
+| `E-reader-two-sources` | A reader takes its KV from one source: one relation per reader, and its entries `… from` the same queue | none, in either form (which source stays is the program's) |
 | `E-connector-no-copy` | An engine's `connector S` (not an L2's) loads what a KV relation from `S` to its queue copies, so the relation is declared | none (a pull or a push is the program's) |

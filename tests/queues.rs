@@ -1673,17 +1673,32 @@ fn a_pull_relation_says_what_it_couples() {
         workload,
         "`D.decode (…) from Q`: the entry takes the KV `from P`",
     );
+    let two_sources = program(
+        "nic ps(1);",
+        "use \"std/kvt\"; use \"std/share\"; kvt.nixl_pull (P, D, share = share.maxmin);",
+        "Q",
+    )
+    .replace(" from P {", " from Q {")
+    .replace("from P to kv", "from Q to kv");
     refused(
-        &program(
-            "nic ps(1);",
-            "use \"std/kvt\"; use \"std/share\"; kvt.nixl_pull (P, D, share = share.maxmin);",
-            "Q",
-        )
-        .replace(" from P {", " from Q {")
-        .replace("from P to kv", "from Q to kv"),
+        &two_sources,
         workload,
-        "`kvt.nixl_pull (P, D)`, and `D.decode (…)` takes the KV `from Q`",
+        "error[E-reader-two-sources]: `kvt.nixl_pull (P, D)`, and `D.decode (…)` takes the KV `from Q`",
     );
+    // the two sources by name, and no fix-it: which stays is the program's
+    // (#645 A5)
+    refused(
+        &two_sources,
+        workload,
+        "help: a reader takes its KV from one source: the relation from `P`, or the entry's `from Q`",
+    );
+    let r = serq::diagnose(
+        &common::main_source(&two_sources),
+        Some(workload),
+        &Default::default(),
+    )
+    .expect("refused");
+    assert!(r.fixes.is_empty(), "{}", r.message);
     refused(
         &program(
             "nic ps(1);",
