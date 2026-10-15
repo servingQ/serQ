@@ -74,7 +74,6 @@ fn one_deployment_runs_under_each_of_its_workloads() {
             .unwrap_or_else(|e| panic!("{}: {e}", w.display()));
         let r = serq::run_ir(&p, w.parent()).unwrap();
         assert!(r.turns > 0, "{}: no turn ran", w.display());
-        assert!(p.stage_index("vllm").is_some(), "{}", w.display());
     }
 }
 

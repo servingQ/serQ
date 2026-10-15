@@ -1,7 +1,6 @@
 // vLLM v1 on one device (ref/vllm at 0c87a197), as a serQ program.
-// docs/use-cases/vllm.md explains it a part at a time. It runs under four
-// workloads (examples/pairs.json, docs/use-cases/workloads.md): chat.sq,
-// which it starts with, human_chat.sq, single_turn.sq and subagents.sq.
+// docs/use-cases/vllm.md explains it a part at a time. It runs under several
+// workloads (examples/pairs.json, docs/use-cases/workloads.md).
 use "std/args";
 
 // --8<-- [start:settings]

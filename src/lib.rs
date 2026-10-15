@@ -417,9 +417,9 @@ pub fn program_path(name: &str) -> std::path::PathBuf {
         .unwrap_or_else(|| panic!("no examples/*/{file}"))
 }
 
-/// The workload file `examples/pairs.json` pairs the program at `path`
-/// with: which workload each example and tutorial program runs, for tests
-/// and tools (`docs/design/paired-workload.md`). `path` is this crate's,
+/// The workload the program at `path` starts with, from
+/// `examples/pairs.json`: the first of `paired_workloads`, for tests and
+/// tools (`docs/design/paired-workload.md`). `path` is this crate's,
 /// absolute or relative to it.
 pub fn paired_workload(path: &Path) -> Option<std::path::PathBuf> {
     paired_workloads(path).into_iter().next()

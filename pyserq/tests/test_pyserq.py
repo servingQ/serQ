@@ -15,6 +15,7 @@ import json
 import math
 import os
 import subprocess
+import sys
 import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -29,11 +30,13 @@ MG1 = ROOT / "examples" / "single-turn" / "mg1.sq"
 VLLM = ROOT / "examples" / "multi-turn" / "vllm.sq"
 REPLAY = ROOT / "examples" / "replay" / "vllm_replay.sq"
 KONG = ROOT / "examples" / "papers" / "kong_svf.sq"
-# each example's workload files (examples/pairs.json, repo-root-relative):
-# one, or several, the first the one it starts with
-_PAIRED = {d: [w] if isinstance(w, str) else w for d, w in json.loads((ROOT / "examples" / "pairs.json").read_text()).items()}
-PAIRS = {ROOT / d: ROOT / ws[0] for d, ws in _PAIRED.items()}
-EVERY = [(ROOT / d, ROOT / w) for d, ws in _PAIRED.items() for w in ws]
+# each example's workload files (examples/pairs.json, read by scripts/pairs.py):
+# the one it starts with, and every one it runs under
+sys.path.insert(0, str(ROOT / "scripts"))
+import pairs  # noqa: E402
+
+PAIRS = {ROOT / d: pairs.workload(ROOT / d) for d in pairs.load()}
+EVERY = [(ROOT / d, w) for d in pairs.load() for w in pairs.workloads(ROOT / d)]
 ARRAYS = """fn main() { pool kv[2] { cap 10; } pool reqs { cap 4; } stage svc[2] : fifo;
 server { set j = ~bernoulli(0.5); hold reqs (cost(reqs, 1)) { hold kv[j] (cost(kv, 1)) { run svc[j] (cost(svc, ~exp(0.5))); } } }
  }"""

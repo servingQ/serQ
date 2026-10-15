@@ -76,6 +76,9 @@ def problems():
                 out.append(f"examples/pairs.json: {p} does not exist")
         if (ROOT / d).parent in WORKLOAD_DIRS:
             out.append(f"examples/pairs.json: {d} is a workload, not a program")
+        # one spelling: one workload is a string, a list names two or more
+        if isinstance(ws, list) and len(ws) < 2:
+            out.append(f"examples/pairs.json: {d}: a list names two workloads or more; one is a string")
         for w in listed(ws):
             if (ROOT / w).parent not in WORKLOAD_DIRS:
                 out.append(f"examples/pairs.json: {w} is not under a workloads/ directory")
