@@ -54,6 +54,7 @@ fn box_style(s: BoxStyle) -> &'static str {
         BoxStyle::Flow => "seqrail",
         BoxStyle::Instance => "seqinstance",
         BoxStyle::Frame => "seqframe",
+        BoxStyle::Server => "seqserver",
     }
 }
 
@@ -82,6 +83,7 @@ const STYLES: &str = r#"x=1pt, y=-1pt, line cap=round, line join=round,
   seqcached/.style={draw=none, fill=seqcache},
   seqinstance/.style={draw=seqline, fill=seqpanel, line width=.8pt},
   seqframe/.style={draw=seqline, line width=.8pt},
+  seqserver/.style={draw=seqline, line width=1pt},
   seqenclosure/.style={draw=seqdim, line width=.7pt, dash pattern=on 4.5pt off 3pt},
   seqstation/.style={draw=seqline, fill=seqtint, line width=.9pt},
   seqcell/.style={draw=seqline, fill=white, line width=.5pt},
@@ -145,6 +147,14 @@ pub fn render(f: &Figure) -> String {
                                     writeln!(s, "  \\draw[seqcell] {} circle (4pt);", p(x, c.y));
                             }
                         }
+                    }
+                    StationKind::Client => {
+                        let _ = writeln!(
+                            s,
+                            "  \\draw[seqstation, rounded corners=12pt] {} rectangle {};",
+                            p(rect.x, rect.y),
+                            p(rect.right(), rect.bottom())
+                        );
                     }
                     StationKind::Decision => {
                         let r = rect.h.min(rect.w) / 2.0;

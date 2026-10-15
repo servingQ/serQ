@@ -24,9 +24,10 @@ The router chooses a replica (`choose j`), and a program's tokens are its
 lease of that replica's `pool prog`, beside vLLM's own `pool E.kv` and
 `pool E.reqs`; its [`queue by`](../api/pool.md#queue) and
 [`preempt leases by`](../api/pool.md#preempt) are the router's order and
-pause rule, read in the table below. The lower exit is a prompt the
-replica's KV cannot hold: the router ends that trajectory before it
-chooses, as vLLM would refuse the request.
+pause rule, read in the table below. The exit back to the client marked
+`prompt + 100 >= 4000 * 16` is a prompt the replica's KV cannot hold: the
+router ends that trajectory before it chooses, as vLLM would refuse the
+request.
 
 ## Configuration
 

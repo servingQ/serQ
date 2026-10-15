@@ -7,7 +7,9 @@
 
 use std::fmt::Write as _;
 
-use crate::view::figure::{Anchor, BoxStyle, EdgeRole, EdgeStyle, Figure, Item, StationKind};
+use crate::view::figure::{
+    Anchor, BoxStyle, CLIENT, EdgeRole, EdgeStyle, Figure, Item, StationKind,
+};
 
 /// Text or an attribute value, escaped.
 fn esc(s: &str) -> String {
@@ -34,6 +36,7 @@ fn box_class(s: BoxStyle) -> &'static str {
         BoxStyle::Flow => "rail",
         BoxStyle::Instance => "instance",
         BoxStyle::Frame => "frame",
+        BoxStyle::Server => "server",
     }
 }
 
@@ -86,6 +89,11 @@ const PAINTS: &[Paint] = &[
     Paint {
         class: "frame",
         light: "fill=\"none\" stroke=\"#4b5563\" stroke-width=\"1.1\"",
+        dark: "stroke:#b6bfcc",
+    },
+    Paint {
+        class: "server",
+        light: "fill=\"none\" stroke=\"#4b5563\" stroke-width=\"1.4\"",
         dark: "stroke:#b6bfcc",
     },
     Paint {
@@ -205,7 +213,9 @@ pub fn render(f: &Figure) -> String {
                 // a bracket names the nodes one job holds at once, which no
                 // arrow joins: a page walking a request treats them as one
                 // place; an instance's panel names the stations in it
-                let tag = if nodes.is_empty() {
+                let tag = if *style == BoxStyle::Server {
+                    r#" data-role="server""#.to_string()
+                } else if nodes.is_empty() {
                     String::new()
                 } else {
                     let role = match style {
@@ -214,7 +224,8 @@ pub fn render(f: &Figure) -> String {
                         BoxStyle::Solid
                         | BoxStyle::Cached
                         | BoxStyle::Enclosure
-                        | BoxStyle::Frame => {
+                        | BoxStyle::Frame
+                        | BoxStyle::Server => {
                             unreachable!("only a bracket or a panel names nodes")
                         }
                     };
@@ -255,6 +266,10 @@ pub fn render(f: &Figure) -> String {
                             esc(node),
                             esc(name)
                         );
+                    }
+                    // the client is no stage either, and says what it is
+                    None if *kind == StationKind::Client => {
+                        let _ = writeln!(s, r#"<g data-node="{}" data-role="client">"#, esc(node));
                     }
                     None => {
                         let _ = writeln!(s, r#"<g data-node="{}">"#, esc(node));
@@ -303,6 +318,17 @@ pub fn render(f: &Figure) -> String {
                                 );
                             }
                         }
+                    }
+                    StationKind::Client => {
+                        let _ = writeln!(
+                            s,
+                            r#"<rect {} x="{}" y="{}" width="{}" height="{}" rx="12"/>"#,
+                            paint("station"),
+                            n(rect.x),
+                            n(rect.y),
+                            n(rect.w),
+                            n(rect.h)
+                        );
                     }
                     StationKind::Decision => {
                         let r = rect.h.min(rect.w) / 2.0;
@@ -457,12 +483,14 @@ pub fn render(f: &Figure) -> String {
                     ""
                 };
                 let r = match role {
-                    Some(EdgeRole::Arrival { to }) => {
-                        format!(r#" data-role="arrival" data-to="{}""#, esc(to))
-                    }
-                    Some(EdgeRole::Exit { from }) => {
-                        format!(r#" data-role="exit" data-from="{}""#, esc(from))
-                    }
+                    Some(EdgeRole::Arrival { to }) => format!(
+                        r#" data-role="arrival" data-from="{CLIENT}" data-to="{}""#,
+                        esc(to)
+                    ),
+                    Some(EdgeRole::Exit { from }) => format!(
+                        r#" data-role="exit" data-from="{}" data-to="{CLIENT}""#,
+                        esc(from)
+                    ),
                     Some(EdgeRole::Flow { from, to }) => format!(
                         r#" data-role="flow" data-from="{}" data-to="{}""#,
                         esc(from),

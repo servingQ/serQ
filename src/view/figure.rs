@@ -81,6 +81,9 @@ pub enum BoxStyle {
     /// A station with the pools held at it alone, a row each under its
     /// glyph. Unfilled, where an instance is a filled panel.
     Frame,
+    /// The server: everything the figure draws but the client. A request
+    /// enters it from the client and its reply leaves it for the client.
+    Server,
 }
 
 /// How a connector is drawn.
@@ -94,17 +97,24 @@ pub enum EdgeStyle {
     Relation,
 }
 
+/// What the figure calls the client: where a request comes from and its
+/// reply goes back to (`data-node`). An arrival leaves it and an exit
+/// returns to it, so an arrow of either role names it at its other end.
+/// It is no stage, so its name starts with `#` as a decision's does: a
+/// stage called `client` is another node.
+pub const CLIENT: &str = "#client";
+
 /// What an edge is, beyond its style: where sessions enter the figure, how
 /// they go from one station to the next, and where they leave. Written into
 /// the SVG (`data-role`, `data-from`, `data-to`) so that a page animating a
 /// run over the figure can move a request along the arrows. A station is
 /// named by its stage; a decision or a tick, which is no stage, by its place
-/// among the net's nodes (`#0`).
+/// among the net's nodes (`#0`); the client by `CLIENT`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EdgeRole {
-    /// Sessions arrive by it, at `to`.
+    /// Sessions arrive by it, from the client at `to`.
     Arrival { to: String },
-    /// Sessions leave by it, from `from`.
+    /// Sessions leave by it, from `from` back to the client.
     Exit { from: String },
     /// Sessions go from `from` to `to` by it: the next station, a loop's
     /// return, a transfer between two NICs.
@@ -177,6 +187,9 @@ pub enum StationKind {
     /// Where a session decides before it reaches a station - the router
     /// at the top of every turn: a diamond. Not a stage.
     Decision,
+    /// The client: the workload, which sends a request and waits for its
+    /// reply, its tool and think times included. Not a stage.
+    Client,
 }
 
 /// One drawable.
@@ -202,12 +215,13 @@ pub enum Item {
         /// `FIFO`, `PS`, the budget for a step engine.
         text: String,
         /// The stage it draws, by name (an array's members share one);
-        /// `None` for a decision or a pool's tick, which are no stage. The
+        /// `None` for a decision, a pool's tick or the client, which are no
+        /// stage. The
         /// SVG writer puts it on the glyph as `data-stage`, so that the
         /// figure is addressable as well as a picture.
         stage: Option<String>,
-        /// What the arrows call it (`EdgeRole`): the stage's name, or `#k`
-        /// for a decision or a tick (`data-node`).
+        /// What the arrows call it (`EdgeRole`): the stage's name, `#k`
+        /// for a decision or a tick, `CLIENT` for the client (`data-node`).
         node: String,
     },
     /// The queueing-theory queue glyph: `cells` boxes between two rails,

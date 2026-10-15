@@ -372,11 +372,17 @@ fn lanes_below_the_row_do_not_collide() {
         let p = program(name);
         let f = deployment::figure(&p);
         // an arrow drawn for each member of a stacked instance is one arrow
-        // (`P[0]`, `P[1]` are `P`'s), and its members share its lane
+        // (`P[0]`, `P[1]` are `P`'s), and its members share its lane; an
+        // exit's lane is the one it reaches the client along
         let mut keyed: Vec<(String, f64)> = f
             .items
             .iter()
             .filter_map(|i| match i {
+                serq::view::figure::Item::Edge {
+                    pts,
+                    role: role @ Some(serq::view::figure::EdgeRole::Exit { .. }),
+                    ..
+                } => Some((family(&format!("{role:?}")), pts[pts.len() - 2].y)),
                 serq::view::figure::Item::Edge { pts, role, .. } if pts.len() >= 3 => {
                     Some((family(&format!("{role:?}")), pts[1].y))
                 }
@@ -1367,7 +1373,12 @@ fn enclosures_contain_their_stations_and_nest() {
         // `layout` pushes one station per node, in node order, then those
         // of a stacked instance's members past the first
         let boxes = f.boxes(BoxStyle::Enclosure);
-        let stations = f.stations();
+        // the client is no node of the net
+        let stations: Vec<_> = f
+            .stations()
+            .into_iter()
+            .filter(|(_, k)| *k != StationKind::Client)
+            .collect();
         let members = f
             .items
             .iter()
@@ -1396,6 +1407,129 @@ fn enclosures_contain_their_stations_and_nest() {
             assert_eq!(framed, want, "{name}: {} has {framed} frames", node.label);
         }
     }
+}
+
+/// A request comes from the client and its reply goes back to it (#705):
+/// the client stands outside the server's frame, which holds every other
+/// station and box; every arrival leaves the client and every exit ends at
+/// it, crossing the server's wall.
+#[test]
+fn the_client_sends_and_the_server_replies() {
+    use serq::view::figure::{EdgeRole, Item, Point};
+    for name in PROGRAMS {
+        let f = deployment::figure(&program(name));
+        let clients: Vec<_> = f
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                Item::Station {
+                    rect,
+                    kind: StationKind::Client,
+                    stage,
+                    node,
+                    text,
+                } => {
+                    // addressed as `#client`, read as `client`
+                    assert!(stage.is_none() && node == "#client", "{name}: {i:?}");
+                    assert_eq!(text, "client", "{name}");
+                    Some(*rect)
+                }
+                _ => None,
+            })
+            .collect();
+        let [client] = clients[..] else {
+            panic!("{name}: one client, not {}", clients.len());
+        };
+        let [server] = f.boxes(BoxStyle::Server)[..] else {
+            panic!("{name}: one server frame");
+        };
+        assert!(!server.overlaps(&client), "{name}: the client is outside");
+        for i in &f.items {
+            match i {
+                Item::Station {
+                    rect,
+                    kind: StationKind::Client,
+                    ..
+                } if *rect == client => {}
+                Item::Station { rect, .. } | Item::Queue { rect, .. } | Item::Drum { rect, .. } => {
+                    assert!(server.contains(rect), "{name}: {i:?} outside the server")
+                }
+                Item::Box { rect, style, .. } if *style != BoxStyle::Server => {
+                    assert!(server.contains(rect), "{name}: {i:?} outside the server")
+                }
+                _ => {}
+            }
+        }
+        let on = |q: &Point| {
+            q.x >= client.x && q.x <= client.right() && q.y >= client.y && q.y <= client.bottom()
+        };
+        let inside = |q: &Point| {
+            q.x >= server.x && q.x <= server.right() && q.y >= server.y && q.y <= server.bottom()
+        };
+        let (mut arrivals, mut exits) = (0, 0);
+        for i in &f.items {
+            match i {
+                Item::Edge {
+                    pts,
+                    role: Some(EdgeRole::Arrival { .. }),
+                    ..
+                } => {
+                    arrivals += 1;
+                    assert!(on(&pts[0]), "{name}: an arrival leaves the client");
+                    assert!(inside(pts.last().unwrap()), "{name}: into the server");
+                }
+                Item::Edge {
+                    pts,
+                    role: Some(EdgeRole::Exit { .. }),
+                    ..
+                } => {
+                    exits += 1;
+                    assert!(
+                        on(pts.last().unwrap()),
+                        "{name}: an exit ends at the client"
+                    );
+                    assert!(inside(&pts[0]), "{name}: from inside the server");
+                }
+                _ => {}
+            }
+        }
+        assert!(arrivals > 0 && exits > 0, "{name}");
+        // what is written past the server's wall is the server's, its
+        // title over the frame aside: a guard on an exit is written where
+        // the exit leaves, inside
+        for i in &f.items {
+            if let Item::Text { at, text, .. } = i
+                && at.x > server.x
+                && text != "server"
+            {
+                assert!(inside(at), "{name}: {i:?} outside the server");
+            }
+        }
+        // and the reply is no word at the figure's edge
+        assert!(
+            !f.items.iter().any(
+                |i| matches!(i, Item::Text { text, .. } if text == "out" || text.starts_with("out ("))
+            ),
+            "{name}"
+        );
+    }
+}
+
+/// The client is no stage, so its name is no stage's (`#client`): a stage
+/// called `client` is a node of its own, and every node one group.
+#[test]
+fn a_stage_called_client_is_not_the_client() {
+    let p = compile(
+        "stage client : fifo;
+        server (a) { run client (cost(client, 1)); }
+        ",
+        "workload { arrive poisson(1); init { set a = 1; } send (a); session { turn; end; } }",
+    );
+    let svg = serq::view::render(&deployment::figure(&p), "svg").unwrap();
+    assert_eq!(svg.matches(r#"<g data-node="client" "#).count(), 1);
+    assert_eq!(svg.matches(r##"<g data-node="#client" "##).count(), 1);
+    assert!(svg.contains(r##"data-role="arrival" data-from="#client" data-to="client""##));
+    assert!(svg.contains(r##"data-role="exit" data-from="client" data-to="#client""##));
 }
 
 /// The figure is big enough for what it contains.
@@ -2135,8 +2269,12 @@ fn the_svg_names_stages_pools_and_roles() {
                         got.insert(st.clone());
                     }
                     None => assert!(
-                        *kind == StationKind::Decision || *kind == StationKind::Delay,
-                        "{name}: a station without a stage is a decision or a tick: {i:?}"
+                        matches!(
+                            kind,
+                            StationKind::Decision | StationKind::Delay | StationKind::Client
+                        ),
+                        "{name}: a station without a stage is a decision, a tick or the \
+                         client: {i:?}"
                     ),
                 }
             }
@@ -2175,12 +2313,18 @@ fn the_svg_names_stages_pools_and_roles() {
     let p = program("llmd_nixl_pull");
     let net = deployment::project(&p);
     let svg = serq::view::render(&deployment::layout(&p, &net), "svg").unwrap();
-    assert!(svg.contains(r#"data-role="exit" data-from="D[0]""#));
-    assert!(svg.contains(r#"data-role="exit" data-from="D[1]""#));
-    assert!(svg.contains(r##"data-role="exit" data-from="#0""##));
+    // (#705): the reply goes back to the client, and the session comes
+    // from it, which is a node of its own, outside the server's frame
+    assert!(svg.contains(r##"data-role="exit" data-from="D[0]" data-to="#client""##));
+    assert!(svg.contains(r##"data-role="exit" data-from="D[1]" data-to="#client""##));
+    assert!(svg.contains(r##"data-role="exit" data-from="#0" data-to="#client""##));
     assert_eq!(svg.matches(r#"data-role="exit""#).count(), 3);
     // sessions arrive at the router's decision, the first node
-    assert!(svg.contains(r##"data-role="arrival" data-to="#0""##));
+    assert!(svg.contains(r##"data-role="arrival" data-from="#client" data-to="#0""##));
+    assert!(svg.contains(r##"<g data-node="#client" data-role="client">"##));
+    assert_eq!(svg.matches(r#"data-role="server""#).count(), 1);
+    // no arrow ends in nothing: an exit no longer says `out`
+    assert!(!svg.contains(">out<") && !svg.contains(">out ("));
     // every arrow between two nodes says which: the net's four edges
     // between nodes (the decision to `P` and to `D`, `P` to its NIC, the
     // decoder's NIC to `D`) for each member, two each, and the run that
@@ -2225,7 +2369,7 @@ fn the_svg_names_stages_pools_and_roles() {
         assert!(svg.contains(&format!(
             r##"data-role="flow" data-from="#0" data-to="D[{m}]""##
         )));
-        assert!(!svg.contains(&format!(r#"data-from="D[{m}]" data-to="#)));
+        assert!(!svg.contains(&format!(r#"data-role="flow" data-from="D[{m}]""#)));
     }
     // a transfer whose NICs sit side by side has a bracket and an arrow
     // inside it, in the order the run names them: the push mode's NICs are

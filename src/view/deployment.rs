@@ -11,8 +11,8 @@ use std::collections::BTreeMap;
 
 use crate::ir::{CArrival, CExpr, CRef, CStageKind, CStmt, CtxVar, Program, RunMode, Side, UnOp};
 use crate::view::figure::{
-    Anchor, BoxStyle, CopyMark, EdgeRole, EdgeStyle, Figure, Item, Point, Rect, StationKind,
-    TextSize, pt,
+    Anchor, BoxStyle, CLIENT, CopyMark, EdgeRole, EdgeStyle, Figure, Item, Point, Rect,
+    StationKind, TextSize, pt,
 };
 
 // --- the projection ---------------------------------------------------------
@@ -1959,6 +1959,10 @@ const INST_HEAD: f64 = 26.0;
 const MEMBERS_MAX: usize = 8;
 /// The room between two members' boxes, the lower one's title in it.
 const MEMBER_GAP: f64 = 34.0;
+/// The client's glyph, left of the server, and the server's margin around
+/// what it holds.
+const CLIENT_W: f64 = 64.0;
+const SERVER_PAD: f64 = 16.0;
 
 /// An instance drawn once per member: `choose i in NP` picks one of `NP`
 /// pods, and the figure draws the `NP`, its box and all in it again a
@@ -2204,6 +2208,7 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
         .collect();
     let framed = |i: usize| !resident[i].is_empty();
     let row_y = MARGIN
+        + SERVER_PAD
         + 34.0
         + (max_depth as f64 + 1.0) * DEPTH_PAD
         + if boxed { INST_HEAD + INST_PAD } else { 0.0 }
@@ -2314,13 +2319,17 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
         }
     }
 
-    // The arrival arrow has to be long enough for the label that sits over it.
+    // The client stands at the left, outside the server; the arrival arrow
+    // from it has to be long enough for the label that sits over it, which
+    // ends before the server's wall.
+    let client = Rect::new(MARGIN, row_y, CLIENT_W, STATION_H);
     let arrival_text = format!("new sessions: {}", net.arrival);
     let lead = TextSize::Small.width_of(&arrival_text).max(70.0) + 14.0;
+    let server_left = client.right() + lead;
 
     // Walk left to right, reserving room for the enclosures that open and
     // close around each station and for the pool glyphs inside them.
-    let mut x = MARGIN + lead;
+    let mut x = server_left + SERVER_PAD;
     let mut rects: Vec<Rect> = Vec::with_capacity(net.nodes.len());
     // a station's outline: its frame when it has one, its glyph otherwise
     let mut frames: Vec<Rect> = Vec::with_capacity(net.nodes.len());
@@ -2885,6 +2894,18 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
         *n += 1.0;
         base + *n * 22.0
     };
+    // The client: where a request comes from and its reply goes back to.
+    // An arrival leaves it by its right side, or by its bottom for a lane;
+    // an exit comes back into its bottom, right of where those leave.
+    f.push(Item::Station {
+        rect: client,
+        kind: StationKind::Client,
+        // what the reader reads; `CLIENT` is what a page addresses
+        text: "client".into(),
+        stage: None,
+        node: CLIENT.into(),
+    });
+    let (client_out, client_in) = (client.x + client.w * 0.3, client.x + client.w * 0.7);
     let mut arrivals = 0;
     for e in &net.edges {
         let label = e.label.clone();
@@ -2894,65 +2915,85 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
                 let y = r.centre().y;
                 arrivals += 1;
                 if arrivals == 1 && i == 0 {
-                    // The arrow starts at the margin and the label rides above
+                    // The arrow leaves the client and the label rides above
                     // it, clear of the pool glyphs it passes; into a stack,
                     // it turns down beside it to each member.
                     for (m, to) in members_of(i) {
                         let pts = match box_of(i) {
                             Some(b) if m > 0 => vec![
-                                pt(MARGIN, y),
+                                pt(client.right(), y),
                                 pt(b.x - 8.0, y),
                                 pt(b.x - 8.0, y + dy(m)),
                                 pt(r.x, y + dy(m)),
                             ],
-                            _ => vec![pt(MARGIN, y), pt(r.x, y)],
+                            _ => vec![pt(client.right(), y), pt(r.x, y)],
                         };
                         f.arrival(pts, to);
                     }
-                    f.note(pt(MARGIN, y - 10.0), arrival_text.clone(), Anchor::Start);
+                    f.note(
+                        pt(client.right() + 6.0, y - 10.0),
+                        arrival_text.clone(),
+                        Anchor::Start,
+                    );
                 } else {
                     // A session that opens with a branch has more than one entry
                     // station, and one may enter past the first station. An
                     // arrow along the row would run straight through the
                     // stations before it, so it takes a lane of its own.
                     if arrivals == 1 {
-                        f.note(pt(MARGIN, y - 10.0), arrival_text.clone(), Anchor::Start);
+                        f.note(
+                            pt(client.right() + 6.0, y - 10.0),
+                            arrival_text.clone(),
+                            Anchor::Start,
+                        );
                     }
                     let ly = lane(&mut lanes);
                     let x = r.x + r.w * 0.25;
                     for (m, to) in members_of(i) {
                         let mut up = down(i, m, x, false);
                         up.reverse();
-                        let mut pts = vec![pt(MARGIN, y), pt(MARGIN, ly), pt(up[0].x, ly)];
+                        let mut pts = vec![
+                            pt(client_out, client.bottom()),
+                            pt(client_out, ly),
+                            pt(up[0].x, ly),
+                        ];
                         pts.extend(up);
                         f.arrival(pts, to);
                     }
                 }
             }
             (End::Node(i), End::Exit) => {
+                // The reply goes back to the client, through the server's
+                // wall, along a lane of its own under the row: the last
+                // station's leaves to the right and turns down, an earlier
+                // one's drops from it rather than running a line through
+                // the stations after it. A session that ends inside the
+                // server has its guard written where it leaves.
                 let r = rects[i];
-                // a request leaving the deployment, or a session that ends
-                // inside it: both go out, and only the second has a guard
-                let text = label.map_or("out".into(), |l| format!("out ({l})"));
-                if i + 1 == net.nodes.len() {
-                    // The last station leaves to the right, each member's.
-                    for (m, from) in members_of(i) {
-                        let y = r.centre().y + dy(m);
-                        f.exit(vec![pt(r.right(), y), pt(row_right + 26.0, y)], from);
-                        f.note(pt(row_right + 30.0, y + 3.0), text.clone(), Anchor::Start);
-                    }
+                let y = lane(&mut lanes);
+                let last = i + 1 == net.nodes.len();
+                // clear of the row and of the panels around its last station
+                let x = if last {
+                    inst_boxes.iter().map(Rect::right).fold(row_right, f64::max) + 14.0
                 } else {
-                    // An earlier station's exit drops into a lane of its own
-                    // rather than running a line through the stations after it.
-                    let y = lane(&mut lanes);
-                    let x = r.x + r.w * 0.75;
-                    for (m, from) in members_of(i) {
-                        let mut pts = down(i, m, x, true);
-                        pts.push(pt(pts.last().unwrap().x, y));
-                        pts.push(pt(row_right + 26.0, y));
-                        f.exit(pts, from);
-                    }
-                    f.note(pt(row_right + 30.0, y + 3.0), text, Anchor::Start);
+                    r.x + r.w * 0.75
+                };
+                for (m, from) in members_of(i) {
+                    let mut pts = if last {
+                        let ym = r.centre().y + dy(m);
+                        vec![pt(r.right(), ym), pt(x, ym)]
+                    } else {
+                        down(i, m, x, true)
+                    };
+                    pts.push(pt(pts.last().unwrap().x, y));
+                    pts.push(pt(client_in, y));
+                    pts.push(pt(client_in, client.bottom()));
+                    f.exit(pts, from);
+                }
+                if let Some(l) = label {
+                    let at = if last { x - 4.0 } else { x + 4.0 };
+                    let anchor = if last { Anchor::End } else { Anchor::Start };
+                    f.note(pt(at, y - 5.0), l, anchor);
                 }
             }
             (End::Node(a), End::Node(b)) if !e.back && b > a + 1 => {
@@ -3017,6 +3058,67 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
             _ => {}
         }
     }
+
+    // The server: a frame around all but the client, under everything. The
+    // arrows to and from the client cross its wall, and the lanes they take
+    // under the row are inside it.
+    let mut ext = Rect::new(server_left + SERVER_PAD, row_y, 0.0, 0.0);
+    for item in &f.items {
+        let r = match item {
+            Item::Station { node, .. } if node == CLIENT => continue,
+            Item::Box { rect, .. }
+            | Item::Station { rect, .. }
+            | Item::Queue { rect, .. }
+            | Item::Drum { rect, .. } => *rect,
+            Item::Edge { pts, .. } => {
+                for q in pts.iter().filter(|q| q.x > server_left) {
+                    ext = ext.union(&Rect::new(q.x, q.y, 0.0, 0.0));
+                }
+                continue;
+            }
+            Item::Dot { at, r } => Rect::new(at.x - r, at.y - r, 2.0 * r, 2.0 * r),
+            // the arrival's label stands outside, over its arrow
+            Item::Text { at, .. } if at.x < server_left => continue,
+            Item::Text {
+                at,
+                text,
+                anchor,
+                size,
+                ..
+            } => {
+                let w = size.width_of(text);
+                let x = match anchor {
+                    Anchor::Start => at.x,
+                    Anchor::Middle => at.x - w / 2.0,
+                    Anchor::End => at.x - w,
+                };
+                Rect::new(x, at.y - size.points(), w, size.points())
+            }
+        };
+        ext = ext.union(&r);
+    }
+    let server = Rect::new(
+        server_left,
+        ext.y - SERVER_PAD,
+        ext.right() + SERVER_PAD - server_left,
+        ext.h + 2.0 * SERVER_PAD,
+    );
+    f.items.insert(
+        0,
+        Item::Box {
+            rect: server,
+            style: BoxStyle::Server,
+            round: 12.0,
+            nodes: vec![],
+            copy: None,
+        },
+    );
+    f.text(
+        pt(server.x + 10.0, server.y - 5.0),
+        "server",
+        Anchor::Start,
+        TextSize::Normal,
+    );
 
     f.fit(MARGIN);
     f
