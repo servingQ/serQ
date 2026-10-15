@@ -2487,12 +2487,15 @@ impl Linker<'_> {
                         )));
                     }
                     ConnectorKind::Relation(Some(rel)) => {
-                        let sources = self.pools.get(&rel.leased).map_or(1, |&(_, n)| n);
-                        let src = |name: String| Ref {
+                        // a source family is indexed at every size, a family
+                        // of one too (`P[1]`), by the member the entry took
+                        // its KV from
+                        let src = |what: &str, name: String| Ref {
                             span: None,
-                            name,
-                            index: (sources > 1)
+                            index: self
+                                .declared_family(what, &name)
                                 .then(|| Box::new(var(&format!("{engine}.{}", RELATION_FROM)))),
+                            name,
                         };
                         let mut out = vec![];
                         // the source's KV is there once its leg has ended;
@@ -2507,7 +2510,7 @@ impl Linker<'_> {
                         // copy's run's `latency`
                         let nic = own(&format!("{}.nic", rel.reader));
                         out.push(Stmt::Run {
-                            stage: src(format!("{}.nic", rel.source)),
+                            stage: src("stage", format!("{}.nic", rel.source)),
                             mode: RunMode::Plain,
                             work: Expr::cost(
                                 &[
@@ -2528,7 +2531,7 @@ impl Linker<'_> {
                             // reader's its `also`
                             poster: Some(if rel.push { 0 } else { 1 }),
                         });
-                        out.push(Stmt::Release(src(rel.leased.clone())));
+                        out.push(Stmt::Release(src("pool", rel.leased.clone())));
                         out
                     }
                 };

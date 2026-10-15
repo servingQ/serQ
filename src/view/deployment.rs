@@ -2308,12 +2308,24 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
     // member, the boxes stacked down from the row (`members`)
     let stacks: Vec<Option<Stack>> = net.instances.iter().map(|g| Stack::of(p, net, g)).collect();
     let stack_of = |i: usize| net.instance_of(i).and_then(|k| stacks[k].as_ref());
+    // a copy across a stacked instance's box: into another instance
+    // (`Net::spans`), or to a station in none (a family `P[i]`'s NIC to one
+    // decoder's). A run from a station in no instance into an unstacked
+    // box is no crossing (#197); a stacked box is drawn once per member,
+    // so a flow out of it is an arrow per member whatever is at its end
+    let stacked_copy = |g: usize| {
+        let group = &net.flows[g];
+        group.iter().any(|&i| stack_of(i).is_some())
+            && group
+                .iter()
+                .any(|&i| net.instance_of(i) != net.instance_of(group[0]))
+    };
 
     // A run over several stages: its stations bracketed as one job.
     for (g, group) in net.flows.iter().enumerate() {
-        // a copy between two stacked instances is an arrow from each member
-        // to each, drawn once the members are
-        if spanning(g) && group.iter().any(|&i| stack_of(i).is_some()) {
+        // a copy across a stacked instance's box is an arrow from each
+        // member to each, drawn once the members are
+        if stacked_copy(g) {
             continue;
         }
         let r = group
@@ -2699,10 +2711,10 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
         vec![pt(ra.right(), ya), pt(x, ya), pt(x, yb), pt(rb.x, yb)]
     };
 
-    // a copy between two stacked instances: an arrow from each member to
-    // each, what it moves and waits for written once, above the first
+    // a copy across a stacked instance's box: an arrow from each member to each,
+    // what it moves and waits for written once, above the first
     for (g, group) in net.flows.iter().enumerate() {
-        if !(spanning(g) && group.iter().any(|&i| stack_of(i).is_some())) {
+        if !stacked_copy(g) {
             continue;
         }
         let (a, b) = (group[0], *group.last().unwrap());
