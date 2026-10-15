@@ -1159,6 +1159,7 @@ fn stmt_reads(s: &Stmt, n: &str) -> bool {
     match s {
         Stmt::Declare(..)
         | Stmt::Side(_)
+        | Stmt::Route(_)
         | Stmt::Turn
         | Stmt::Request
         | Stmt::End
@@ -1600,6 +1601,7 @@ fn split_reads<'a>(
         match s {
             Stmt::Declare(..)
             | Stmt::Side(_)
+            | Stmt::Route(_)
             | Stmt::Turn
             | Stmt::End
             | Stmt::Request
@@ -2395,7 +2397,7 @@ impl Parser {
         }
         for q in &self.queues {
             for e in &q.entries {
-                if e.verb != "route" {
+                if e.verb != queue::GATEWAY_VERB {
                     shared.extend(e.locals.iter().map(|l| format!("{}.{l}", q.name)));
                 }
             }
@@ -5000,7 +5002,7 @@ impl Parser {
         self.in_queue = Some(qi);
         self.entry_from = from.clone();
         self.entry_gateway =
-            verb == "route" && self.queues[qi].roles.iter().any(|r| r == "gateway");
+            verb == queue::GATEWAY_VERB && self.queues[qi].roles.iter().any(|r| r == "gateway");
         let body = self.block();
         self.entry_from = None;
         self.entry_gateway = false;
@@ -5059,7 +5061,7 @@ impl Parser {
         let mut header_refused = None;
         // the gateway's `route` is the deployment's and reads as a server
         // does; any other entry of a queue that is also a gateway is an entry
-        let is_gateway = verb == "route" && q.roles.iter().any(|r| r == "gateway");
+        let is_gateway = verb == queue::GATEWAY_VERB && q.roles.iter().any(|r| r == "gateway");
         // `seen`: the locals a read sees, all of them in the body and in a
         // header those set above its hold
         let allowed_var = |n: &str, header: bool, seen: &[String]| -> bool {
@@ -5728,7 +5730,9 @@ impl Parser {
         // a call a `def`'s use expanded into is written in the `def`, not here
         let expanded = self.expanded.iter().any(|e| e.start <= at && at < e.end);
         let (block, owner) = match self.in_queue {
-            Some(qi) if self.entry_gateway => ("route", Some(self.queues[qi].name.as_str())),
+            Some(qi) if self.entry_gateway => {
+                (queue::GATEWAY_VERB, Some(self.queues[qi].name.as_str()))
+            }
             Some(qi) => ("entry", Some(self.queues[qi].name.as_str())),
             None => ("server", None),
         };
@@ -6017,7 +6021,7 @@ impl Parser {
                 // a choose a `def`'s use expanded into is written in the `def`, not here
                 let expanded = self.expanded.iter().any(|e| e.start <= at && at < e.end);
                 let (block, owner) = match self.in_queue {
-                    Some(qi) if self.entry_gateway => ("route", Some(self.queues[qi].name.as_str())),
+                    Some(qi) if self.entry_gateway => (queue::GATEWAY_VERB, Some(self.queues[qi].name.as_str())),
                     Some(qi) => ("entry", Some(self.queues[qi].name.as_str())),
                     None => ("server", None),
                 };
@@ -7139,7 +7143,7 @@ mod tests {
     /// Each side is a deployment's main body and the workload's file.
     fn same(a: (&str, &str), b: (&str, &str)) {
         fn executable(stmts: &mut Vec<Stmt>) {
-            stmts.retain(|s| !matches!(s, Stmt::Side(_)));
+            stmts.retain(|s| !matches!(s, Stmt::Side(_) | Stmt::Route(_)));
             for s in stmts {
                 match s {
                     Stmt::Hold { body, .. }

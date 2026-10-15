@@ -1,11 +1,19 @@
 //! Queues are parse-time sugar (`docs/design/queue.md`): a program written
 //! with queues compiles to the IR the same program written with pools,
 //! stages and a server compiles to, up to the names the queue gives its
-//! pools (`Q.p`), its stage (`Q`) and its entries' attributes (`Q.x`).
+//! pools (`Q.p`), its stage (`Q`) and its entries' attributes (`Q.x`), and
+//! up to where a gateway's route stands (`Program::routes`), which the
+//! figure draws and nothing runs.
 
 mod common;
 
 use serq::{Overrides, frontend::parser::parse_expr};
+
+/// A program's IR as JSON, its gateways' routes left out.
+fn run_json(mut p: serq::Program) -> String {
+    p.routes.clear();
+    p.to_json()
+}
 
 /// The deployment `src` (a main body) with the workload's file beside it,
 /// parsed.
@@ -22,12 +30,14 @@ fn parse(src: &str, workload: &str) -> Result<serq::frontend::ast::Program, Stri
 /// `renames` applied to its JSON is the flat program's IR.
 fn same_ir(queues: &str, flat: &str, workload: &str, renames: &[(&str, &str)]) {
     let ov = common::horizon(100.0);
-    let q = common::compile(&common::main_source(queues), workload, &ov)
-        .unwrap_or_else(|e| panic!("queues: {e}\n{queues}"))
-        .to_json();
-    let f = common::compile(&common::main_source(flat), workload, &ov)
-        .unwrap_or_else(|e| panic!("flat: {e}\n{flat}"))
-        .to_json();
+    let q = run_json(
+        common::compile(&common::main_source(queues), workload, &ov)
+            .unwrap_or_else(|e| panic!("queues: {e}\n{queues}")),
+    );
+    let f = run_json(
+        common::compile(&common::main_source(flat), workload, &ov)
+            .unwrap_or_else(|e| panic!("flat: {e}\n{flat}")),
+    );
     let mut q = q;
     for (from, to) in renames {
         q = q.replace(&format!("\"{from}\""), &format!("\"{to}\""));
@@ -46,13 +56,14 @@ fn same_ir(queues: &str, flat: &str, workload: &str, renames: &[(&str, &str)]) {
 /// change: from then on it is the sugar's own output, kept beside the flat
 /// program that spells it.
 fn same_ir_as_flat(queues: &str, workload: &str, name: &str, renames: &[(&str, &str)]) {
-    let mut q = common::compile(
-        &common::main_source(queues),
-        workload,
-        &common::horizon(100.0),
-    )
-    .unwrap_or_else(|e| panic!("queues: {e}\n{queues}"))
-    .to_json();
+    let mut q = run_json(
+        common::compile(
+            &common::main_source(queues),
+            workload,
+            &common::horizon(100.0),
+        )
+        .unwrap_or_else(|e| panic!("queues: {e}\n{queues}")),
+    );
     for (from, to) in renames {
         q = q.replace(&format!("\"{from}\""), &format!("\"{to}\""));
     }

@@ -5,12 +5,15 @@ The program as a queueing network.
 ![llm-d prefill/decode over NIXL](../assets/llmd_nixl_pull.deployment.svg)
 
 That is `examples/pd-disaggregation/llmd_nixl_pull.sq`: two prefill and two decode
-instances, the KV read over NIXL. Each filled panel is an instance: what the
-router's `choose` picks, a pod with its engine, its NIC and its pools; the
-engine's slots and KV blocks are drawn in the engine's frame. The router
+instances, the KV read over NIXL. The server first refuses a prompt longer
+than `max_model_len` (the diamond), then calls the gateway (`gw.route();`,
+the hexagon). Each filled panel is an instance: what the gateway's
+`choose` picks, a pod with its engine, its NIC and its pools; the
+engine's slots and KV blocks are drawn in the engine's frame. The gateway
 picks one of `NP` prefillers and one of `ND` decoders, and the figure draws
 all of them, a panel per member stacked down from the first (`P[0]`,
-`P[1]`), the router's arrow turning down to each. The
+`P[1]`), the gateway's arrow turning down to each. The decoder replies to
+the gateway, and the reply leaves by it for the client. The
 read crosses from a prefiller's box to a decoder's, from each to each: it
 holds the prefiller's NIC and the decoder's at once, and what it moves
 (`P.kv[i] → D.kv[j]`: the prefiller's blocks stay leased until it ends, the
@@ -25,8 +28,8 @@ bracket over `P.nic`.
 For a program with a `server` or gateway, the figure shows one request's
 path. Workload tool calls, subsequent turns and session exits are omitted,
 but holds surrounding the workload's `request` remain visible. The figure
-reads the request from the IR (`sides`), so a program, its JSON IR and a
-compiled `pyserq.Program` draw
+reads the request from the IR (`sides`), and a gateway's route from it too
+(`routes`), so a program, its JSON IR and a compiled `pyserq.Program` draw
 the same figure. Two requests are the same when they run the same
 statements inside workload holds of the same pools, whatever the units;
 when the session's requests differ, the figure shows the full session.
@@ -41,8 +44,9 @@ every way through holds it, whichever hold took it on each.
 | Client | The rounded box at the left, outside the server: the workload, which sends a request and waits for its reply. Its tool and think times are its own, so they are not drawn. A program has one workload, so the figure has one client. |
 | Server frame | The frame around everything but the client: the one `server` that takes a request and gives its reply. The arrival leaves the client and crosses the server's wall; every exit crosses it back to the client. |
 | Station | A stage reached by a `run`; an array is labelled with its size. Consecutive prefill and decode runs at one engine share a station. |
-| Arrow | Request flow between stages, including branches and loop returns. Guards label alternatives. An exit is the reply going back to the client, along a lane under the row; one that ends a session inside the server carries its guard. Every station has an arrow in and one out: a stage nothing runs does not link, and a request goes on from every station it reaches. `serq check` and `serq draw` check it on every program (`deployment::checked_figure`) and refuse a figure that cuts a station off, naming it, as the view's fault; `tests/draw.rs` checks it over every example and tutorial program. |
-| Decision diamond | A branch or routing decision before the first station. |
+| Arrow | Request flow between stages, including branches and loop returns. Guards label alternatives. An exit is the reply going back to the client, along a lane under the row; one that ends a session inside the server carries its guard. A station a gateway's route ends at replies to the gateway, along a lane of its own, and the reply leaves by the gateway. Every station has an arrow in and one out: a stage nothing runs does not link, and a request goes on from every station it reaches. `serq check` and `serq draw` check it on every program (`deployment::checked_figure`) and refuse a figure that cuts a station off, naming it, as the view's fault; `tests/draw.rs` checks it over every example and tutorial program. |
+| Decision diamond | A branch or routing decision before the first station or gateway: the server's own (`if (input >= max_model_len) { end; }` before `gw.route();`), or, with no gateway, a server's `choose` (`routing.sq`). |
+| Gateway hexagon | A gateway (`queue gw : gateway`), named above it, where the server calls `gw.route();`: the route's `choose`s are written in it, its branches leave it, and the stations it ends at reply to it. A gateway the route passes through without branching is drawn all the same (`vllm_nixl_push.sq`). |
 | Filled panel | An instance selected by `choose`, grouping the engine, NIC and pools indexed by exactly its variable. One the session also indexes otherwise (`E[j]`, `E[0]`) is in no panel; a panel takes in a dashed enclosure only when all of it stands inside. An instance's pool is drawn only inside its panel, so a station outside it does not show that hold; a run between stations the panels would pull apart is drawn outside them. |
 | Stacked panels | An instance's members, one panel each (`choose i in NP`: `NP` of them, its families' smallest size), stacked down from the first; past eight, the figure says how many it drew. An arrow into the instance turns down beside the stack to each member, one out of it from each; an arrow between two stacked instances goes from each member to each. |
 | Dashed enclosure | A pool held across several stations. |
@@ -74,8 +78,10 @@ pools are named by their member, `<g data-node="P[1]" data-stage="P[1]">`
 (the run log's `name` and `index`, written `P[1]`); a queue glyph and a
 drum carry their pool and which of the two they are, `<g
 data-pool="P.reqs[0]" data-role="queue">`. A
-decision diamond and a pool's tick are no stage: they have a node name
-(`<g data-node="#0">`) and no `data-stage`. Nor is the client, `<g
+decision diamond, a pool's tick, a gateway and the client are no stage:
+they have a node name and no `data-stage`, and say which they are, `<g
+data-node="#0" data-role="decision">`, `<g data-node="#1"
+data-role="tick">`, `<g data-node="gw.route" data-role="gateway">`, `<g
 data-node="#client" data-role="client">`. That is what
 [serq-lar](https://github.com/servingQ/serq-lar) animates a
 [run log](../reference/log.md) over: it finds a station by what the
@@ -86,10 +92,14 @@ TikZ writer ignores the ids.
 |---|---|---|
 | `queue` | `<g data-pool>` | the queue glyph where holds of the pool wait |
 | `drum` | `<g data-pool>` | the pool's drum |
+| `decision` | `<g data-node>` | a decision diamond |
+| `tick` | `<g data-node>` | a pool's queue tick (`queue every`) a hold waits for |
+| `gateway` | `<g data-node="gw.route">` | a gateway, where the server calls its route |
 | `client` | `<g data-node="#client">` | the client, where sessions come from and replies go back to |
 | `server` | a `<rect class="server">` | the server's frame, around all but the client |
 | `arrival` | a `<path>` | the arrow sessions arrive by, `data-from="#client"`; `data-to` names the node it reaches |
 | `flow` | a `<path>` | an arrow sessions take from `data-from` to `data-to`: the next station, a loop's return, a transfer between two NICs |
+| `reply` | a `<path>` | the reply, from `data-from`, a station a gateway's route ended at, back to the gateway `data-to` |
 | `exit` | a `<path>` | the reply, from `data-from` back to the client, `data-to="#client"` |
 | `budget` | a `<rect>` inside `<g data-stage>` | the used part of an engine's budget bar |
 | `bracket` | a `<rect>` | the stations one job holds at once (a transfer over two NICs); `data-nodes` lists them, and a `flow` arrow joins each to the next in the run's order |
@@ -108,7 +118,10 @@ the arrows it would take, through the decision between them, and across a
 bracket as one place. A loop's return among the flows is the one painted
 `class="back"`, which the layout decides (`a >= b` in the row). The client,
 no stage either, is `#client` (its box reads `client`): a name that starts
-with `#` is no stage's, so a stage called `client` is another node.
+with `#` is no stage's, so a stage called `client` is another node. A
+gateway is named by the call the server makes, `gw.route`, the same in
+every figure of the program: a gateway queue with an engine has a stage
+`gw`, and no stage is called `gw.route`.
 
 ## Glyphs
 

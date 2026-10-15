@@ -156,6 +156,13 @@ pub fn render(f: &Figure) -> String {
                             p(rect.right(), rect.bottom())
                         );
                     }
+                    StationKind::Gateway => {
+                        let pts: Vec<String> = crate::view::figure::hexagon(*rect)
+                            .iter()
+                            .map(|q| p(q.x, q.y))
+                            .collect();
+                        let _ = writeln!(s, "  \\draw[seqstation] {} -- cycle;", pts.join(" -- "));
+                    }
                     StationKind::Decision => {
                         let r = rect.h.min(rect.w) / 2.0;
                         let _ = writeln!(

@@ -1208,6 +1208,24 @@ pub struct Program {
     /// body sets and the scheduler's expressions read (`CExpr::Reg`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub registers: Vec<Register>,
+    /// Where a gateway's `route` stands among the statements it was
+    /// expanded into: the server's call `gw.route();` puts the route's body
+    /// in its place. The statements run as any of the server's do; a
+    /// reader that ignores this runs the same program (`docs/ir.md`,
+    /// Stability). The deployment figure draws them as the gateway.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub routes: Vec<Route>,
+}
+
+/// A gateway's `route`, expanded where the server called it: the
+/// statements `blocks[block][from..to]`, the blocks nested in them
+/// included, are the route of queue `gateway`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Route {
+    pub gateway: String,
+    pub block: BlockId,
+    pub from: usize,
+    pub to: usize,
 }
 
 /// A step stage's register: its name, the stage whose body sets it, and its
@@ -1856,6 +1874,21 @@ impl Program {
             ("session", self.session),
         ] {
             v.block(blk).map_err(|e| format!("{k}: {e}"))?;
+        }
+        // a route names statements the program has: nothing reads it to
+        // run, so one that names none would only draw a wrong figure
+        for r in &self.routes {
+            if !self
+                .blocks
+                .get(r.block)
+                .is_some_and(|b| r.from < r.to && r.to <= b.len())
+            {
+                return Err(format!(
+                    "gateway `{}`'s route names statements {}..{} of block {}, which it does not have",
+                    r.gateway, r.from, r.to, r.block
+                )
+                .into());
+            }
         }
         // the workload draws marks; time passes in the session (#272)
         for (k, blk) in [("init", self.init), ("turn", self.turn)] {

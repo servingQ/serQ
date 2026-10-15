@@ -317,6 +317,22 @@ fn malformed_ir_is_rejected() {
     let mut bad = p.clone();
     bad.blocks[bad.session].push(serq::ir::CStmt::Set(99, serq::ir::CExpr::Num(1.0)));
     assert!(bad.validate().unwrap_err().contains("attribute slot 99"));
+    // a gateway's route names statements the program has, and some (#706)
+    for (block, from, to) in [
+        (bad.blocks.len(), 0, 1),
+        (p.session, 0, 0),
+        (p.session, 0, 999),
+    ] {
+        let mut bad = p.clone();
+        bad.routes.push(serq::ir::Route {
+            gateway: "gw".into(),
+            block,
+            from,
+            to,
+        });
+        let e = bad.validate().unwrap_err();
+        assert!(e.contains("gateway `gw`'s route names statements"), "{e}");
+    }
     // a context variable outside the moment that supplies it: `tokens` exists
     // in a step stage's budget and cost, not in a session statement
     let mut bad = p.clone();

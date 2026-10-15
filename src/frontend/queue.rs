@@ -11,7 +11,7 @@
 //! bound to the pool `S`'s entry leases. The linker sees the kernel program
 //! it saw before queues existed.
 
-use crate::frontend::ast::{Arg, Expr, Ref, Span, Stmt};
+use crate::frontend::ast::{Arg, Expr, Ref, RouteMark, Span, Stmt};
 use crate::frontend::diagnostic::Code;
 
 /// A role of the serving vocabulary: its entry's verb, its number of
@@ -28,6 +28,11 @@ pub struct RoleSig {
     pub entry_optional: bool,
 }
 
+/// The gateway's verb: the server calls `gw.route();`, the parser expands
+/// it in place (`Program::routes` says where), and the figure names the
+/// gateway by it (`gw.route`).
+pub const GATEWAY_VERB: &str = "route";
+
 /// The roles of the serving vocabulary: name, verb, parameters, and
 /// whether its entry is written with `from`. A verb and a `from` name one
 /// role: `decode (prompt)` is an aggregated engine's, prefilling and
@@ -35,7 +40,7 @@ pub struct RoleSig {
 /// reading the KV `P` leased; a pod that does either plays both. An L2 has
 /// no entry: its empty verb is never one `role_of_verb` finds.
 pub const ROLES: &[RoleSig] = &[
-    RoleSig::new("gateway", "route", 0, false),
+    RoleSig::new("gateway", GATEWAY_VERB, 0, false),
     RoleSig::new("prefill", "prefill", 1, false),
     RoleSig::new("agg", "decode", 1, false),
     RoleSig::new("decode", "decode", 1, true),
@@ -505,7 +510,12 @@ impl Ctx<'_> {
 
     fn stmt(&self, s: &Stmt) -> Result<Stmt, ExpandError> {
         Ok(match s {
-            Stmt::Side(_) | Stmt::Turn | Stmt::End | Stmt::Request | Stmt::Join => s.clone(),
+            Stmt::Side(_)
+            | Stmt::Route(_)
+            | Stmt::Turn
+            | Stmt::End
+            | Stmt::Request
+            | Stmt::Join => s.clone(),
             Stmt::Declare(n, t) => Stmt::Declare(self.local(n), *t),
             Stmt::Set(n, e) => Stmt::Set(self.local(n), self.expr(e)?),
             Stmt::Observe(n, e) => Stmt::Observe(n.clone(), self.expr(e)?),
@@ -692,11 +702,14 @@ fn expand_at(
                 let result = expand_at(&mut body, queues, stack, expanded);
                 stack.pop();
                 result?;
-                if verb == "route" {
+                // a gateway's route says where it stands, for the figure
+                if verb == GATEWAY_VERB {
                     out.push(Stmt::Side(crate::ir::Side::Server));
+                    out.push(Stmt::Route(RouteMark::Open(queue.name.clone())));
                 }
                 out.extend(body);
-                if verb == "route" {
+                if verb == GATEWAY_VERB {
+                    out.push(Stmt::Route(RouteMark::Close));
                     out.push(Stmt::Side(crate::ir::Side::Workload));
                 }
                 continue;

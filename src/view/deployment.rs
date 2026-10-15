@@ -9,6 +9,7 @@
 
 use std::collections::BTreeMap;
 
+use crate::frontend::queue::GATEWAY_VERB;
 use crate::ir::{CArrival, CExpr, CRef, CStageKind, CStmt, CtxVar, Program, RunMode, Side, UnOp};
 use crate::view::figure::{
     Anchor, BoxStyle, CLIENT, CopyMark, EdgeRole, EdgeStyle, Figure, Item, Point, Rect,
@@ -155,6 +156,9 @@ pub struct Edge {
     pub label: Option<String>,
     /// A back edge: it returns to somewhere already drawn.
     pub back: bool,
+    /// A reply: from a station the route ended at back to its gateway,
+    /// which the request leaves by.
+    pub reply: bool,
 }
 
 /// The session program, projected onto the stages.
@@ -181,25 +185,34 @@ impl Net {
     pub fn node_of(&self, stage: usize) -> Option<usize> {
         self.nodes.iter().position(|n| n.stage == Some(stage))
     }
-    /// Whether an edge exists between two ends, in that direction.
+    /// Whether an edge a request takes exists between two ends, in that
+    /// direction; a reply is not one (`Edge::reply`).
     pub fn has_edge(&self, from: End, to: End) -> bool {
-        self.edges.iter().any(|e| e.from == from && e.to == to)
+        self.edges
+            .iter()
+            .any(|e| !e.reply && e.from == from && e.to == to)
     }
+    /// What the SVG calls node `i`: its stage's name; for a gateway, the
+    /// call the server makes (`gw.route`), which no stage is called (a
+    /// gateway queue's engine is the stage `gw`); for a decision or a tick,
+    /// which is no stage, its place among the nodes (`#0`), a name the
+    /// arrows use within one figure: the place moves with the layout.
+    pub fn name(&self, p: &Program, i: usize) -> String {
+        let n = &self.nodes[i];
+        match n.stage {
+            Some(st) => p.stages[st].name.clone(),
+            None if n.kind == StationKind::Gateway => {
+                format!("{}.{GATEWAY_VERB}", n.label)
+            }
+            None => format!("#{i}"),
+        }
+    }
+
     /// Whether a run over several stages crosses from one instance to
     /// another: two of its stations in two different instances.
     /// It does when its stations, in the order named, are one instance's
     /// and then another's (`egress[i], ingress[j]`); any other mixture
     /// (`a[i], b[j], c[i]`) is bracketed where it stands.
-    /// What the SVG calls node `i`: its stage's name, or, for a decision or
-    /// a tick, which is no stage, its place among the nodes (`#0`). A name
-    /// the arrows use within one figure: the place moves with the layout.
-    pub fn name(&self, p: &Program, i: usize) -> String {
-        match self.nodes[i].stage {
-            Some(st) => p.stages[st].name.clone(),
-            None => format!("#{i}"),
-        }
-    }
-
     pub fn spans(&self, flow: &[usize]) -> bool {
         let mut runs: Vec<Option<usize>> = vec![];
         for &k in flow {
@@ -346,6 +359,8 @@ struct Walker<'a> {
     decisions: Vec<(usize, usize)>,
     /// The node of each pool's queue tick a hold waits for, by pool.
     ticks: Vec<(usize, usize)>,
+    /// The node of each gateway whose route the walk reached, by name.
+    gateways: Vec<(String, usize)>,
     /// Attributes this path has set to a constant, by slot. A guard that
     /// reads only these is decided, and only its arm is drawn.
     known: Vec<(usize, f64)>,
@@ -481,6 +496,7 @@ impl Walker<'_> {
                 to: End::Node(node),
                 label,
                 back,
+                reply: false,
             });
         }
     }
@@ -493,7 +509,7 @@ impl Walker<'_> {
             .net
             .edges
             .iter_mut()
-            .find(|x| x.from == e.from && x.to == e.to)
+            .find(|x| x.from == e.from && x.to == e.to && x.reply == e.reply)
         {
             // Keep the shorter label: it is the one that reads.
             match (&existing.label, &e.label) {
@@ -534,6 +550,14 @@ impl Walker<'_> {
                 i
             }
         };
+        self.enclose(idx);
+        idx
+    }
+
+    /// A node of no stage the walk reached inside the holds it is in (a
+    /// tick, a gateway): the pools held now enclose it, as of its first
+    /// visit, and each hold has reached it.
+    fn enclose(&mut self, idx: usize) {
         let mut pools = vec![];
         for &(q, id, e) in &self.holds {
             if e && !pools.contains(&q) {
@@ -547,7 +571,6 @@ impl Walker<'_> {
         if self.net.nodes[idx].pools.is_empty() {
             self.net.nodes[idx].pools = pools;
         }
-        idx
     }
 
     /// The node of a stage the session reaches, made on the first visit.
@@ -616,7 +639,75 @@ impl Walker<'_> {
         let Some(stmts) = self.p.blocks.get(block) else {
             return;
         };
-        self.walk_stmts(stmts.clone());
+        self.walk_in(stmts.clone(), Some(block));
+    }
+
+    /// The node of a gateway, made on the first route the walk reaches:
+    /// no stage's, named after the gateway, the `choose`s its route makes
+    /// before any station written in it.
+    fn gateway(&mut self, r: &crate::ir::Route) -> usize {
+        match self.gateways.iter().find(|(g, _)| *g == r.gateway) {
+            Some(&(_, i)) => i,
+            None => {
+                let mut slots = vec![];
+                leading_chooses_from(self.p, r.block, r.from, r.to, false, &mut slots);
+                let names: Vec<&str> = slots
+                    .iter()
+                    .map(|v| self.p.attrs.get(*v).map_or("?", String::as_str))
+                    .collect();
+                // inside the glyph, clear of the arrows below it, when it
+                // fits; `route` when the route chooses nothing first
+                let chooses = (!names.is_empty()).then(|| format!("choose {}", names.join(", ")));
+                let fits = |t: &String| TextSize::Normal.width_of(t) <= STATION_W - 12.0;
+                let (inner, note) = match chooses {
+                    Some(c) if fits(&c) => (c, None),
+                    Some(c) => (GATEWAY_VERB.into(), Some(c)),
+                    None => (GATEWAY_VERB.into(), None),
+                };
+                self.net.nodes.push(Node {
+                    stage: None,
+                    label: r.gateway.clone(),
+                    kind: StationKind::Gateway,
+                    inner,
+                    note,
+                    pools: vec![],
+                    work: String::new(),
+                    modes: vec![],
+                });
+                let i = self.net.nodes.len() - 1;
+                self.gateways.push((r.gateway.clone(), i));
+                i
+            }
+        }
+    }
+
+    /// The routes that end and begin before statement `k` of the block
+    /// being walked: the stations a route ended at reply to its gateway,
+    /// which the request goes on from; a route starts at its gateway.
+    fn routes_at(&mut self, routes: &[crate::ir::Route], k: usize) {
+        for r in routes.iter().filter(|r| r.to == k) {
+            let gw = self.gateway(r);
+            for (from, _) in std::mem::take(&mut self.frontier) {
+                if let At::End(from @ End::Node(n)) = from
+                    && n != gw
+                {
+                    self.push_edge(Edge {
+                        from,
+                        to: End::Node(gw),
+                        label: None,
+                        back: true,
+                        reply: true,
+                    });
+                }
+            }
+            self.frontier = vec![(At::End(End::Node(gw)), None)];
+        }
+        for r in routes.iter().filter(|r| r.from == k) {
+            let gw = self.gateway(r);
+            // inside the holds the route runs in, as a tick is
+            self.enclose(gw);
+            self.attach(gw);
+        }
     }
 
     /// A connector's block as its request's call says it: the engine's own
@@ -681,8 +772,24 @@ impl Walker<'_> {
     }
 
     fn walk_stmts(&mut self, stmts: Vec<CStmt>) {
-        let mut stmts = stmts.into_iter().peekable();
-        while let Some(s) = stmts.next() {
+        self.walk_in(stmts, None);
+    }
+
+    /// Walk statements, those of `block` when they are a block's as the
+    /// program has it, whose gateways' routes are found by it.
+    fn walk_in(&mut self, stmts: Vec<CStmt>, block: Option<usize>) {
+        let routes: Vec<crate::ir::Route> = block.map_or(vec![], |b| {
+            self.p
+                .routes
+                .iter()
+                .filter(|r| r.block == b)
+                .cloned()
+                .collect()
+        });
+        let n = stmts.len();
+        let mut stmts = stmts.into_iter().enumerate().peekable();
+        while let Some((k, s)) = stmts.next() {
+            self.routes_at(&routes, k);
             match s {
                 CStmt::Run {
                     stage,
@@ -972,8 +1079,7 @@ impl Walker<'_> {
                     // before a copy (`kvt.nixl_push`'s connector) the legs
                     // end at the source, and the session does not pass
                     // through it: the copy's run sorts the two out
-                    let copy =
-                        matches!(stmts.peek(), Some(CStmt::Run { also, .. }) if !also.is_empty());
+                    let copy = matches!(stmts.peek(), Some((_, CStmt::Run { also, .. })) if !also.is_empty());
                     if copy && !ends.is_empty() {
                         let mut session = std::mem::replace(&mut self.frontier, ends);
                         // a station a leg ends at reaches the copy by its
@@ -1026,6 +1132,7 @@ impl Walker<'_> {
                             to: End::Exit,
                             label,
                             back: false,
+                            reply: false,
                         });
                     }
                     self.arm = arm;
@@ -1088,6 +1195,8 @@ impl Walker<'_> {
                 CStmt::Grow(..) | CStmt::Shrink(..) | CStmt::Drop(..) => {}
             }
         }
+        // a route that ends with its block
+        self.routes_at(&routes, n);
     }
 
     /// The value of an expression that reads only constants and attributes
@@ -1169,6 +1278,7 @@ impl Walker<'_> {
             self.next_hold,
             self.decisions.clone(),
             self.ticks.clone(),
+            self.gateways.clone(),
         );
         let k = self.probes.len();
         self.probes.push(vec![]);
@@ -1191,6 +1301,7 @@ impl Walker<'_> {
             self.next_hold,
             self.decisions,
             self.ticks,
+            self.gateways,
         ) = saved;
         let known = self
             .decisions
@@ -1206,9 +1317,8 @@ impl Walker<'_> {
             return;
         }
         if entries.len() > 1 {
-            // named by the `choose`s it makes before any station: the
-            // router's name is the gateway's, which is the parser's and not
-            // the IR's
+            // named by the `choose`s it makes before any station or
+            // gateway, whose own are its
             let mut slots = vec![];
             leading_chooses(self.p, body, &mut slots);
             let names: Vec<&str> = slots
@@ -1290,12 +1400,31 @@ fn own(
 }
 
 /// The attributes a block `choose`s before any station, down every path,
-/// in order; whether every path reaches a station or ends.
+/// in order; whether every path reaches a station or ends. A gateway's
+/// route is a station of its own, and what it chooses its own.
 fn leading_chooses(p: &Program, block: usize, out: &mut Vec<usize>) -> bool {
+    leading_chooses_from(p, block, 0, usize::MAX, true, out)
+}
+
+/// `leading_chooses` over statements `from..to` of a block; a route that
+/// starts among them ends the search when `gateways` says so, and is
+/// searched as any statements otherwise (the route's own, for its
+/// gateway's label).
+fn leading_chooses_from(
+    p: &Program,
+    block: usize,
+    from: usize,
+    to: usize,
+    gateways: bool,
+    out: &mut Vec<usize>,
+) -> bool {
     let Some(stmts) = p.blocks.get(block) else {
         return false;
     };
-    for s in stmts {
+    for (k, s) in stmts.iter().enumerate().take(to).skip(from) {
+        if gateways && p.routes.iter().any(|r| r.block == block && r.from == k) {
+            return true;
+        }
         match s {
             CStmt::Choose { var, .. } => {
                 if !out.contains(var) {
@@ -1527,6 +1656,13 @@ pub fn request(p: &Program) -> Option<Program> {
     q.blocks
         .push(p.blocks[site.block][site.from..site.to].to_vec());
     q.sides.push(vec![Side::Server; site.to - site.from]);
+    // a route among the statements taken moves with them; one in a block
+    // nested in them keeps its block
+    for r in &mut q.routes {
+        if r.block == site.block && site.from <= r.from && r.to <= site.to {
+            (r.block, r.from, r.to) = (block, r.from - site.from, r.to - site.from);
+        }
+    }
     for h in site.holds.iter().rev() {
         let mut h = h.clone();
         if let CStmt::Hold { body, .. } = &mut h {
@@ -1567,6 +1703,7 @@ pub fn project(p: &Program) -> Net {
         probes: vec![],
         decisions: vec![],
         ticks: vec![],
+        gateways: vec![],
         known: vec![],
         set_to: vec![],
     };
@@ -1583,6 +1720,7 @@ pub fn project(p: &Program) -> Net {
                 to: End::Exit,
                 label,
                 back: false,
+                reply: false,
             });
         }
     }
@@ -1608,7 +1746,11 @@ pub fn project(p: &Program) -> Net {
 /// A decision stands before the stations it sends sessions to.
 fn decisions_first(net: &mut Net) {
     for d in 0..net.nodes.len() {
-        if net.nodes[d].kind != StationKind::Decision {
+        // a gateway decides where its route goes, as a decision does
+        if !matches!(
+            net.nodes[d].kind,
+            StationKind::Decision | StationKind::Gateway
+        ) {
             continue;
         }
         let Some(first) = net
@@ -2066,6 +2208,10 @@ impl Stack {
                 pts.iter_mut().for_each(|q| q.y += dy);
                 match role {
                     Some(EdgeRole::Flow { from, to }) => {
+                        *from = name(from);
+                        *to = name(to);
+                    }
+                    Some(EdgeRole::Reply { from, to }) => {
                         *from = name(from);
                         *to = name(to);
                     }
@@ -2994,6 +3140,26 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
                     let at = if last { x - 4.0 } else { x + 4.0 };
                     let anchor = if last { Anchor::End } else { Anchor::Start };
                     f.note(pt(at, y - 5.0), l, anchor);
+                }
+            }
+            (End::Node(a), End::Node(b)) if e.reply => {
+                // A reply: from the station the route ended at back to its
+                // gateway, along a lane of its own, into the gateway's
+                // underside left of where the request leaves it. It
+                // leaves by a point no other arrow does (0.875) and a
+                // stacked member by the stack's right, where the arrows
+                // into the stack do not run
+                let (ra, rb) = (rects[a], rects[b]);
+                let y = lane(&mut lanes);
+                let (ax, bx) = (ra.x + ra.w * 0.875, rb.x + rb.w * 0.375);
+                for ((ma, na), (mb, nb)) in pairs(a, b) {
+                    let mut pts = down(a, ma, ax, true);
+                    pts.push(pt(pts.last().unwrap().x, y));
+                    let mut up = down(b, mb, bx, false);
+                    up.reverse();
+                    pts.push(pt(up[0].x, y));
+                    pts.extend(up);
+                    f.reply(pts, na, nb);
                 }
             }
             (End::Node(a), End::Node(b)) if !e.back && b > a + 1 => {
