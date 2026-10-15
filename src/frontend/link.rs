@@ -230,6 +230,8 @@ struct Linker<'a> {
     prog: &'a Program,
     /// The step stages' registers (`state`), and their indices by name.
     registers: Vec<crate::ir::Register>,
+    /// The gateways' routes, where the blocks put them (`Program::routes`).
+    routes: Vec<crate::ir::Route>,
     reg_index: HashMap<String, usize>,
     /// Terms the program's aggregates have written out so far, nested ones
     /// included, against `MAX_OVER`.
@@ -498,6 +500,7 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
         reader: Cell::new(None),
         registers: vec![],
         reg_index: HashMap::new(),
+        routes: vec![],
     };
     for a in BUILTIN_ATTRS {
         lk.attr(a);
@@ -991,6 +994,7 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
         gauges,
         claims,
         registers: lk.registers.clone(),
+        routes: std::mem::take(&mut lk.routes),
         version: IR_VERSION,
         hidden,
         slot_cached: slot(&lk, "cached"),
@@ -1570,6 +1574,7 @@ fn hidden_in_server(
                 }
                 Stmt::Declare(..)
                 | Stmt::Side(_)
+                | Stmt::Route(_)
                 | Stmt::Request
                 | Stmt::Call { .. }
                 | Stmt::Mark(_)
@@ -2674,6 +2679,7 @@ impl Linker<'_> {
         let initial_side = self.side;
         let reader = self.reader.get();
         let mut side_stack = vec![];
+        let mut routes: Vec<(String, usize)> = vec![];
         let mut out = vec![];
         for s in stmts {
             self.reader.set(Some(self.side));
@@ -2684,6 +2690,27 @@ impl Linker<'_> {
             if let Stmt::Unread(args) = s {
                 for a in args {
                     self.unread(a)?;
+                }
+                continue;
+            }
+            // a gateway's route: from the statement after its opening to the
+            // one before its close, in this block (`expand` puts both marks
+            // in one list)
+            if let Stmt::Route(gateway) = s {
+                let here = self.sides[id].len();
+                match gateway {
+                    Some(g) => routes.push((g.clone(), here)),
+                    None => {
+                        let (gateway, from) = routes.pop().expect("`expand` closes what it opens");
+                        if from < here {
+                            self.routes.push(crate::ir::Route {
+                                gateway,
+                                block: id,
+                                from,
+                                to: here,
+                            });
+                        }
+                    }
                 }
                 continue;
             }
@@ -2712,7 +2739,9 @@ impl Linker<'_> {
                 }
                 Stmt::Turn => CStmt::Turn,
                 Stmt::End => CStmt::End,
-                Stmt::Declare(..) | Stmt::Side(_) | Stmt::Unread(_) => unreachable!(),
+                Stmt::Declare(..) | Stmt::Side(_) | Stmt::Route(_) | Stmt::Unread(_) => {
+                    unreachable!()
+                }
                 Stmt::Request => {
                     return Err(LinkError::new(
                         "`request` survived parsing: the parser splices the server in its place"

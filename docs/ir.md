@@ -48,6 +48,7 @@ variants as strings, `"Lru"`). JSON has no infinity: an infinite constant
 | `gauges` | `[{name, expr}]`: functions of the state whose time average the report gives, each read at the `Gauge` moment after every instant; omitted when empty. They read and do not act, so a reader that ignores them runs the same program |
 | `claims` | `[{name, given?, kind, expr}]`; read-only properties checked on the simulated path; omitted when empty |
 | `registers` | `[{name, stage, init}]`; persistent stage registers, below; omitted when empty |
+| `routes` | `[{gateway, block, from, to}]`: a gateway's `route`, expanded where the server called it (`gw.route();`), is the statements `blocks[block][from..to]`, the blocks nested in them included. They run as any of the server's statements; the deployment view draws them as the gateway. Omitted when empty. A reader that ignores them runs the same program. `validate` refuses a range the block does not have |
 | `slot_cached`, `slot_serial`, … | slots of the built-in attributes (`cached`, `serial`, `turn_no`, `new`, `out`, `think`, `more`, `forced`, `computed`) |
 
 `Sessions`: all the sessions arrive at time 0; each one runs `init`, then

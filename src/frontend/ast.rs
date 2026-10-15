@@ -560,6 +560,10 @@ pub enum DeclaredType {
 pub enum Stmt {
     /// Parse-time boundary, retained as per-statement authority in the IR.
     Side(crate::ir::Side),
+    /// Parse-time boundary of a gateway's `route` expanded in place: the
+    /// gateway's name opens it, `None` closes it. Retained in the IR as
+    /// `Program::routes`.
+    Route(Option<String>),
     Declare(String, DeclaredType),
     /// Draw the next turn's attributes from the workload.
     Turn,
@@ -676,6 +680,7 @@ where
     for s in stmts {
         match s {
             Stmt::Side(_)
+            | Stmt::Route(_)
             | Stmt::Declare(..)
             | Stmt::Turn
             | Stmt::Request

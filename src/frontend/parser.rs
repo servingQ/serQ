@@ -1159,6 +1159,7 @@ fn stmt_reads(s: &Stmt, n: &str) -> bool {
     match s {
         Stmt::Declare(..)
         | Stmt::Side(_)
+        | Stmt::Route(_)
         | Stmt::Turn
         | Stmt::Request
         | Stmt::End
@@ -1600,6 +1601,7 @@ fn split_reads<'a>(
         match s {
             Stmt::Declare(..)
             | Stmt::Side(_)
+            | Stmt::Route(_)
             | Stmt::Turn
             | Stmt::End
             | Stmt::Request
@@ -7139,7 +7141,7 @@ mod tests {
     /// Each side is a deployment's main body and the workload's file.
     fn same(a: (&str, &str), b: (&str, &str)) {
         fn executable(stmts: &mut Vec<Stmt>) {
-            stmts.retain(|s| !matches!(s, Stmt::Side(_)));
+            stmts.retain(|s| !matches!(s, Stmt::Side(_) | Stmt::Route(_)));
             for s in stmts {
                 match s {
                     Stmt::Hold { body, .. }

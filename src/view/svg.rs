@@ -267,12 +267,18 @@ pub fn render(f: &Figure) -> String {
                             esc(name)
                         );
                     }
-                    // the client is no stage either, and says what it is
-                    None if *kind == StationKind::Client => {
-                        let _ = writeln!(s, r#"<g data-node="{}" data-role="client">"#, esc(node));
-                    }
+                    // a node that is no stage says what it is
                     None => {
-                        let _ = writeln!(s, r#"<g data-node="{}">"#, esc(node));
+                        let role = match kind {
+                            StationKind::Decision => "decision",
+                            StationKind::Delay => "tick",
+                            StationKind::Gateway => "gateway",
+                            StationKind::Client => "client",
+                            StationKind::Fifo | StationKind::Ps | StationKind::Step => {
+                                unreachable!("a queueing station is a stage's")
+                            }
+                        };
+                        let _ = writeln!(s, r#"<g data-node="{}" data-role="{role}">"#, esc(node));
                     }
                 }
                 match kind {
@@ -328,6 +334,18 @@ pub fn render(f: &Figure) -> String {
                             n(rect.y),
                             n(rect.w),
                             n(rect.h)
+                        );
+                    }
+                    StationKind::Gateway => {
+                        let pts: Vec<String> = crate::view::figure::hexagon(*rect)
+                            .iter()
+                            .map(|q| format!("{},{}", n(q.x), n(q.y)))
+                            .collect();
+                        let _ = writeln!(
+                            s,
+                            r#"<polygon {} points="{}"/>"#,
+                            paint("station"),
+                            pts.join(" ")
                         );
                     }
                     StationKind::Decision => {
@@ -493,6 +511,11 @@ pub fn render(f: &Figure) -> String {
                     ),
                     Some(EdgeRole::Flow { from, to }) => format!(
                         r#" data-role="flow" data-from="{}" data-to="{}""#,
+                        esc(from),
+                        esc(to)
+                    ),
+                    Some(EdgeRole::Reply { from, to }) => format!(
+                        r#" data-role="reply" data-from="{}" data-to="{}""#,
                         esc(from),
                         esc(to)
                     ),

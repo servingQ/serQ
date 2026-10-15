@@ -505,7 +505,12 @@ impl Ctx<'_> {
 
     fn stmt(&self, s: &Stmt) -> Result<Stmt, ExpandError> {
         Ok(match s {
-            Stmt::Side(_) | Stmt::Turn | Stmt::End | Stmt::Request | Stmt::Join => s.clone(),
+            Stmt::Side(_)
+            | Stmt::Route(_)
+            | Stmt::Turn
+            | Stmt::End
+            | Stmt::Request
+            | Stmt::Join => s.clone(),
             Stmt::Declare(n, t) => Stmt::Declare(self.local(n), *t),
             Stmt::Set(n, e) => Stmt::Set(self.local(n), self.expr(e)?),
             Stmt::Observe(n, e) => Stmt::Observe(n.clone(), self.expr(e)?),
@@ -692,11 +697,14 @@ fn expand_at(
                 let result = expand_at(&mut body, queues, stack, expanded);
                 stack.pop();
                 result?;
+                // a gateway's route says where it stands, for the figure
                 if verb == "route" {
                     out.push(Stmt::Side(crate::ir::Side::Server));
+                    out.push(Stmt::Route(Some(queue.name.clone())));
                 }
                 out.extend(body);
                 if verb == "route" {
+                    out.push(Stmt::Route(None));
                     out.push(Stmt::Side(crate::ir::Side::Workload));
                 }
                 continue;

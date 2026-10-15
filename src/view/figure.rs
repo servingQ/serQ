@@ -119,6 +119,9 @@ pub enum EdgeRole {
     /// Sessions go from `from` to `to` by it: the next station, a loop's
     /// return, a transfer between two NICs.
     Flow { from: String, to: String },
+    /// A reply goes by it from `from`, a station a gateway's route ended
+    /// at, back to the gateway `to`, which the request leaves by.
+    Reply { from: String, to: String },
 }
 
 /// Who posts a copy over several stages (`CStmt::Run::poster`): the
@@ -190,6 +193,10 @@ pub enum StationKind {
     /// The client: the workload, which sends a request and waits for its
     /// reply, its tool and think times included. Not a stage.
     Client,
+    /// A gateway (`queue gw : gateway`): the server's call `gw.route();`,
+    /// where the route decides and the reply comes back to. A hexagon.
+    /// Not a stage.
+    Gateway,
 }
 
 /// One drawable.
@@ -215,13 +222,14 @@ pub enum Item {
         /// `FIFO`, `PS`, the budget for a step engine.
         text: String,
         /// The stage it draws, by name (an array's members share one);
-        /// `None` for a decision, a pool's tick or the client, which are no
+        /// `None` for a decision, a pool's tick, a gateway or the client, which are no
         /// stage. The
         /// SVG writer puts it on the glyph as `data-stage`, so that the
         /// figure is addressable as well as a picture.
         stage: Option<String>,
         /// What the arrows call it (`EdgeRole`): the stage's name, `#k`
-        /// for a decision or a tick, `CLIENT` for the client (`data-node`).
+        /// for a decision or a tick, `gw.route` for a gateway, `CLIENT` for the
+        /// client (`data-node`).
         node: String,
     },
     /// The queueing-theory queue glyph: `cells` boxes between two rails,
@@ -306,6 +314,20 @@ pub fn density(duration: &str, rect: Rect) -> Option<Vec<Point>> {
     })
 }
 
+/// A gateway's glyph in its rectangle: a hexagon, flat on top and bottom
+/// so that the arrows in and out of it below meet a side.
+pub fn hexagon(rect: Rect) -> [Point; 6] {
+    let (c, k) = (rect.centre(), rect.h / 3.0);
+    [
+        pt(rect.x + k, rect.y),
+        pt(rect.right() - k, rect.y),
+        pt(rect.right(), c.y),
+        pt(rect.right() - k, rect.bottom()),
+        pt(rect.x + k, rect.bottom()),
+        pt(rect.x, c.y),
+    ]
+}
+
 /// A laid-out figure.
 #[derive(Clone, Debug, Default)]
 pub struct Figure {
@@ -336,7 +358,7 @@ impl Figure {
                     ..
                 } => outs.push(from),
                 Item::Edge {
-                    role: Some(EdgeRole::Flow { from, to }),
+                    role: Some(EdgeRole::Flow { from, to } | EdgeRole::Reply { from, to }),
                     ..
                 } => {
                     outs.push(from);
@@ -442,6 +464,17 @@ impl Figure {
             style,
             arrow: true,
             role: Some(EdgeRole::Flow { from, to }),
+            copy: None,
+        });
+    }
+
+    /// The arrow a reply takes from node `from` back to the gateway `to`.
+    pub fn reply(&mut self, pts: Vec<Point>, from: String, to: String) {
+        self.push(Item::Edge {
+            pts,
+            style: EdgeStyle::Flow,
+            arrow: true,
+            role: Some(EdgeRole::Reply { from, to }),
             copy: None,
         });
     }

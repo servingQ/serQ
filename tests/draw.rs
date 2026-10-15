@@ -881,10 +881,12 @@ fn a_release_takes_the_innermost_hold_even_of_no_units() {
 /// to a prefiller and over the two NICs (remote), after the read's fixed
 /// wait (the relation's `latency`, the read's own, written on it), or
 /// straight to the decoder (local); a request whose KV is already there
-/// skips both. The router decides before any station, so it is the
-/// decision a request starts from. The figure is what a request runs: the
-/// server's `max_model_len` check contributes a rejection exit. The client's
-/// tool call and next turn are not drawn.
+/// skips both. The router is the gateway `gw` (#706): the server's
+/// `max_model_len` check before `gw.route()` is a decision of its own,
+/// which a request starts from and which rejects with an exit; the route's
+/// `choose`s are the gateway's, and the decoder replies to the gateway,
+/// which the request leaves by. The client's tool call and next turn are
+/// not drawn.
 #[test]
 fn the_router_branches_to_a_remote_or_a_local_prefill() {
     let p = program("llmd_nixl_pull");
@@ -892,13 +894,30 @@ fn the_router_branches_to_a_remote_or_a_local_prefill() {
     let at = |name: &str| End::Node(net.node_of(stage(&p, name)).unwrap());
     let (pf, eg, ing, d) = (at("P"), at("P.nic"), at("D.nic"), at("D"));
     assert!(net.node_of(stage(&p, "tool")).is_none());
-    let route = decision(&net).expect("the router");
-    assert!(net.has_edge(End::Arrival, route));
+    let check = decision(&net).expect("the server's check");
+    let route = gateway(&net).expect("the router");
+    let End::Node(r) = route else { unreachable!() };
+    assert_eq!(net.name(&p, r), "gw.route");
+    assert_eq!(net.nodes[r].inner, "choose j, i");
+    let End::Node(c) = check else { unreachable!() };
+    assert_eq!(net.nodes[c].label, "", "the check chooses nothing");
+    assert!(net.has_edge(End::Arrival, check));
+    assert!(net.has_edge(check, route));
     assert!(net.has_edge(route, pf), "remote");
     assert!(net.has_edge(route, d), "local");
     assert!(
-        net.has_edge(route, End::Exit),
+        net.has_edge(check, End::Exit),
         "the server rejects a prompt beyond max_model_len before routing"
+    );
+    assert!(
+        net.edges
+            .iter()
+            .any(|e| e.reply && e.from == d && e.to == route),
+        "the decoder replies to the gateway"
+    );
+    assert!(
+        net.has_edge(route, End::Exit),
+        "the reply leaves by the gateway"
     );
     assert!(net.has_edge(pf, eg));
     assert!(net.has_edge(ing, d));
@@ -915,8 +934,8 @@ fn the_router_branches_to_a_remote_or_a_local_prefill() {
     );
     let out: Vec<_> = net.edges.iter().filter(|e| e.to == End::Exit).collect();
     assert_eq!(out.len(), 2);
-    assert!(out.iter().any(|e| e.from == d && e.label.is_none()));
-    assert!(out.iter().any(|e| e.from == route));
+    assert!(out.iter().any(|e| e.from == route && e.label.is_none()));
+    assert!(out.iter().any(|e| e.from == check && e.label.is_some()));
     assert!(net.arrival.contains("Poisson"));
 }
 
@@ -1166,6 +1185,13 @@ fn decision(net: &deployment::Net) -> Option<End> {
     net.nodes
         .iter()
         .position(|n| n.kind == StationKind::Decision)
+        .map(End::Node)
+}
+
+fn gateway(net: &deployment::Net) -> Option<End> {
+    net.nodes
+        .iter()
+        .position(|n| n.kind == StationKind::Gateway)
         .map(End::Node)
 }
 
@@ -1530,6 +1556,105 @@ fn a_stage_called_client_is_not_the_client() {
     assert_eq!(svg.matches(r##"<g data-node="#client" "##).count(), 1);
     assert!(svg.contains(r##"data-role="arrival" data-from="#client" data-to="client""##));
     assert!(svg.contains(r##"data-role="exit" data-from="client" data-to="#client""##));
+}
+
+/// A gateway is a node of its own (#706), named by the call the server
+/// makes (`gw.route`): the server's statements before the call are drawn
+/// before it, a station the route ends at replies to it, and the request
+/// leaves by it. The IR says where the route is (`Program::routes`), so
+/// the program read back from its JSON draws the same.
+#[test]
+fn a_gateway_routes_and_the_reply_comes_back_by_it() {
+    use serq::view::figure::Item;
+    let p = compile(
+        "stage a : fifo; stage b : fifo;
+        queue gw : gateway {
+          route {
+            if (x > 0) { run a (cost(a, 1)); } else { run b (cost(b, 1)); }
+          }
+        }
+        server (x) { if (x > 1) { end; } gw.route(); }
+        ",
+        "workload { arrive poisson(1); init { set x = 1; } send (x); session { turn; end; } }",
+    );
+    assert_eq!(p.routes.len(), 1, "{:?}", p.routes);
+    let net = deployment::project(&p);
+    let End::Node(g) = gateway(&net).expect("the gateway") else {
+        unreachable!()
+    };
+    assert_eq!(net.name(&p, g), "gw.route");
+    assert_eq!(net.nodes[g].inner, "route", "the route chooses nothing");
+    // the server's own guard before the call is a decision, and the
+    // route's is the gateway's
+    let d = decision(&net).expect("the server's check");
+    let gw = End::Node(g);
+    let at = |name: &str| End::Node(net.node_of(stage(&p, name)).unwrap());
+    assert!(net.has_edge(End::Arrival, d));
+    assert!(net.has_edge(d, gw));
+    for s in ["a", "b"] {
+        assert!(net.has_edge(gw, at(s)), "{s}");
+        assert!(
+            net.edges
+                .iter()
+                .any(|e| e.reply && e.from == at(s) && e.to == gw),
+            "{s} replies to the gateway"
+        );
+        assert!(!net.has_edge(at(s), End::Exit), "{s} answers no one itself");
+    }
+    // the replies leave by the gateway; the server's `end` by the
+    // decision, with its guard
+    let out: Vec<_> = net.edges.iter().filter(|e| e.to == End::Exit).collect();
+    assert_eq!(out.len(), 2, "{out:?}");
+    assert!(out.iter().any(|e| e.from == gw && e.label.is_none()));
+    assert!(
+        out.iter()
+            .any(|e| e.from == d && e.label.as_deref() == Some("x > 1"))
+    );
+    let f = deployment::checked_figure(&p).expect("every station joined");
+    assert!(
+        f.items.iter().any(|i| matches!(i,
+        Item::Station { kind: StationKind::Gateway, node, stage: None, .. } if node == "gw.route"))
+    );
+    let svg = serq::view::render(&f, "svg").unwrap();
+    let back = Program::from_json(&p.to_json()).unwrap();
+    assert_eq!(
+        serq::view::render(&deployment::figure(&back), "svg").unwrap(),
+        svg
+    );
+    // a gateway queue that is also an engine's has a stage `gw`, and its
+    // gateway is another node
+    let p = compile(
+        "queue gw : gateway, agg {
+          device gpu { compute (t) = t * 2e-5; kv cap 160000; }
+          engine on gpu {
+            reqs cap 16;
+            tokens cap 8192;
+            scheduler {
+              advance running;
+              admit waiting while (running.preempted == 0)
+                taking reqs (1), kv (request.known) reuse (0) cache (0);
+            }
+            worker { forward (compute(batch.tokens)); }
+          }
+          pool reqs on gw { queue fifo; }
+          pool kv on gpu { block 16; }
+          decode (prompt) { gw (prompt, output); }
+          route { gw.decode (input); }
+        }
+        server (input, hidden output) { gw.route(); }
+        ",
+        "workload { arrive poisson(1); turn { set n = 100; set o = 10; } send (input: n, output: o); session { turn; end; } }",
+    );
+    let svg = serq::view::render(&deployment::checked_figure(&p).unwrap(), "svg").unwrap();
+    assert!(svg.contains(r#"<g data-node="gw" data-stage="gw">"#));
+    assert!(svg.contains(r#"<g data-node="gw.route" data-role="gateway">"#));
+    assert!(svg.contains(r#"data-role="reply" data-from="gw" data-to="gw.route""#));
+    // a program with no gateway has no route, and its router stays a
+    // decision
+    let r = program("routing");
+    assert!(r.routes.is_empty());
+    let net = deployment::project(&r);
+    assert!(gateway(&net).is_none() && decision(&net).is_some());
 }
 
 /// The figure is big enough for what it contains.
@@ -1909,14 +2034,14 @@ fn a_flows_stations_are_neighbours_in_the_row() {
 }
 
 /// An arrow forward past other stations goes below the row, not through
-/// them: `llmd_nixl_pull.sq`'s router sends a local request straight to the
-/// decoder, past the prefiller and the two NICs.
+/// them: `llmd_nixl_pull.sq`'s gateway sends a local request straight to
+/// the decoder, past the prefiller and the two NICs.
 #[test]
 fn an_arrow_past_stations_goes_below_the_row() {
     let p = program("llmd_nixl_pull");
     let net = deployment::project(&p);
     let f = deployment::layout(&p, &net);
-    let End::Node(r) = decision(&net).expect("the router") else {
+    let End::Node(r) = gateway(&net).expect("the router") else {
         unreachable!()
     };
     let (pf, d) = (
@@ -2271,10 +2396,13 @@ fn the_svg_names_stages_pools_and_roles() {
                     None => assert!(
                         matches!(
                             kind,
-                            StationKind::Decision | StationKind::Delay | StationKind::Client
+                            StationKind::Decision
+                                | StationKind::Delay
+                                | StationKind::Gateway
+                                | StationKind::Client
                         ),
-                        "{name}: a station without a stage is a decision, a tick or the \
-                         client: {i:?}"
+                        "{name}: a station without a stage is a decision, a tick, a \
+                         gateway or the client: {i:?}"
                     ),
                 }
             }
@@ -2305,40 +2433,51 @@ fn the_svg_names_stages_pools_and_roles() {
         let tikz = serq::view::render(&f, "tikz").unwrap();
         assert!(!tikz.contains("data-"), "{name}");
     }
-    // llmd_nixl_pull: the last station is `D`, and the session leaves from
-    // it (`docs/use-cases/pd.md`: the decoder answers), from each of the
-    // `ND = 2` decoders drawn; the program also ends a session at the
-    // router when the context is full (`end` under `K + n >=
-    // max_model_len`), an exit from the decision, with no stage
+    // llmd_nixl_pull: the decoder answers (`docs/use-cases/pd.md`), each of
+    // the `ND = 2` decoders drawn, back to the gateway `gw` whose route
+    // sent the request to it (#706), and the reply leaves by the gateway;
+    // the server also ends a session before it routes when the context is
+    // full (`end` under `input >= max_model_len`), an exit from the
+    // decision, with no stage
     let p = program("llmd_nixl_pull");
     let net = deployment::project(&p);
     let svg = serq::view::render(&deployment::layout(&p, &net), "svg").unwrap();
     // (#705): the reply goes back to the client, and the session comes
     // from it, which is a node of its own, outside the server's frame
-    assert!(svg.contains(r##"data-role="exit" data-from="D[0]" data-to="#client""##));
-    assert!(svg.contains(r##"data-role="exit" data-from="D[1]" data-to="#client""##));
+    assert!(svg.contains(r##"data-role="exit" data-from="gw.route" data-to="#client""##));
     assert!(svg.contains(r##"data-role="exit" data-from="#0" data-to="#client""##));
-    assert_eq!(svg.matches(r#"data-role="exit""#).count(), 3);
-    // sessions arrive at the router's decision, the first node
+    assert_eq!(svg.matches(r#"data-role="exit""#).count(), 2);
+    assert!(svg.contains(r#"data-role="reply" data-from="D[0]" data-to="gw.route""#));
+    assert!(svg.contains(r#"data-role="reply" data-from="D[1]" data-to="gw.route""#));
+    assert_eq!(svg.matches(r#"data-role="reply""#).count(), 2);
+    // sessions arrive at the server's decision, the first node, which
+    // sends them on to the gateway; a node of no stage says what it is
     assert!(svg.contains(r##"data-role="arrival" data-from="#client" data-to="#0""##));
+    assert!(svg.contains(r##"data-role="flow" data-from="#0" data-to="gw.route""##));
+    assert!(svg.contains(r##"<g data-node="#0" data-role="decision">"##));
+    assert!(svg.contains(r#"<g data-node="gw.route" data-role="gateway">"#));
     assert!(svg.contains(r##"<g data-node="#client" data-role="client">"##));
     assert_eq!(svg.matches(r#"data-role="server""#).count(), 1);
     // no arrow ends in nothing: an exit no longer says `out`
     assert!(!svg.contains(">out<") && !svg.contains(">out ("));
-    // every arrow between two nodes says which: the net's four edges
-    // between nodes (the decision to `P` and to `D`, `P` to its NIC, the
-    // decoder's NIC to `D`) for each member, two each, and the run that
-    // spans the two instances (`P.nic` to `D.nic`, the flow's stages in the
-    // order they are named) from each prefiller to each decoder, four
+    // every arrow between two nodes says which: the net's edges between
+    // nodes but the reply (the decision to the gateway, drawn once; the
+    // gateway to `P` and to `D`, `P` to its NIC, the decoder's NIC to `D`,
+    // for each member, two each), and the run that spans the two
+    // instances (`P.nic` to `D.nic`, the flow's stages in the order they
+    // are named) from each prefiller to each decoder, four
     let between = net
         .edges
         .iter()
-        .filter(|e| matches!((e.from, e.to), (End::Node(_), End::Node(_))))
+        .filter(|e| !e.reply && matches!((e.from, e.to), (End::Node(_), End::Node(_))))
         .count();
-    assert_eq!(between, 4);
+    assert_eq!(between, 5);
     let spanning = net.flows.iter().filter(|g| net.spans(g)).count();
     assert_eq!(spanning, 1);
-    assert_eq!(svg.matches(r#"data-role="flow""#).count(), 2 * between + 4);
+    assert_eq!(
+        svg.matches(r#"data-role="flow""#).count(),
+        1 + 2 * (between - 1) + 4
+    );
     // every name an arrow uses is a node in the figure, and the bracket
     // names the two NICs the transfer holds at once
     for m in svg
@@ -2359,15 +2498,15 @@ fn the_svg_names_stages_pools_and_roles() {
             r#"data-role="flow" data-from="P.nic[{i}]" data-to="D.nic[{j}]""#
         )));
     }
-    // the decision to each prefiller (`remote_prefill`), and to each decoder
+    // the gateway to each prefiller (`remote_prefill`), and to each decoder
     // alone (`else`); the next turn goes through the workload, which the
-    // figure omits, so no arrow returns from `D`
+    // figure omits, so no flow leaves `D`: it replies
     for m in 0..2 {
         assert!(svg.contains(&format!(
-            r##"data-role="flow" data-from="#0" data-to="P[{m}]""##
+            r#"data-role="flow" data-from="gw.route" data-to="P[{m}]""#
         )));
         assert!(svg.contains(&format!(
-            r##"data-role="flow" data-from="#0" data-to="D[{m}]""##
+            r#"data-role="flow" data-from="gw.route" data-to="D[{m}]""#
         )));
         assert!(!svg.contains(&format!(r#"data-role="flow" data-from="D[{m}]""#)));
     }
@@ -2392,8 +2531,8 @@ fn the_svg_names_stages_pools_and_roles() {
     assert!(svg.contains(r#"<g data-pool="waiting_queue" data-role="queue">"#));
     assert!(svg.contains(r#"<g data-pool="waiting_queue" data-role="drum">"#));
     // its decision and its tick are nodes without a stage
-    assert!(svg.contains(r##"<g data-node="#0">"##));
-    assert!(svg.contains(r##"<g data-node="#1">"##));
+    assert!(svg.contains(r##"<g data-node="#0" data-role="decision">"##));
+    assert!(svg.contains(r##"<g data-node="#1" data-role="tick">"##));
     assert!(svg.contains(r##"data-role="flow" data-from="#0" data-to="#1""##));
 }
 
@@ -2497,7 +2636,7 @@ fn an_instance_is_drawn_once_per_member() {
         .collect();
     for m in 0..3 {
         let has = |a: String, b: String| flows.contains(&(a, b));
-        assert!(has("#0".into(), format!("P[{m}]")), "{flows:?}");
+        assert!(has("gw.route".into(), format!("P[{m}]")), "{flows:?}");
         assert!(has(format!("P[{m}]"), format!("P.nic[{m}]")), "{flows:?}");
         assert!(has(format!("P.nic[{m}]"), "D.nic[0]".into()), "{flows:?}");
     }
