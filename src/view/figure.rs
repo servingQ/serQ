@@ -187,8 +187,9 @@ pub enum Item {
         style: BoxStyle,
         /// Corner radius in points; 0 for square corners.
         round: f64,
-        /// For a `Flow` bracket: the nodes one job holds at once (the SVG's
-        /// `data-nodes`), between which it draws no arrow. Empty otherwise.
+        /// The SVG's `data-nodes`. For a `Flow` bracket: the nodes one job
+        /// holds at once, between which it draws no arrow. For an
+        /// `Instance` panel: the stations in it. Empty otherwise.
         nodes: Vec<String>,
         /// For a `Flow` bracket around a copy whose poster the IR names:
         /// who posts it.

@@ -2571,7 +2571,10 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
                 rect: r,
                 style: BoxStyle::Instance,
                 round: 10.0,
-                nodes: vec![],
+                // the stations it holds, by the names their arrows use: an
+                // editor reads what is in the panel from the figure, not
+                // from where things stand (#645 B1)
+                nodes: g.nodes.iter().map(|&i| net.name(p, i)).collect(),
                 copy: None,
             },
         );

@@ -203,12 +203,23 @@ pub fn render(f: &Figure) -> String {
                 copy,
             } => {
                 // a bracket names the nodes one job holds at once, which no
-                // arrow joins: a page walking a request treats them as one place
+                // arrow joins: a page walking a request treats them as one
+                // place; an instance's panel names the stations in it
                 let tag = if nodes.is_empty() {
                     String::new()
                 } else {
+                    let role = match style {
+                        BoxStyle::Flow => "bracket",
+                        BoxStyle::Instance => "instance",
+                        BoxStyle::Solid
+                        | BoxStyle::Cached
+                        | BoxStyle::Enclosure
+                        | BoxStyle::Frame => {
+                            unreachable!("only a bracket or a panel names nodes")
+                        }
+                    };
                     format!(
-                        r#" data-role="bracket" data-nodes="{}"{}"#,
+                        r#" data-role="{role}" data-nodes="{}"{}"#,
                         esc(&nodes.join(" ")),
                         copy_tag(copy)
                     )
