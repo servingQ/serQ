@@ -86,6 +86,16 @@ codes! {
     /// An engine's connector that names another queue than the one its
     /// queue's relation reads from.
     ConnectorMisnamed => "E-connector-misnamed",
+    /// A KV relation naming a queue not declared above it.
+    CopyNoQueue => "E-copy-no-queue",
+    /// A KV relation between queues one of which has no NIC.
+    CopyNoNic => "E-copy-no-nic",
+    /// A KV relation from a queue to itself.
+    CopySameQueue => "E-copy-same-queue",
+    /// A KV relation's `latency`: no constant, or a second for one poster.
+    CopyLatency => "E-copy-latency",
+    /// A call `from` another queue than its entry takes the KV from.
+    CallFrom => "E-call-from",
     /// A second KV relation into one reader.
     ReaderTwoSources => "E-reader-two-sources",
     /// An engine's connector to a queue its queue copies no KV from.

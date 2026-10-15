@@ -74,3 +74,8 @@ the pair compiles as `serq check` compiles it, else a
 | `E-connector-misnamed` | An engine's `connector` names the queue its queue's relation reads from (`kvt.nixl_pull (S, R, …)`: `connector S`) | rename the connector to `S` |
 | `E-reader-two-sources` | A reader takes its KV from one source: one relation per reader, and its entries `… from` the same queue | none, in either form (which source stays is the program's) |
 | `E-connector-no-copy` | An engine's `connector S` (not an L2's) loads what a KV relation from `S` to its queue copies, so the relation is declared | none (a pull or a push is the program's) |
+| `E-copy-no-queue` | A KV relation, or an entry's `from`, names queues declared above it | none (which queue is the program's) |
+| `E-copy-no-nic` | A copy runs over the source's NIC and the reader's: both queues have a `nic` | none (its bandwidth is the program's) |
+| `E-copy-same-queue` | A relation, or an entry's `from`, takes the KV from another queue than its own | none (which queue reads is the program's) |
+| `E-copy-latency` | A relation's `latency` is a constant, one per side that posts the copies | none |
+| `E-call-from` | A call `Q.v (…) from S` names the queue its entry takes the KV `from` | none (the call's `from`, or the entry's with its relation, is the one meant) |
