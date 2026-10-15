@@ -1181,6 +1181,61 @@ impl Parser {
         }
     }
 
+    /// The outline's devices and engines, once the program is read: each
+    /// one's capacities and the pool on each, and an engine's device's
+    /// memory, the first `pool … on` it, as `link_engines` takes it (which
+    /// refuses a second). As written: two pools on an engine's device are
+    /// both listed, the first `pool … on` the memory.
+    pub(super) fn record_places(&mut self, prog: &Program) {
+        let Some(r) = self.outline.as_ref() else {
+            return;
+        };
+        let caps = |owner: &str, caps: &[Capacity]| -> Vec<crate::frontend::outline::Capacity> {
+            caps.iter()
+                .map(|c| crate::frontend::outline::Capacity {
+                    name: c.name.clone(),
+                    range: r.token(&self.toks, c.at),
+                    pool: self
+                        .pools_on
+                        .iter()
+                        .find(|po| po.on.owner == owner && po.cap == c.name)
+                        .map(|po| prog.pools[po.pool].name.clone()),
+                })
+                .collect()
+        };
+        let devices: Vec<_> = self
+            .devices
+            .iter()
+            .map(|d| {
+                let caps = caps(&d.name, &d.caps);
+                let engine = self.engines.iter().find(|e| e.device == d.name);
+                crate::frontend::outline::Device {
+                    name: d.name.clone(),
+                    engine: engine.map(|e| e.name.clone()),
+                    memory: engine.and(
+                        self.pools_on
+                            .iter()
+                            .find(|po| po.on.owner == d.name)
+                            .map(|po| prog.pools[po.pool].name.clone()),
+                    ),
+                    caps,
+                }
+            })
+            .collect();
+        let engines: Vec<_> = self
+            .engines
+            .iter()
+            .map(|e| crate::frontend::outline::Engine {
+                name: e.name.clone(),
+                device: e.device.clone(),
+                caps: caps(&e.name, &e.caps),
+            })
+            .collect();
+        let r = self.outline.as_mut().expect("checked above");
+        r.out.devices = devices;
+        r.out.engines = engines;
+    }
+
     /// Link the engines, their devices and the pools on them, once the
     /// program is read: a pool on an engine, or on its device as
     /// `on ENGINE.DEVICE`, is admitted by the engine; the pool on a device is

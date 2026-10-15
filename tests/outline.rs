@@ -358,3 +358,53 @@ fn a_parse_error_is_the_diagnostic() {
     let e = serq::outline("fn main() { queue }").unwrap_err();
     assert!(e.contains("1:"), "{e}");
 }
+
+/// Each device and engine, the capacities it declares and the pool on
+/// each, and a device's KV (#645 A3, A4): what an editor may put where,
+/// read from the program, not known beside it.
+#[test]
+fn devices_and_engines_say_their_capacities_and_pools() {
+    let src = read("examples/pd-disaggregation/vllm_nixl_push.sq");
+    let o = outline(&src);
+    let d = o.devices.iter().find(|d| d.name == "D.gpu").unwrap();
+    assert_eq!(d.engine.as_deref(), Some("D"));
+    assert_eq!(d.memory.as_deref(), Some("D.kv"));
+    let kv: Vec<_> = d
+        .caps
+        .iter()
+        .map(|c| (c.name.as_str(), c.pool.as_deref()))
+        .collect();
+    assert_eq!(kv, [("kv", Some("D.kv"))]);
+    assert_eq!(text(&src, d.caps[0].range), "kv");
+    let e = o.engines.iter().find(|e| e.name == "P").unwrap();
+    assert_eq!(e.device, "P.gpu");
+    let caps: Vec<_> = e
+        .caps
+        .iter()
+        .map(|c| (c.name.as_str(), c.pool.as_deref()))
+        .collect();
+    assert_eq!(caps, [("reqs", Some("P.reqs"))]);
+
+    // a device no engine runs on has no KV, whatever is on it
+    let o = outline(
+        "fn main() { device ram { buf cap 10; } pool buf on ram { } stage s : delay; \
+         server { run s (cost(s, 1)); } }",
+    );
+    let ram = &o.devices[0];
+    assert_eq!((ram.engine.as_deref(), ram.memory.as_deref()), (None, None));
+
+    // two pools on an engine's device, which does not link: both are
+    // listed, and the memory is the first `pool … on` it, as the linker
+    // takes it, not the first capacity
+    let o = outline(
+        "fn main() { device gpu { a cap 10; b cap 10; } \
+         engine E on gpu { tokens cap 8; scheduler { advance running; admit waiting; } \
+         worker { forward (1); } } \
+         pool b on gpu { } pool a on gpu { } server { } }",
+    );
+    let gpu = &o.devices[0];
+    assert_eq!(gpu.memory.as_deref(), Some("b"));
+    let pools: Vec<_> = gpu.caps.iter().map(|c| c.pool.as_deref()).collect();
+    assert_eq!(pools, [Some("a"), Some("b")]);
+    assert_eq!(ram.caps[0].pool.as_deref(), Some("buf"));
+}

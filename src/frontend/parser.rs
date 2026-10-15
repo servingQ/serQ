@@ -732,9 +732,10 @@ pub fn outline_paired(
     let mut parser = Parser::new(spliced.toks);
     parser.paired = Some(spliced.split);
     parser.outline = Some(crate::frontend::outline::Recorder::new(&p.combined));
-    parser
+    let prog = parser
         .program()
         .map_err(|e| crate::frontend::paired::parse_error(p, &e))?;
+    parser.record_places(&prog);
     Ok(parser.outline.take().expect("set above").out)
 }
 
@@ -746,7 +747,8 @@ pub fn outline(src: &str) -> PResult<crate::frontend::outline::Outline> {
     // what only a whole program is checked for
     p.syntax_only = true;
     p.outline = Some(crate::frontend::outline::Recorder::new(src));
-    p.program()?;
+    let prog = p.program()?;
+    p.record_places(&prog);
     Ok(p.outline.take().expect("set above").out)
 }
 
