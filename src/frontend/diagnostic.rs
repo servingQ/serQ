@@ -96,6 +96,12 @@ codes! {
     CopyLatency => "E-copy-latency",
     /// A call `from` another queue than its entry takes the KV from.
     CallFrom => "E-call-from",
+    /// A second `server` in a deployment.
+    OneServer => "E-one-server",
+    /// A second `workload` in a workload file.
+    OneWorkload => "E-one-workload",
+    /// A `workload` written in a deployment, not a file of its own.
+    WorkloadInDeployment => "E-workload-in-deployment",
     /// A second KV relation into one reader.
     ReaderTwoSources => "E-reader-two-sources",
     /// An engine's connector to a queue its queue copies no KV from.
