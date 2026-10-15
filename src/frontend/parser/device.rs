@@ -1254,10 +1254,7 @@ impl Parser {
             .chain(self.engines.iter().map(|e| (&e.name, &e.caps)))
         {
             for c in caps {
-                let declared = self
-                    .pools_on
-                    .iter()
-                    .any(|po| po.on.owner == *owner && po.cap == c.name);
+                let declared = self.has_pool(owner, &c.name);
                 if !declared {
                     return self.err_at(
                         c.at,
@@ -1328,11 +1325,7 @@ impl Parser {
     /// Record that `prog.pools[pool]` is `on.owner`'s capacity `cap`.
     pub(super) fn pool_on(&mut self, pool: usize, cap: String, on: On) -> PResult<()> {
         let po = PoolOn { pool, cap, on };
-        if self
-            .pools_on
-            .iter()
-            .any(|o| o.on.owner == po.on.owner && o.cap == po.cap)
-        {
+        if self.has_pool(&po.on.owner, &po.cap) {
             return self.err_at(
                 po.on.at,
                 format!(
@@ -1379,6 +1372,27 @@ impl Parser {
         }
     }
 
+    /// Whether a pool is declared on `owner`'s capacity `cap` (a pool read
+    /// so far: while the program is read, the pools above).
+    fn has_pool(&self, owner: &str, cap: &str) -> bool {
+        self.pools_on
+            .iter()
+            .any(|po| po.on.owner == owner && po.cap == cap)
+    }
+
+    /// The capacities of `owner` no pool above is on yet: the ones a pool
+    /// of another name may have meant (`kv2` is no misspelt `kv` when a
+    /// pool is on `kv` already). A pool declared below is not seen.
+    fn free_caps<'a>(
+        &'a self,
+        owner: &'a str,
+        caps: &'a [Capacity],
+    ) -> impl Iterator<Item = &'a str> + 'a {
+        caps.iter()
+            .filter(move |c| !self.has_pool(owner, &c.name))
+            .map(|c| c.name.as_str())
+    }
+
     /// `pool NAME on OWNER`: the capacity it is, as `(cap, count, array)`;
     /// `at` is where NAME is written, `o_at` where OWNER is.
     pub(super) fn capacity_of(
@@ -1400,7 +1414,25 @@ impl Parser {
             }
             return match d.caps.iter().find(|c| c.name == name) {
                 Some(c) => Ok((c.cap.clone(), d.count, d.array)),
-                None => self.err_at(at, format!("{} has no capacity `{name}`", shown(owner))),
+                // the device an engine runs on holds one pool, its KV: one
+                // capacity more would be the two pools `link_engines`
+                // refuses, so the way out is E-device-two-pools'
+                None if !d.caps.is_empty() && self.engines.iter().any(|e| e.device == d.name) => {
+                    self.err_at(
+                        at,
+                        format!(
+                            "{}\nhelp: the device an engine runs on holds one pool, its KV: \
+                             declare `{name}` on no device, above the engine (`pool {name} \
+                             {{ cap …; }}`)",
+                            Code::PoolNoCapacity
+                                .message(format_args!("{} has no capacity `{name}`", shown(owner)))
+                        ),
+                    )
+                }
+                None => self.err_at(
+                    at,
+                    no_capacity(&shown(owner), name, self.free_caps(owner, &d.caps)),
+                ),
             };
         }
         if let Some(e) = self.engines.iter().find(|e| e.name == owner) {
@@ -1411,7 +1443,10 @@ impl Parser {
                 .map_or((1, false), |d| (d.count, d.array));
             return match e.caps.iter().find(|c| c.name == name) {
                 Some(c) => Ok((c.cap.clone(), count, array)),
-                None => self.err_at(at, format!("`{owner}` has no capacity `{name}`")),
+                None => self.err_at(
+                    at,
+                    no_capacity(&format!("`{owner}`"), name, self.free_caps(owner, &e.caps)),
+                ),
             };
         }
         let help = crate::frontend::diagnostic::suggestion(
@@ -1440,6 +1475,21 @@ fn shown(owner: &str) -> String {
         Some((q, local)) => format!("`{local}` of queue `{q}`"),
         None => format!("`{owner}`"),
     }
+}
+
+/// The refusal of `pool name on owner` when `owner` (as `shown`) declares
+/// no capacity `name`: a pool is a capacity of its device or engine. How
+/// much it holds is the program's, so the help names the line, not its
+/// amount; a capacity of a nearby name is likely the one meant.
+fn no_capacity<'a>(owner: &str, name: &str, caps: impl Iterator<Item = &'a str>) -> String {
+    let near = crate::frontend::diagnostic::suggestion(name, caps)
+        .map(|c| format!("\nhelp: did you mean `{c}`?"))
+        .unwrap_or_default();
+    format!(
+        "{}\nhelp: a pool on {owner} is one of its capacities: declare `{name} cap …;` in it{near}",
+        crate::frontend::diagnostic::Code::PoolNoCapacity
+            .message(format_args!("{owner} has no capacity `{name}`"))
+    )
 }
 
 /// The `pool … on …` that declares capacity `cap` of `owner`, as written

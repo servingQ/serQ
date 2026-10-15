@@ -75,6 +75,8 @@ codes! {
     ReservedWord => "E-reserved-word",
     /// Two pools on the device an engine runs on, which holds one: the engine's KV.
     DeviceTwoPools => "E-device-two-pools",
+    /// A pool on a device or engine that declares no capacity of its name.
+    PoolNoCapacity => "E-pool-no-capacity",
 }
 
 impl Code {

@@ -117,3 +117,13 @@ fn a_missing_connector_has_no_fix() {
     let r = refused(&d, &w, Code::CopyNoConnector);
     assert!(r.fixes.is_empty());
 }
+
+/// How much a pool holds is the program's: no fix-it (#645 A4).
+#[test]
+fn a_pool_with_no_capacity_has_no_fix() {
+    let (d, w) = pair(PUSH);
+    let d = with(&d, "pool reqs on D {", "pool req on D {");
+    let r = refused(&d, &w, Code::PoolNoCapacity);
+    assert!(r.message.contains("did you mean `reqs`?"), "{}", r.message);
+    assert!(r.fixes.is_empty());
+}
