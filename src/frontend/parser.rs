@@ -6271,12 +6271,18 @@ impl Parser {
             .iter()
             .find(|e| e.from.as_ref().is_some_and(|f| *f != source))
         {
+            // a second source for one reader, said by its entry (#645 A5):
+            // which one it reads from is the program's to say
+            let other = e.from.as_deref().unwrap_or("?");
             return self.err_at(
                 s_at,
                 format!(
-                    "{written}, and `{reader}.{} (…)` takes the KV `from {}`",
-                    e.verb,
-                    e.from.as_deref().unwrap_or("?")
+                    "{}\nhelp: a reader takes its KV from one source: the relation from \
+                     `{source}`, or the entry's `from {other}`",
+                    Code::ReaderTwoSources.message(format_args!(
+                        "{written}, and `{reader}.{} (…)` takes the KV `from {other}`",
+                        e.verb
+                    ))
                 ),
             );
         }
