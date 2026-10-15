@@ -64,7 +64,7 @@ progress); when one does, its latency samples do not describe all
 offered traffic. Inspect these counters, and the run length, before using
 a mean for capacity planning, and repeat the experiment across seeds.
 
-Measured 2026-10-15 on serQ 13c7166 with whole token counts (#661), by
+Measured 2026-10-15 on serQ afee627 with whole token counts (#661, #700), by
 the commands on this page (seeds 2 and 3:
 `--seed 2`, `--seed 3` at `--horizon 320000`).
 

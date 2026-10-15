@@ -202,13 +202,20 @@ reqs    0.2      0.0  0.003    0.158  0.0011   49906         0         0        
 
 `done 89549` at `llm` against 44 889 turns — two runs per turn, prefill
 and decode, but for the 229 turns whose prefill samples their one output
-token (`o` is 1), which never decode: `tpot` counts the 44 660 turns that
-do.
+token (`o` is 1, which `floor(~exp(200)) + 1` draws with probability
+0.005: 224 ± 15 turns expected), which never decode: `tpot` counts the
+44 660 turns that do. The output is a whole number of tokens, 200.5 on
+average. Before token counts were whole (#661) the workload drew
+`~exp(200) + 1`, whose fractional last token still cost a whole decode
+iteration: rounding down gives every turn one decode step fewer, so the
+response is shorter by about one decode step (0.000225 s) than it was,
+0.06472 s before, on seeds 1–5 by 0.00021 to 0.00025 s, and the
+iterations fell from 9 305 275 to 9 261 013.
 
 TTFT is now separately observable, and at 19 ms it is a different quantity from
 the 64 ms response. Iteration-level simulation gives both.
 
-Measured 2026-10-15 on serQ 13c7166 with whole token counts (#661), by
+Measured 2026-10-15 on serQ afee627 with whole token counts (#661, #700), by
 the command above.
 
 !!! note "`wait NaN` on the `kv` pool"

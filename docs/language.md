@@ -1461,9 +1461,17 @@ and output (`llm (input, output)`), what a hold takes of a pool that holds
 a token sequence, its `reuse`, its `cache` and its `prefix` segments, a
 `grow`, `shrink` or `load` of such a pool, an engine's `tokens cap` and
 `each at most`, its `taking` of such a pool, and its connector's `load` and
-`save`. A pool holds a token sequence when it has a `block`, is an
-engine's memory (`pool kv on gpu`), or a hold or an engine's admission with
-`cache`, `reuse` or `prefix` takes it. A pool that does not counts in the
+`save`, and a run on an engine. A pool holds a token sequence (a KV pool)
+when
+
+1. it has a `block`;
+2. it is an engine's memory (`pool kv on gpu`);
+3. a hold or an engine's admission with `cache`, `reuse` or `prefix` takes
+   it (the prefix cache's pools);
+4. a `load` loads it, or a growing run grows it;
+5. a KV pool spills to it.
+
+The error says which made the pool one. A pool that does not counts in the
 program's units, which may be fractions (ThunderAgent's acting-token weight
 in `examples/multi-turn/thunderagent.sq`), and so may a `reserve`, an
 admission test (SGLang's scales by a real ratio in
@@ -1480,10 +1488,15 @@ not; an attribute is whole when every assignment to it is (`set K = K + n
 the count fractional:
 
 ```text
-workload.sq: 13:13: `n` is a number of tokens (`hold kv`: `cost(kv, K + n + o)`), and
+workload.sq: 13:13: `n` is a number of tokens (what `hold kv` takes: `cost(kv, K + n + o)`;
+`kv` holds tokens: the `cache` of the hold at deployment.sq:20:10), and
 `K == 0 ? ~uniform(1000, 3000) : ~exp(500)` may not be a whole number (`~uniform` draws a
-real number); write the rounding it means: `ceil(…)`, or `floor(…) + 1` (#661)
+real number); write the rounding it means: `floor(…)` or `ceil(…)` (#661)
 ```
+
+An error about an engine's clause (`tokens cap`, `each at most`, `taking`)
+or a pool's cap points at the engine's or the pool's declaration, and
+names the clause; the expression is printed with its `let`s folded.
 
 A trace's `new` and `out` columns are token counts too: a fraction there
 is refused when the trace is read. With whole counts the interpreter's

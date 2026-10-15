@@ -282,8 +282,13 @@ text and directly constructed IR meet the same rules. Validation covers:
   continuous draws and the other functions are not. A hold's `reserve`,
   a non-KV pool's units, seconds and stage work are not token counts.
   The trace's `new` and `out` columns are whole numbers when it is read.
-  The error names the count and, for an attribute, the assignment that
-  made it fractional, which is where the program writes its rounding.
+  The error names the count, why a KV pool is one (the first of the
+  reasons above, with its statement's place), and, for an attribute, the
+  assignment that made it fractional, which is where the program writes
+  its rounding. A message quotes a statement's place as `place(b, k)`,
+  which `Invalid::placed` writes as the text's `line:col` (the linker) or
+  as the block and statement; an error about an engine's clause or a
+  pool's cap carries the declaration (`Invalid::decl`).
 - **Arrivals.** Constant renewal gaps are positive; Poisson rates are
   positive and finite. `Closed` and `Batch` populations lie between 1 and
   `MAX_SESSIONS`.

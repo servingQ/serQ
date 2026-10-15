@@ -1357,18 +1357,13 @@ fn station_of(p: &Program, stage: usize) -> (StationKind, String, Option<String>
             "engine".into(),
             Some(format!(
                 "tokens cap {}",
-                p.show_expr_with(&s.budget, list_names)
+                // a step stage is drawn in the words an engine is written in
+                // (`docs/language.md`, the engine form), whichever form the
+                // program used: its budget as `tokens cap` reads it (#411, #416)
+                p.show_expr_with(&s.budget, crate::frontend::parser::tokens_cap_name)
             )),
         ),
     }
-}
-
-/// A step stage is drawn in the words an engine is written in
-/// (`docs/language.md`, the engine form), whichever form the program used:
-/// the IR does not keep the form. Its budget is read as `tokens cap` reads
-/// it, the residents' totals by their list (#411, #416).
-fn list_names(v: CtxVar) -> &'static str {
-    crate::frontend::parser::engine_name(v.name(), "tokens cap").unwrap_or(v.name())
 }
 
 /// The step stage whose `memory` pool `i` is.

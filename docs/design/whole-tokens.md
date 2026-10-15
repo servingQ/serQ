@@ -12,7 +12,7 @@ writes the rounding it means. A stricter check: no IR field moves, and
 
 ## Before
 
-`docs/tutorial/programs/workloads/04-cache.sq` at serQ 13c7166:
+`docs/tutorial/programs/workloads/04-cache.sq` at serQ afee627:
 
 ```serq
   turn {
@@ -34,7 +34,7 @@ and the server of `docs/tutorial/programs/04-cache.sq`:
 
 `serq run docs/tutorial/programs/04-cache.sq --workload
 docs/tutorial/programs/workloads/04-cache.sq --horizon 20000 --warmup 2000
---seed 1` at 13c7166:
+--seed 1` at afee627:
 
 ```text
 observe  count    mean   95% CI    cv2     p99
@@ -58,7 +58,7 @@ releases wrote, `[0, L₁)` and then `[L₁, L₂)`, and `cached` is their sum
 The same pair does not link:
 
 ```text
-docs/tutorial/programs/workloads/04-cache.sq: 13:13: `n` is a number of tokens (`hold kv`: `cost(kv, K + n + o)`), and `K == 0 ? ~uniform(1000, 3000) : ~exp(500)` may not be a whole number (`~uniform` draws a real number); write the rounding it means: `ceil(…)`, or `floor(…) + 1` (#661)
+docs/tutorial/programs/workloads/04-cache.sq: 13:13: `n` is a number of tokens (what `hold kv` takes: `cost(kv, K + n + o)`; `kv` holds tokens: the `cache` of the hold at docs/tutorial/programs/04-cache.sq:22:10), and `K == 0 ? ~uniform(1000, 3000) : ~exp(500)` may not be a whole number (`~uniform` draws a real number); write the rounding it means: `floor(…)` or `ceil(…)` (#661)
 13 |     set n = K == 0 ? ~uniform(1000, 3000) : ~exp(500);
    |             ^
 ```
@@ -121,12 +121,21 @@ A token count is a whole number. The token counts are:
 | a KV pool's `cap` (`inf` too) and `block` | `CPool` |
 | a trace's `new` and `out` | read by `trace::Corpus::from_csv` |
 
-A **KV pool** is one whose units are positions of a token sequence: it has a
-`block`, is an engine's memory (`CStep.memory`), is taken by a hold or an
-engine's admission with `cache`, `reuse` or `prefix` (the prefix cache's
-pools), is a `load`'s or a growing run's pool, or is spilled to by one.
-Nothing else in the IR says a pool counts tokens, and nothing needs to:
-these are the pools whose units the trie and the positions are made of.
+A **KV pool** is one whose units are positions of a token sequence:
+
+1. it has a `block`;
+2. it is an engine's memory (`CStep.memory`);
+3. a hold or an engine's admission with `cache`, `reuse` or `prefix` takes
+   it (the prefix cache's pools);
+4. a `load` loads it, or a growing run grows it;
+5. a KV pool spills to it.
+
+Nothing else in the IR says a pool counts tokens: these are the pools whose
+units the trie and the positions are made of. That the judgement goes by
+use means a line may link or not by a statement elsewhere (a `cache` on
+another hold of the same pool), so the message says which reason made the
+pool one, and where: "`kv` holds tokens: the `cache` of the hold at
+20:10", "the memory of engine `llm`", "its `block`".
 
 What is **not** a token count is not checked, and may be fractional:
 
@@ -179,19 +188,36 @@ refused in a `tokens cap` (a test writes `floor(now * 0)`). A program writes
 ### The message
 
 When an attribute makes the count fractional, the error points at the
-assignment that made it so, where the rounding goes, and names the count:
+assignment that made it so, where the rounding goes, names the count, and
+says why the pool holds tokens:
 
 ```text
-workload.sq: 13:13: `n` is a number of tokens (`hold kv`: `cost(kv, K + n + o)`), and `K == 0 ? ~uniform(1000, 3000) : ~exp(500)` may not be a whole number (`~uniform` draws a real number); write the rounding it means: `ceil(…)`, or `floor(…) + 1` (#661)
+workload.sq: 13:13: `n` is a number of tokens (what `hold kv` takes: `cost(kv, K + n + o)`; `kv` holds tokens: the `cache` of the hold at deployment.sq:20:10), and `K == 0 ? ~uniform(1000, 3000) : ~exp(500)` may not be a whole number (`~uniform` draws a real number); write the rounding it means: `floor(…)` or `ceil(…)` (#661)
 ```
+
+The place of the statement that made the pool a KV pool is quoted as a
+placeholder in the IR's message (`place(b, k)`), which the text frontend
+writes as the statement's `line:col` in its own file, and a program read
+from JSON as its block and statement (`Invalid::placed`). Every refusal
+ends with the one hint, `floor(…)` or `ceil(…)`.
 
 Through several attributes, it follows them back to the first assignment
 fractional by itself (`input` ← `K + n` ← `n` ← `~uniform`). A count
 fractional by itself is named where it is:
 
 ```text
-`llm`'s `tokens cap` is a number of tokens, and `max(running.decoding, (2e-4 + 2e-9 * running.kv_decode) / 2e-5)` may not be a whole number (`/` divides); write the rounding it means: `floor(…)` or `ceil(…)` (#661)
+examples/multi-turn/replica.sq: 29:10: engine `llm`'s `tokens cap` is a number of tokens, and `max(running.decoding, (2e-4 + 2e-9 * running.kv_decode) / 2e-5)` may not be a whole number (`/` divides); write the rounding it means: `floor(…)` or `ceil(…)` (#661)
+29 |   engine llm on gpu {
+   |          ^^^
 ```
+
+An engine's clauses and a pool's cap are no statements of the IR: the
+error carries the declaration (`Invalid::decl`), and the text frontend
+points at the engine's or the pool's name. The linker keeps no span of a
+clause, so the clause is named in the message; the expression is the
+IR's, its `let`s folded (`omega` is `2e-4`). Keeping a clause's span would
+take a span table for the IR's declarations, which is more than this
+message is worth.
 
 A trace with a fractional `new` or `out` is refused when it is read:
 ``line 2: column 3 (new): `2004.5` is not a whole number of tokens``.
@@ -236,12 +262,15 @@ point unchanged; three change more than that:
 the workload's rounding, every hit one; a trace's fractional `new` and
 `out` refused; a `reserve`, a non-KV pool's units and a stage's work that
 are fractions linking, ThunderAgent at `w = 0.5` and SGLang among them; a
-KV pool's fractional cap refused.
+KV pool's fractional cap refused; and one refusal per path the inference
+takes: a pool made a KV pool by a spill, a `load` and a growing run, each
+named in the message; a register; `budget_left`; a connector's `load`
+and `save`.
 
 ## Validation
 
-Measured 2026-10-15, serQ 13c7166 (Before) and this change (After), seed 1,
-`--horizon 20000 --warmup 2000`:
+Measured 2026-10-15, serQ afee627 (Before) and afee627 with this change
+(After), seed 1, `--horizon 20000 --warmup 2000`:
 
 | Program | Before | After |
 |---|---|---|
@@ -249,19 +278,40 @@ Measured 2026-10-15, serQ 13c7166 (Before) and this change (After), seed 1,
 | `05-engine.sq` | TTFT 0.01906 s, response 0.06472 s, `llm` done 89779 | TTFT 0.01906 s, response 0.06450 s, `llm` done 89549 |
 | `replica.sq` | hit 0.8415, response 3.602 ± 3.150 s | hit 0.8428, response 3.481 ± 2.374 s |
 
-The commands: `serq run P --workload W --horizon 20000 --warmup 2000 --seed 1`
+The commands: `serq run P --workload W --horizon 20000 --warmup 2000 --seed S`
 for each pair of `examples/pairs.json`, with the binary of each commit.
-Chapter 4, 5 and 6 of the tutorial were measured again with the commands
-on their pages. In chapter 5, 229 turns now draw an output of one token,
-which the prefill samples, so they never decode: `done` is two runs per
-turn but for them, and `tpot` counts the other 44 660. `replica.sq` is
-bistable at its cap (`docs/review.md`), and its change is within the
-seeds' spread.
+Chapters 4, 5 and 6 of the tutorial were measured again with the commands
+on their pages (chapter 6 with the change on 13c7166; between 13c7166 and
+afee627 only the frontend's outline changed, and chapters 4 and 5 read the
+same on both).
+
+What the rounding changes is the workload, not only its arithmetic:
+
+- **Half a token more per draw.** `ceil(~exp(500))` has mean 500.5 and
+  `floor(~exp(200)) + 1` mean 200.5 (`E[⌊X⌋] = 1/(e^{1/μ} − 1) ≈ μ − 1/2`).
+  In chapter 4 the engine's service goes 0.0559 → 0.0560 s and the
+  response 0.06320 → 0.06336 s by that alone; the hits go 0.9999 → 1.0000
+  by the arithmetic.
+- **One decode step fewer per turn in chapter 5.** The workload drew
+  `~exp(200) + 1`, whose fractional last token still cost a whole decode
+  iteration: `ceil(X + 1) = ⌊X⌋ + 2` steps, against `⌊X⌋ + 1` now. The
+  iterations go 9 305 275 → 9 261 013, and the response is shorter by
+  about one decode step (0.000225 s) on every seed: −0.00021, −0.00024,
+  −0.00024, −0.00023, −0.00021 s on seeds 1–5. A systematic change, not
+  noise. 229 turns draw an output of one token (expected `(1 − e^{−1/200})
+  · 44 889 = 224 ± 15`), which the prefill samples, so they never decode:
+  `done` is two runs per turn but for them, and `tpot` counts the other
+  44 660.
+- **`replica.sq`** is bistable at its cap (`docs/review.md`). On seeds 1–5
+  the mean hit is 0.8000 before and 0.7987 after, the mean response 3.547
+  and 3.474 s, with the seeds' responses spread over 2.4–5.3 s: the change
+  is within that spread.
 
 ## Self-critique
 
 - **The interpreter rounds.** Rejected. Which way to round is policy, `ceil`,
-  `floor` or `floor + 1` (vLLM's `max_tokens` is at least one), and a
+  `floor` or `floor + 1` (vLLM's `max_tokens` is at least one,
+  `sampling_params.py:612-614`), and a
   language that chooses it is one in which a program cannot state the
   opposite (criterion 2). `cost(kv, 12.3)` would mean 12 or 13 without the
   program saying which (criterion 0). Rounding at the use is not rounding
@@ -296,4 +346,4 @@ seeds' spread.
 
 What is left: the interpreter's tolerance on token comparisons
 (`EPS` in `src/engine/cache.rs`, and #479's run end) is now unnecessary on
-token counts; removing it is a change of its own.
+token counts; removing it is a change of its own, #701.
