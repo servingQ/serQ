@@ -20,9 +20,9 @@ workload {
     set Z = doc ? 2 : 6;
   }
   turn {
-    set n = cold ? (doc ? ~uniform(15000, 30000) : ~uniform(4000, 8000))
-                 : (doc ? ~exp(500) : ~exp(800));
-    set o = ~exp(300);
+    set n = ceil(cold ? (doc ? ~uniform(15000, 30000) : ~uniform(4000, 8000))
+                      : (doc ? ~exp(500) : ~exp(800)));
+    set o = floor(~exp(300)) + 1;
     // the session ends past `maxctx` tokens of context, or after this
     // turn's tool call when it does not continue
     set full = K + n + o > maxctx;

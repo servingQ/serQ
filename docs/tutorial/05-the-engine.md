@@ -172,42 +172,44 @@ serq run docs/tutorial/programs/05-engine.sq --workload docs/tutorial/programs/w
 ```
 
 ```text
-run: horizon 20000 end 20000 warmup 2000 seed 1 events 9355182 arrivals 9905 ended 8902 turns 44889 mean live 6.146
+run: horizon 20000 end 20000 warmup 2000 seed 1 events 9310920 arrivals 9905 ended 8902 turns 44889 mean live 6.146
 
 observe      count       mean    95% CI    cv2         p99
 -----------  -----  ---------  --------  -----  ----------
-llm.reused   44890  3988.8495  ±79.5088  0.861  16640.0000
-llm.prefill  44890   876.0771  ±33.2292  1.468   3487.0891
+llm.reused   44889  3988.7417  ±79.2073  0.861  16640.0000
+llm.prefill  44889   876.4606  ±33.4152  1.471   3492.0000
 
 client    count       mean      95% CI    cv2        p99
 --------  -----  ---------  ----------  -----  ---------
-ttft      44889    0.01906    ±0.00112  1.879    0.09575
-tpot      44889  0.0002524  ±0.0000154  7.841  0.0007155
-response  44889    0.06472    ±0.00219  0.834    0.26135
+ttft      44889    0.01906    ±0.00111  1.870    0.09567
+tpot      44660  0.0002516  ±0.0000146  7.313  0.0007231
+response  44889    0.06450    ±0.00217  0.817    0.26212
 
 stage  number   util   done    thru    wait  service    iters
 -----  ------  -----  -----  ------  ------  -------  -------
-llm     0.159  0.141  89779  4.9877  0.0000   0.0318  9305275
+llm     0.158  0.141  89549  4.9749  0.0000   0.0318  9261013
 tool    5.985  0.998  35986  1.9992  0.0000   2.9932        0
 
 step  prefill only  decode only  mixed   idle  decodes  decode batch  decode step   itl p50   itl p99
 ----  ------------  -----------  -----  -----  -------  ------------  -----------  --------  --------
-llm          0.037        0.097  0.007  0.859    0.114         1.081     0.000225  0.000209  0.000245
+llm          0.037        0.097  0.007  0.859    0.113         1.080     0.000225  0.000209  0.000245
 
 pool   used   cached  queue  holders    wait  admits  evict(n)  evict(u)  preempt  spill  rej  stuck
 ----  -----  -------  -----  -------  ------  ------  --------  --------  -------  -----  ---  -----
-kv    785.1  29642.7  0.000    0.159     NaN   49907       437   3500288        1      0    0      0
-reqs    0.2      0.0  0.003    0.159  0.0011   49907         0         0        0      0    0      0
+kv    783.2  29643.4  0.000    0.158     NaN   49906       435   3514144        0      0    0      0
+reqs    0.2      0.0  0.003    0.158  0.0011   49906         0         0        0      0    0      0
 ```
 
-`done 89779` at `llm` against 44 889 turns — two runs per turn, prefill
-and decode.
+`done 89549` at `llm` against 44 889 turns — two runs per turn, prefill
+and decode, but for the 229 turns whose prefill samples their one output
+token (`o` is 1), which never decode: `tpot` counts the 44 660 turns that
+do.
 
 TTFT is now separately observable, and at 19 ms it is a different quantity from
-the 65 ms response. Iteration-level simulation gives both.
+the 64 ms response. Iteration-level simulation gives both.
 
-Measured 2026-10-14 on serQ 1b0a47b with the paired-workload change (the
-workload a file of its own), by the command above.
+Measured 2026-10-15 on serQ 13c7166 with whole token counts (#661), by
+the command above.
 
 !!! note "`wait NaN` on the `kv` pool"
     An admission that takes several pools joins the queue of the **first**

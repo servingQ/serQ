@@ -1453,6 +1453,44 @@ is evaluated. Zero is an amount (a run of no work). The Lean model's
 fragment computes over ℕ, where a subtraction stops at 0, so it agrees with
 the interpreter on programs whose amounts are never negative.
 
+### Token counts
+
+A number of tokens is a whole number, and a program in which one may be
+fractional does not link (#661). The token counts are a request's input
+and output (`llm (input, output)`), what a hold takes of a pool that holds
+a token sequence, its `reuse`, its `cache` and its `prefix` segments, a
+`grow`, `shrink` or `load` of such a pool, an engine's `tokens cap` and
+`each at most`, its `taking` of such a pool, and its connector's `load` and
+`save`. A pool holds a token sequence when it has a `block`, is an
+engine's memory (`pool kv on gpu`), or a hold or an engine's admission with
+`cache`, `reuse` or `prefix` takes it. A pool that does not counts in the
+program's units, which may be fractions (ThunderAgent's acting-token weight
+in `examples/multi-turn/thunderagent.sq`), and so may a `reserve`, an
+admission test (SGLang's scales by a real ratio in
+`examples/engines/sglang.sq`).
+
+Which way to round is the program's: the workload writes it where it
+draws, `set n = ceil(~exp(500));` or `set o = floor(~exp(200)) + 1;`, an
+engine where it divides, `tokens cap floor(…)`. serQ checks it by reading
+the expression: an integer, `floor` and `ceil`, a count, and a sum,
+difference, product, minimum, maximum or choice of whole numbers is whole;
+`/`, `^`, `~exp`, `~uniform`, `~erlang`, `~h2`, `now` and `work(…)` are
+not; an attribute is whole when every assignment to it is (`set K = K + n
++ o;` with whole `n` and `o`). The error points at the assignment that made
+the count fractional:
+
+```text
+workload.sq: 13:13: `n` is a number of tokens (`hold kv`: `cost(kv, K + n + o)`), and
+`K == 0 ? ~uniform(1000, 3000) : ~exp(500)` may not be a whole number (`~uniform` draws a
+real number); write the rounding it means: `ceil(…)`, or `floor(…) + 1` (#661)
+```
+
+A trace's `new` and `out` columns are token counts too: a fraction there
+is refused when the trace is read. With whole counts the interpreter's
+arithmetic on them is exact: a prefix cached in two releases reads back as
+the sum the workload wrote, so `cached >= K` holds when the prefix is all
+there ([Whole token counts](design/whole-tokens.md)).
+
 ### Workload
 
 `init` runs at arrival. Each source `turn;` draws its attributes and waits

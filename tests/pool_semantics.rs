@@ -805,8 +805,9 @@ fn bad_amounts_and_indices_fail_the_run() {
             "`grow kv (cost(kv, z - 1))`: the amount is -1",
         ),
         (
-            "hold kv (cost(kv, 8)) { load kv (cost(kv, z / z)); }",
-            "`load kv (cost(kv, z / z))`: the amount is NaN",
+            // (a token count is whole, so its NaN is under `floor`, #661)
+            "hold kv (cost(kv, 8)) { load kv (cost(kv, floor(z / z))); }",
+            "`load kv (cost(kv, floor(z / z)))`: the amount is NaN",
         ),
         (
             "run a[i - 1] (cost(a, 1));",
@@ -1167,15 +1168,17 @@ fn a_held_reservation_is_each_live_hold_s() {
 }
 
 /// A run ends at its start plus its work, not at the sum of its chunks
-/// (#479). A prompt of 0.4 + 1.2 in chunks of 1 sums to an ulp short of
+/// (#479). A prompt of 0.4 + 1.2 in chunks of 1 summed to an ulp short of
 /// it: the cached extent and the tokens of a request preempted right after
-/// its prefill read a finished prefill as unfinished.
+/// its prefill read a finished prefill as unfinished. A token count is a
+/// whole number now (#661), so that prompt does not link, and a whole one's
+/// chunks sum to it exactly.
 #[test]
 fn a_run_ends_at_its_start_plus_its_work() {
     let workload = |sessions: u32| {
         format!("workload {{ arrive batch({sessions}); session {{ turn; end; }} }}")
     };
-    let prog = |cap: u32, cache: &str, body: &str| {
+    let prog = |prompt: &str, cap: u32, cache: &str, body: &str| {
         format!(
             r#"
         device gpu {{ kv cap {cap}; }}
@@ -1191,31 +1194,46 @@ fn a_run_ends_at_its_start_plus_its_work() {
         pool reqs on llm {{ }}
         pool kv on gpu {{ preempt lifo; }}
         server {{
-          set prompt = 0.4 + 1.2;
+          set prompt = {prompt};
           {body}
         }}
 "#
         )
     };
+    // #479's prompt is refused: the language says what the run would have
+    // read an ulp short
+    let e = common::compile(
+        &common::main_source(&prog("0.4 + 1.2", 10, " cache (100)", "llm (prompt, 1);")),
+        &workload(1),
+        &common::horizon(20.0),
+    )
+    .unwrap_err();
+    assert!(
+        e.contains("`prompt` is a number of tokens")
+            && e.contains("`0.4 + 1.2`")
+            && e.contains("#661"),
+        "{e}"
+    );
     // the cached extent: the position the prefill ended at
     let src = prog(
+        "1 + 1",
         10,
         " cache (100)",
         "llm (prompt, 1);
          observe extent = cachedin(kv);",
     );
     let r = run(&src, &workload(1), &common::horizon(20.0));
-    assert_eq!(r.observe("extent").unwrap().samples, [0.4 + 1.2]);
-    // B ends its prefill at 1.6 with A and samples a token, and A's first
+    assert_eq!(r.observe("extent").unwrap().samples, [2.0]);
+    // B ends its prefill at 2 with A and samples a token, and A's first
     // decode token preempts it (lifo): B is admitted again with its prompt
     // and that token, which it prefills again
-    let src = prog(4, "", "llm (prompt, 3);");
+    let src = prog("1 + 1", 4, "", "llm (prompt, 3);");
     let r = run(&src, &workload(2), &common::horizon(20.0));
     assert_eq!(r.ended, 2, "{}", r.text());
     assert!(r.pool("kv").unwrap().preemptions >= 1, "{}", r.text());
     assert_eq!(
         r.observe("llm.prefill").unwrap().samples.last(),
-        Some(&(0.4 + 1.2 + 1.0)),
+        Some(&3.0),
         "{}",
         r.text()
     );

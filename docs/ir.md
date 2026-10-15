@@ -258,6 +258,32 @@ text and directly constructed IR meet the same rules. Validation covers:
   constant hold demand, rounded to blocks, must fit at least one pool its
   reference can name. See [Every instant settles](language.md#every-instant-settles)
   for runtime checks of progress that static validation cannot establish.
+- **Token counts.** A token count is a whole number (#661,
+  [Whole token counts](design/whole-tokens.md)): a `Request`'s `input`
+  and `output`; a `Load`; a `Run`'s `work` on a step stage or with
+  `growing`; a step stage's `budget`, `chunk` and `granule`; a hold's or
+  a `CRequest`'s `reuse`, `cache` and `prefix` lengths, its units on a KV
+  pool, and a `Grow` or `Shrink` of one; a `CConnector`'s `load` and
+  `save`; a KV pool's `cap` (`inf` too) and `block`. A *KV pool* is one
+  whose units are positions of a token sequence: it has a `block`, is a
+  step stage's `memory`, is taken by a hold or a `CRequest` with `cache`,
+  `reuse` or `prefix`, is a `Load`'s or a `growing` run's, or is spilled
+  to by one. Every such expression must be provably whole: an integer
+  constant or `inf`, `Floor`, `Ceil`, `Queue`, `Busy`, `Holders`,
+  `Queued`, a comparison or a logical operator; `Add`, `Sub`, `Mul`,
+  `Neg`, `Min`, `Max`, `Abs` and both branches of a `Cond` of whole
+  numbers; `Bernoulli`, and `Det` of a whole number; `Used`, `Free`,
+  `CachedIn`, `Allocated` of a KV pool; `BudgetLeft` of a stage whose
+  budget is whole; every context variable but `Now`, `Waited`, `Age`,
+  `Last` and `Attn`; an attribute every `Set` of which, and every
+  explicit session's value of which, is whole (the greatest fixpoint),
+  and the built-in ones but `think` and the times an engine records; a
+  register whose `init` and every `Set` are whole. `Div`, `Pow`, the
+  continuous draws and the other functions are not. A hold's `reserve`,
+  a non-KV pool's units, seconds and stage work are not token counts.
+  The trace's `new` and `out` columns are whole numbers when it is read.
+  The error names the count and, for an attribute, the assignment that
+  made it fractional, which is where the program writes its rounding.
 - **Arrivals.** Constant renewal gaps are positive; Poisson rates are
   positive and finite. `Closed` and `Batch` populations lie between 1 and
   `MAX_SESSIONS`.

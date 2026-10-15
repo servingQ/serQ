@@ -8,6 +8,7 @@
 
 pub mod trace;
 mod types;
+mod whole;
 
 use serde::{Deserialize, Serialize};
 
@@ -1765,6 +1766,8 @@ impl Program {
         self.stage_shares()?;
         self.validate_declarations()?;
         self.validate_types()?;
+        // token counts are whole numbers (#661)
+        self.validate_whole()?;
         // last, so that a program wrong in another way is told that first
         if let Some(k) = self.unreached_stage() {
             return Err(self.unreached_message(k).into());

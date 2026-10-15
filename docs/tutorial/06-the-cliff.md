@@ -13,11 +13,11 @@ done
 
 | sessions/s | from cache | TTFT (s) | preemptions | `stuck` | utilisation |
 |---|---|---|---|---|---|
-| 1.5 | 0.443 | 0.131 | 320 | 0 | 0.597 |
-| 1.7 | 0.324 | 0.264 | 1,035 | 0 | 0.727 |
-| 1.8 | 0.251 | 0.504 | 2,012 | 0 | 0.803 |
-| 1.9 | 0.151 | 1.505 | 3,635 | 0 | 0.894 |
-| 2.0 | 0.031 | 25.173 | 6,257 | 0 | 1.000 |
+| 1.5 | 0.442 | 0.131 | 350 | 0 | 0.598 |
+| 1.7 | 0.326 | 0.263 | 1,104 | 0 | 0.726 |
+| 1.8 | 0.249 | 0.513 | 1,973 | 0 | 0.803 |
+| 1.9 | 0.150 | 1.532 | 3,659 | 0 | 0.895 |
+| 2.0 | 0.032 | 25.124 | 6,484 | 0 | 1.000 |
 
 *From cache* is the share of the prompt tokens the cache supplied,
 `llm.reused / (llm.reused + llm.prefill)` (the means of the report's two
@@ -37,21 +37,21 @@ done
 
 | sessions/s | TTFT (s) at 20 000 | 40 000 | 80 000 | 160 000 | 320 000 | from cache at 320 000 |
 |---|---|---|---|---|---|---|
-| 1.5 | 0.131 | 0.132 | 0.132 | 0.136 | 0.137 | 0.437 |
-| 1.7 | 0.264 | 0.300 | 0.287 | 0.314 | 0.315 | 0.312 |
-| 1.8 | 0.504 | 0.627 | 0.599 | 0.665 | 0.664 | 0.233 |
-| 1.9 | 1.505 | 2.319 | 2.355 | 2.311 | 2.295 | 0.130 |
-| 2.0 | 25.173 | 33.170 | 63.421 | 126.720 | 288.270 | 0.032 |
+| 1.5 | 0.131 | 0.132 | 0.132 | 0.136 | 0.137 | 0.438 |
+| 1.7 | 0.263 | 0.297 | 0.288 | 0.312 | 0.313 | 0.312 |
+| 1.8 | 0.513 | 0.623 | 0.601 | 0.666 | 0.663 | 0.233 |
+| 1.9 | 1.532 | 2.317 | 2.309 | 2.284 | 2.295 | 0.131 |
+| 2.0 | 25.124 | 32.977 | 62.878 | 125.442 | 285.360 | 0.031 |
 
 Up to 1.9 the TTFT has a level: about 0.14 s at 1.5, 0.31 s at 1.7,
 0.6 s at 1.8 and 2.0 s at 1.9 (the last two the mean of seeds 1–3 at
-320 000 s). The level at 1.9 is noisy: at 320 000 s, seeds 1–3 give 2.30,
-1.70 and 1.94 s, each with a 95 % interval of ±0.3–0.5 s within its run
-(at 1.8 they give 0.66, 0.56 and 0.57 s). With seed 1 the 20 000 s runs
+320 000 s). The level at 1.9 is noisy: at 320 000 s, seeds 1–3 give 2.29,
+1.68 and 1.93 s, each with a 95 % interval of ±0.3–0.5 s within its run
+(at 1.8 they give 0.66, 0.57 and 0.57 s). With seed 1 the 20 000 s runs
 at 1.8 and 1.9 read below the level: the queue's long excursions are
 rare, and a short run may not sample one; another seed may read above
 it. Only 2.0 has no level: its TTFT
-keeps growing with the run length, so 25.17 s is one moment of a queue
+keeps growing with the run length, so 25.12 s is one moment of a queue
 without bound.
 
 The cliff is between 1.9 and 2.0 sessions/s, and latency rises steeply
@@ -64,8 +64,8 @@ progress); when one does, its latency samples do not describe all
 offered traffic. Inspect these counters, and the run length, before using
 a mean for capacity planning, and repeat the experiment across seeds.
 
-Measured 2026-10-14 on serQ 1b0a47b with the paired-workload change (the
-workload a file of its own), by the commands on this page (seeds 2 and 3:
+Measured 2026-10-15 on serQ 13c7166 with whole token counts (#661), by
+the commands on this page (seeds 2 and 3:
 `--seed 2`, `--seed 3` at `--horizon 320000`).
 
 ## Is it just saturation?
@@ -80,12 +80,12 @@ serq run docs/tutorial/programs/05-engine.sq --workload docs/tutorial/programs/w
 
 | sessions/s | KV blocks | from cache | TTFT (s) | preemptions | utilisation |
 |---|---|---|---|---|---|
-| 2.0 | 4,000 | 0.031 | 25.173 | 6,257 | 1.000 |
-| 2.0 | 40,000 | 0.832 | 0.020 | 0 | 0.471 |
-| 3.0 | 40,000 | 0.832 | 0.023 | 0 | 0.635 |
+| 2.0 | 4,000 | 0.032 | 25.124 | 6,484 | 1.000 |
+| 2.0 | 40,000 | 0.832 | 0.020 | 0 | 0.470 |
+| 3.0 | 40,000 | 0.832 | 0.023 | 0 | 0.634 |
 
 At 2.0 sessions/s, the larger pool turns a queue that grows without bound
-(25.17 s at this horizon) into a TTFT of 0.020 s. Both larger-pool runs have no preemptions.
+(25.12 s at this horizon) into a TTFT of 0.020 s. Both larger-pool runs have no preemptions.
 Memory capacity changes the amount of recomputation, even with the same
 arrival rate and engine cost model.
 

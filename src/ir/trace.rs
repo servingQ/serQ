@@ -50,9 +50,24 @@ impl Corpus {
                 sessions.push(TraceSession::default());
                 last = Some(sid);
             }
+            // `new` and `out` are numbers of tokens: whole ones (#661)
+            let tokens = |i: usize| -> Result<f64, String> {
+                let x = num(i)?;
+                if x.fract() != 0.0 {
+                    let name = ["session", "turn", "new", "out"][i];
+                    return Err(format!(
+                        "line {}: column {} ({name}): `{}` is not a whole number of tokens\nhelp: \
+                         a token count is a whole number (#661)",
+                        ln + 1,
+                        i + 1,
+                        f[i]
+                    ));
+                }
+                Ok(x)
+            };
             sessions.last_mut().unwrap().turns.push(Turn {
-                new: num(2)?,
-                out: num(3)?,
+                new: tokens(2)?,
+                out: tokens(3)?,
                 think: num(4)?,
                 forced: if f.len() == 6 { num(5)? } else { 0.0 },
             });
