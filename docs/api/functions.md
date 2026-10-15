@@ -7,6 +7,11 @@ they are not part of the call syntax. Arguments are required and positional.
 A wrong count, wrong kind, or unavailable evaluation context is a link error.
 See [types](index.md#types) and [evaluation moments](context.md).
 
+An editor reads the functions of the index below, their parameters and
+what each returns, from `serq::frontend::highlight::functions()` (the
+table `ir::Fun` and the summaries beside it), not from this page; a test
+holds the index and each function's section equal to it.
+
 ## Function index
 
 **[Arithmetic](#arithmetic)**
@@ -16,7 +21,7 @@ See [types](index.md#types) and [evaluation moments](context.md).
 | [`min(a: expr, b: expr)`](#min) | The smaller argument. |
 | [`max(a: expr, b: expr)`](#max) | The larger argument. |
 | [`abs(x: expr)`](#abs) | The absolute value of `x`. |
-| [`floor(x: expr [, step: expr])`](#floor) | The greatest integer less than or equal to `x`, represented as a number; with `step`, the greatest multiple of `step` at most `x`. |
+| [`floor(x: expr [, step: expr])`](#floor) | The greatest integer less than or equal to `x`, represented as a number. |
 | [`ceil(x: expr)`](#ceil) | The least integer greater than or equal to `x`, represented as a number. |
 | [`sqrt(x: expr)`](#sqrt) | The square root of `x`. |
 | [`exp(x: expr)`](#exp) | The exponential `eˣ`. |
@@ -31,7 +36,7 @@ See [types](index.md#types) and [evaluation moments](context.md).
 | [`work(s: stage)`](#work) | Unfinished work at `s`, in the stage's work unit. |
 | [`est_lambda(s: stage)`](#est_lambda) | Measured arrival rate at `s`, per clock unit. |
 | [`est_rho(s: stage)`](#est_rho) | Measured utilization at `s`, capped below 1. |
-| [`est_wait(s: stage)`](#est_wait) | Measured mean wait at `s` from a run's arrival to its start (a run's `latency` included), in clock units. |
+| [`est_wait(s: stage)`](#est_wait) | Measured mean wait at `s` from a run's arrival to its start, a run's `latency` included, in clock units. |
 | [`price(s: stage, s_hit: expr, ds: expr)`](#price) | An online estimate of the added cost of a cache miss, in clock units. |
 
 **[Pool](#pool)**
@@ -49,7 +54,7 @@ See [types](index.md#types) and [evaluation moments](context.md).
 
 | Function | Returns |
 |---|---|
-| [`budget_left(s: stage)`](#budget_left) | Tokens available to admissions after planning service for the current residents. |
+| [`budget_left(s: stage)`](#budget_left) | Tokens available to admissions after planning service for the running requests. |
 
 **[Declarations](#declarations)**
 

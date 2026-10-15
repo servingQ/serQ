@@ -390,6 +390,95 @@ pub fn vocabulary() -> Vec<(Role, String)> {
     out
 }
 
+/// A parameter of a function a program may call: its name, as the
+/// reference names it, and what it takes (`expr`, `stage` or `pool`).
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct Param {
+    pub name: &'static str,
+    pub kind: &'static str,
+}
+
+/// A function of `ir::Fun`, as an editor offers it: for the keys a
+/// `choose … by (…)` may read, and what each argument is. `blocksize` and
+/// `cost`, which the linker folds, and the aggregates of a claim
+/// (`total(o)`, …) are other tables'. The reference's index
+/// (`docs/api/functions.md`) is a copy, held equal by a test.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct Function {
+    pub name: &'static str,
+    pub params: Vec<Param>,
+    /// What it reads: `arithmetic` (its arguments alone), `stage`, `pool`
+    /// or `engine`.
+    pub group: &'static str,
+    /// What it returns, one sentence of Markdown (`code` in backticks).
+    pub summary: &'static str,
+}
+
+/// Every function of `ir::Fun`, in the table's order.
+pub fn functions() -> Vec<Function> {
+    Fun::all()
+        .map(|f| Function {
+            name: f.name(),
+            params: f
+                .params()
+                .iter()
+                .zip(f.signature())
+                .map(|(&name, &kind)| Param {
+                    name,
+                    kind: kind.name(),
+                })
+                .collect(),
+            group: f.group().name(),
+            summary: summary(f),
+        })
+        .collect()
+}
+
+/// What a function returns: the reference's `Returns`, its first sentence.
+/// A match, so a new `Fun` does not compile without one.
+fn summary(f: Fun) -> &'static str {
+    match f {
+        Fun::Min => "The smaller argument.",
+        Fun::Max => "The larger argument.",
+        Fun::Abs => "The absolute value of `x`.",
+        Fun::Floor => "The greatest integer less than or equal to `x`, represented as a number.",
+        Fun::Ceil => "The least integer greater than or equal to `x`, represented as a number.",
+        Fun::Sqrt => "The square root of `x`.",
+        Fun::Exp => "The exponential `eˣ`.",
+        Fun::Ln => "The natural logarithm of `x`.",
+        Fun::Queue => "Jobs present at `s`, including waiting and in-service jobs.",
+        Fun::Busy => {
+            "Jobs in service: active servers for `fifo`, scheduled jobs in the current \
+             iteration for `step`."
+        }
+        Fun::Work => "Unfinished work at `s`, in the stage's work unit.",
+        Fun::Used => "Units currently allocated in `p`.",
+        Fun::Free => "`cap - used`. Cached units are reclaimable and are not subtracted.",
+        Fun::CachedIn => {
+            "The cached units in `p` of this session's chain there (its waiting hold's if that \
+             hold asks for `p`, else its innermost hold of `p`'s, else the chain it or one of \
+             its legs last cached along in `p`, else its own), in whole blocks; 0 when \
+             evaluated without a session."
+        }
+        Fun::Allocated => {
+            "This session's own allocated units in `p`, in its holds and its leases; 0 when \
+             evaluated without a session."
+        }
+        Fun::Holders => "Sessions holding units in `p`.",
+        Fun::Queued => "Sessions waiting in `p`'s admission queue.",
+        Fun::Price => "An online estimate of the added cost of a cache miss, in clock units.",
+        Fun::BudgetLeft => {
+            "Tokens available to admissions after planning service for the running requests."
+        }
+        Fun::EstLambda => "Measured arrival rate at `s`, per clock unit.",
+        Fun::EstRho => "Measured utilization at `s`, capped below 1.",
+        Fun::EstWait => {
+            "Measured mean wait at `s` from a run's arrival to its start, a run's `latency` \
+             included, in clock units."
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
