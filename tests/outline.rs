@@ -384,6 +384,10 @@ fn devices_and_engines_say_their_capacities_and_pools() {
         .map(|c| (c.name.as_str(), c.pool.as_deref()))
         .collect();
     assert_eq!(caps, [("reqs", Some("P.reqs"))]);
+    // who admits each pool's queue (#645 B9): the engine it is on, or the
+    // engine `on D.gpu` names; the linker's own answer
+    assert_eq!(e.caps[0].admitted_by.as_deref(), Some("P"));
+    assert_eq!(d.caps[0].admitted_by.as_deref(), Some("D"));
 
     // a device no engine runs on has no KV, whatever is on it
     let o = outline(
@@ -406,5 +410,8 @@ fn devices_and_engines_say_their_capacities_and_pools() {
     assert_eq!(gpu.memory.as_deref(), Some("b"));
     let pools: Vec<_> = gpu.caps.iter().map(|c| c.pool.as_deref()).collect();
     assert_eq!(pools, [Some("a"), Some("b")]);
+    // `on gpu`, no `E.`: no engine admits them, the engine's KV as well
+    assert!(gpu.caps.iter().all(|c| c.admitted_by.is_none()));
     assert_eq!(ram.caps[0].pool.as_deref(), Some("buf"));
+    assert_eq!(ram.caps[0].admitted_by, None);
 }

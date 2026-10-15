@@ -1181,6 +1181,20 @@ impl Parser {
         }
     }
 
+    /// The engine whose scheduler admits the queue of the pool `po`: the
+    /// engine it is on, or the one its `on ENGINE.DEVICE` names (which
+    /// `check_admitted_by` has seen runs there); none for a pool `on
+    /// DEVICE`, the engine's KV too, where a hold is admitted as soon as it
+    /// fits. The one rule: `link_engines` sets `admit_via` by it,
+    /// `check_engine_runs` reads it, and the outline says it.
+    pub(super) fn admitted_by(&self, po: &PoolOn) -> Option<String> {
+        if self.engines.iter().any(|e| e.name == po.on.owner) {
+            Some(po.on.owner.clone())
+        } else {
+            po.on.admitted_by.clone()
+        }
+    }
+
     /// The outline's devices and engines, once the program is read: each
     /// one's capacities and the pool on each, and an engine's device's
     /// memory, the first `pool … on` it, as `link_engines` takes it (which
@@ -1191,15 +1205,18 @@ impl Parser {
             return;
         };
         let caps = |owner: &str, caps: &[Capacity]| -> Vec<crate::frontend::outline::Capacity> {
+            let on = |c: &Capacity| {
+                self.pools_on
+                    .iter()
+                    .find(|po| po.on.owner == owner && po.cap == c.name)
+            };
             caps.iter()
                 .map(|c| crate::frontend::outline::Capacity {
                     name: c.name.clone(),
                     range: r.token(&self.toks, c.at),
-                    pool: self
-                        .pools_on
-                        .iter()
-                        .find(|po| po.on.owner == owner && po.cap == c.name)
-                        .map(|po| prog.pools[po.pool].name.clone()),
+                    pool: on(c).map(|po| prog.pools[po.pool].name.clone()),
+                    // as `link_engines` sets it, from the one rule
+                    admitted_by: on(c).and_then(|po| self.admitted_by(po)),
                 })
                 .collect()
         };
@@ -1242,14 +1259,17 @@ impl Parser {
     /// its engine's memory; `waiting.count` counts the queues the engine
     /// admits, each member of a family.
     pub(super) fn link_engines(&mut self, prog: &mut Program) -> PResult<()> {
+        let via = |e: Option<String>| {
+            e.map(|name| Ref {
+                span: None,
+                name,
+                index: None,
+            })
+        };
         for po in &self.pools_on {
             let name = prog.pools[po.pool].name.clone();
             if self.engines.iter().any(|e| e.name == po.on.owner) {
-                prog.pools[po.pool].admit_via = Some(Ref {
-                    span: None,
-                    name: po.on.owner.clone(),
-                    index: None,
-                });
+                prog.pools[po.pool].admit_via = via(self.admitted_by(po));
                 continue;
             }
             let on: Vec<&EngineDecl> = self
@@ -1296,11 +1316,7 @@ impl Parser {
                 name: name.clone(),
                 index: None,
             });
-            prog.pools[po.pool].admit_via = po.on.admitted_by.as_ref().map(|e| Ref {
-                span: None,
-                name: e.clone(),
-                index: None,
-            });
+            prog.pools[po.pool].admit_via = via(self.admitted_by(po));
         }
         for (owner, caps) in self
             .devices

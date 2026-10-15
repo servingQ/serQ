@@ -179,6 +179,10 @@ pub struct Capacity {
     pub range: Range,
     /// The pool on it, as the program names it (`D.kv`).
     pub pool: Option<String>,
+    /// The engine whose scheduler admits that pool's queue (`pool … on E`,
+    /// `on E.DEVICE`), or null: a pool `on DEVICE`, an engine's KV too, admits a
+    /// hold as soon as it fits (#645 B9). The IR's `admit_via`, read unlinked.
+    pub admitted_by: Option<String>,
 }
 
 /// `device NAME { … }`: its capacities, the engine that runs on it, and
