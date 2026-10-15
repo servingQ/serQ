@@ -208,6 +208,9 @@ struct Parser {
     /// The `def` overrides: the body an expression definition has instead of
     /// its own, and whether the program defined it.
     def_overrides: Vec<(String, String, bool)>,
+    /// A pair's files' own names (`frontend::paired`): an override's body
+    /// is renamed as its definition's file is.
+    paired_own: Option<crate::frontend::paired::Own>,
     /// The queues declared so far; their entries are expanded in `assemble`.
     queues: Vec<QueueDecl>,
     /// `let` constants with a constant value, for a family's size.
@@ -676,11 +679,9 @@ pub fn parse_paired(
     lets: &[String],
 ) -> Result<Program, String> {
     use crate::frontend::paired::{DEPLOYMENT, WORKLOAD};
-    let spliced = p.tokens()?;
-    let mut parser = Parser::new(spliced.toks);
-    parser.paired = Some(spliced.split);
+    let mut spliced = p.tokens()?;
     // an override names a definition as its file writes it
-    parser.def_overrides = defs
+    let def_overrides = defs
         .iter()
         .map(|(n, e)| {
             let prefix = if spliced.defs.1.contains(n) {
@@ -693,6 +694,11 @@ pub fn parse_paired(
             (format!("{prefix}{n}"), e.clone(), false)
         })
         .collect();
+    let mut parser = Parser::new(std::mem::take(&mut spliced.toks));
+    parser.paired = Some(spliced.split);
+    parser.def_overrides = def_overrides;
+    // an override's body reads its definition's file's names (#703)
+    parser.paired_own = Some(spliced.own());
     parser.supplied_inputs = lets.to_vec();
     let mut prog = parser
         .program()
@@ -1799,6 +1805,7 @@ impl Parser {
             expanded: vec![],
             deferred: vec![],
             def_overrides: vec![],
+            paired_own: None,
             queues: vec![],
             consts: vec![],
             structural_overrides: vec![],
@@ -3674,6 +3681,9 @@ impl Parser {
                 .filter(|t| t.tok != Tok::Eof)
                 .map(|t| Token { line, col, ..t })
                 .collect();
+            if let Some(own) = &self.paired_own {
+                crate::frontend::paired::rename_override(own, &name, &mut body);
+            }
         }
         if body.is_empty() && !stmts {
             return self.err_at(at, format!("`def {name}` has no expression"));

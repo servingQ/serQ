@@ -61,6 +61,32 @@ pub struct Spliced {
     /// The definitions of the deployment file and of the workload file, as
     /// written: an override names one (`--def service=…`).
     pub defs: (Vec<String>, Vec<String>),
+    /// Each file's own constants and definitions, the deployment's and the
+    /// workload's: an override's body reads its definition's file's (#703).
+    own: Own,
+}
+
+impl Spliced {
+    /// Each file's own names, the deployment's and the workload's, for the
+    /// parser to rename an override's body with (`rename_override`).
+    pub fn own(&self) -> Own {
+        self.own.clone()
+    }
+}
+
+/// Each file's own constants and definitions: the deployment's, the workload's.
+pub type Own = (Vec<(Token, String)>, Vec<(Token, String)>);
+
+/// The tokens of an override of the definition `name` (as the pair
+/// renamed it), its file's names renamed as that file's are, so that it
+/// reads them as the definition it replaces would (`--def size_of=a * x`,
+/// #703).
+pub fn rename_override(own: &Own, name: &str, body: &mut [Token]) {
+    if name.starts_with(DEPLOYMENT) {
+        rename(body, &own.0, DEPLOYMENT);
+    } else if name.starts_with(WORKLOAD) {
+        rename(body, &own.1, WORKLOAD);
+    }
 }
 
 impl<'a> Paired<'a> {
@@ -290,6 +316,7 @@ impl<'a> Paired<'a> {
             split: self.lines,
             stages,
             defs,
+            own: (dep_own, wl_own),
         })
     }
 }
