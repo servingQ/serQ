@@ -8,14 +8,14 @@ its own given when the program runs (`serq run DEPLOYMENT --workload
 WORKLOAD`); `examples/pairs.json` names each program's. Client delays (`tool`, `user`, `delegate`) represent time
 outside the engine.
 
-All four programs share the engine constants, resource declarations and
-server body of `examples/multi-turn/vllm.sq`, checked by `tests/workloads.rs`.
-They hide output length `o` from scheduling expressions. See the
+One deployment, `examples/multi-turn/vllm.sq`, runs under all four
+workloads: `examples/pairs.json` lists them for it, its own `chat.sq` first
+(`serq run examples/multi-turn/vllm.sq --workload examples/workloads/single_turn.sq`).
+Its server hides the output length from scheduling expressions. See the
 [vLLM use case](vllm.md) for the engine's validation scope.
 
 | | single turn | multi-turn chat | multi-turn agent | agent with subagents |
 |---|---|---|---|---|
-| program | `vllm_single_turn.sq` | `vllm_chat.sq` | `vllm.sq` | `vllm_subagents.sq` |
 | workload (`examples/workloads/`) | `single_turn.sq` | `human_chat.sq` | `chat.sq` | `subagents.sq` |
 | a session is | one request | a conversation | a task | a task and the subtasks it hands out |
 | carried to the next turn | nothing | the conversation, `K = K + n + o` | the same | the same |
@@ -92,17 +92,18 @@ The approximation has three parts:
   share entries across sessions, so the subagent misses that prefix.
 
 `--q 0` gives the same agents with no delegation. Here are both next to
-the other three (seed 1, 1 800 s after warm-up; requests/s is the number of
-`response` observations over those 1 800 s; each program runs at its own
-arrival rate, so compare the rows within a pair, not across the table):
+the other three, `vllm.sq` under each workload (seed 1, 1 800 s after
+warm-up; requests/s is the number of `response` observations over those
+1 800 s; each workload arrives at its own rate, so compare the rows within
+a pair, not across the table):
 
-| program | requests/s | hit rate | prefill tokens | TTFT (ms) | response (ms) | engine busy |
+| workload | requests/s | hit rate | prefill tokens | TTFT (ms) | response (ms) | engine busy |
 |---|---|---|---|---|---|---|
-| `vllm_single_turn` | 2.98 | 0.00 | 1 995 | 43 | 96 | 0.23 |
-| `vllm_chat` | 1.62 | 0.80 | 221 | 5 | 66 | 0.10 |
-| `vllm` | 2.94 | 0.89 | 727 | 16 | 62 | 0.16 |
-| `vllm_subagents --q 0` | 0.90 | 0.89 | 665 | 13 | 58 | 0.05 |
-| `vllm_subagents` | 3.77 | 0.68 | 1 997 | 53 | 112 | 0.29 |
+| `single_turn` | 2.98 | 0.00 | 1 995 | 43 | 96 | 0.23 |
+| `human_chat` | 1.62 | 0.80 | 221 | 5 | 66 | 0.10 |
+| `chat` | 2.94 | 0.89 | 727 | 16 | 62 | 0.16 |
+| `subagents --q 0` | 0.90 | 0.89 | 665 | 13 | 58 | 0.05 |
+| `subagents` | 3.77 | 0.68 | 1 997 | 53 | 112 | 0.29 |
 
 Delegation increases request traffic and the mean prefill work in this
 approximation. The first turn of each subagent misses its copied context;

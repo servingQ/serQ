@@ -5,7 +5,7 @@
 
 mod common;
 
-use serq::{compile_paired, outline_paired, run_paired};
+use serq::{compile_paired, outline_paired};
 
 const DEPLOYMENT: &str = "fn main() {
   stage svc : fifo;
@@ -56,35 +56,25 @@ fn main() {
     .unwrap();
 }
 
-/// The paired example's one deployment, under each workload, reports what
-/// the example that pairs the same engine with that workload
-/// (`examples/pairs.json`) does.
+/// One deployment under several loads: `examples/multi-turn/vllm.sq` runs
+/// under each workload `examples/pairs.json` lists for it, the chat it
+/// starts with first, and each loads it as its own client.
 #[test]
-fn a_pair_runs_as_its_example() {
-    let read = |p: &str| std::fs::read_to_string(p).unwrap();
-    let deployment = read("examples/paired/deployments/vllm.sq");
+fn one_deployment_runs_under_each_of_its_workloads() {
+    let deployment = std::path::Path::new("examples/multi-turn/vllm.sq");
+    let workloads = serq::paired_workloads(deployment);
+    let names: Vec<_> = workloads
+        .iter()
+        .map(|w| w.file_stem().unwrap().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(names, ["chat", "human_chat", "single_turn", "subagents"]);
     let ov = common::horizon(100.0);
-    for (workload, example) in [
-        (
-            "examples/paired/workloads/multi_turn.sq",
-            "examples/multi-turn/vllm.sq",
-        ),
-        (
-            "examples/paired/workloads/single_turn.sq",
-            "examples/single-turn/vllm_single_turn.sq",
-        ),
-        (
-            "examples/paired/workloads/chat.sq",
-            "examples/multi-turn/vllm_chat.sq",
-        ),
-        (
-            "examples/paired/workloads/subagents.sq",
-            "examples/subagent/vllm_subagents.sq",
-        ),
-    ] {
-        let pair = run_paired(&deployment, &read(workload), ("d", "w"), &ov, None).unwrap();
-        let one = common::run_example(example, &ov).unwrap();
-        assert_eq!(pair.json(), one.json(), "{workload} against {example}");
+    for w in &workloads {
+        let p = serq::load_paired(deployment, w, &ov)
+            .unwrap_or_else(|e| panic!("{}: {e}", w.display()));
+        let r = serq::run_ir(&p, w.parent()).unwrap();
+        assert!(r.turns > 0, "{}: no turn ran", w.display());
+        assert!(p.stage_index("vllm").is_some(), "{}", w.display());
     }
 }
 

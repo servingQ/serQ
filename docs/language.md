@@ -436,7 +436,7 @@ itself (`stage user : delay;`), the pools it holds itself (`pool live { cap
 deployment file's and refused.
 
 ```serq
-// examples/workloads/human_chat.sq (examples/multi-turn/vllm_chat.sq runs it)
+// examples/workloads/human_chat.sq (examples/multi-turn/vllm.sq runs it)
 let Lambda = 0.3;      // conversations per second
 let p = 0.8;           // the person asks again
 let Z = 20.0;          // reading and typing time (s)
@@ -462,10 +462,11 @@ last request sends `final`, and the server `if (final) { drop kv; }`,
 
 The examples' deployments keep their paths; their workloads are in
 `examples/workloads/` (the tutorial's in `docs/tutorial/programs/workloads/`),
-and `examples/pairs.json` maps each program to its workload. One workload
-can run on several deployments (`chat.sq` on `vllm.sq` and
-`vllm_lmcache.sq`), and `examples/paired/` has vLLM's engine once under
-four workloads.
+and `examples/pairs.json` maps each program to its workload, or to the
+workloads it runs under, the one it starts with first. One workload can run
+on several deployments (`chat.sq` on `vllm.sq` and `vllm_lmcache.sq`), and
+one deployment under several workloads (`vllm.sq` under a chat, a person's
+chat, single turns and subagents).
 
 The parser puts what `send` binds at the end of the `turn` block, a
 hidden parameter in the IR's `hidden`; it expands
@@ -1649,10 +1650,9 @@ file `examples/pairs.json` gives it, from `examples/workloads/`
 | `multi-turn/replica.sq` | the paper's two-resource replica on the open-session scenario (`advance running decode first`; the server drops a session's KV after the request its workload sends as `final`, before a last tool call, where libqueuingsim drops it after: fewer evictions, a higher hit rate) | — |
 | `multi-turn/routing.sq` | four replicas, five routing policies | — |
 | `multi-turn/thunderagent.sq` | ThunderAgent's router in TR mode in front of two vLLM replicas, a fixed number of agents at once ([use case](use-cases/thunderagent.md)) | the source (ThunderAgent at 7ddc861), read; `tests/thunderagent.rs` against the router's default mode; no oracle |
-| `multi-turn/vllm.sq` | vLLM v1's engine under a multi-turn agent workload | its engine is the other vLLM workloads' (`tests/workloads.rs`) |
+| `multi-turn/vllm.sq` | vLLM v1's engine, under a multi-turn agent workload and, from `examples/pairs.json`, a person's chat, single turns and an approximated subagent workload ([use case](use-cases/workloads.md)) | `tests/workloads.rs`, `tests/paired.rs` |
 | `multi-turn/vllm_lmcache.sq` | `vllm.sq` with an LMCache server as its L2 (`queue lmc : l2`, the engine's `connector lmc { … }`) | the source (the LMCache connector at vLLM v0.31.0, the scheduler at 0c87a197); `tests/connector.rs`; no scheduler oracle |
 | `multi-turn/vllm_system_prompt.sq` | `vllm.sq` serving the sessions of `M` products, each with its own system prompt, shared across sessions (its admission's `prefix (product: floor(S, bs), serial: inf)`) | the source (vLLM at 0c87a197); `tests/shared_prefix.rs`; no scheduler oracle |
-| `single-turn/vllm_single_turn.sq`, `multi-turn/vllm_chat.sq`, `subagent/vllm_subagents.sq` | the same engine under a single-turn, a chat and an approximated subagent workload ([use case](use-cases/workloads.md)) | `tests/workloads.rs` |
 | `oracle/vllm_shared_prompt.sq` | `vllm_replay.sq` with a system prompt every session shares (its admission's `prefix (system: floor(S, bs), serial: inf)`), on the scenario `tools/oracle/shared_trace` | the upstream oracle, `tests/vllm_cache.rs`; no Lean theorem |
 | `oracle/vllm_request.sq` | one vLLM v1 request on the step clock, compiled per scenario to `tools/oracle/{alone,chunked,hol,longchunk,mixed,preempt,seqcap}.ir.json` | the upstream oracle ([vLLM correspondence](#7-vllm-v1-as-a-serq-program)), `tests/vllm_oracle.rs`, the Lean theorems generated from the same IR |
 | `replay/vllm_replay.sq` | vLLM v1 on the A100 testbed replaying the short-context trace ([A100 testbed](#8-vllm-on-the-a100-testbed)) | the prefix-cache oracle `tools/oracle/cache_trace` (`tests/vllm_cache.rs`, theorem `vllm_cache_trace`) |

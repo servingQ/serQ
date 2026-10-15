@@ -1,43 +1,32 @@
 //! Different workloads (`docs/use-cases/workloads.md`).
 //!
-//! The use case's claim is that the single-turn, chat and subagent programs
-//! run `examples/multi-turn/vllm.sq`'s engine and differ from it only in the client.
-//! The engine is the text a reader would compare: the constants from `B` to
-//! `c0`, the declarations from `device gpu` to `pool reqs on vllm`, among
-//! them the `engine vllm` block with its `request`, and the `server` that
-//! calls it. Held to the text, not the IR, because the request is spliced
-//! into the session and the IR has no engine to compare. Snippet markers
-//! (`// --8<-- [start:…]`) are not text a reader sees, so they are skipped.
+//! The use case's claim is that the single-turn, chat and subagent clients
+//! run `examples/multi-turn/vllm.sq`'s engine and differ only in the client.
+//! The engine is one file, so that holds by construction: what is left to
+//! hold is that each of the use case's workloads is one `examples/pairs.json`
+//! runs `vllm.sq` under, and that it compiles there.
 
-use serq::program_path;
-
-fn engine(name: &str) -> Vec<String> {
-    let src = std::fs::read_to_string(program_path(name)).unwrap();
-    let lines: Vec<&str> = src
-        .lines()
-        .filter(|l| !l.contains("--8<--"))
-        .map(|l| l.strip_prefix("  ").unwrap_or(l))
-        .collect();
-    let span = |from: &str, to: &dyn Fn(&str) -> bool| -> Vec<String> {
-        let i = lines
-            .iter()
-            .position(|l| l.starts_with(from))
-            .unwrap_or_else(|| panic!("{name}: no line starting `{from}`"));
-        let j = i + lines[i..].iter().position(|l| to(l)).unwrap();
-        lines[i..=j].iter().map(|l| l.to_string()).collect()
-    };
-    let mut out = span("let B ", &|l| l.starts_with("let c0 "));
-    out.extend(span("device gpu ", &|l| {
-        l.starts_with("pool reqs on vllm ")
-    }));
-    out.extend(span("server (", &|l| l == "}"));
-    out
-}
+use std::path::Path;
 
 #[test]
 fn every_workload_runs_the_vllm_engine() {
-    let vllm = engine("vllm");
-    for name in ["vllm_single_turn", "vllm_chat", "vllm_subagents"] {
-        assert_eq!(engine(name), vllm, "{name}'s engine is not vllm.sq's");
+    let deployment = Path::new("examples/multi-turn/vllm.sq");
+    let paired = serq::paired_workloads(deployment);
+    for w in ["chat", "human_chat", "single_turn", "subagents"] {
+        let w = Path::new("examples/workloads").join(format!("{w}.sq"));
+        assert!(
+            paired.iter().any(|p| p.ends_with(&w)),
+            "{}: not among vllm.sq's workloads",
+            w.display()
+        );
+        serq::load_paired(
+            deployment,
+            &w,
+            &serq::Overrides {
+                horizon: Some(10.0),
+                ..Default::default()
+            },
+        )
+        .unwrap_or_else(|e| panic!("{}: {e}", w.display()));
     }
 }

@@ -16,6 +16,10 @@ program is split, and pyserq takes the workload too.
 
 ### Step 1: pairing (#639)
 
+(`examples/paired/` was merged into `examples/multi-turn/vllm.sq` under four
+workloads in #655: with every example a pair, one deployment lists several
+workloads in `examples/pairs.json`. The record below is #639's.)
+
 `examples/multi-turn/vllm.sq`, `vllm_chat.sq`, `single-turn/vllm_single_turn.sq`
 and `subagent/vllm_subagents.sq` are one engine under four workloads, written
 four times; `tests/workloads.rs` holds the four engines' text equal. After,
@@ -282,4 +286,4 @@ Within the seeds' spread, but always that way.
 of chapters 4, 5 and 6, which run 04 and 05, were measured again with
 their own commands. `scripts/check_rust.sh` links and draws every program
 with its workload from `examples/pairs.json` (`scripts/pairs.py`), and
-every deployment of `examples/paired/` under every workload there.
+every deployment under every workload `examples/pairs.json` lists for it.

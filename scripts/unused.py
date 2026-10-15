@@ -69,11 +69,14 @@ def tags(x, out):
 
 def unused():
     used = set()
+    # each program under each workload it runs (examples/pairs.json)
     for p in programs():
-        ir = subprocess.run([str(SERQ), "ir", str(p), *pairs.workload_args(p), "--horizon", "10"], capture_output=True, text=True, cwd=ROOT)
-        if ir.returncode:
-            sys.exit(f"FAIL: {p.relative_to(ROOT)}: serq ir failed\n{ir.stderr}")
-        tags(json.loads(ir.stdout), used)
+        for w in pairs.workloads(p) or [None]:
+            args = ["--workload", str(w)] if w else []
+            ir = subprocess.run([str(SERQ), "ir", str(p), *args, "--horizon", "10"], capture_output=True, text=True, cwd=ROOT)
+            if ir.returncode:
+                sys.exit(f"FAIL: {p.relative_to(ROOT)}: serq ir failed\n{ir.stderr}")
+            tags(json.loads(ir.stdout), used)
     # the IR the oracles and the Lean claims read: an example with its
     # scenario's sessions written in
     for p in sorted((ROOT / "tools").glob("**/*.ir.json")):

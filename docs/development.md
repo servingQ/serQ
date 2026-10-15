@@ -118,8 +118,8 @@ one comes from:
   `session,turn,new,out,think,forced` (`examples/replay/data/`), and
   `--trace F` swaps the file without editing the workload.
 - **A quantity the program cannot compute itself.** For example, the subagent
-  wait `W` of `examples/subagent/vllm_subagents.sq` (an input of its workload,
-  `examples/workloads/subagents.sq`) is taken from the program's own
+  wait `W` of `examples/workloads/subagents.sq` (an input of the workload
+  `examples/multi-turn/vllm.sq` runs under) is taken from the program's own
   output. Run the program, compute the statistic from `--dump`, set it with
   `--W …` (the example exposes `W` through `args.number`), and repeat
   until it stops moving. Write the fixed point into that input's default

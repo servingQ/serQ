@@ -74,7 +74,6 @@ fn each_oracle_program_synthesises_to_the_configuration_its_scenario_ran() {
 fn the_vllm_programs_are_on_vllms_architecture() {
     for path in [
         "examples/multi-turn/vllm.sq",
-        "examples/multi-turn/vllm_chat.sq",
         "examples/replay/vllm_replay.sq",
     ] {
         let t = target(path).unwrap_or_else(|e| panic!("{path}: {e}"));

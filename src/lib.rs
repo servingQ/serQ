@@ -422,13 +422,31 @@ pub fn program_path(name: &str) -> std::path::PathBuf {
 /// and tools (`docs/design/paired-workload.md`). `path` is this crate's,
 /// absolute or relative to it.
 pub fn paired_workload(path: &Path) -> Option<std::path::PathBuf> {
+    paired_workloads(path).into_iter().next()
+}
+
+/// Every workload `examples/pairs.json` runs the program at `path` with,
+/// the one it starts with first: one deployment under several loads
+/// (`examples/multi-turn/vllm.sq`).
+pub fn paired_workloads(path: &Path) -> Vec<std::path::PathBuf> {
+    /// One workload, or several.
+    #[derive(serde::Deserialize)]
+    #[serde(untagged)]
+    enum Paired {
+        One(String),
+        Several(Vec<String>),
+    }
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let list = root.join("examples/pairs.json");
     let text = std::fs::read_to_string(&list).unwrap_or_else(|e| panic!("{}: {e}", list.display()));
-    let pairs: std::collections::BTreeMap<String, String> =
+    let pairs: std::collections::BTreeMap<String, Paired> =
         serde_json::from_str(&text).unwrap_or_else(|e| panic!("{}: {e}", list.display()));
     let path = path.strip_prefix(root).unwrap_or(path);
-    pairs.get(path.to_str()?).map(|w| root.join(w))
+    match path.to_str().and_then(|p| pairs.get(p)) {
+        None => vec![],
+        Some(Paired::One(w)) => vec![root.join(w)],
+        Some(Paired::Several(ws)) => ws.iter().map(|w| root.join(w)).collect(),
+    }
 }
 
 /// Convenience for tests: run `examples/*/<name>.sq` with overrides given

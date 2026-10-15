@@ -1,4 +1,6 @@
-// A person's multi-turn chat (examples/multi-turn/vllm_chat.sq runs it).
+// A person's multi-turn chat: the person reads the answer, types a short
+// follow-up, and sends the whole conversation back
+// (examples/multi-turn/vllm.sq runs it, docs/use-cases/workloads.md).
 
 let Lambda = 0.3;      // conversations per second
 let p = 0.8;           // the person asks again

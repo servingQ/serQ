@@ -11,8 +11,12 @@
   "examples/multi-turn/replica.sq": "examples/workloads/replica.sq",
   "examples/multi-turn/routing.sq": "examples/workloads/routing.sq",
   "examples/multi-turn/thunderagent.sq": "examples/workloads/closed_agents.sq",
-  "examples/multi-turn/vllm.sq": "examples/workloads/chat.sq",
-  "examples/multi-turn/vllm_chat.sq": "examples/workloads/human_chat.sq",
+  "examples/multi-turn/vllm.sq": [
+    "examples/workloads/chat.sq",
+    "examples/workloads/human_chat.sq",
+    "examples/workloads/single_turn.sq",
+    "examples/workloads/subagents.sq"
+  ],
   "examples/multi-turn/vllm_lmcache.sq": "examples/workloads/chat.sq",
   "examples/multi-turn/vllm_system_prompt.sq": "examples/workloads/chat_products.sq",
   "examples/oracle/vllm_request.sq": "examples/workloads/one_request.sq",
@@ -34,8 +38,6 @@
   "examples/single-turn/mg1.sq": "examples/workloads/mg1.sq",
   "examples/single-turn/ps.sq": "examples/workloads/ps.sq",
   "examples/single-turn/separate_phases.sq": "examples/workloads/two_prompts.sq",
-  "examples/single-turn/vllm_single_turn.sq": "examples/workloads/single_turn.sq",
-  "examples/subagent/vllm_subagents.sq": "examples/workloads/subagents.sq",
   "examples/vendors/ascend.sq": "examples/workloads/ascend_batch.sq",
   "examples/vendors/rbln.sq": "examples/workloads/rbln_batch.sq",
   "tests/lean-regress/chunk_expr.sq": "tests/lean-regress/workloads/chunk_expr.sq",
