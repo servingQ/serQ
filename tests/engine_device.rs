@@ -917,8 +917,33 @@ fn the_design_refuses_what_it_says() {
     );
     refused(
         &engine(ok).replace("pool reqs on vllm { }", "pool slots on vllm { }"),
-        "has no capacity `slots`",
+        "error[E-pool-no-capacity]: `vllm` has no capacity `slots`",
     );
+    refused(
+        &engine(ok).replace("pool reqs on vllm { }", "pool slots on vllm { }"),
+        "help: a pool on `vllm` is one of its capacities: declare `slots cap …;` in it",
+    );
+    // a capacity of a nearby name is the one likely meant (#645 A4)
+    refused(
+        &engine(ok).replace("pool reqs on vllm { }", "pool req on vllm { }"),
+        "help: did you mean `reqs`?",
+    );
+    // on the device an engine runs on, a second capacity would be a second
+    // pool there (E-device-two-pools): the way out is that one's, a pool on
+    // no device, whichever order the two pools are written in, and no
+    // capacity of a nearby name is offered
+    for two in [
+        "pool kv on gpu { preempt lifo; } pool kv2 on gpu { }",
+        "pool kv2 on gpu { } pool kv on gpu { preempt lifo; }",
+    ] {
+        let e = error(&engine(ok).replace("pool kv on gpu { preempt lifo; }", two));
+        assert!(e.contains("error[E-pool-no-capacity]"), "{e}");
+        assert!(
+            e.contains("help: the device an engine runs on holds one pool, its KV: declare `kv2` on no device"),
+            "{e}"
+        );
+        assert!(!e.contains("did you mean") && !e.contains("kv2 cap"), "{e}");
+    }
     refused(
         &engine(ok).replace(
             "pool kv on gpu { preempt lifo; }",
