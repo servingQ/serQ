@@ -97,6 +97,9 @@ pub struct Instance {
     pub nodes: Vec<usize>,
     /// Its pools.
     pub pools: Vec<usize>,
+    /// The attribute its `choose` chose: two instances of one variable
+    /// that share a station are one (`own`).
+    pub slot: usize,
 }
 
 /// What a run over several stages moves and waits for, when it is a
@@ -298,6 +301,8 @@ struct Walker<'a> {
     chosen: Vec<(usize, String)>,
     /// The instance each chosen slot made, by slot.
     instance_of_slot: Vec<(usize, usize)>,
+    /// Pairs of instances of one variable found to share a station (`own`).
+    merges: Vec<(usize, usize)>,
     /// Per station and per pool, the one instance every index addressed
     /// it through; `None` once two indices disagree or one is no chosen
     /// attribute, and then it is in no instance's box.
@@ -334,6 +339,7 @@ impl Walker<'_> {
             label,
             nodes: vec![],
             pools: vec![],
+            slot: *slot,
         });
         let k = self.net.instances.len() - 1;
         self.instance_of_slot.push((*slot, k));
@@ -344,7 +350,13 @@ impl Walker<'_> {
     fn place(&mut self, node: usize, r: &CRef) {
         if r.index.is_some() {
             let k = self.instance(r.index.as_deref());
-            own(&mut self.node_owners, node, k);
+            own(
+                &mut self.node_owners,
+                &self.net.instances,
+                &mut self.merges,
+                node,
+                k,
+            );
         }
     }
 
@@ -352,6 +364,28 @@ impl Walker<'_> {
     /// family two instances index (`E[i]`, then `E[j]`) is one node of the
     /// projection, and neither box holds it.
     fn settle_instances(&mut self) {
+        // instances of one variable that share a station are one: each is
+        // its representative's, the lowest of those merged with it (`own`)
+        let mut rep: Vec<usize> = (0..self.net.instances.len()).collect();
+        fn find(rep: &mut [usize], k: usize) -> usize {
+            let mut r = k;
+            while rep[r] != r {
+                r = rep[r];
+            }
+            rep[k] = r;
+            r
+        }
+        for &(a, b) in &self.merges {
+            let (ra, rb) = (find(&mut rep, a), find(&mut rep, b));
+            rep[ra.max(rb)] = ra.min(rb);
+        }
+        for owners in [&mut self.node_owners, &mut self.pool_owners] {
+            for (_, o) in owners.iter_mut() {
+                if let Some(k) = *o {
+                    *o = Some(find(&mut rep, k));
+                }
+            }
+        }
         let sole = |owners: &[(usize, Option<usize>)], k: usize| -> Vec<usize> {
             owners
                 .iter()
@@ -780,7 +814,13 @@ impl Walker<'_> {
                         self.holds.push((r.base, id, encloses));
                         if r.index.is_some() {
                             let k = self.instance(r.index.as_deref());
-                            own(&mut self.pool_owners, r.base, k);
+                            own(
+                                &mut self.pool_owners,
+                                &self.net.instances,
+                                &mut self.merges,
+                                r.base,
+                                k,
+                            );
                         }
                     }
                     // a hold that only waits for its queue's tick is the
@@ -957,9 +997,12 @@ impl Walker<'_> {
                     self.pending.retain(|(v, _)| *v != var);
                     self.known.retain(|&(s, _)| s != var);
                     self.pending.push((var, label.clone()));
-                    if !self.chosen.iter().any(|(v, _)| *v == var) {
-                        self.chosen.push((var, label));
-                    }
+                    // a choose is an instance of its own, even of a variable
+                    // chosen before (`choose j` in each arm of an `if`, #685):
+                    // what it indexes from here on is its, not the other's
+                    self.chosen.retain(|(v, _)| *v != var);
+                    self.chosen.push((var, label));
+                    self.instance_of_slot.retain(|(s, _)| *s != var);
                 }
                 CStmt::Load(r, _) => {
                     if let Some(k) = self.last_flow {
@@ -994,7 +1037,13 @@ impl Walker<'_> {
                     self.holds.push((r.base, id, true));
                     if r.index.is_some() {
                         let k = self.instance(r.index.as_deref());
-                        own(&mut self.pool_owners, r.base, k);
+                        own(
+                            &mut self.pool_owners,
+                            &self.net.instances,
+                            &mut self.merges,
+                            r.base,
+                            k,
+                        );
                     }
                 }
                 CStmt::Grow(..) | CStmt::Shrink(..) | CStmt::Drop(..) => {}
@@ -1073,6 +1122,7 @@ impl Walker<'_> {
             self.arm.clone(),
             self.chosen.clone(),
             self.instance_of_slot.clone(),
+            self.merges.clone(),
             self.node_owners.clone(),
             self.pool_owners.clone(),
             self.last_flow,
@@ -1094,6 +1144,7 @@ impl Walker<'_> {
             self.arm,
             self.chosen,
             self.instance_of_slot,
+            self.merges,
             self.node_owners,
             self.pool_owners,
             self.last_flow,
@@ -1175,8 +1226,24 @@ fn reaches_a_station(p: &Program, block: usize) -> bool {
 
 /// Record that `x` is addressed through `owner`: a second, different one
 /// leaves it in no box.
-fn own(owners: &mut Vec<(usize, Option<usize>)>, x: usize, owner: Option<usize>) {
+/// `x` is addressed through instance `owner`. Two instances of one
+/// variable that address one station are one instance, merged in
+/// `settle_instances`: a variable chosen in each arm of an `if` and read
+/// after it, or a choose in a loop's body walked twice (#685). Two of two
+/// variables (`E[i]`, then `E[j]`) leave it in neither box.
+fn own(
+    owners: &mut Vec<(usize, Option<usize>)>,
+    instances: &[Instance],
+    merges: &mut Vec<(usize, usize)>,
+    x: usize,
+    owner: Option<usize>,
+) {
     match owners.iter_mut().find(|(y, _)| *y == x) {
+        Some((_, Some(a)))
+            if owner.is_some_and(|b| b != *a && instances[b].slot == instances[*a].slot) =>
+        {
+            merges.push((*a, owner.expect("checked above")));
+        }
         Some((_, o)) if *o != owner => *o = None,
         Some(_) => {}
         None => owners.push((x, owner)),
@@ -1459,6 +1526,7 @@ pub fn project(p: &Program) -> Net {
         arm: None,
         chosen: vec![],
         instance_of_slot: vec![],
+        merges: vec![],
         node_owners: vec![],
         pool_owners: vec![],
         last_flow: None,
