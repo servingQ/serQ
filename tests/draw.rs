@@ -1427,9 +1427,11 @@ fn the_client_sends_and_the_server_replies() {
                     kind: StationKind::Client,
                     stage,
                     node,
-                    ..
+                    text,
                 } => {
+                    // addressed as `#client`, read as `client`
                     assert!(stage.is_none() && node == "#client", "{name}: {i:?}");
+                    assert_eq!(text, "client", "{name}");
                     Some(*rect)
                 }
                 _ => None,

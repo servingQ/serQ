@@ -102,13 +102,13 @@ A KV relation's copy also says who posts it, on its bracket and on its
 
 An arrow's ends name a station by its stage, and a decision or a tick, which
 is no stage, by its place among the figure's nodes: `#0` is the first. The
-client, no stage either, is `#client`: a name that starts with `#` is no
-stage's, so a stage called `client` is another node. The
 place is the layout's, so the name holds within one figure, not across
 programs. A page can so walk a request from one station to the next along
 the arrows it would take, through the decision between them, and across a
 bracket as one place. A loop's return among the flows is the one painted
-`class="back"`, which the layout decides (`a >= b` in the row).
+`class="back"`, which the layout decides (`a >= b` in the row). The client,
+no stage either, is `#client` (its box reads `client`): a name that starts
+with `#` is no stage's, so a stage called `client` is another node.
 
 ## Glyphs
 

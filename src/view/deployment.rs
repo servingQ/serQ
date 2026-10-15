@@ -2900,7 +2900,8 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
     f.push(Item::Station {
         rect: client,
         kind: StationKind::Client,
-        text: CLIENT.into(),
+        // what the reader reads; `CLIENT` is what a page addresses
+        text: "client".into(),
         stage: None,
         node: CLIENT.into(),
     });
