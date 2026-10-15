@@ -2467,3 +2467,77 @@ fn a_copy_between_a_family_of_one_and_one_queue_links_draws_and_runs_alike() {
     let p = common::compile(&two, &workload, &ov).unwrap_or_else(|e| panic!("{e}"));
     deployment::checked_figure(&p).unwrap_or_else(|e| panic!("{e}"));
 }
+
+/// An instance's panel names the stations in it (#645 B1, serq-lar U15):
+/// what an editor reads of an instance is the figure's, the one definition,
+/// not a second one from the text. Its names are the stations drawn in it,
+/// no more and no fewer. `pd_two_fabrics.sq` indexes stages and pools
+/// directly, with no entry call: still its two instances, eight panels.
+#[test]
+fn an_instances_panel_names_its_stations() {
+    use serq::view::figure::Item;
+    let panels = |path: &str| -> Vec<Vec<String>> {
+        let p = common::example(path, &common::horizon(10.0)).unwrap();
+        let f = deployment::checked_figure(&p).unwrap();
+        let stations: Vec<(&String, _)> = f
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                Item::Station { node, rect, .. } => Some((node, rect.centre())),
+                _ => None,
+            })
+            .collect();
+        let mut panels = vec![];
+        for i in &f.items {
+            let Item::Box {
+                style: BoxStyle::Instance,
+                nodes,
+                rect,
+                ..
+            } = i
+            else {
+                continue;
+            };
+            let mut inside: Vec<&String> = stations
+                .iter()
+                .filter(|(_, c)| {
+                    rect.x <= c.x && c.x <= rect.right() && rect.y <= c.y && c.y <= rect.bottom()
+                })
+                .map(|(n, _)| *n)
+                .collect();
+            let mut named: Vec<&String> = nodes.iter().collect();
+            inside.sort();
+            named.sort();
+            assert_eq!(named, inside, "{path}");
+            panels.push(nodes.clone());
+        }
+        panels
+    };
+    for path in [
+        "examples/pd-disaggregation/llmd_nixl_pull.sq",
+        "examples/pd-disaggregation/pd_batching.sq",
+    ] {
+        assert!(panels(path).iter().all(|p| !p.is_empty()), "{path}");
+    }
+    // two instances, each drawn once per member of its families (4), each
+    // member's panel naming its own (`P[1] nvl_out[1] nic_out[1]`)
+    let two = panels("examples/pd-disaggregation/pd_two_fabrics.sq");
+    assert_eq!(two.len(), 8, "{two:?}");
+    let mut families: Vec<Vec<String>> = two
+        .iter()
+        .map(|p| {
+            p.iter()
+                .map(|n| n[..n.find('[').unwrap()].to_string())
+                .collect()
+        })
+        .collect();
+    families.sort();
+    families.dedup();
+    assert_eq!(
+        families,
+        [
+            vec!["P", "nvl_out", "nic_out"],
+            vec!["nvl_in", "nic_in", "D"]
+        ]
+    );
+}

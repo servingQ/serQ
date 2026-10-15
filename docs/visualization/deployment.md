@@ -88,6 +88,7 @@ TikZ writer ignores the ids.
 | `exit` | a `<path>` | an arrow sessions leave by, from `data-from` |
 | `budget` | a `<rect>` inside `<g data-stage>` | the used part of an engine's budget bar |
 | `bracket` | a `<rect>` | the stations one job holds at once (a transfer over two NICs); `data-nodes` lists them, and a `flow` arrow joins each to the next in the run's order |
+| `instance` | a `<rect class="instance">` | an instance's panel, what one `choose` picks: `data-nodes` lists the stations in it, in no order, a stacked instance's member's by the member (`P[1] P.nic[1]`). An editor reads what is in a panel here, not from where things stand |
 
 A KV relation's copy also says who posts it, on its bracket and on its
 `flow` arrow:

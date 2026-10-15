@@ -20,10 +20,10 @@
 </style>
 <defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="context-stroke"/></marker></defs>
 <rect class="bg" fill="#ffffff" x="0" y="0" width="1646.8" height="648"/>
-<rect class="instance" fill="#f5f7f9" stroke="#4b5563" stroke-width="1.2" x="320" y="347" width="468.4" height="224" rx="10"/>
-<rect class="instance" fill="#f5f7f9" stroke="#4b5563" stroke-width="1.2" x="959.6" y="347" width="545.2" height="224" rx="10"/>
-<rect class="instance" fill="#f5f7f9" stroke="#4b5563" stroke-width="1.2" x="959.6" y="89" width="545.2" height="224" rx="10"/>
-<rect class="instance" fill="#f5f7f9" stroke="#4b5563" stroke-width="1.2" x="320" y="89" width="468.4" height="224" rx="10"/>
+<rect class="instance" fill="#f5f7f9" stroke="#4b5563" stroke-width="1.2" data-role="instance" data-nodes="P[1] P.nic[1]" x="320" y="347" width="468.4" height="224" rx="10"/>
+<rect class="instance" fill="#f5f7f9" stroke="#4b5563" stroke-width="1.2" data-role="instance" data-nodes="D.nic[1] D[1]" x="959.6" y="347" width="545.2" height="224" rx="10"/>
+<rect class="instance" fill="#f5f7f9" stroke="#4b5563" stroke-width="1.2" data-role="instance" data-nodes="D.nic[0] D[0]" x="959.6" y="89" width="545.2" height="224" rx="10"/>
+<rect class="instance" fill="#f5f7f9" stroke="#4b5563" stroke-width="1.2" data-role="instance" data-nodes="P[0] P.nic[0]" x="320" y="89" width="468.4" height="224" rx="10"/>
 <rect class="frame" fill="none" stroke="#4b5563" stroke-width="1.1" x="332" y="115" width="286.4" height="186" rx="8"/>
 <g data-pool="P.reqs[0]" data-role="drum">
 <path class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" d="M 344 222 L 344 240 A 11 4 0 0 0 366 240 L 366 222 Z"/>
