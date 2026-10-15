@@ -39,7 +39,7 @@ every way through holds it, whichever hold took it on each.
 | Element | Meaning |
 |---|---|
 | Client | The rounded box at the left, outside the server: the workload, which sends a request and waits for its reply. Its tool and think times are its own, so they are not drawn. A program has one workload, so the figure has one client. |
-| Server frame | The frame around everything but the client: the one `server` that takes a request and gives its reply. The arrival leaves the client and crosses its wall; every exit crosses it back to the client. |
+| Server frame | The frame around everything but the client: the one `server` that takes a request and gives its reply. The arrival leaves the client and crosses the server's wall; every exit crosses it back to the client. |
 | Station | A stage reached by a `run`; an array is labelled with its size. Consecutive prefill and decode runs at one engine share a station. |
 | Arrow | Request flow between stages, including branches and loop returns. Guards label alternatives. An exit is the reply going back to the client, along a lane under the row; one that ends a session inside the server carries its guard. Every station has an arrow in and one out: a stage nothing runs does not link, and a request goes on from every station it reaches. `serq check` and `serq draw` check it on every program (`deployment::checked_figure`) and refuse a figure that cuts a station off, naming it, as the view's fault; `tests/draw.rs` checks it over every example and tutorial program. |
 | Decision diamond | A branch or routing decision before the first station. |
@@ -76,7 +76,7 @@ drum carry their pool and which of the two they are, `<g
 data-pool="P.reqs[0]" data-role="queue">`. A
 decision diamond and a pool's tick are no stage: they have a node name
 (`<g data-node="#0">`) and no `data-stage`. Nor is the client, `<g
-data-node="client" data-role="client">`. That is what
+data-node="#client" data-role="client">`. That is what
 [serq-lar](https://github.com/servingQ/serq-lar) animates a
 [run log](../reference/log.md) over: it finds a station by what the
 program calls it, so a change of layout moves nothing but the picture. The
@@ -86,11 +86,11 @@ TikZ writer ignores the ids.
 |---|---|---|
 | `queue` | `<g data-pool>` | the queue glyph where holds of the pool wait |
 | `drum` | `<g data-pool>` | the pool's drum |
-| `client` | `<g data-node="client">` | the client, where sessions come from and replies go back to |
+| `client` | `<g data-node="#client">` | the client, where sessions come from and replies go back to |
 | `server` | a `<rect class="server">` | the server's frame, around all but the client |
-| `arrival` | a `<path>` | the arrow sessions arrive by, `data-from="client"`; `data-to` names the node it reaches |
+| `arrival` | a `<path>` | the arrow sessions arrive by, `data-from="#client"`; `data-to` names the node it reaches |
 | `flow` | a `<path>` | an arrow sessions take from `data-from` to `data-to`: the next station, a loop's return, a transfer between two NICs |
-| `exit` | a `<path>` | the reply, from `data-from` back to the client, `data-to="client"` |
+| `exit` | a `<path>` | the reply, from `data-from` back to the client, `data-to="#client"` |
 | `budget` | a `<rect>` inside `<g data-stage>` | the used part of an engine's budget bar |
 | `bracket` | a `<rect>` | the stations one job holds at once (a transfer over two NICs); `data-nodes` lists them, and a `flow` arrow joins each to the next in the run's order |
 | `instance` | a `<rect class="instance">` | an instance's panel, what one `choose` picks: `data-nodes` lists the stations in it, in no order, a stacked instance's member's by the member (`P[1] P.nic[1]`). An editor reads what is in a panel here, not from where things stand |
@@ -102,8 +102,8 @@ A KV relation's copy also says who posts it, on its bracket and on its
 
 An arrow's ends name a station by its stage, and a decision or a tick, which
 is no stage, by its place among the figure's nodes: `#0` is the first. The
-client end of an `arrival` or an `exit` is always the client, whatever a
-stage is called: the role says which end it is. The
+client, no stage either, is `#client`: a name that starts with `#` is no
+stage's, so a stage called `client` is another node. The
 place is the layout's, so the name holds within one figure, not across
 programs. A page can so walk a request from one station to the next along
 the arrows it would take, through the decision between them, and across a

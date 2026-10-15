@@ -1429,7 +1429,7 @@ fn the_client_sends_and_the_server_replies() {
                     node,
                     ..
                 } => {
-                    assert!(stage.is_none() && node == "client", "{name}: {i:?}");
+                    assert!(stage.is_none() && node == "#client", "{name}: {i:?}");
                     Some(*rect)
                 }
                 _ => None,
@@ -1492,6 +1492,17 @@ fn the_client_sends_and_the_server_replies() {
             }
         }
         assert!(arrivals > 0 && exits > 0, "{name}");
+        // what is written past the server's wall is the server's, its
+        // title over the frame aside: a guard on an exit is written where
+        // the exit leaves, inside
+        for i in &f.items {
+            if let Item::Text { at, text, .. } = i
+                && at.x > server.x
+                && text != "server"
+            {
+                assert!(inside(at), "{name}: {i:?} outside the server");
+            }
+        }
         // and the reply is no word at the figure's edge
         assert!(
             !f.items.iter().any(
@@ -1500,6 +1511,23 @@ fn the_client_sends_and_the_server_replies() {
             "{name}"
         );
     }
+}
+
+/// The client is no stage, so its name is no stage's (`#client`): a stage
+/// called `client` is a node of its own, and every node one group.
+#[test]
+fn a_stage_called_client_is_not_the_client() {
+    let p = compile(
+        "stage client : fifo;
+        server (a) { run client (cost(client, 1)); }
+        ",
+        "workload { arrive poisson(1); init { set a = 1; } send (a); session { turn; end; } }",
+    );
+    let svg = serq::view::render(&deployment::figure(&p), "svg").unwrap();
+    assert_eq!(svg.matches(r#"<g data-node="client" "#).count(), 1);
+    assert_eq!(svg.matches(r##"<g data-node="#client" "##).count(), 1);
+    assert!(svg.contains(r##"data-role="arrival" data-from="#client" data-to="client""##));
+    assert!(svg.contains(r##"data-role="exit" data-from="client" data-to="#client""##));
 }
 
 /// The figure is big enough for what it contains.
@@ -2285,13 +2313,13 @@ fn the_svg_names_stages_pools_and_roles() {
     let svg = serq::view::render(&deployment::layout(&p, &net), "svg").unwrap();
     // (#705): the reply goes back to the client, and the session comes
     // from it, which is a node of its own, outside the server's frame
-    assert!(svg.contains(r#"data-role="exit" data-from="D[0]" data-to="client""#));
-    assert!(svg.contains(r#"data-role="exit" data-from="D[1]" data-to="client""#));
-    assert!(svg.contains(r##"data-role="exit" data-from="#0" data-to="client""##));
+    assert!(svg.contains(r##"data-role="exit" data-from="D[0]" data-to="#client""##));
+    assert!(svg.contains(r##"data-role="exit" data-from="D[1]" data-to="#client""##));
+    assert!(svg.contains(r##"data-role="exit" data-from="#0" data-to="#client""##));
     assert_eq!(svg.matches(r#"data-role="exit""#).count(), 3);
     // sessions arrive at the router's decision, the first node
-    assert!(svg.contains(r##"data-role="arrival" data-from="client" data-to="#0""##));
-    assert!(svg.contains(r#"<g data-node="client" data-role="client">"#));
+    assert!(svg.contains(r##"data-role="arrival" data-from="#client" data-to="#0""##));
+    assert!(svg.contains(r##"<g data-node="#client" data-role="client">"##));
     assert_eq!(svg.matches(r#"data-role="server""#).count(), 1);
     // no arrow ends in nothing: an exit no longer says `out`
     assert!(!svg.contains(">out<") && !svg.contains(">out ("));

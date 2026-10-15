@@ -100,7 +100,9 @@ pub enum EdgeStyle {
 /// What the figure calls the client: where a request comes from and its
 /// reply goes back to (`data-node`). An arrival leaves it and an exit
 /// returns to it, so an arrow of either role names it at its other end.
-pub const CLIENT: &str = "client";
+/// It is no stage, so its name starts with `#` as a decision's does: a
+/// stage called `client` is another node.
+pub const CLIENT: &str = "#client";
 
 /// What an edge is, beyond its style: where sessions enter the figure, how
 /// they go from one station to the next, and where they leave. Written into

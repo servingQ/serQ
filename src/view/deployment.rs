@@ -2971,8 +2971,9 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
                 let r = rects[i];
                 let y = lane(&mut lanes);
                 let last = i + 1 == net.nodes.len();
+                // clear of the row and of the panels around its last station
                 let x = if last {
-                    row_right + 14.0
+                    inst_boxes.iter().map(Rect::right).fold(row_right, f64::max) + 14.0
                 } else {
                     r.x + r.w * 0.75
                 };
