@@ -79,3 +79,6 @@ the pair compiles as `serq check` compiles it, else a
 | `E-copy-same-queue` | A relation, or an entry's `from`, takes the KV from another queue than its own | none (which queue reads is the program's) |
 | `E-copy-latency` | A relation's `latency` is a constant, one per side that posts the copies | none |
 | `E-call-from` | A call `Q.v (…) from S` names the queue its entry takes the KV `from` | none (the call's `from`, or the entry's with its relation, is the one meant) |
+| `E-one-server` | A deployment has one `server`, where each request enters (the frame an editor draws once) | none (how the two become one is the program's) |
+| `E-one-workload` | A workload file has one `workload`, one client | none |
+| `E-workload-in-deployment` | A workload is a file of its own, given when the program runs (`--workload W.sq`) | none (which `let`s and stages go with it is the program's) |

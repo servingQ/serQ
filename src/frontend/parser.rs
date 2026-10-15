@@ -2212,14 +2212,23 @@ impl Parser {
                 if self.paired.is_none() {
                     return self.err_at(
                         item_at,
-                        "a workload is a file of its own, given when the program runs: \
-                         `--workload W.sq` (pyserq: `workload=`)\n\
-                         help: move `workload { … }`, with the `let`s, `def`s, stages and pools \
-                         only it reads, to a file of its own",
+                        format!(
+                            "{}\nhelp: move `workload {{ … }}`, with the `let`s, `def`s, stages \
+                             and pools only it reads, to a file of its own",
+                            Code::WorkloadInDeployment.message(
+                                "a workload is a file of its own, given when the program runs: \
+                                 `--workload W.sq` (pyserq: `workload=`)"
+                            )
+                        ),
                     );
                 }
+                // one client per run (#645 B10): what the editor draws once
                 if prog.workload.is_some() {
-                    return self.err("duplicate workload");
+                    return self.err_at(item_at, format!(
+                        "{}\nhelp: a workload file has one `workload {{ … }}`: its arrivals and \
+                         sessions, one client",
+                        Code::OneWorkload.message("duplicate workload")
+                    ));
                 }
                 prog.workload = Some(self.workload()?);
             } else if self.is_kw("session") {
@@ -2227,8 +2236,19 @@ impl Parser {
             } else if self.is_kw("server") {
                 let at = self.pos;
                 self.advance();
+                // one server per deployment (#645 B10): the frame the editor
+                // draws once; requests are routed inside it (`gw.route()`)
                 if self.server.is_some() {
-                    return self.err_at(at, "duplicate server");
+                    return self.err_at(
+                        at,
+                        format!(
+                            "{}\nhelp: a deployment has one `server`, where each request enters: \
+                             write one `server {{ … }}` with both bodies, or route each request \
+                             to one in a gateway (`queue gw : gateway {{ route {{ … }} }}`, \
+                             `gw.route();`)",
+                            Code::OneServer.message("duplicate server")
+                        ),
+                    );
                 }
                 let sig = self.signature()?;
                 if let Some(r) = self.outline.as_mut() {
@@ -5224,11 +5244,12 @@ impl Parser {
                  `workload {{ … }}`"
             ));
         }
+        // the same rule as a deployment read alone (`E-workload-in-deployment`)
         if !in_workload && kw == "workload" {
-            return self.err(
+            return self.err(Code::WorkloadInDeployment.message(
                 "the workload is the workload file's: this deployment is paired with one, so it \
                  declares none",
-            );
+            ));
         }
         Ok(())
     }
@@ -8041,12 +8062,12 @@ mod tests {
         refused(
             "stage s : fifo; server { run s (cost(s, 1)); } server { run s (cost(s, 1)); }",
             "workload { session { turn; } }",
-            "duplicate server",
+            "error[E-one-server]: duplicate server",
         );
         refused(
             "stage s : fifo; server { run s (cost(s, 1)); }",
             "workload { session { turn; } } workload { session { turn; } }",
-            "duplicate workload",
+            "error[E-one-workload]: duplicate workload",
         );
         refused(
             "stage s : fifo;",
@@ -8064,7 +8085,11 @@ mod tests {
             "stage s : fifo;\nserver { run s (cost(s, 1)); }\nworkload { session { turn; } }",
         ] {
             let e = parse(&main_source(body)).unwrap_err();
-            assert!(e.msg.contains("a workload is a file of its own"), "{e}");
+            assert!(
+                e.msg
+                    .contains("error[E-workload-in-deployment]: a workload is a file of its own"),
+                "{e}"
+            );
             assert!(e.msg.contains("`--workload W.sq`"), "{e}");
             assert!(e.msg.contains("help: move `workload { … }`"), "{e}");
             assert_eq!(e.col, 1, "{e}");
@@ -8073,7 +8098,7 @@ mod tests {
             refused(
                 body,
                 "workload { session { turn; } }",
-                "the workload is the workload file's: this deployment is paired with one",
+                "error[E-workload-in-deployment]: the workload is the workload file's: this deployment is paired with one",
             );
             // and by the deployment read alone
             assert!(
