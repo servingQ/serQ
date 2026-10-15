@@ -2395,22 +2395,11 @@ fn an_instance_is_drawn_once_per_member() {
     );
 }
 
-/// A KV copy between a family of one and a single queue (#645 A2): the
-/// linker indexed the source's NIC only past one member, so `P[1]` with one
-/// `D` did not link ("stage `P.nic` is a family of 1; index it"), and the
-/// view drew a copy out of a stacked instance into none as a bracket named
-/// `P.nic`, leaving `P.nic[0]` with no arrow out. Each way it links, draws,
-/// and runs as the program with two single queues does.
-#[test]
-fn a_copy_between_a_family_of_one_and_one_queue_links_draws_and_runs_alike() {
+/// `vllm_nixl_push.sq` with its prefiller a family of one, `P[1]`, chosen by
+/// `i`, and its decoder still one queue (#664, #667).
+fn push_source_family_of_one() -> String {
     let src = std::fs::read_to_string(program_path("vllm_nixl_push")).unwrap();
-    let edit = |pairs: &[(&str, &str)]| {
-        pairs.iter().fold(src.clone(), |s, (a, b)| {
-            assert!(s.contains(a), "{a}");
-            s.replace(a, b)
-        })
-    };
-    let source_family = edit(&[
+    [
         ("  queue P : prefill {", "  queue P[1] : prefill {"),
         (
             "fork { P.prefill (prompt); }",
@@ -2428,7 +2417,30 @@ fn a_copy_between_a_family_of_one_and_one_queue_links_draws_and_runs_alike() {
             "      set prompt = new;\n",
             "      set prompt = new;\n      choose i in 1 by (work(P[i]));\n",
         ),
-    ]);
+    ]
+    .iter()
+    .fold(src, |s, (a, b)| {
+        assert!(s.contains(a), "{a}");
+        s.replace(a, b)
+    })
+}
+
+/// A KV copy between a family of one and a single queue (#645 A2): the
+/// linker indexed the source's NIC only past one member, so `P[1]` with one
+/// `D` did not link ("stage `P.nic` is a family of 1; index it"), and the
+/// view drew a copy out of a stacked instance into none as a bracket named
+/// `P.nic`, leaving `P.nic[0]` with no arrow out. Each way it links, draws,
+/// and runs as the program with two single queues does.
+#[test]
+fn a_copy_between_a_family_of_one_and_one_queue_links_draws_and_runs_alike() {
+    let src = std::fs::read_to_string(program_path("vllm_nixl_push")).unwrap();
+    let edit = |pairs: &[(&str, &str)]| {
+        pairs.iter().fold(src.clone(), |s, (a, b)| {
+            assert!(s.contains(a), "{a}");
+            s.replace(a, b)
+        })
+    };
+    let source_family = push_source_family_of_one();
     let reader_family = edit(&[
         ("  queue D : decode {", "  queue D[1] : decode {"),
         (
@@ -2595,4 +2607,37 @@ fn chooses_of_one_variable_over_the_same_stations_are_one_instance() {
             .collect();
         assert_eq!(boxes, [vec!["A".to_string(), "B".to_string()]], "{src}");
     }
+}
+
+/// A copy out of a stacked instance into a station in none (#667): the
+/// reader's pool (`D.kv`, of no box) is not drawn at the source's NIC in
+/// the box, where its enclosure would cross the box, and the copy is
+/// noted as one between two boxes is (`Net::crosses`).
+#[test]
+fn a_copy_out_of_a_stacked_box_draws_no_pool_across_it() {
+    let s = push_source_family_of_one();
+    let wpath = serq::paired_workload(&program_path("vllm_nixl_push")).unwrap();
+    let workload = std::fs::read_to_string(&wpath).unwrap();
+    let p = common::compile(&s, &workload, &common::horizon(10.0)).unwrap();
+    let net = deployment::project(&p);
+    let stage = |n: &str| p.stages.iter().position(|st| st.name == n).unwrap();
+    let pool = |n: &str| p.pools.iter().position(|q| q.name == n).unwrap();
+    let nic = net.node_of(stage("P.nic")).unwrap();
+    let k = net.instance_of(nic).expect("P.nic is in P's box");
+    assert!(net.instances[k].stacked);
+    assert!(!net.drawn_pools(nic).contains(&pool("D.kv")));
+    let copy = net.flows.iter().find(|g| g.contains(&nic)).unwrap();
+    assert!(net.crosses(copy) && !net.spans(copy));
+    // and noted as a copy between two boxes is: `push` on what it moves,
+    // as `llmd_nixl_pull`'s `pull · P.kv[i] → D.kv[j]`
+    let f = deployment::checked_figure(&p).unwrap();
+    let texts: Vec<&str> = f
+        .items
+        .iter()
+        .filter_map(|i| match i {
+            serq::view::figure::Item::Text { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert!(texts.contains(&"push · P.kv[i] → D.kv"), "{texts:?}");
 }
