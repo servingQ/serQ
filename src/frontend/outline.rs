@@ -203,6 +203,24 @@ pub struct Engine {
     pub caps: Vec<Capacity>,
 }
 
+/// An instance: what one `choose` variable indexes, the queues whose
+/// calls in the same block are indexed by it (`P[i].prefill (…)`), each
+/// a family whose member it picks (#645 B1). The deployment view draws
+/// one around their engines and NICs; two ends of a copy indexed by one
+/// variable are one instance (B2).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Instance {
+    pub var: String,
+    /// The `choose` statement, as `chooses` has it.
+    pub choose: Range,
+    /// The queues, in the order their first call is written.
+    pub queues: Vec<String>,
+    /// Where it is written: `server`, `route` or `entry`.
+    pub block: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
+}
+
 /// The outline of a program's text (`serq::outline`).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct Outline {
@@ -226,9 +244,40 @@ pub struct Outline {
     /// pools on them: what an editor may put where (#645 A3, A4).
     pub devices: Vec<Device>,
     pub engines: Vec<Engine>,
+    /// Each `choose` that indexes a call, and the queues it indexes.
+    pub instances: Vec<Instance>,
 }
 
 impl Outline {
+    /// The instances, from what is recorded: each `choose` and the calls
+    /// of its block (its owner's route or entry, or the server) that its
+    /// variable indexes. A `choose` that indexes no call is none.
+    pub(crate) fn find_instances(&mut self) {
+        self.instances = self
+            .chooses
+            .iter()
+            .filter_map(|c| {
+                let mut queues: Vec<String> = vec![];
+                for k in &self.calls {
+                    if k.block == c.block
+                        && k.owner == c.owner
+                        && k.index.as_deref() == Some(c.var.as_str())
+                        && !queues.contains(&k.queue)
+                    {
+                        queues.push(k.queue.clone());
+                    }
+                }
+                (!queues.is_empty()).then(|| Instance {
+                    var: c.var.clone(),
+                    choose: c.range,
+                    queues,
+                    block: c.block.clone(),
+                    owner: c.owner.clone(),
+                })
+            })
+            .collect();
+    }
+
     pub fn to_json(&self) -> String {
         serde_json::to_string(self).expect("an outline serializes")
     }
@@ -258,6 +307,7 @@ impl Outline {
             workload_items,
             devices,
             engines,
+            instances,
         } = self;
         let (wl_uses, uses): (Vec<_>, Vec<_>) = uses.into_iter().partition(|u| own(u.range));
         let (wl_decls, decls): (Vec<_>, Vec<_>) = decls.into_iter().partition(|d| own(d.range));
@@ -298,6 +348,7 @@ impl Outline {
             chooses: Vec::new(),
             devices: Vec::new(),
             engines: Vec::new(),
+            instances: Vec::new(),
         };
         let deployment = Outline {
             main,
@@ -314,6 +365,7 @@ impl Outline {
             workload_items,
             devices,
             engines,
+            instances,
         };
         (deployment, wl)
     }

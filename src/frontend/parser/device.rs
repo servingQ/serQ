@@ -1234,6 +1234,7 @@ impl Parser {
         let r = self.outline.as_mut().expect("checked above");
         r.out.devices = devices;
         r.out.engines = engines;
+        r.out.find_instances();
     }
 
     /// Link the engines, their devices and the pools on them, once the

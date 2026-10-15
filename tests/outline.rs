@@ -408,3 +408,31 @@ fn devices_and_engines_say_their_capacities_and_pools() {
     assert_eq!(pools, [Some("a"), Some("b")]);
     assert_eq!(ram.caps[0].pool.as_deref(), Some("buf"));
 }
+
+/// An instance is what one `choose` variable indexes (#645 B1, B2): in
+/// llm-d's router `j` picks a decoder and `i` a prefiller, two instances;
+/// a `choose` whose variable indexes no call is none.
+#[test]
+fn an_instance_is_what_a_choose_indexes() {
+    let src = read("examples/pd-disaggregation/llmd_nixl_pull.sq");
+    let o = outline(&src);
+    let of: Vec<_> = o
+        .instances
+        .iter()
+        .map(|i| (i.var.as_str(), i.queues.clone(), i.block.as_str()))
+        .collect();
+    assert_eq!(
+        of,
+        [
+            ("j", vec!["D".to_string()], "route"),
+            ("i", vec!["P".to_string()], "route")
+        ]
+    );
+    assert!(text(&src, o.instances[0].choose).starts_with("choose j in ND"));
+    assert_eq!(o.instances[0].owner.as_deref(), Some("gw"));
+
+    let o = outline(
+        "fn main() { stage s : delay; server { choose k in 2 by (0); run s (cost(s, 1)); } }",
+    );
+    assert!(o.instances.is_empty());
+}
