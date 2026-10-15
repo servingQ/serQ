@@ -1676,7 +1676,7 @@ fn a_reply_shares_no_line_with_a_flow() {
             0.0
         }
     };
-    for name in PROGRAMS.iter().chain(&["llmd_nixl_pull", "vllm_nixl_push"]) {
+    for name in PROGRAMS.iter().chain(&["pd_batching"]) {
         let f = deployment::figure(&program(name));
         let segments = |reply: bool| -> Vec<(Point, Point)> {
             f.items
