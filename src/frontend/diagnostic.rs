@@ -70,12 +70,57 @@ codes! {
     ConnectorUntaken => "E-connector-untaken",
     /// A queue's NIC that no copy runs on.
     NicUnused => "E-nic-unused",
+    /// A name the language uses for itself, given to something the program
+    /// declares.
+    ReservedWord => "E-reserved-word",
 }
 
 impl Code {
     /// The message with its code: `error[E-…]: message`.
     pub fn message(self, message: impl std::fmt::Display) -> String {
         format!("error[{}]: {message}", self.name())
+    }
+
+    /// The code a rendered message's first line carries (`L:C: error[E-…]: …`).
+    pub fn of(message: &str) -> Option<Code> {
+        let first = message.lines().next()?;
+        let name = first.split_once("error[")?.1.split_once("]: ")?.0;
+        Code::ALL.iter().copied().find(|c| c.name() == name)
+    }
+}
+
+/// A byte range of the text, and what to write there instead.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct Edit {
+    pub range: crate::frontend::outline::Range,
+    pub text: String,
+}
+
+/// A code's fix-it (`docs/reference/diagnostics.md`) as edits of the text.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct Fix {
+    pub label: String,
+    pub edits: Vec<Edit>,
+}
+
+/// Why a text does not compile, for an editor (`serq::diagnose`): the
+/// message `serq check` prints, its code, its place, and its fix-it.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct Diagnostic {
+    pub code: Option<&'static str>,
+    pub message: String,
+    /// A pair's file the place is in, `deployment` or `workload`; null for
+    /// one text, or a refusal with no place.
+    pub file: Option<&'static str>,
+    pub line: Option<usize>,
+    pub col: Option<usize>,
+    pub range: Option<crate::frontend::outline::Range>,
+    pub fixes: Vec<Fix>,
+}
+
+impl Diagnostic {
+    pub fn to_json(&self) -> String {
+        serde_json::to_string(self).expect("a diagnostic serializes")
     }
 }
 

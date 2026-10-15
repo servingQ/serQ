@@ -28,9 +28,41 @@ choice and no fix-it: the program states its policy, not the compiler.
 The list is `serq::frontend::diagnostic::Code`; a test holds this table
 equal to it.
 
+## In the API
+
+`serq::diagnose(&deployment, Some(&workload), &overrides)` is `None` when
+the pair compiles as `serq check` compiles it, else a
+`serq::frontend::diagnostic::Diagnostic`, and `Diagnostic::to_json()`
+(`llmd_nixl_pull.sq` with `fork { P[i].prefill (input); }`):
+
+```json
+{
+  "code": "E-pull-forked",
+  "message": "deployment: 39:16: error[E-pull-forked]: `kvt.nixl_pull (P, D)`: `P` is called in a leg …",
+  "file": "deployment",
+  "line": 39,
+  "col": 16,
+  "range": [1664, 1665],
+  "fixes": [
+    {"label": "take `P[i].prefill (input);` out of its `fork { … }`",
+     "edits": [{"range": [1657, 1687], "text": "P[i].prefill (input);"}]}
+  ]
+}
+```
+
+| Field | What |
+|---|---|
+| `code` | the code of the message's first line, or null for a refusal without one |
+| `message` | what `serq check` prints, the pair's files named `deployment` and `workload`, the line and the caret under it included |
+| `file` | the file the place is in, `deployment` or `workload`; null for one text (`None` for the workload), or a refusal with no place |
+| `line`, `col` | where it is in that file, 1-based, as the message's `LINE:COL:`; null for a refusal with no place |
+| `range` | the token at that place, as a byte range of the text, `[start, end]` as in [the outline](outline.md); null with no place |
+| `fixes` | the table's fix-it for this refusal, as edits of that file: each a byte range and what to write there. Made from the last, they take the refusal away; another may follow. serQ finds the edit from the place and the tokens around it; where the text there is not the one the fix-it is for (a `fork` with more than the call in it), there is none. `E-pull-forked`'s is the one written so far |
+
 | Code | The rule | Fix-it |
 |---|---|---|
 | `E-pull-forked` | In a pull (`kvt.nixl_pull (S, R, …)`), nothing waits for a leg as a push's connector does, so a call of `S` forked in a program that writes no `join` would outlive its session | take the call of `S` at the place out of its `fork { … }` |
 | `E-copy-no-connector` | A KV relation (`kvt.nixl_pull (S, R, …)` or `kvt.nixl_push`) copies only through `R`'s engine's `connector S`, which loads each copy, or an entry of `R` that `transfer`s it | when `R`'s engine has a connector to another queue, rename it to `connector S`; otherwise none (what a request loads is the program's) |
 | `E-connector-untaken` | What an engine's connector loads goes into the engine's memory, the KV pool on its device, so its `taking` takes that pool | none (how much of it a request takes is the program's) |
 | `E-nic-unused` | A queue's `nic` carries a copy: a KV relation or a `transfer` runs on it | none (removing it leaves what reads `Q.nic`, and a relation names another queue) |
+| `E-reserved-word` | A name the language uses for itself (a keyword, a function, a distribution) is not a name the program can give a constant, a parameter, a queue, a device or a pool | none (the name is the program's) |

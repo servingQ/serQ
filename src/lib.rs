@@ -177,6 +177,65 @@ pub fn compile_inspected(src: &str, ov: &Overrides) -> Result<ir::Program, Strin
     compile_source(src, &inspected(ov))
 }
 
+/// Why a deployment does not compile under `workload` (or program text,
+/// with none), for an editor (`docs/reference/diagnostics.md`): `None`
+/// when it compiles as `serq check` compiles it, else the message it
+/// prints (a pair's files named `deployment` and `workload`), the code the
+/// message carries, its place (the file, its `L:C:`, and the token there),
+/// and the code's fix-it as edits of that file (`frontend::fix`).
+pub fn diagnose(
+    deployment: &str,
+    workload: Option<&str>,
+    ov: &Overrides,
+) -> Option<frontend::diagnostic::Diagnostic> {
+    const NAMES: (&str, &str) = ("deployment", "workload");
+    let message = match workload {
+        Some(w) => compile_paired_inspected(deployment, w, NAMES, ov),
+        None => compile_inspected(deployment, ov),
+    }
+    .err()?;
+    let code = frontend::diagnostic::Code::of(&message);
+    // a pair's message names its file first (`Paired::render`)
+    let (file, rest) = match workload {
+        Some(_) => match message.split_once(": ") {
+            Some((f, rest)) if f == NAMES.0 || f == NAMES.1 => (Some(f), rest),
+            _ => (None, message.as_str()),
+        },
+        None => (None, message.as_str()),
+    };
+    let text = if file == Some(NAMES.1) {
+        workload.unwrap_or_default()
+    } else {
+        deployment
+    };
+    // `L:C: ` before the first line, as `Span::render` writes it
+    let place = (workload.is_none() || file.is_some())
+        .then(|| {
+            let (at, _) = rest.split_once(": ")?;
+            let (l, c) = at.split_once(':')?;
+            Some((l.parse::<usize>().ok()?, c.parse::<usize>().ok()?))
+        })
+        .flatten();
+    Some(frontend::diagnostic::Diagnostic {
+        code: code.map(|c| c.name()),
+        file: file.map(|f| {
+            if f == NAMES.0 {
+                "deployment"
+            } else {
+                "workload"
+            }
+        }),
+        line: place.map(|p| p.0),
+        col: place.map(|p| p.1),
+        range: place.and_then(|(l, c)| frontend::fix::place(text, l, c)),
+        fixes: match (code, place) {
+            (Some(code), Some((l, c))) => frontend::fix::fixes(code, text, l, c),
+            _ => Vec::new(),
+        },
+        message,
+    })
+}
+
 fn inspected(ov: &Overrides) -> Overrides {
     Overrides {
         horizon: ov.horizon.or(Some(f64::MAX)),
