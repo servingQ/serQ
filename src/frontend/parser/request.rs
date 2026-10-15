@@ -220,11 +220,7 @@ impl Parser {
                 .pools_on
                 .iter()
                 .find(|po| prog.pools[po.pool].name == pool)?;
-            if self.engines.iter().any(|e| e.name == po.on.owner) {
-                Some(po.on.owner.clone())
-            } else {
-                po.on.admitted_by.clone()
-            }
+            self.admitted_by(po)
         };
         let engines = Engines {
             admitter: &admitter,
