@@ -679,9 +679,11 @@ pub fn parse_paired(
     lets: &[String],
 ) -> Result<Program, String> {
     use crate::frontend::paired::{DEPLOYMENT, WORKLOAD};
-    let mut spliced = p.tokens()?;
+    let spliced = p.tokens()?;
+    let mut parser = Parser::new(spliced.toks);
+    parser.paired = Some(spliced.split);
     // an override names a definition as its file writes it
-    let def_overrides = defs
+    parser.def_overrides = defs
         .iter()
         .map(|(n, e)| {
             let prefix = if spliced.defs.1.contains(n) {
@@ -694,11 +696,8 @@ pub fn parse_paired(
             (format!("{prefix}{n}"), e.clone(), false)
         })
         .collect();
-    let mut parser = Parser::new(std::mem::take(&mut spliced.toks));
-    parser.paired = Some(spliced.split);
-    parser.def_overrides = def_overrides;
     // an override's body reads its definition's file's names (#703)
-    parser.paired_own = Some(spliced.own());
+    parser.paired_own = Some(spliced.own);
     parser.supplied_inputs = lets.to_vec();
     let mut prog = parser
         .program()

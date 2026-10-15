@@ -63,15 +63,7 @@ pub struct Spliced {
     pub defs: (Vec<String>, Vec<String>),
     /// Each file's own constants and definitions, the deployment's and the
     /// workload's: an override's body reads its definition's file's (#703).
-    own: Own,
-}
-
-impl Spliced {
-    /// Each file's own names, the deployment's and the workload's, for the
-    /// parser to rename an override's body with (`rename_override`).
-    pub fn own(&self) -> Own {
-        self.own.clone()
-    }
+    pub own: Own,
 }
 
 /// Each file's own constants and definitions: the deployment's, the workload's.
