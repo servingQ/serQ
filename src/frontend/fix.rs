@@ -1,0 +1,134 @@
+//! A code's fix-it (`docs/reference/diagnostics.md`) as edits of the text,
+//! for `serq::diagnose`: found from the refusal's place and the tokens
+//! around it, never from the message's wording. Where the table names no
+//! fix-it, or the text around the place is not the one the fix-it is for,
+//! there is none.
+
+use crate::frontend::diagnostic::{Code, Edit, Fix};
+use crate::frontend::lexer::{Tok, Token, lex};
+use crate::frontend::outline::Range;
+
+/// The text as tokens, with where each starts and ends in bytes.
+struct Text<'a> {
+    src: &'a str,
+    toks: Vec<Token>,
+    /// The byte offset of each line's start.
+    lines: Vec<usize>,
+}
+
+impl<'a> Text<'a> {
+    fn new(src: &'a str) -> Option<Self> {
+        let toks = lex(src).ok()?;
+        let lines = std::iter::once(0)
+            .chain(src.match_indices('\n').map(|(k, _)| k + 1))
+            .collect();
+        Some(Text { src, toks, lines })
+    }
+
+    /// Where token `k` starts: its line's start, then its column in characters.
+    fn start(&self, k: usize) -> usize {
+        let t = &self.toks[k];
+        let line = self
+            .lines
+            .get(t.line.saturating_sub(1))
+            .copied()
+            .unwrap_or(0);
+        self.src[line..]
+            .char_indices()
+            .nth(t.col.saturating_sub(1))
+            .map_or(self.src.len(), |(b, _)| line + b)
+    }
+
+    fn end(&self, k: usize) -> usize {
+        self.start(k) + self.toks[k].text.len()
+    }
+
+    /// The token at a place `L:C`.
+    fn at(&self, line: usize, col: usize) -> Option<usize> {
+        self.toks
+            .iter()
+            .position(|t| t.line == line && t.col == col && t.tok != Tok::Eof)
+    }
+
+    fn word(&self, k: usize) -> Option<&str> {
+        match &self.toks.get(k)?.tok {
+            Tok::Ident(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    /// The `}` that closes the `{` at `open`.
+    fn close(&self, open: usize) -> Option<usize> {
+        let mut depth = 0usize;
+        for (j, t) in self.toks.iter().enumerate().skip(open) {
+            match t.tok {
+                Tok::LBrace => depth += 1,
+                Tok::RBrace => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(j);
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+}
+
+/// The token at a refusal's place, as a byte range.
+pub fn place(src: &str, line: usize, col: usize) -> Option<Range> {
+    let t = Text::new(src)?;
+    let k = t.at(line, col)?;
+    Some(Range(t.start(k), t.end(k)))
+}
+
+/// `code`'s fix-it for the refusal at `L:C`, if the table names one and the
+/// text there is the one it is for.
+pub fn fixes(code: Code, src: &str, line: usize, col: usize) -> Vec<Fix> {
+    let fix = Text::new(src).and_then(|t| {
+        let k = t.at(line, col)?;
+        match code {
+            Code::PullForked => unfork(&t, k),
+            _ => None,
+        }
+    });
+    fix.into_iter().collect()
+}
+
+/// `E-pull-forked`, at the call's queue: `fork { S.v (…); }` written as the
+/// call alone. Only a `fork` that holds the call and nothing else: a leg
+/// with more in it is the program's to divide.
+fn unfork(t: &Text, k: usize) -> Option<Fix> {
+    // the `{` the call stands in
+    let mut depth = 0usize;
+    let open = (0..k).rev().find(|&j| match t.toks[j].tok {
+        Tok::RBrace => {
+            depth += 1;
+            false
+        }
+        Tok::LBrace if depth == 0 => true,
+        Tok::LBrace => {
+            depth -= 1;
+            false
+        }
+        _ => false,
+    })?;
+    if open + 1 != k || t.word(open.checked_sub(1)?) != Some("fork") {
+        return None;
+    }
+    let close = t.close(open)?;
+    // the call, to its `;`, and then the `}`
+    let semi = (k..close).find(|&j| t.toks[j].tok == Tok::Semi)?;
+    if semi + 1 != close {
+        return None;
+    }
+    let call = &t.src[t.start(k)..t.end(semi)];
+    Some(Fix {
+        label: format!("take `{call}` out of its `fork {{ … }}`"),
+        edits: vec![Edit {
+            range: Range(t.start(open - 1), t.end(close)),
+            text: call.to_string(),
+        }],
+    })
+}

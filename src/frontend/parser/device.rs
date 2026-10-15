@@ -245,7 +245,10 @@ impl Parser {
         let at = self.pos;
         let name = self.ident()?;
         if KEYWORDS.contains(&name.as_str()) {
-            return self.err_at(at, format!("`{name}` is a word of the language"));
+            return self.err_at(
+                at,
+                Code::ReservedWord.message(format_args!("`{name}` is a word of the language")),
+            );
         }
         self.declare(at, &name, Kind::Device)?;
         if self.devices.iter().any(|d| d.name == name) {
@@ -314,7 +317,10 @@ impl Parser {
             let p_at = self.pos;
             let p = self.name()?;
             if is_reserved(&p) {
-                return self.err_at(p_at, format!("`{p}` is a word of the language"));
+                return self.err_at(
+                    p_at,
+                    Code::ReservedWord.message(format_args!("`{p}` is a word of the language")),
+                );
             }
             self.own_name(p_at, &p, "a parameter")?;
             if params.contains(&p) {
@@ -388,7 +394,10 @@ impl Parser {
         let at = self.pos;
         let name = self.ident()?;
         if KEYWORDS.contains(&name.as_str()) {
-            return self.err_at(at, format!("`{name}` is a word of the language"));
+            return self.err_at(
+                at,
+                Code::ReservedWord.message(format_args!("`{name}` is a word of the language")),
+            );
         }
         // a queue's engine is named after the queue: that one is refused as
         // a queue, in `declare_in`
@@ -549,7 +558,10 @@ impl Parser {
             } else {
                 let r = self.ident()?;
                 if KEYWORDS.contains(&r.as_str()) {
-                    return self.err_at(k_at, format!("`{r}` is a word of the language"));
+                    return self.err_at(
+                        k_at,
+                        Code::ReservedWord.message(format_args!("`{r}` is a word of the language")),
+                    );
                 }
                 // an engine's capacity is one pool: a request's `taking`
                 // names one, and a queue's entry names its own without an

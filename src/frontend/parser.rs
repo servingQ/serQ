@@ -3497,7 +3497,10 @@ impl Parser {
         let at = self.pos;
         let name = self.ident()?;
         if is_reserved(&name) {
-            return self.err_at(at, format!("`{name}` is a word of the language"));
+            return self.err_at(
+                at,
+                Code::ReservedWord.message(format_args!("`{name}` is a word of the language")),
+            );
         }
         self.declare(at, &name, Kind::Definition)?;
         if let Some(now) = retired(&name) {
@@ -3535,7 +3538,9 @@ impl Parser {
             if is_reserved(&p) {
                 return self.err_at(
                     p_at,
-                    format!("`{p}` is a word of the language: name the parameter otherwise"),
+                    Code::ReservedWord.message(format_args!(
+                        "`{p}` is a word of the language: name the parameter otherwise"
+                    )),
                 );
             }
             self.own_name(p_at, &p, "a parameter")?;
@@ -4556,7 +4561,11 @@ impl Parser {
                     ));
                 }
                 if is_reserved(&dev) {
-                    return self.err_at(d_at, format!("`{dev}` is a word of the language"));
+                    return self.err_at(
+                        d_at,
+                        Code::ReservedWord
+                            .message(format_args!("`{dev}` is a word of the language")),
+                    );
                 }
                 self.declare_in(Scope::Queue(name.clone()), d_at, &dev, Kind::Device)?;
                 if dev == name {
@@ -4588,10 +4597,10 @@ impl Parser {
                 if KEYWORDS.contains(&name.as_str()) {
                     return self.err_at(
                         at + 1,
-                        format!(
+                        Code::ReservedWord.message(format_args!(
                             "`{name}` is a word of the language, and a queue's engine is named \
                              after the queue: name the queue for what it models"
-                        ),
+                        )),
                     );
                 }
                 let d_at = self.pos;
