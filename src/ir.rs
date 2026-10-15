@@ -8,6 +8,7 @@
 
 pub mod trace;
 mod types;
+mod whole;
 
 use serde::{Deserialize, Serialize};
 
@@ -42,6 +43,22 @@ pub const IR_VERSION: u32 = 14;
 pub struct Invalid {
     pub message: String,
     pub at: Option<(BlockId, usize)>,
+    /// The declaration an error about no statement is about (an engine's
+    /// clause, a pool's cap), which the text frontend points at.
+    pub decl: Option<Decl>,
+}
+
+/// A declaration of the deployment, by its index.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Decl {
+    Pool(usize),
+    Stage(usize),
+}
+
+/// A statement a message quotes as a place, `at ⟨b.k⟩`: `Invalid::placed`
+/// writes it as the text's `line:col`, or as the IR's block and statement.
+pub(crate) fn place(block: BlockId, index: usize) -> String {
+    format!("⟨{block}.{index}⟩")
 }
 
 impl Invalid {
@@ -49,13 +66,46 @@ impl Invalid {
         Self {
             message,
             at: Some((block, index)),
+            decl: None,
         }
+    }
+
+    /// The message, each place it quotes (`place`) written by `at` (the
+    /// text's `line:col` of a statement), else as the IR's block and
+    /// statement.
+    pub fn placed(&self, at: impl Fn(BlockId, usize) -> Option<String>) -> String {
+        let mut out = String::new();
+        let mut rest = self.message.as_str();
+        while let Some(i) = rest.find('⟨') {
+            out.push_str(&rest[..i]);
+            let tail = &rest[i + '⟨'.len_utf8()..];
+            let Some(j) = tail.find('⟩') else {
+                out.push_str(&rest[i..]);
+                return out;
+            };
+            let parsed = tail[..j]
+                .split_once('.')
+                .and_then(|(b, k)| Some((b.parse().ok()?, k.parse().ok()?)));
+            match parsed {
+                Some((b, k)) => {
+                    out.push_str(&at(b, k).unwrap_or_else(|| format!("block {b}, statement {k}")))
+                }
+                None => out.push_str(&rest[i..i + '⟨'.len_utf8() + j + '⟩'.len_utf8()]),
+            }
+            rest = &tail[j + '⟩'.len_utf8()..];
+        }
+        out.push_str(rest);
+        out
     }
 }
 
 impl From<String> for Invalid {
     fn from(message: String) -> Self {
-        Self { message, at: None }
+        Self {
+            message,
+            at: None,
+            decl: None,
+        }
     }
 }
 
@@ -1755,7 +1805,7 @@ impl Program {
     /// linker runs it on what it produces; it also guards IR read from JSON
     /// or built by tools.
     pub fn validate(&self) -> Result<(), String> {
-        self.validate_located().map_err(|e| e.message)
+        self.validate_located().map_err(|e| e.placed(|_, _| None))
     }
 
     /// `validate`, with the statement an error is about, which the linker
@@ -1765,6 +1815,8 @@ impl Program {
         self.stage_shares()?;
         self.validate_declarations()?;
         self.validate_types()?;
+        // token counts are whole numbers (#661)
+        self.validate_whole()?;
         // last, so that a program wrong in another way is told that first
         if let Some(k) = self.unreached_stage() {
             return Err(self.unreached_message(k).into());
@@ -1867,7 +1919,7 @@ impl Program {
         self.enclosed(self.session, &mut vec![], &leased)
             .map_err(|e| Invalid {
                 message: format!("session: {}", e.message),
-                at: e.at,
+                ..e
             })?;
         Ok(())
     }

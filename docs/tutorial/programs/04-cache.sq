@@ -1,10 +1,12 @@
 // Chapter 4: the prefix cache.
-// The same workload as chapter 3 (workloads/04-cache.sq), but now a turn's
-// context lives in a KV pool. When the turn ends the memory is released and
-// the context stays cached; the next turn of that session is a *hit* if its
-// prefix survived. A miss recomputes the whole context, which costs the
-// engine more, which makes the queue longer, which loses more prefixes: a
-// feedback loop.
+// Chapter 3's workload, its token counts rounded to whole numbers
+// (workloads/04-cache.sq): a token count is whole from where a KV pool reads
+// it, which chapter 3 has none of, and the rounding raises each draw's mean
+// by half a token. Now a turn's context lives in a KV pool. When
+// the turn ends the memory is released and the context stays cached; the
+// next turn of that session is a *hit* if its prefix survived. A miss
+// recomputes the whole context, which costs the engine more, which makes the
+// queue longer, which loses more prefixes: a feedback loop.
 use "std/args";
 
 let a = 2e-5;

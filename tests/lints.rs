@@ -29,7 +29,7 @@ fn engine(taking: &str) -> String {
     )
 }
 const ENGINE_WORKLOAD: &str = "arrive poisson(0.3); init { set K = 0; }
-               turn { set n = ~exp(500); set o = ~exp(200) + 1; }";
+               turn { set n = ceil(~exp(500)); set o = floor(~exp(200)) + 1; }";
 /// The workload of `engine`'s programs, sending `send` and running `session`.
 fn engine_workload(send: &str, session: &str) -> String {
     format!("workload {{ {ENGINE_WORKLOAD} send ({send}); session {{ {session} }} }}")
@@ -194,7 +194,7 @@ fn a_context_variable_outside_its_moment_is_rejected() {
         )
     };
     let wl = "workload { arrive poisson(0.3); init { set K = 0; }
-          turn { set m = ~exp(500); set o = ~exp(200) + 1; }
+          turn { set m = ceil(~exp(500)); set o = floor(~exp(200)) + 1; }
           send (m);
           session {  turn; end;
           }
@@ -291,14 +291,14 @@ fn a_context_variable_outside_its_moment_is_rejected() {
     // what the table allows still links: `age`, `size` and a pool index in
     // an eviction key, `present` in a ps capacity, the residents' variables in a
     // `tokens cap` and an `each at most`, the batch's in `worker`, `now` at
-    // every moment
+    // every moment (under `floor` in a `tokens cap`, a number of tokens, #661)
     let src =
         "device gpu[2] { kv cap 1e5; }
         pool kv on gpu { evict by (age, size + used(kv[size > 1e9 ? 1 : 0]) * 0, now * 0); }
         stage svc : ps (min(present, 4) + now * 0);
         device chip { }
         engine llm on chip {
-          tokens cap 512 + running.count + running.decoding + running.kv_decode * 0 + running.kv_prefill * 0 + now * 0;
+          tokens cap 512 + running.count + running.decoding + running.kv_decode * 0 + running.kv_prefill * 0 + floor(now * 0);
           scheduler {
             let c = running.decoding > 0 ? 64 : 128;
             advance running each at most (c);
@@ -405,7 +405,7 @@ fn a_hidden_attribute_is_not_read_by_the_scheduler() {
         )
     };
     let wl_workload = "workload { arrive poisson(0.3); init { set K = 0; }
-                   turn { set n = ~exp(500); set o = ~exp(200) + 1; } send (n, o);
+                   turn { set n = ceil(~exp(500)); set o = floor(~exp(200)) + 1; } send (n, o);
                    session {  turn; end; \n} }";
     // the request's output may be it, and its release may cache by it
     let ok = format!(

@@ -172,6 +172,13 @@ pub fn engine_name(var: &str, clause: &str) -> Option<&'static str> {
         .map(|(v, ..)| *v)
 }
 
+/// A context variable as an engine's `tokens cap` reads it: the residents'
+/// totals by their list (`running.decoding`), the rest by the kernel's name.
+/// A printer of a step stage's budget (`Program::show_expr_with`) takes it.
+pub(crate) fn tokens_cap_name(v: crate::ir::CtxVar) -> &'static str {
+    engine_name(v.name(), "tokens cap").unwrap_or(v.name())
+}
+
 /// Why `value` of `ENGINE_VALUES` is not read in `clause`.
 fn not_read_in(value: &str, clause: &str) -> String {
     let (list, field) = value.split_once('.').expect("a list's value");

@@ -131,19 +131,35 @@ fn finish(
     // `tokens` in a queue key), so a text program meets it too. An error
     // about a statement points at it in the text (#279).
     p.validate_located().map_err(|e| {
-        // a stage no statement runs is about its declaration, not a statement
-        let declared = p
-            .unreached_stage()
-            .filter(|&k| e.message == p.unreached_message(k))
-            .and_then(|k| {
-                prog.stages
-                    .iter()
-                    .find(|s| s.name == p.stages[k].name)?
-                    .span
-            });
-        let span =
-            declared.or_else(|| e.at.and_then(|(b, k)| spans.get(b)?.get(k)?.of(&e.message)));
-        render(span, &e.message)
+        // a stage no statement runs is about its declaration, not a statement,
+        // and so is an error about a declaration's clause
+        let stage = |k: usize| {
+            prog.stages
+                .iter()
+                .find(|s| s.name == p.stages[k].name)?
+                .span
+        };
+        let declared = match e.decl {
+            Some(ir::Decl::Stage(k)) => stage(k),
+            Some(ir::Decl::Pool(k)) => prog
+                .pools
+                .iter()
+                .find(|q| q.name == p.pools[k].name)
+                .and_then(|q| q.span),
+            None => None,
+        }
+        .or_else(|| {
+            p.unreached_stage()
+                .filter(|&k| e.message == p.unreached_message(k))
+                .and_then(stage)
+        });
+        // the places it quotes, where the text has them
+        let message = e.placed(|b, k| {
+            let s = spans.get(b)?.get(k)?.at?;
+            Some(format!("{}:{}", s.line, s.col))
+        });
+        let span = declared.or_else(|| e.at.and_then(|(b, k)| spans.get(b)?.get(k)?.of(&message)));
+        render(span, &message)
     })?;
     Ok(p)
 }

@@ -234,8 +234,8 @@ fn the_marks_of_a_session_turn_do_not_depend_on_the_machine() {
         workload {
           arrive poisson(0.3);
           init { set K = 0; set u0 = ~exp(1); }
-          turn { set n = K == 0 ? ~uniform(1000, 3000) : ~exp(500);
-            set o = ~exp(200) + 1; set more = ~bernoulli(0.9); }
+          turn { set n = ceil(K == 0 ? ~uniform(1000, 3000) : ~exp(500));
+            set o = floor(~exp(200)) + 1; set more = ~bernoulli(0.9); }
           send (K, n, o);
           session {
 
@@ -314,7 +314,7 @@ fn the_machine_still_matters() {
         "
         )
     };
-    let workload = "workload { arrive poisson(0.5); turn { set n = ~uniform(1000, 3000); }
+    let workload = "workload { arrive poisson(0.5); turn { set n = ceil(~uniform(1000, 3000)); }
           send (n);
           session {  turn; end;
           }

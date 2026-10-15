@@ -4,8 +4,9 @@
 // iteration (decode = processor sharing on memory bandwidth, iteration
 // time omega + beta * K_B), and the compute the decode step leaves idle
 // goes to the oldest prefill (prefill = FIFO in the leftover budget). The
-// `tokens cap` fills each iteration exactly to its memory time, which is the
-// fluid `TwoStage` server of `libqueuingsim::models::batch` at iteration
+// `tokens cap` fills each iteration to its memory time, to the whole token
+// below it (a token count is a whole number, #661), which is the fluid
+// `TwoStage` server of `libqueuingsim::models::batch` at iteration and token
 // granularity. Batch cap `B`, a KV pool of `C` tokens with shortest-first
 // eviction (tool calls before waiting turns). The sessions, and their cap
 // on live sessions: examples/workloads/replica.sq. One difference from
@@ -27,7 +28,7 @@ fn main() {
   pool reqs { cap B; }
   device gpu { compute (t) = t * a; hbm (k) = omega + beta * k; kv cap C; }
   engine llm on gpu {
-    tokens cap max(running.decoding, (omega + beta * running.kv_decode) / a);    // fill the memory time
+    tokens cap max(running.decoding, floor((omega + beta * running.kv_decode) / a));    // fill the memory time
     scheduler {
       advance running decode first;                // prefill in what decode leaves
       admit waiting while (running.preempted == 0);
@@ -43,10 +44,11 @@ fn main() {
     hold reqs (cost(reqs, 1)), kv (cost(kv, K + n + o)) {
       set warm = !cold && cached >= K;
       // prefill work in tokens: the overhead and the attention term are
-      // converted at the compute rate 1/a
+      // converted at the compute rate 1/a, and the request rounds it up to
+      // a whole token
       set P = s0 / a + (warm ? n + (b / a) * n * (K + n / 2)
                             : (K + n) + (b / a) * (K + n) * (K + n) / 2);
-      llm (P, o + 1);   // the model's o decode steps after the prefill's sampled token
+      llm (ceil(P), o + 1);   // the model's o decode steps after the prefill's sampled token
     } cache (cost(reqs, kv, K + n + o));
     if (!cold) { observe hit = warm; }
     // the session's last request: nothing of its prefix is read again

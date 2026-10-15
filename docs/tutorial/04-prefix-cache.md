@@ -57,33 +57,44 @@ serq run docs/tutorial/programs/04-cache.sq --workload docs/tutorial/programs/wo
 ```
 
 ```text
-run: horizon 20000 end 20000 warmup 2000 seed 1 events 99813 arrivals 9905 ended 8902 turns 44889 mean live 6.142
+run: horizon 20000 end 20000 warmup 2000 seed 1 events 99813 arrivals 9905 ended 8902 turns 44889 mean live 6.143
 
 observe  count    mean   95% CI    cv2     p99
 -------  -----  ------  -------  -----  ------
-hit      35986  0.9999  ±0.0001  0.000  1.0000
+hit      35986  1.0000  ±0.0000  0.000  1.0000
 
 client    count     mean    95% CI    cv2      p99
 --------  -----  -------  --------  -----  -------
-response  44889  0.06320  ±0.00072  0.640  0.23978
+response  44889  0.06336  ±0.00074  0.640  0.24050
 
 stage   number   util   done    thru    wait  service  iters
 ------  ------  -----  -----  ------  ------  -------  -----
-engine   0.158  0.139  44889  2.4938  0.0073   0.0559      0
+engine   0.158  0.140  44889  2.4938  0.0074   0.0560      0
 tool     5.985  0.998  35986  1.9992  0.0000   2.9932      0
 
 pool   used   cached  queue  holders    wait  admits  evict(n)  evict(u)  preempt  spill  rej  stuck
 ----  -----  -------  -----  -------  ------  ------  --------  --------  -------  -----  ---  -----
-kv    793.4  30165.3  0.000    0.158  0.0000   49906         0         0        0      0    0      0
+kv    796.3  30195.3  0.000    0.158  0.0000   49906         0         0        0      0    0      0
 ```
 
-A hit rate of 0.9999, and the response time falls
+Every turn after a session's first is a hit, and the response time falls
 from 0.178 s to 0.063 s against chapter 3 — nearly a factor of three, from
-one clause. The pool is holding 30 165 tokens of cache against a capacity
-of 200 000, so nothing is ever evicted. The five misses are no evictions:
-`K` and `cached` are sums of real-valued token counts, and in five turns
-the cached prefix reads short of `K` by a rounding error
-([#661](https://github.com/servingQ/serQ/issues/661)).
+one clause. The pool is holding 30 195 tokens of cache against a capacity
+of 200 000, so nothing is ever evicted.
+
+The workload rounds what it draws, `ceil(…)` for the new tokens and
+`floor(…) + 1` for the output: a token count is a whole number from where a
+KV pool reads it, and serQ refuses a program in which one may be
+fractional there. Chapter 3 has no KV pool, so its workload keeps its real
+draws; rounding raises each draw's mean by half a token (`ceil` of an
+exponential of mean 500 has mean 500.5), so the comparison with chapter 3
+is between two workloads that differ by that half token (against real
+draws, the rounding adds 0.1 ms of service and 0.16 ms of response per
+turn here). With real-valued counts this run read a
+hit rate of 0.9999 with nothing evicted: `K` and `cached` were sums of
+fractions, and in five turns the cached prefix read short of `K` by a
+rounding error ([#661](https://github.com/servingQ/serQ/issues/661); the
+rule is in [Token counts](../language.md#token-counts)).
 
 ## Vary cache capacity
 
@@ -95,23 +106,23 @@ done
 
 | `cap` | hit rate | response (s) | entries evicted | rejected |
 |---|---|---|---|---|
-| 200,000 | 1.000 | 0.0632 | 0 | 0 |
-| 60,000 | 0.972 | 0.0689 | 1,098 | 0 |
-| 40,000 | 0.850 | 0.0883 | 6,036 | 0 |
-| 30,000 | 0.690 | 0.1101 | 12,535 | 4 |
-| 20,000 | 0.463 | 0.1366 | 21,824 | 47 |
-| 15,000 | 0.356 | 0.1401 | 25,973 | 213 |
-| 10,000 | 0.259 | 0.1309 | 28,196 | 854 |
+| 200,000 | 1.000 | 0.0634 | 0 | 0 |
+| 60,000 | 0.972 | 0.0692 | 1,112 | 0 |
+| 40,000 | 0.850 | 0.0885 | 6,056 | 0 |
+| 30,000 | 0.690 | 0.1101 | 12,537 | 4 |
+| 20,000 | 0.463 | 0.1365 | 21,815 | 47 |
+| 15,000 | 0.355 | 0.1403 | 25,968 | 214 |
+| 10,000 | 0.259 | 0.1312 | 28,208 | 856 |
 
-Measured 2026-10-14 on serQ 1b0a47b with the paired-workload change (the
-workload a file of its own), by the commands above.
+Measured 2026-10-15 on serQ afee627 with whole token counts (#661, #700), by the
+commands above.
 
 At 10 000 units the mean response time is lower than at 15 000 despite a
-lower hit rate, but rejections rise from 213 to 854. Requests that cannot
+lower hit rate, but rejections rise from 214 to 856. Requests that cannot
 fit do not contribute completed response samples, so the lower mean alone
 does not establish better performance.
 
-The default run caches 30 165 tokens on average. Most live sessions are in
+The default run caches 30 195 tokens on average. Most live sessions are in
 the tool stage, so the cache stores context that the engine is not currently
 using. Reducing its capacity forces more of that context to be recomputed.
 

@@ -482,7 +482,7 @@ fn serving_forms_compile_to_the_kernel_ir() {
     // the client's own station, which its session runs
     let deployment_workload = r#"stage tool : delay; workload { arrive poisson(0.5);
           init { set K = 0; }
-          turn { set n = ~exp(100); set o = ~exp(20); set Z = ~exp(3); set T = K + n; }
+          turn { set n = ceil(~exp(100)); set o = ~exp(20); set Z = ~exp(3); set T = K + n; }
           send (K, n, o, T);"#;
     let serving = format!(
         "{deployment}
@@ -800,7 +800,7 @@ fn the_request_boundary_preserves_size_ownership() {
         pool reqs on llm { }
         ";
     let client = "stage tool : delay; workload { arrive poisson(0.3); init { set K = 0; }
-        turn { set n = ~exp(500); set o = ~exp(200) + 1; set more = ~bernoulli(0.9); }
+        turn { set n = ceil(~exp(500)); set o = floor(~exp(200)) + 1; set more = ~bernoulli(0.9); }
         send (K, n, o);";
     let split = format!(
         "{head}

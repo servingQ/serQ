@@ -80,6 +80,7 @@ use crate::ir::{DistKind, Fun};
 mod device;
 mod request;
 
+pub(crate) use device::tokens_cap_name;
 pub use device::{ENGINE_VALUES, engine_name};
 
 #[derive(Debug, Clone)]

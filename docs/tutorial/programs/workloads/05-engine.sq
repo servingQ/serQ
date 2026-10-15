@@ -11,8 +11,8 @@ workload {
   arrive poisson(Lambda);
   init { set K = 0; }
   turn {
-    set n = K == 0 ? ~uniform(1000, 3000) : ~exp(500);
-    set o = ~exp(200) + 1;
+    set n = ceil(K == 0 ? ~uniform(1000, 3000) : ~exp(500));
+    set o = floor(~exp(200)) + 1;
     set more = ~bernoulli(p);
   }
   send (input: K + n, output: o, final: more == 0);

@@ -21,6 +21,9 @@ pub struct Corpus {
     pub sessions: Vec<TraceSession>,
 }
 
+/// A trace's columns, in order; `forced` may be left out.
+const COLUMNS: [&str; 6] = ["session", "turn", "new", "out", "think", "forced"];
+
 impl Corpus {
     pub fn from_csv(text: &str) -> Result<Self, String> {
         let mut sessions: Vec<TraceSession> = vec![];
@@ -39,7 +42,6 @@ impl Corpus {
                 ));
             }
             let num = |i: usize| -> Result<f64, String> {
-                const COLUMNS: [&str; 6] = ["session", "turn", "new", "out", "think", "forced"];
                 f[i].parse::<f64>().map_err(|_| format!(
                     "line {}: column {} ({}): invalid number `{}`\nhelp: replace `{}` with a numeric value",
                     ln + 1, i + 1, COLUMNS[i], f[i], COLUMNS[i]
@@ -50,9 +52,24 @@ impl Corpus {
                 sessions.push(TraceSession::default());
                 last = Some(sid);
             }
+            // `new` and `out` are numbers of tokens: whole ones (#661)
+            let tokens = |i: usize| -> Result<f64, String> {
+                let x = num(i)?;
+                if x.fract() != 0.0 {
+                    return Err(format!(
+                        "line {}: column {} ({}): `{}` is not a whole number of tokens\nhelp: \
+                         a token count is a whole number (#661)",
+                        ln + 1,
+                        i + 1,
+                        COLUMNS[i],
+                        f[i]
+                    ));
+                }
+                Ok(x)
+            };
             sessions.last_mut().unwrap().turns.push(Turn {
-                new: num(2)?,
-                out: num(3)?,
+                new: tokens(2)?,
+                out: tokens(3)?,
                 think: num(4)?,
                 forced: if f.len() == 6 { num(5)? } else { 0.0 },
             });

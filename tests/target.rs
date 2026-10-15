@@ -239,12 +239,24 @@ fn the_adaptive_chunk_cap_is_taken_and_another_share_refused() {
     let c = target("1000").unwrap()["config"].clone();
     assert_eq!(c["long_prefill_token_threshold"], 1000);
     assert!(c.get("long_prefill_token_threshold_adaptive").is_none());
-    // another share: of a budget not the engine's, of another count, or
-    // without the floor
+    // without the floor (vLLM's `//`) the cap is not a whole number of
+    // tokens, which the language refuses before the target reads it (#661)
+    let e = compile_vllm(
+        &common::main_source(&src.replace(
+            rule,
+            "let r = running.count + waiting.count; let threshold = r > 1 ? max(1000, B / r) : inf;",
+        )),
+        &common::horizon(10.0),
+    )
+    .unwrap_err();
+    assert!(
+        e.contains("`each at most` is a number of tokens") && e.contains("#661"),
+        "{e}"
+    );
+    // another share: of a budget not the engine's, or of another count
     for cap in [
         "max(1000, floor(4096 / r))",
         "max(1000, floor(B / (r + 1)))",
-        "max(1000, B / r)",
         "max(1000, floor(B / r) + 1)",
     ] {
         let e = target(cap).unwrap_err();
