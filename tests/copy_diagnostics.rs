@@ -106,10 +106,69 @@ fn a_push_whose_reader_has_no_connector_names_the_connector() {
     // not the `fork` the program wrote, which the missing `join` left alone
     assert!(!e.contains("never joins"), "{e}");
     assert!(e.contains("`D`'s engine has no `connector P`"), "{e}");
+    assert!(e.contains(": error[E-copy-no-connector]: "), "{e}");
+    // what a request loads is the program's to say: a help, no fix-it that
+    // would write one program's policy into another (criterion 2)
     assert!(
         e.contains("help: in `D`'s engine, write `connector P { load (…); }`"),
         "{e}"
     );
+    assert!(!e.contains("fix-it"), "{e}");
+}
+
+/// A push toggled back to a pull, its source's call still forked: a pull's
+/// connector joins no leg, so the refusal names the fork, not a `join` the
+/// program never had (#657).
+#[test]
+fn a_pull_whose_source_is_forked_names_the_fork() {
+    let (src, workload) = example("examples/pd-disaggregation/vllm_nixl_push.sq");
+    let push = "kvt.nixl_push (P, D,";
+    assert!(src.contains(push));
+    let e = refused(&src.replace(push, "kvt.nixl_pull (P, D,"), &workload);
+    assert!(!e.contains("never joins"), "{e}");
+    assert!(
+        e.contains("error[E-pull-forked]: `kvt.nixl_pull (P, D)`"),
+        "{e}"
+    );
+    assert!(
+        e.contains(" 57:16: error[E-pull-forked]"),
+        "at the call: {e}"
+    );
+    assert!(
+        e.contains("help: fix-it: take the call `P.prefill (…);` out of its `fork { … }`\n"),
+        "{e}"
+    );
+    // the other way out is a choice, its own help
+    assert!(
+        e.contains("help: or make the copy a push: `kvt.nixl_push (P, D, …)`"),
+        "{e}"
+    );
+}
+
+/// The other half of the connector's rule: what it loads, the engine's
+/// `taking` takes. `vllm_nixl_push.sq` with `kv` taken out of the decoder's
+/// `taking` is refused at `D`, with the pool to take and no amount.
+#[test]
+fn a_connector_whose_engine_does_not_take_its_memory_names_the_taking() {
+    let (src, workload) = example("examples/pd-disaggregation/vllm_nixl_push.sq");
+    let taking =
+        "          taking kv (request.known) reserve (request.known),\n                 reqs";
+    assert!(src.contains(taking));
+    let e = refused(&src.replace(taking, "          taking reqs"), &workload);
+    assert!(
+        e.contains("error[E-connector-untaken]: engine `D`'s connector"),
+        "{e}"
+    );
+    assert!(
+        e.contains(" 99:9: error[E-connector-untaken]"),
+        "at `D`: {e}"
+    );
+    assert!(!e.contains("link error"), "{e}");
+    assert!(
+        e.contains("help: take `kv` in the `taking` of `D`'s `admit waiting`: `kv (…)`"),
+        "{e}"
+    );
+    assert!(!e.contains("fix-it"), "{e}");
 }
 
 #[test]

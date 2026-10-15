@@ -121,8 +121,8 @@ fn finish(
     render: &Render,
     ov: &Overrides,
 ) -> Result<ir::Program, String> {
-    let (mut p, spans) = frontend::link::link_located(&prog, ov)
-        .map_err(|e| render(e.span, &format!("link error: {}", e.message)))?;
+    let (mut p, spans) =
+        frontend::link::link_located(&prog, ov).map_err(|e| render(e.span, &e.headed()))?;
     if let Some(t) = &ov.trace {
         p.trace = Some(t.clone());
     }
