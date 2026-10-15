@@ -34,10 +34,19 @@ word to its `;` or `}`; a `body` is what is between its braces.
 | `server` | `{range, body}` | `server { … }` |
 | `workload` | a range | `workload { … }` |
 | `calls` | `{queue, index, verb, from, range, block, owner?}` | `D[j].decode (prompt) from P[i];` to its `;`; `index` the text between the brackets; `block` is `server`, `route` or `entry`, `owner` the queue whose route or entry it is in |
-
 | `chooses` | `{var, count, keys, by, range, block, owner?}` | `choose i in NP by (work(P[i]), ~uniform(0, 1));` to its `;`; `count` the range of the count after `in`, `keys` the range of each key in order, `by` the key list with its parentheses; `block` and `owner` as a call's |
-
 | `workload_items` | `{kind, name?, block, value, range}` | a statement of the workload, to its `;`, in order: `kind` its first word (`arrive`, `send`, `set`, `tool`, `turn`, …), `name` a `set`'s, `block` where it is (`workload` at its top, or `init`, `turn`, `session`), `value` what it says or null: an `arrive`'s process (`poisson(Lambda)`), a `set`'s right-hand side, what a `tool` or `send` takes between its parentheses. A statement holding a block (`while`, `if`) is not an item; the statements in it are |
+| `devices` | `{name, engine, memory, caps}` | every `device`: `name` as a pool's `on` names it (`gpu`, `D.gpu` in queue `D`), `engine` the engine that runs on it or null, `memory` the engine's memory, its KV: the first `pool … on` the device, or null without an engine |
+| `engines` | `{name, device, caps}` | every engine, and the device it runs on |
+| `devices[].caps`, `engines[].caps` | `{name, range, pool}` | each capacity declared, `NAME cap …;`: `range` its name where it is declared, `pool` the pool on it (`pool NAME on OWNER`, as the program names it: `D.kv`) or null |
+
+A device an engine runs on holds one pool, its KV
+([`E-device-two-pools`](diagnostics.md)); a pool on a device or an engine
+is one of its capacities ([`E-pool-no-capacity`](diagnostics.md)). An
+editor reads where a pool may go from `devices` and `engines`, the rule
+from the refusal. The outline lists what is written: a text with two
+pools on an engine's device, which does not link, lists both, and the
+first `pool … on` it is its `memory`, as the linker takes it.
 
 A call, a `choose` or a workload statement a `def` expands to is written
 in the `def`, and is not among the `calls`, the `chooses` or the

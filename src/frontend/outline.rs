@@ -170,6 +170,39 @@ pub struct Signature {
     pub reply: Vec<String>,
 }
 
+/// A capacity of a device or an engine, `NAME cap …;`, and the pool that
+/// is it (`pool NAME on OWNER`), if one is declared.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Capacity {
+    pub name: String,
+    /// Its name where the capacity is declared.
+    pub range: Range,
+    /// The pool on it, as the program names it (`D.kv`).
+    pub pool: Option<String>,
+}
+
+/// `device NAME { … }`: its capacities, the engine that runs on it, and
+/// the engine's memory, its KV: the one pool on it when an engine runs
+/// there (#645 A3).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Device {
+    /// As a pool's `on` names it: `gpu`, or `D.gpu` inside queue `D`.
+    pub name: String,
+    pub engine: Option<String>,
+    /// The pool the linker takes as the engine's memory: the first
+    /// `pool … on` the device; null with no engine.
+    pub memory: Option<String>,
+    pub caps: Vec<Capacity>,
+}
+
+/// `engine on DEVICE { … }`: its device and its capacities (`reqs cap …;`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Engine {
+    pub name: String,
+    pub device: String,
+    pub caps: Vec<Capacity>,
+}
+
 /// The outline of a program's text (`serq::outline`).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct Outline {
@@ -189,6 +222,10 @@ pub struct Outline {
     pub calls: Vec<Call>,
     pub chooses: Vec<Choose>,
     pub workload_items: Vec<WorkloadItem>,
+    /// Every device and engine, with the capacities each declares and the
+    /// pools on them: what an editor may put where (#645 A3, A4).
+    pub devices: Vec<Device>,
+    pub engines: Vec<Engine>,
 }
 
 impl Outline {
@@ -219,6 +256,8 @@ impl Outline {
             calls,
             chooses,
             workload_items,
+            devices,
+            engines,
         } = self;
         let (wl_uses, uses): (Vec<_>, Vec<_>) = uses.into_iter().partition(|u| own(u.range));
         let (wl_decls, decls): (Vec<_>, Vec<_>) = decls.into_iter().partition(|d| own(d.range));
@@ -257,6 +296,8 @@ impl Outline {
             signature: None,
             calls: Vec::new(),
             chooses: Vec::new(),
+            devices: Vec::new(),
+            engines: Vec::new(),
         };
         let deployment = Outline {
             main,
@@ -271,6 +312,8 @@ impl Outline {
             calls,
             chooses,
             workload_items,
+            devices,
+            engines,
         };
         (deployment, wl)
     }
@@ -332,6 +375,11 @@ impl Recorder {
         let open = (first..last).find(|&k| toks[k].tok == Tok::LBrace)?;
         (toks[last].tok == Tok::RBrace)
             .then(|| Range(self.end(&toks[open]), self.start(&toks[last])))
+    }
+
+    /// Token `k`'s range.
+    pub(crate) fn token(&self, toks: &[Token], k: usize) -> Range {
+        self.range(toks, k, k)
     }
 
     fn name_at(toks: &[Token], k: usize) -> String {
