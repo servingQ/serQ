@@ -76,6 +76,31 @@ pub struct Queue {
     pub range: Range,
     pub body: Range,
     pub members: Vec<Member>,
+    /// What the queue as written accepts (#645 B6).
+    pub accepts: Accepts,
+}
+
+/// A place a pool may go in a queue: a capacity no pool is on yet, as a
+/// `pool NAME on …` spells it, and the engine that would admit the pool's
+/// queue (`admitted_by`, as `devices[].caps` says it). One capacity may be
+/// spelt two ways that differ in it: a device's `on gpu` (none admits; a
+/// hold is admitted as soon as it fits) and `on Q.gpu` (`Q`'s scheduler).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Spot {
+    /// What follows `on`: `Q`, `gpu`, `Q.gpu`.
+    pub on: String,
+    /// The capacity, and so the pool's name.
+    pub cap: String,
+    pub admitted_by: Option<String>,
+}
+
+/// What a queue accepts that its members do not already say (#645 B6).
+/// An entry member is what a call names (a NIC, a pool or a device is no
+/// call's target); a `nic` member is what a KV copy's end needs; a queue
+/// playing `gateway` routes. The pools it may still take are these.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct Accepts {
+    pub pools: Vec<Spot>,
 }
 
 /// `kvt.nixl_pull (SOURCE, READER, …);` or `kvt.nixl_push (…);`.
@@ -518,6 +543,7 @@ impl Recorder {
             range: self.range(toks, at, close),
             body: Range(self.end(&toks[open]), self.start(&toks[close])),
             members,
+            accepts: Accepts::default(),
         });
     }
 

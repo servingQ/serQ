@@ -415,3 +415,51 @@ fn devices_and_engines_say_their_capacities_and_pools() {
     assert_eq!(ram.caps[0].pool.as_deref(), Some("buf"));
     assert_eq!(ram.caps[0].admitted_by, None);
 }
+
+/// Where a queue may still take a pool (#645 B6): each capacity no pool is
+/// on, as `pool … on` spells it there, and who would admit it. A device's
+/// capacity has two spellings that differ in that: `on gpu` (none admits)
+/// and `on X.gpu` (`X`'s scheduler). Once the device an engine runs on
+/// holds a pool, it offers none (`E-device-two-pools`).
+#[test]
+fn each_queue_says_where_a_pool_may_go() {
+    let queue = |pools: &str| {
+        format!(
+            "fn main() {{ queue X : agg {{ device gpu {{ kv cap 1000; }} engine on gpu {{ \
+             reqs cap 4; tokens cap 64; scheduler {{ advance running; admit waiting; }} \
+             worker {{ forward (1); }} }} {pools} decode (p) {{ X (p, 1); }} }} \
+             server (n) {{ X.decode (n); }} }}"
+        )
+    };
+    let spots = |src: &str| -> Vec<(String, String, Option<String>)> {
+        let o = outline(src);
+        o.queues[0]
+            .accepts
+            .pools
+            .iter()
+            .map(|s| (s.on.clone(), s.cap.clone(), s.admitted_by.clone()))
+            .collect()
+    };
+    let x = || Some("X".to_string());
+    assert_eq!(
+        spots(&queue("")),
+        [
+            ("X".to_string(), "reqs".to_string(), x()),
+            ("gpu".to_string(), "kv".to_string(), None),
+            ("X.gpu".to_string(), "kv".to_string(), x()),
+        ]
+    );
+    // the KV taken, the engine's slots are left
+    assert_eq!(
+        spots(&queue("pool kv on gpu { block 16; }")),
+        [("X".to_string(), "reqs".to_string(), x())]
+    );
+    // every capacity of the push example has its pool
+    let src = read("examples/pd-disaggregation/vllm_nixl_push.sq");
+    assert!(
+        outline(&src)
+            .queues
+            .iter()
+            .all(|q| q.accepts.pools.is_empty())
+    );
+}

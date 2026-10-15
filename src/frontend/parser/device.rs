@@ -1248,9 +1248,66 @@ impl Parser {
                 caps: caps(&e.name, &e.caps),
             })
             .collect();
+        // each queue's free places for a pool, as `pool … on` spells them
+        // inside it (#645 B6)
+        let spots: Vec<(String, Vec<crate::frontend::outline::Spot>)> = self
+            .queues
+            .iter()
+            .map(|q| (q.name.clone(), self.pool_spots(&q.name)))
+            .collect();
         let r = self.outline.as_mut().expect("checked above");
         r.out.devices = devices;
         r.out.engines = engines;
+        for (name, pools) in spots {
+            if let Some(q) = r.out.queues.iter_mut().find(|q| q.name == name) {
+                q.accepts.pools = pools;
+            }
+        }
+    }
+
+    /// The capacities of queue `q`'s engine and devices no pool is on yet,
+    /// each as `pool NAME on …` may spell it in `q`, and who would admit it
+    /// (`admitted_by`'s rule). A device its engine runs on holds one pool
+    /// (`E-device-two-pools`): once it has one, it offers none.
+    fn pool_spots(&self, q: &str) -> Vec<crate::frontend::outline::Spot> {
+        use crate::frontend::outline::Spot;
+        let mut out = vec![];
+        if let Some(e) = self.engines.iter().find(|e| e.name == q) {
+            for c in e.caps.iter().filter(|c| !self.has_pool(q, &c.name)) {
+                out.push(Spot {
+                    on: q.to_string(),
+                    cap: c.name.clone(),
+                    admitted_by: Some(q.to_string()),
+                });
+            }
+        }
+        let prefix = format!("{q}.");
+        for d in &self.devices {
+            let Some(bare) = d.name.strip_prefix(&prefix) else {
+                continue;
+            };
+            let engine = self.engines.iter().find(|e| e.device == d.name);
+            if engine.is_some() && d.caps.iter().any(|c| self.has_pool(&d.name, &c.name)) {
+                continue;
+            }
+            for c in d.caps.iter().filter(|c| !self.has_pool(&d.name, &c.name)) {
+                // `on gpu`: no engine admits it
+                out.push(Spot {
+                    on: bare.to_string(),
+                    cap: c.name.clone(),
+                    admitted_by: None,
+                });
+                // `on Q.gpu`, the engine that runs there: its scheduler does
+                if let Some(e) = engine {
+                    out.push(Spot {
+                        on: format!("{}.{bare}", e.name),
+                        cap: c.name.clone(),
+                        admitted_by: Some(e.name.clone()),
+                    });
+                }
+            }
+        }
+        out
     }
 
     /// Link the engines, their devices and the pools on them, once the
