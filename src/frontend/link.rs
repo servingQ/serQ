@@ -2480,11 +2480,7 @@ impl Linker<'_> {
                         poster: None,
                     }],
                     ConnectorKind::Relation(None) => {
-                        return Err(LinkError::new(format!(
-                            "engine `{engine}`'s `connector {}`: its queue reads KV from no \
-                             `{}` (`kvt.nixl_pull ({}, {engine}, …);` or `kvt.nixl_push`)",
-                            c.queue, c.queue, c.queue
-                        )));
+                        unreachable!("the parser refuses a connector no relation reads by")
                     }
                     ConnectorKind::Relation(Some(rel)) => {
                         // a source family is indexed at every size, a family

@@ -77,6 +77,19 @@ codes! {
     DeviceTwoPools => "E-device-two-pools",
     /// A pool on a device or engine that declares no capacity of its name.
     PoolNoCapacity => "E-pool-no-capacity",
+    /// A KV relation whose reader has no entry that takes the KV from its
+    /// source.
+    CopyNoEntry => "E-copy-no-entry",
+    /// A KV relation written reader first: the source has the entry `…
+    /// from` the other.
+    CopySwapped => "E-copy-swapped",
+    /// An engine's connector that names another queue than the one its
+    /// queue's relation reads from.
+    ConnectorMisnamed => "E-connector-misnamed",
+    /// A second KV relation into one reader.
+    ReaderTwoSources => "E-reader-two-sources",
+    /// An engine's connector to a queue its queue copies no KV from.
+    ConnectorNoCopy => "E-connector-no-copy",
 }
 
 impl Code {

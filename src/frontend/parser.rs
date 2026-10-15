@@ -2434,17 +2434,46 @@ impl Parser {
                 .filter(|t| t.source == c.queue);
             let source = self.queues.iter().find(|s| s.name == c.queue);
             let (Some(q), Some(t), Some(source)) = (q, takes, source) else {
-                let at = self
+                let engine_at = self
                     .engines
                     .iter()
                     .find(|e| e.name == st.name)
                     .map_or(0, |e| e.at);
+                // the connector's name where it is written, in the engine
+                let at = (engine_at..self.toks.len().saturating_sub(1))
+                    .find(|&k| self.toks[k].text == "connector" && self.toks[k + 1].text == c.queue)
+                    .map_or(engine_at, |k| k + 1);
+                // the queue reads its KV from another: the relation has
+                // chosen the source, and the connector names it otherwise
+                if let Some(read) = q.and_then(|q| q.takes.as_ref()) {
+                    let verb = if read.push { "push" } else { "pull" };
+                    return self.err_at(
+                        at,
+                        format!(
+                            "{}\nhelp: fix-it: rename `connector {}` to `connector {}`",
+                            Code::ConnectorMisnamed.message(format_args!(
+                                "engine `{0}`'s `connector {1}`: queue `{0}` reads its KV from \
+                                 `{2}` (`kvt.nixl_{verb} ({2}, {0}, …)`), not from `{1}`",
+                                st.name, c.queue, read.source
+                            )),
+                            c.queue,
+                            read.source
+                        ),
+                    );
+                }
                 return self.err_at(
                     at,
                     format!(
-                        "engine `{}`'s `connector {}`: queue `{}` reads KV from no `{}`; \
-                         declare `kvt.nixl_pull ({}, {}, …);` or `kvt.nixl_push`",
-                        st.name, c.queue, st.name, c.queue, c.queue, st.name
+                        "{}\nhelp: declare the copy, a pull or a push: `kvt.nixl_pull ({}, {}, …);` \
+                         or `kvt.nixl_push ({}, {}, …);`",
+                        Code::ConnectorNoCopy.message(format_args!(
+                            "engine `{}`'s `connector {}`: queue `{}` reads KV from no `{}`",
+                            st.name, c.queue, st.name, c.queue
+                        )),
+                        c.queue,
+                        st.name,
+                        c.queue,
+                        st.name
                     ),
                 );
             };
@@ -2494,9 +2523,13 @@ impl Parser {
                         "`{}`'s engine has `connector {}`, not `connector {}`",
                         q.name, c.queue, t.source
                     ),
+                    // reached only by an L2's connector (another queue's
+                    // relation is refused first): which one the engine
+                    // keeps is a choice, so no fix-it
                     format!(
-                        "fix-it: in `{}`'s engine, rename `connector {}` to `connector {}`",
-                        q.name, c.queue, t.source
+                        "an engine has one connector: replace `connector {}` with `{connector}`, \
+                         or keep it and give `{}` an entry that `transfer`s the KV `from {}`",
+                        c.queue, q.name, t.source
                     ),
                 ),
                 Some(None) => (
@@ -6251,20 +6284,53 @@ impl Parser {
             .iter()
             .any(|e| e.from.as_deref() == Some(source.as_str()))
         {
-            return self.err_at(
-                at,
+            // the two written the wrong way round is the one fix that makes
+            // no choice; otherwise the entry, whose body is the program's
+            let swapped = self
+                .queues
+                .iter()
+                .find(|q| q.name == source)
+                .is_some_and(|s| {
+                    s.entries
+                        .iter()
+                        .any(|e| e.from.as_deref() == Some(reader.as_str()))
+                        // a relation into it already: the swap would be a
+                        // second, not the fix
+                        && s.takes.is_none()
+                });
+            // the two written the wrong way round is a refusal of its own,
+            // whose fix-it is the swap (`frontend::fix`)
+            let message = if swapped {
                 format!(
-                    "{written}: `{reader}` has no entry `… from {source}`, so nothing reads \
-                     what this copies; the source comes first, then the reader"
-                ),
-            );
+                    "{}\nhelp: fix-it: swap the two: `kvt.nixl_{verb} ({reader}, {source}, …)`, \
+                     the source first, then the reader",
+                    Code::CopySwapped.message(format_args!(
+                        "{written}: `{reader}` has no entry `… from {source}`, and `{source}` \
+                         has one `… from {reader}`: the source comes first, then the reader"
+                    ))
+                )
+            } else {
+                format!(
+                    "{}\nhelp: give `{reader}` an entry for a request whose KV comes from \
+                     `{source}`: `VERB (…) from {source} {{ … }}`",
+                    Code::CopyNoEntry.message(format_args!(
+                        "{written}: `{reader}` has no entry `… from {source}`, so nothing reads \
+                         what this copies"
+                    ))
+                )
+            };
+            return self.err_at(at, message);
         }
         if let Some(r) = &self.queues[qi].takes {
             return self.err_at(
                 at,
                 format!(
-                    "`{reader}` takes the KV from `{}` already: one relation per reader",
-                    r.source
+                    "{}\nhelp: a reader takes its KV from one source: remove one of the two \
+                     relations",
+                    Code::ReaderTwoSources.message(format_args!(
+                        "`{reader}` takes the KV from `{}` already: one relation per reader",
+                        r.source
+                    ))
                 ),
             );
         }
