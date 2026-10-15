@@ -3622,7 +3622,48 @@ pub enum ArgKind {
     Stage,
 }
 
+impl ArgKind {
+    /// As the reference writes it in a signature: `queued(p: pool)`.
+    pub fn name(self) -> &'static str {
+        match self {
+            ArgKind::Expr => "expr",
+            ArgKind::Pool => "pool",
+            ArgKind::Stage => "stage",
+        }
+    }
+}
+
 use ArgKind::{Expr as E, Pool as P, Stage as S};
+
+/// A function's row of the table (`Fun::entry`).
+struct FunEntry {
+    name: &'static str,
+    kinds: &'static [ArgKind],
+    params: &'static [&'static str],
+    group: FunGroup,
+}
+
+/// What a function reads: its arguments alone, or a stage's, a pool's or
+/// an engine's state (`Fun::group`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FunGroup {
+    Arithmetic,
+    Stage,
+    Pool,
+    Engine,
+}
+
+impl FunGroup {
+    /// As the reference names its section: `arithmetic`, `stage`, ….
+    pub fn name(self) -> &'static str {
+        match self {
+            FunGroup::Arithmetic => "arithmetic",
+            FunGroup::Stage => "stage",
+            FunGroup::Pool => "pool",
+            FunGroup::Engine => "engine",
+        }
+    }
+}
 
 /// Every function a call may name, for lookup by name; `Fun::entry` is
 /// the definition and a match, so a new `Fun` without one does not compile.
@@ -3653,33 +3694,10 @@ const FUNS: [Fun; 22] = [
 
 impl Fun {
     /// A function of its arguments alone (`min`, `ceil`, …), which reads
-    /// no state. Written out, not read off the signature: a function of
-    /// numbers alone may still read state.
+    /// no state: its group says so (`Fun::entry`), not its signature, since
+    /// a function of numbers alone may still read state.
     pub fn is_arithmetic(self) -> bool {
-        match self {
-            Fun::Min
-            | Fun::Max
-            | Fun::Abs
-            | Fun::Floor
-            | Fun::Ceil
-            | Fun::Sqrt
-            | Fun::Exp
-            | Fun::Ln => true,
-            Fun::Queue
-            | Fun::Busy
-            | Fun::Work
-            | Fun::Used
-            | Fun::Free
-            | Fun::CachedIn
-            | Fun::Allocated
-            | Fun::Holders
-            | Fun::Queued
-            | Fun::Price
-            | Fun::BudgetLeft
-            | Fun::EstLambda
-            | Fun::EstRho
-            | Fun::EstWait => false,
-        }
+        self.group() == FunGroup::Arithmetic
     }
 
     /// The value of an arithmetic function, the one definition the
@@ -3699,42 +3717,67 @@ impl Fun {
         })
     }
 
-    /// The function's name in a program and the kind of each argument. The
-    /// linker resolves a call by it, and `Program::validate` checks one.
-    fn entry(self) -> (&'static str, &'static [ArgKind]) {
+    /// The function's name in a program, the kind and name of each
+    /// argument, and its group, whose `Arithmetic` is what `is_arithmetic`
+    /// reads. The linker resolves a call by it, and `Program::validate`
+    /// checks one; an editor reads it too (`frontend::highlight::functions`).
+    fn entry(self) -> FunEntry {
+        use FunGroup::{Arithmetic as A, Engine as En, Pool as Po, Stage as St};
+        let f = |name, kinds, params, group| FunEntry {
+            name,
+            kinds,
+            params,
+            group,
+        };
         match self {
-            Fun::Min => ("min", &[E, E]),
-            Fun::Max => ("max", &[E, E]),
-            Fun::Abs => ("abs", &[E]),
-            Fun::Floor => ("floor", &[E]),
-            Fun::Ceil => ("ceil", &[E]),
-            Fun::Sqrt => ("sqrt", &[E]),
-            Fun::Exp => ("exp", &[E]),
-            Fun::Ln => ("ln", &[E]),
-            Fun::Queue => ("queue", &[S]),
-            Fun::Busy => ("busy", &[S]),
-            Fun::Work => ("work", &[S]),
-            Fun::Used => ("used", &[P]),
-            Fun::Free => ("free", &[P]),
-            Fun::CachedIn => ("cachedin", &[P]),
-            Fun::Allocated => ("allocated", &[P]),
-            Fun::Holders => ("holders", &[P]),
-            Fun::Queued => ("queued", &[P]),
-            Fun::Price => ("price", &[S, E, E]),
-            Fun::BudgetLeft => ("budget_left", &[S]),
-            Fun::EstLambda => ("est_lambda", &[S]),
-            Fun::EstRho => ("est_rho", &[S]),
-            Fun::EstWait => ("est_wait", &[S]),
+            Fun::Min => f("min", &[E, E], &["a", "b"], A),
+            Fun::Max => f("max", &[E, E], &["a", "b"], A),
+            Fun::Abs => f("abs", &[E], &["x"], A),
+            Fun::Floor => f("floor", &[E], &["x"], A),
+            Fun::Ceil => f("ceil", &[E], &["x"], A),
+            Fun::Sqrt => f("sqrt", &[E], &["x"], A),
+            Fun::Exp => f("exp", &[E], &["x"], A),
+            Fun::Ln => f("ln", &[E], &["x"], A),
+            Fun::Queue => f("queue", &[S], &["s"], St),
+            Fun::Busy => f("busy", &[S], &["s"], St),
+            Fun::Work => f("work", &[S], &["s"], St),
+            Fun::Used => f("used", &[P], &["p"], Po),
+            Fun::Free => f("free", &[P], &["p"], Po),
+            Fun::CachedIn => f("cachedin", &[P], &["p"], Po),
+            Fun::Allocated => f("allocated", &[P], &["p"], Po),
+            Fun::Holders => f("holders", &[P], &["p"], Po),
+            Fun::Queued => f("queued", &[P], &["p"], Po),
+            Fun::Price => f("price", &[S, E, E], &["s", "s_hit", "ds"], St),
+            Fun::BudgetLeft => f("budget_left", &[S], &["s"], En),
+            Fun::EstLambda => f("est_lambda", &[S], &["s"], St),
+            Fun::EstRho => f("est_rho", &[S], &["s"], St),
+            Fun::EstWait => f("est_wait", &[S], &["s"], St),
         }
     }
 
     pub fn name(self) -> &'static str {
-        self.entry().0
+        self.entry().name
     }
 
     /// The kind of each argument, in order.
     pub fn signature(self) -> &'static [ArgKind] {
-        self.entry().1
+        self.entry().kinds
+    }
+
+    /// The name of each parameter, in order, as the reference names it.
+    pub fn params(self) -> &'static [&'static str] {
+        self.entry().params
+    }
+
+    /// What the function reads: its arguments alone, or a stage's, a
+    /// pool's or an engine's state; the reference's group.
+    pub fn group(self) -> FunGroup {
+        self.entry().group
+    }
+
+    /// Every function, in the table's order.
+    pub fn all() -> impl Iterator<Item = Fun> {
+        FUNS.into_iter()
     }
 
     pub fn from_name(name: &str) -> Option<Fun> {
