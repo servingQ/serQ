@@ -4839,13 +4839,14 @@ impl Parser {
                 continue;
             }
             // a link needs none when its `serve` is its cost (`transfer on L[k] (n) …`)
-            if sig.name == "link" {
+            if sig.entry_optional {
                 if !q.has_stage {
                     return self.err_at(
                         at,
                         format!(
-                            "queue `{name}` plays `link` and has neither a `serve` nor a \
-                             `transfer` entry: nothing says what a transfer over it costs"
+                            "queue `{name}` plays `{}` and has neither a `serve` nor a \
+                             `{}` entry: nothing says what a {} over it costs",
+                            sig.name, sig.verb, sig.verb
                         ),
                     );
                 }

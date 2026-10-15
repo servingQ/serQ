@@ -414,6 +414,37 @@ pub struct Function {
     pub summary: &'static str,
 }
 
+/// A role a queue plays (`queue Q : prefill`), as an editor offers it: its
+/// entry's verb, how many parameters the entry takes, and whether it is
+/// written `from` the queue whose KV it reads (#645 B5, B8). The
+/// language's table is `queue::ROLES`; the one in `docs/language.md` is a
+/// copy, held equal by a test.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct QueueRole {
+    pub name: &'static str,
+    /// The entry's verb, `prefill`, or null for a role with none (`l2`).
+    pub verb: Option<&'static str>,
+    pub params: usize,
+    /// Its entry is written `… from Q`, the queue whose KV it reads.
+    pub from: bool,
+    /// The queue may have no entry, its `serve` the cost (`link`).
+    pub entry_optional: bool,
+}
+
+/// Every role of the serving vocabulary, in the table's order.
+pub fn queue_roles() -> Vec<QueueRole> {
+    crate::frontend::queue::ROLES
+        .iter()
+        .map(|r| QueueRole {
+            name: r.name,
+            verb: (!r.verb.is_empty()).then_some(r.verb),
+            params: r.params,
+            from: r.from,
+            entry_optional: r.entry_optional,
+        })
+        .collect()
+}
+
 /// Every function of `ir::Fun`, in the table's order.
 pub fn functions() -> Vec<Function> {
     Fun::all()

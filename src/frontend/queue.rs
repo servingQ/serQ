@@ -23,6 +23,8 @@ pub struct RoleSig {
     pub verb: &'static str,
     pub params: usize,
     pub from: bool,
+    /// The queue may have no entry, its `serve` the cost (a link).
+    pub entry_optional: bool,
 }
 
 /// The roles of the serving vocabulary: name, verb, parameters, and
@@ -36,7 +38,7 @@ pub const ROLES: &[RoleSig] = &[
     RoleSig::new("prefill", "prefill", 1, false),
     RoleSig::new("agg", "decode", 1, false),
     RoleSig::new("decode", "decode", 1, true),
-    RoleSig::new("link", "transfer", 1, false),
+    RoleSig::new("link", "transfer", 1, false).entry_optional(),
     RoleSig::new("l2", "", 0, false),
 ];
 
@@ -47,6 +49,14 @@ impl RoleSig {
             verb,
             params,
             from,
+            entry_optional: false,
+        }
+    }
+
+    const fn entry_optional(self) -> RoleSig {
+        RoleSig {
+            entry_optional: true,
+            ..self
         }
     }
 
