@@ -27,8 +27,9 @@ word to its `;` or `}`; a `body` is what is between its braces.
 | `main` | `{range, body}` | `fn main() { … }` |
 | `uses` | `{path, range}` | `use "std/kvt";` |
 | `decls` | `{kind, name, range}`, `kind` one of `let`, `stage`, `engine`, `pool`, `device` | a declaration outside a queue, in order |
-| `queues` | `{name, roles, family, range, body, members}` | `queue P[NP] : prefill { … }`; `family` is the text between the brackets, or null |
+| `queues` | `{name, roles, family, range, body, members, accepts}` | `queue P[NP] : prefill { … }`; `family` is the text between the brackets, or null |
 | `queues[].members` | `{kind, name?, from?, range, body?}`, `kind` one of `device`, `engine`, `pool`, `nic`, `serve`, `entry` | in order; a device's or pool's `name`, an entry's verb as `name` and its `from Q` |
+| `queues[].accepts.pools` | `{on, cap, admitted_by}` | where the queue may still take a pool: each capacity of its engine and devices no pool is on, as `pool NAME on …` spells it there (`on` is `Q`, `gpu` or `Q.gpu`), and the engine that would admit it, or null (`on gpu`: none; `on Q.gpu`: `Q`). The device an engine runs on holds one pool, so once it has one it offers none. What the members already say is not repeated: an entry is what a call names (a NIC, a pool or a device is not), a `nic` is what a KV copy's end needs, a `gateway` routes |
 | `relations` | `{mode, source, reader, range, function}` | `kvt.nixl_pull (P, D, …);`; `mode` is `pull` or `push`, `function` the range of `nixl_pull` |
 | `routes` | `{gateway, range, body}` | a gateway's `route { … }` |
 | `server` | `{range, body}` | `server { … }` |
