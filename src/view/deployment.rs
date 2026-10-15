@@ -100,6 +100,10 @@ pub struct Instance {
     /// The attribute its `choose` chose: two instances of one variable
     /// that share a station are one (`own`).
     pub slot: usize,
+    /// Its stations are all a family's members (`P[i]`, `P.nic[i]`): the
+    /// figure draws it once per member (`Stack`), so a flow out of it is
+    /// one per member, whatever is at its other end.
+    pub stacked: bool,
 }
 
 /// What a run over several stages moves and waits for, when it is a
@@ -207,6 +211,22 @@ impl Net {
         matches!(runs.as_slice(), [Some(a), Some(b)] if a != b)
     }
 
+    /// Whether a flow crosses an instance's box: between two instances
+    /// (`spans`), or out of a stacked one to a station in any other place,
+    /// none included, since a stacked box is drawn once per member (#667).
+    /// A run from a station in no box into an unstacked one is no crossing
+    /// (#197): that box is drawn once, and its pools with it.
+    pub fn crosses(&self, flow: &[usize]) -> bool {
+        self.spans(flow)
+            || flow.iter().any(|&i| {
+                self.instance_of(i)
+                    .is_some_and(|k| self.instances[k].stacked)
+                    && flow
+                        .iter()
+                        .any(|&j| self.instance_of(j) != self.instance_of(i))
+            })
+    }
+
     /// The instance a station is in, if any.
     pub fn instance_of(&self, node: usize) -> Option<usize> {
         self.instances.iter().position(|g| g.nodes.contains(&node))
@@ -216,11 +236,20 @@ impl Net {
     /// transfer between two instances. A transfer holds the sender's pool
     /// and the receiver's at both NICs; the figure says so on the link
     /// between the instances (`kvP[i] → kvD[j]`), not with boxes that cross.
+    /// Nor a pool of no box at a station of a copy out of its stacked box
+    /// (#667), whose enclosure would cross that box.
     pub fn drawn_pools(&self, node: usize) -> Vec<usize> {
         let here = self.instance_of(node);
         if self.across(node) {
             return vec![];
         }
+        // a station of a copy out of its stacked box: a pool of no box (the
+        // reader's, `D.kv`) would be an enclosure across the box (#667)
+        let leaves = here.is_some_and(|k| self.instances[k].stacked)
+            && self
+                .flows
+                .iter()
+                .any(|g| g.contains(&node) && self.crosses(g));
         self.nodes[node]
             .pools
             .iter()
@@ -229,7 +258,7 @@ impl Net {
                 |&q| match self.instances.iter().position(|g| g.pools.contains(&q)) {
                     // outside the box, its enclosure would cross the box
                     Some(owner) => here == Some(owner),
-                    None => true,
+                    None => !leaves,
                 },
             )
             .collect()
@@ -340,6 +369,7 @@ impl Walker<'_> {
             nodes: vec![],
             pools: vec![],
             slot: *slot,
+            stacked: false,
         });
         let k = self.net.instances.len() - 1;
         self.instance_of_slot.push((*slot, k));
@@ -396,8 +426,17 @@ impl Walker<'_> {
         for k in 0..self.net.instances.len() {
             let mut nodes = sole(&self.node_owners, k);
             nodes.sort_unstable();
+            let p = self.p;
+            let net = &self.net;
+            let stacked = !nodes.is_empty()
+                && nodes.iter().all(|&i| {
+                    net.nodes[i]
+                        .stage
+                        .is_some_and(|s| p.stages[s].index.is_some())
+                });
             self.net.instances[k].nodes = nodes;
             self.net.instances[k].pools = sole(&self.pool_owners, k);
+            self.net.instances[k].stacked = stacked;
         }
     }
 
@@ -1746,7 +1785,11 @@ fn instance_order(net: &Net) -> Vec<usize> {
     // from here; 1: neither, or both
     let side = |k: usize| {
         let (mut arrives, mut leaves) = (false, false);
-        for g in net.flows.iter().filter(|g| g.contains(&k) && net.spans(g)) {
+        for g in net
+            .flows
+            .iter()
+            .filter(|g| g.contains(&k) && net.crosses(g))
+        {
             if net.instance_of(k) == net.instance_of(g[0]) {
                 leaves = true;
             } else {
@@ -1941,6 +1984,11 @@ struct Stack {
 
 impl Stack {
     fn of(p: &Program, net: &Net, g: &Instance) -> Option<Stack> {
+        // stacked or not is `settle_instances`'s to say (`Instance.stacked`),
+        // which `Net::crosses` reads too
+        if !g.stacked {
+            return None;
+        }
         let family = |name: &str, index: Option<u32>, of: &mut dyn Iterator<Item = &str>| {
             index.map(|_| of.filter(|n| *n == name).count())
         };
@@ -2209,7 +2257,7 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
             + cached as f64 * 16.0
             + 4.0
     };
-    let spanning = |g: usize| net.spans(&net.flows[g]);
+    let spanning = |g: usize| net.crosses(&net.flows[g]);
     // who posts a copy: one poster for all the runs over these stations,
     // at the arrow's head (where the bytes arrive: a pull) or its tail (a
     // push); the arrow goes from the first stage the run names to the last
@@ -2376,18 +2424,10 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
     // member, the boxes stacked down from the row (`members`)
     let stacks: Vec<Option<Stack>> = net.instances.iter().map(|g| Stack::of(p, net, g)).collect();
     let stack_of = |i: usize| net.instance_of(i).and_then(|k| stacks[k].as_ref());
-    // a copy across a stacked instance's box: into another instance
-    // (`Net::spans`), or to a station in none (a family `P[i]`'s NIC to one
-    // decoder's). A run from a station in no instance into an unstacked
-    // box is no crossing (#197); a stacked box is drawn once per member,
-    // so a flow out of it is an arrow per member whatever is at its end
-    let stacked_copy = |g: usize| {
-        let group = &net.flows[g];
-        group.iter().any(|&i| stack_of(i).is_some())
-            && group
-                .iter()
-                .any(|&i| net.instance_of(i) != net.instance_of(group[0]))
-    };
+    // a copy across a stacked instance's box (`Net::crosses`): an arrow per
+    // member, whatever is at its other end
+    let stacked_copy =
+        |g: usize| spanning(g) && net.flows[g].iter().any(|&i| stack_of(i).is_some());
 
     // A run over several stages: its stations bracketed as one job.
     for (g, group) in net.flows.iter().enumerate() {
