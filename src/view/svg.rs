@@ -270,15 +270,15 @@ pub fn render(f: &Figure) -> String {
                     // a node that is no stage says what it is
                     None => {
                         let role = match kind {
-                            StationKind::Decision => "decision",
-                            StationKind::Delay => "tick",
-                            StationKind::Gateway => "gateway",
-                            StationKind::Client => "client",
-                            StationKind::Fifo | StationKind::Ps | StationKind::Step => {
-                                unreachable!("a queueing station is a stage's")
-                            }
+                            StationKind::Decision => r#" data-role="decision""#,
+                            StationKind::Delay => r#" data-role="tick""#,
+                            StationKind::Gateway => r#" data-role="gateway""#,
+                            StationKind::Client => r#" data-role="client""#,
+                            // a queueing station is a stage's: one drawn
+                            // without is named alone
+                            StationKind::Fifo | StationKind::Ps | StationKind::Step => "",
                         };
-                        let _ = writeln!(s, r#"<g data-node="{}" data-role="{role}">"#, esc(node));
+                        let _ = writeln!(s, r#"<g data-node="{}"{role}>"#, esc(node));
                     }
                 }
                 match kind {

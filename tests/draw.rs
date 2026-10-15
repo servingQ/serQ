@@ -1657,6 +1657,51 @@ fn a_gateway_routes_and_the_reply_comes_back_by_it() {
     assert!(gateway(&net).is_none() && decision(&net).is_some());
 }
 
+/// A reply and a flow never run along one line: a reader could not tell
+/// which way the arrow points. `llmd_nixl_pull.sq`'s gateway sends a
+/// request down into the stacked decoders, and each replies to it.
+#[test]
+fn a_reply_shares_no_line_with_a_flow() {
+    use serq::view::figure::{EdgeRole, Item, Point};
+    // the overlap of two axis-aligned segments, along their common line
+    let overlap = |(a, b): (Point, Point), (c, d): (Point, Point)| -> f64 {
+        let span = |x: f64, y: f64| (x.min(y), x.max(y));
+        if a.x == b.x && c.x == d.x && a.x == c.x {
+            let ((p, q), (r, s)) = (span(a.y, b.y), span(c.y, d.y));
+            q.min(s) - p.max(r)
+        } else if a.y == b.y && c.y == d.y && a.y == c.y {
+            let ((p, q), (r, s)) = (span(a.x, b.x), span(c.x, d.x));
+            q.min(s) - p.max(r)
+        } else {
+            0.0
+        }
+    };
+    for name in PROGRAMS.iter().chain(&["llmd_nixl_pull", "vllm_nixl_push"]) {
+        let f = deployment::figure(&program(name));
+        let segments = |reply: bool| -> Vec<(Point, Point)> {
+            f.items
+                .iter()
+                .filter_map(|i| match i {
+                    Item::Edge {
+                        pts, role: Some(r), ..
+                    } if matches!(r, EdgeRole::Reply { .. }) == reply
+                        && matches!(r, EdgeRole::Reply { .. } | EdgeRole::Flow { .. }) =>
+                    {
+                        Some(pts.windows(2).map(|w| (w[0], w[1])).collect::<Vec<_>>())
+                    }
+                    _ => None,
+                })
+                .flatten()
+                .collect()
+        };
+        for r in segments(true) {
+            for s in segments(false) {
+                assert!(overlap(r, s) <= 0.0, "{name}: {r:?} runs along {s:?}");
+            }
+        }
+    }
+}
+
 /// The figure is big enough for what it contains.
 #[test]
 fn figures_are_fitted() {

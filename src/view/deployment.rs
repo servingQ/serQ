@@ -9,6 +9,7 @@
 
 use std::collections::BTreeMap;
 
+use crate::frontend::queue::GATEWAY_VERB;
 use crate::ir::{CArrival, CExpr, CRef, CStageKind, CStmt, CtxVar, Program, RunMode, Side, UnOp};
 use crate::view::figure::{
     Anchor, BoxStyle, CLIENT, CopyMark, EdgeRole, EdgeStyle, Figure, Item, Point, Rect,
@@ -184,15 +185,13 @@ impl Net {
     pub fn node_of(&self, stage: usize) -> Option<usize> {
         self.nodes.iter().position(|n| n.stage == Some(stage))
     }
-    /// Whether an edge exists between two ends, in that direction.
+    /// Whether an edge a request takes exists between two ends, in that
+    /// direction; a reply is not one (`Edge::reply`).
     pub fn has_edge(&self, from: End, to: End) -> bool {
-        self.edges.iter().any(|e| e.from == from && e.to == to)
+        self.edges
+            .iter()
+            .any(|e| !e.reply && e.from == from && e.to == to)
     }
-    /// Whether a run over several stages crosses from one instance to
-    /// another: two of its stations in two different instances.
-    /// It does when its stations, in the order named, are one instance's
-    /// and then another's (`egress[i], ingress[j]`); any other mixture
-    /// (`a[i], b[j], c[i]`) is bracketed where it stands.
     /// What the SVG calls node `i`: its stage's name; for a gateway, the
     /// call the server makes (`gw.route`), which no stage is called (a
     /// gateway queue's engine is the stage `gw`); for a decision or a tick,
@@ -202,11 +201,18 @@ impl Net {
         let n = &self.nodes[i];
         match n.stage {
             Some(st) => p.stages[st].name.clone(),
-            None if n.kind == StationKind::Gateway => format!("{}.route", n.label),
+            None if n.kind == StationKind::Gateway => {
+                format!("{}.{GATEWAY_VERB}", n.label)
+            }
             None => format!("#{i}"),
         }
     }
 
+    /// Whether a run over several stages crosses from one instance to
+    /// another: two of its stations in two different instances.
+    /// It does when its stations, in the order named, are one instance's
+    /// and then another's (`egress[i], ingress[j]`); any other mixture
+    /// (`a[i], b[j], c[i]`) is bracketed where it stands.
     pub fn spans(&self, flow: &[usize]) -> bool {
         let mut runs: Vec<Option<usize>> = vec![];
         for &k in flow {
@@ -544,6 +550,14 @@ impl Walker<'_> {
                 i
             }
         };
+        self.enclose(idx);
+        idx
+    }
+
+    /// A node of no stage the walk reached inside the holds it is in (a
+    /// tick, a gateway): the pools held now enclose it, as of its first
+    /// visit, and each hold has reached it.
+    fn enclose(&mut self, idx: usize) {
         let mut pools = vec![];
         for &(q, id, e) in &self.holds {
             if e && !pools.contains(&q) {
@@ -557,7 +571,6 @@ impl Walker<'_> {
         if self.net.nodes[idx].pools.is_empty() {
             self.net.nodes[idx].pools = pools;
         }
-        idx
     }
 
     /// The node of a stage the session reaches, made on the first visit.
@@ -631,10 +644,9 @@ impl Walker<'_> {
 
     /// The node of a gateway, made on the first route the walk reaches:
     /// no stage's, named after the gateway, the `choose`s its route makes
-    /// before any station written in it. Inside the holds the route runs
-    /// in, as a tick is.
+    /// before any station written in it.
     fn gateway(&mut self, r: &crate::ir::Route) -> usize {
-        let idx = match self.gateways.iter().find(|(g, _)| *g == r.gateway) {
+        match self.gateways.iter().find(|(g, _)| *g == r.gateway) {
             Some(&(_, i)) => i,
             None => {
                 let mut slots = vec![];
@@ -649,8 +661,8 @@ impl Walker<'_> {
                 let fits = |t: &String| TextSize::Normal.width_of(t) <= STATION_W - 12.0;
                 let (inner, note) = match chooses {
                     Some(c) if fits(&c) => (c, None),
-                    Some(c) => ("route".into(), Some(c)),
-                    None => ("route".into(), None),
+                    Some(c) => (GATEWAY_VERB.into(), Some(c)),
+                    None => (GATEWAY_VERB.into(), None),
                 };
                 self.net.nodes.push(Node {
                     stage: None,
@@ -666,21 +678,7 @@ impl Walker<'_> {
                 self.gateways.push((r.gateway.clone(), i));
                 i
             }
-        };
-        let mut pools = vec![];
-        for &(q, id, e) in &self.holds {
-            if e && !pools.contains(&q) {
-                pools.push(q);
-            }
-            let visits = &mut self.net.holds[id].visits;
-            if e && !visits.contains(&(q, idx)) {
-                visits.push((q, idx));
-            }
         }
-        if self.net.nodes[idx].pools.is_empty() {
-            self.net.nodes[idx].pools = pools;
-        }
-        idx
     }
 
     /// The routes that end and begin before statement `k` of the block
@@ -706,6 +704,8 @@ impl Walker<'_> {
         }
         for r in routes.iter().filter(|r| r.from == k) {
             let gw = self.gateway(r);
+            // inside the holds the route runs in, as a tick is
+            self.enclose(gw);
             self.attach(gw);
         }
     }
@@ -3145,12 +3145,21 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
             (End::Node(a), End::Node(b)) if e.reply => {
                 // A reply: from the station the route ended at back to its
                 // gateway, along a lane of its own, into the gateway's
-                // underside left of where the request leaves it
+                // underside left of where the request leaves it. It
+                // leaves by a point no other arrow does (0.875) and a
+                // stacked member by the stack's right, where the arrows
+                // into the stack do not run
                 let (ra, rb) = (rects[a], rects[b]);
                 let y = lane(&mut lanes);
-                let (ax, bx) = (ra.x + ra.w * 0.375, rb.x + rb.w * 0.375);
+                let (ax, bx) = (ra.x + ra.w * 0.875, rb.x + rb.w * 0.375);
                 for ((ma, na), (mb, nb)) in pairs(a, b) {
-                    f.reply(lane_path((a, ma, ax), (b, mb, bx), y), na, nb);
+                    let mut pts = down(a, ma, ax, true);
+                    pts.push(pt(pts.last().unwrap().x, y));
+                    let mut up = down(b, mb, bx, false);
+                    up.reverse();
+                    pts.push(pt(up[0].x, y));
+                    pts.extend(up);
+                    f.reply(pts, na, nb);
                 }
             }
             (End::Node(a), End::Node(b)) if !e.back && b > a + 1 => {

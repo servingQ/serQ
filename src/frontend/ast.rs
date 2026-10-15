@@ -556,14 +556,22 @@ pub enum DeclaredType {
     Cost,
 }
 
+/// Where a gateway's `route`, expanded in place, opens and closes.
+#[derive(Clone, Debug, PartialEq)]
+pub enum RouteMark {
+    /// The route of the gateway so named starts after it.
+    Open(String),
+    /// The route opened last ends before it.
+    Close,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Stmt {
     /// Parse-time boundary, retained as per-statement authority in the IR.
     Side(crate::ir::Side),
-    /// Parse-time boundary of a gateway's `route` expanded in place: the
-    /// gateway's name opens it, `None` closes it. Retained in the IR as
-    /// `Program::routes`.
-    Route(Option<String>),
+    /// Parse-time boundary of a gateway's `route` expanded in place.
+    /// Retained in the IR as `Program::routes`.
+    Route(RouteMark),
     Declare(String, DeclaredType),
     /// Draw the next turn's attributes from the workload.
     Turn,

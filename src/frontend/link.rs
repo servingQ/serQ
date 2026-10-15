@@ -2696,11 +2696,11 @@ impl Linker<'_> {
             // a gateway's route: from the statement after its opening to the
             // one before its close, in this block (`expand` puts both marks
             // in one list)
-            if let Stmt::Route(gateway) = s {
+            if let Stmt::Route(mark) = s {
                 let here = self.sides[id].len();
-                match gateway {
-                    Some(g) => routes.push((g.clone(), here)),
-                    None => {
+                match mark {
+                    RouteMark::Open(g) => routes.push((g.clone(), here)),
+                    RouteMark::Close => {
                         let (gateway, from) = routes.pop().expect("`expand` closes what it opens");
                         if from < here {
                             self.routes.push(crate::ir::Route {

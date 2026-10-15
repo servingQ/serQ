@@ -108,8 +108,9 @@ A page finds a node by `data-node`, so a name must mean one node (criterion
   is.** Rejected. It writes the gateway's name once per statement, where a
   range writes it once per call.
 - **`data-node="gw"` and `data-node="client"`, as the issues wrote them.**
-  Rejected for the collisions above. serq-lar reads `gw.route` and
-  `#client`.
+  Rejected for the collisions above. serq-lar must read `gw.route` and
+  `#client`, and drop its own `CLIENT` node, `ServerNode` frame and
+  `exitId` (its `docs/upstream.md` U20).
 - **An `end` in a route replying through the gateway.** Written, then
   removed. An entry does not refuse a request; the server does (`` `end` in
   a queue's entry `` does not link). So no program reaches that branch.

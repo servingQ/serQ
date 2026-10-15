@@ -238,7 +238,7 @@ impl Parser {
         for q in &self.queues {
             let gateway = q.roles.iter().any(|r| r == "gateway");
             for e in &q.entries {
-                if gateway && e.verb == "route" {
+                if gateway && e.verb == queue::GATEWAY_VERB {
                     blocks.push(("the gateway's `route`".into(), e.at, &e.body, None));
                 } else {
                     let who = format!("`{}.{}`", q.name, e.verb);
