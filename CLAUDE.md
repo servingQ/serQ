@@ -142,9 +142,10 @@ in Korean, short: the finding and the evidence.
 Copilot and CodeRabbit review a pull request. CodeRabbit is set by
 `.coderabbit.yaml`: it writes in Korean, reads this file, the checklist and
 the writing guides as they stand (the config copies none of them), and
-skips the generated files. It reviews each commit once, so a force-push
-starts its review over; `@coderabbitai review` asks for one by hand. Each
-finding of either is answered on the pull request: fixed, or why not. When
+skips the generated files. It reviews again on each push, the commits since
+its last review, and pauses after five reviewed commits:
+`@coderabbitai review` asks for one while it is paused, `@coderabbitai full
+review` reviews the whole pull request again. Each finding of either is answered on the pull request: fixed, or why not. When
 Copilot's review limit is reached, the subagents in `.claude/agents/`
 review instead, at most two in parallel: `design-reviewer` for the
 checklist and the code, `sim-reviewer` — only when the PR moves a number —
