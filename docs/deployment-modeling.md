@@ -8,8 +8,8 @@ the client's behaviour, the workload, is a file apart. Then it goes inside
 the server's engines: each has a scheduler that decides what each iteration
 computes and owns the engine's resources, and a worker that turns the
 scheduled batch into time. It explains how the two divide the work, where
-resources are taken and given back, and which invariants every program
-keeps.
+resources are taken and given back, the one status each engine request is
+in, and which invariants every program keeps.
 
 The language reference defines each construct:
 [The two sides](language.md#the-two-sides),
