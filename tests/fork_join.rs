@@ -153,6 +153,23 @@ fn a_leg_s_send_is_read_on_every_way() {
         workload,
         "more than once",
     );
+    // each leg's send is read: two legs of one source and one read leave
+    // one unread (PR #719's fourth review: one read cleared both)
+    refused(
+        &push(
+            "fork { P.prefill (prompt); } fork { P.prefill (prompt); } D.decode (prompt) from P;",
+            100,
+            1.0,
+        ),
+        workload,
+        "is read on no way after its `fork`",
+    );
+    // a call that takes its KV from no source reads no send (its review)
+    refused(
+        &push("fork { P.prefill (prompt); } D.decode (prompt);", 100, 1.0),
+        workload,
+        "is read on no way after its `fork`",
+    );
     // and leases nothing: what it leaves its session is the send
     refused(
         &push("D.decode (prompt);", 100, 1.0).replace(
@@ -232,7 +249,8 @@ fn a_load_whose_send_expired_computes_the_prompt_itself() {
     let route = "set t0 = now;
          fork { P.prefill (prompt); run gate (cost(gate, 1)); }
          D.decode (prompt) from P;
-         observe done_at = now - t0;";
+         observe done_at = now - t0;
+         observe loaded_at = D.load_done - t0;";
     let src = |ttl: &str| {
         push(route, 100, 1.0).replace(
             "share = share.maxmin);",
@@ -247,6 +265,35 @@ fn a_load_whose_send_expired_computes_the_prompt_itself() {
     // third review): nothing loaded, the 10 tokens prefilled
     assert_eq!(samples(&r, "D.loaded"), [0.0]);
     assert_eq!(samples(&r, "D.prefill"), [10.0]);
+    // and its load is over when it found no send, at 11, as the log says
+    // (PR #719's fourth review: `load_done` stayed unset, the load
+    // registered and never done)
+    assert_eq!(samples(&r, "loaded_at"), [11.0]);
+    let p = common::compile(
+        &common::main_source(&src(", ttl = 0.5")),
+        PROMPT10,
+        &common::horizon(100.0),
+    )
+    .unwrap();
+    let log = serq::run_ir_logged(&p, None, usize::MAX)
+        .unwrap()
+        .log
+        .unwrap();
+    use serq::engine::log::EventKind;
+    use serq::engine::state::{Moved, Transfer};
+    let loads: Vec<(Moved, f64)> = log
+        .events
+        .iter()
+        .filter_map(|e| match e.kind {
+            EventKind::Transfer {
+                kind: Transfer::Load,
+                moved,
+                ..
+            } => Some((moved, e.t)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(loads, [(Moved::Registered, 0.0), (Moved::Done, 11.0)]);
     // without the `ttl`, the send is read: the copy, then the last token again
     let r = run(&src(""), PROMPT10);
     assert_eq!(samples(&r, "done_at"), [15.0]);
@@ -266,6 +313,7 @@ fn a_load_ends_the_send_its_copy_read() {
     use serq::engine::state::{Moved, Transfer};
     let route = "fork { P.prefill (prompt); }
          fork { run gate (cost(gate, 0.5)); P.prefill (prompt); }
+         D.decode (prompt) from P;
          D.decode (prompt) from P;";
     let src = push(route, 100, 1.0).replace("nic ps(10);", "nic ps(1);")
         + "\n        stage gate : delay;";
@@ -358,6 +406,11 @@ fn two_relations_from_one_source_name_one_ttl() {
     };
     run(&src("2", "2"), PROMPT10);
     let e = fails(&src("1", "2"), PROMPT10);
+    // where the second relation is written (PR #719's fourth review)
+    assert!(
+        e.starts_with("deployment.sq: ") && e.contains("kvt.nixl_pull (P, E"),
+        "{e}"
+    );
     assert!(
         e.contains("two KV relations from `P` name different `ttl`s"),
         "{e}"

@@ -979,7 +979,8 @@ pub struct CConnector {
     /// copies to.
     pub loaded: usize,
     pub saved: usize,
-    /// Attribute slot: when its latest load ended (`E.load_done`).
+    /// Attribute slot: when its latest load ended, or found its send gone
+    /// (`E.load_done`).
     pub load_done: usize,
     /// A KV relation's (`kvt.nixl_pull`): the attribute its request's entry
     /// sets to the source's member it took `from`, -1 for none, which loads
@@ -3398,6 +3399,7 @@ impl Validator<'_> {
                 return Err("a connector's load may not draw".into());
             }
             if let Some(src) = &t.source {
+                self.cref(src, self.p.pools.len(), "pool", Moment::Request)?;
                 if c.from.is_none() {
                     return Err(
                         "a connector reads a source's send, and its requests' entries name \
@@ -3887,32 +3889,44 @@ impl Validator<'_> {
     /// pending there. A session that ends with one pending would end while
     /// its leg runs, or leave the send to nobody.
     fn legs_read(&self, b: BlockId, mut pending: Vec<usize>) -> Result<Vec<usize>, String> {
-        let union = |mut a: Vec<usize>, b: Vec<usize>| {
-            for x in b {
-                if !a.contains(&x) {
-                    a.push(x);
+        // one send per leg, one read per send: a multiset of sources, a way
+        // through either branch keeping the more of each
+        let union = |a: Vec<usize>, b: Vec<usize>| {
+            let mut out = vec![];
+            for &x in a.iter().chain(&b) {
+                let n = a.iter().filter(|&&y| y == x).count();
+                let m = b.iter().filter(|&&y| y == x).count();
+                if out.iter().filter(|&&y| y == x).count() < n.max(m) {
+                    out.push(x);
                 }
             }
-            a
+            out
         };
+        // the constants this block has set its attributes to so far: a
+        // request whose entry took its KV `from` no source (`E.from` -1)
+        // reads nothing
+        let mut set: Vec<(usize, f64)> = vec![];
         for s in &self.p.blocks[b] {
             match s {
-                CStmt::Fork(body) => {
-                    for m in self.leg_sources(*body) {
-                        if !pending.contains(&m) {
-                            pending.push(m);
-                        }
+                CStmt::Fork(body) => pending.extend(self.leg_sources(*body)),
+                CStmt::Set(slot, e) => {
+                    set.retain(|&(k, _)| k != *slot);
+                    if let CExpr::Num(v) = e {
+                        set.push((*slot, *v));
                     }
                 }
                 CStmt::Request { stage, .. } => {
                     if let CStageKind::Step(sp) = &self.p.stages[stage.base].kind
-                        && let Some(src) = sp
-                            .connector
-                            .as_ref()
-                            .and_then(|c| c.load.as_ref())
-                            .and_then(|t| t.source.as_ref())
+                        && let Some(c) = sp.connector.as_ref()
+                        && let Some(src) = c.load.as_ref().and_then(|t| t.source.as_ref())
                     {
-                        pending.retain(|&m| m != src.base);
+                        let sourceless = c
+                            .from
+                            .is_some_and(|f| set.iter().any(|&(k, v)| k == f && v < 0.0));
+                        if !sourceless && let Some(i) = pending.iter().position(|&m| m == src.base)
+                        {
+                            pending.remove(i);
+                        }
                     }
                 }
                 CStmt::Hold { body, .. } => pending = self.legs_read(*body, pending)?,

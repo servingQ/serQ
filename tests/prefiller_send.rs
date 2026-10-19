@@ -105,6 +105,11 @@ fn an_expired_send_is_computed_again() {
     assert!(mean(&short, "D.loaded") < mean(&kept, "D.loaded"));
     assert!(short.client("ttft").unwrap().mean > kept.client("ttft").unwrap().mean);
     assert!(pkv(&short) < pkv(&kept));
+    // the program's `send_held` reads `D.load_done`, which a read of a send
+    // gone sets as it is admitted: never a stale load's (PR #719's fourth
+    // review)
+    let held = &short.observe("send_held").unwrap().samples;
+    assert!(held.iter().all(|&x| x >= 0.0), "{held:?}");
 }
 
 /// A `ttl` is a positive constant: a setting of the relation, read once.

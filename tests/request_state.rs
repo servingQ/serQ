@@ -351,3 +351,25 @@ fn every_request_has_one_status_at_a_time() {
     }
     assert!(n >= 30, "{n} programs");
 }
+
+/// A connector's read names its source by a pool reference, which IR read
+/// from JSON could point anywhere: validation checks it as it checks every
+/// other (PR #719's fourth review).
+#[test]
+fn a_read_s_source_is_a_pool_of_the_program() {
+    let (mut p, _) = load(&serq::program_path("llmd_nixl_pull"), common::horizon(10.0));
+    assert!(p.validate().is_ok());
+    for st in &mut p.stages {
+        if let serq::ir::CStageKind::Step(sp) = &mut st.kind
+            && let Some(t) = sp.connector.as_mut().and_then(|c| c.load.as_mut())
+            && let Some(src) = t.source.as_mut()
+        {
+            src.count = 999;
+        }
+    }
+    let e = p.validate().unwrap_err();
+    assert!(
+        e.contains("pool reference") && e.contains("out of range"),
+        "{e}"
+    );
+}

@@ -230,6 +230,9 @@ struct Req<'p> {
     /// The source's send its load's copy reads (`Lease::id`), chosen when
     /// the copy starts: the one its load ends.
     reads: Option<u64>,
+    /// Its admission found the send it would read gone: it loads nothing,
+    /// and its load is over when it is admitted (`E.load_done`).
+    unread: bool,
 }
 
 /// Where a request stands, read when its session is ready again: admitted
@@ -2456,6 +2459,7 @@ impl<'p> Interp<'p> {
                         status: None,
                         since: f64::NAN,
                         reads: None,
+                        unread: false,
                     });
                     if spec.is_some_and(|r| !r.pools.is_empty()) {
                         self.request_ask(sid, false);
@@ -2575,6 +2579,7 @@ impl<'p> Interp<'p> {
             .connector(st)
             .and_then(|c| c.from)
             .is_none_or(|a| self.sessions[sid].attrs[a] >= 0.0);
+        let mut unread = false;
         let loaded = match self
             .connector(st)
             .and_then(|c| c.load.as_ref())
@@ -2588,6 +2593,7 @@ impl<'p> Interp<'p> {
                     self.send_of(sid, pl).is_none() && self.sessions[sid].legs == 0
                 }) =>
             {
+                unread = true;
                 0.0
             }
             Some(t) => {
@@ -2596,7 +2602,9 @@ impl<'p> Interp<'p> {
             }
             None => 0.0,
         };
-        self.sessions[sid].req.as_mut().expect("a request").loaded = loaded;
+        let r = self.sessions[sid].req.as_mut().expect("a request");
+        r.loaded = loaded;
+        r.unread = unread;
     }
 
     /// The request's load has ended: when, and a request that has KV for
@@ -2757,6 +2765,10 @@ impl<'p> Interp<'p> {
         if let Some(c) = self.connector(st) {
             self.observe_for(sid, c.record, loaded);
             self.sessions[sid].attrs[c.loaded] = loaded;
+            // a read of a send gone is over as it is admitted
+            if self.sessions[sid].req.as_ref().is_some_and(|r| r.unread) {
+                self.sessions[sid].attrs[c.load_done] = now;
+            }
         }
     }
 
@@ -2895,8 +2907,12 @@ impl<'p> Interp<'p> {
     fn load_nothing(&mut self, sid: usize) {
         let r = self.sessions[sid].req.as_ref().expect("a request");
         let (st, spec, loaded, known) = (r.stage, r.spec, r.loaded, r.known);
+        // the load registered when it began to wait is over, having read
+        // nothing: when, as a load's end
+        self.log_transfer(sid, Transfer::Load, Moved::Done);
         if let Some(c) = self.connector(st) {
             self.sessions[sid].attrs[c.loaded] = 0.0;
+            self.sessions[sid].attrs[c.load_done] = self.now;
             self.amend(sid, c.record, loaded, 0.0);
         }
         if let Some(spec) = spec {

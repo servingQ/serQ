@@ -2430,6 +2430,9 @@ impl Parser {
     /// KV relation, which `kvt.nixl_pull (C, Q, …)` or `kvt.nixl_push`
     /// declared, below the engine as often as above it.
     fn relations(&self, prog: &mut Program) -> PResult<()> {
+        // per source, the `ttl` its first relation named: one send per
+        // request, whichever reader reads it
+        let mut ttls: Vec<(String, Option<f64>)> = vec![];
         for st in &mut prog.stages {
             let StageKind::Step(sp) = &mut st.kind else {
                 continue;
@@ -2517,6 +2520,21 @@ impl Parser {
                         st.name, c.queue, c.queue, c.queue, e.verb, c.queue
                     ),
                 );
+            }
+            match ttls.iter().find(|(s, _)| *s == source.name) {
+                Some((_, ttl)) if *ttl != t.ttl => {
+                    return self.err_at(
+                        t.at,
+                        format!(
+                            "two KV relations from `{0}` name different `ttl`s: a request of \
+                             `{0}` keeps its blocks for one send, whichever reader reads it; \
+                             write the same `ttl` on both",
+                            source.name
+                        ),
+                    );
+                }
+                Some(_) => {}
+                None => ttls.push((source.name.clone(), t.ttl)),
             }
             c.kind = ConnectorKind::Relation(Some(Relation {
                 source: source.name.clone(),
