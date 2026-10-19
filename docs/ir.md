@@ -17,7 +17,7 @@ than host-language code, and every input passes `Program::validate`.
 The source model and externally supplied execution settings resolve to one
 complete `Program`; its JSON records the experiment as well as the deployment.
 
-Source: `src/ir.rs`. Current version: `IR_VERSION = 14`.
+Source: `src/ir.rs`. Current version: `IR_VERSION = 15`.
 
 ## Format
 
@@ -97,8 +97,13 @@ delay stage is `Ps(Ctx(N))`, `ps(present)` (`CStageKind::delay`).
 | `connector?` | `CConnector`: its KV connector, to an L2 or from its queue's KV source, below. Omitted when it has none. |
 
 A `CRequest` is a hold's header read for a request: `pools: [(pool,
-units, reserve?)]`, `reuse?`, `prefix?` (read at `Request`) and `cache?`
-(read at `Release`). The request waits in its first pool's queue. Its
+units, reserve?)]`, `reuse?`, `prefix?` (read at `Request`), `cache?` and
+`lease?` (read at `Release`). `lease: (pool, t)`, one of `pools`, keeps
+that pool's allocation past the request's end as a hold's `lease` keeps
+it past the scope, `cache` read when the request ends and applied when
+the lease does (the P/D prefiller's blocks, kept for the decoder's read:
+vLLM's `delay_free_blocks`); a program in which no `Release` names the
+pool is refused, since nothing would end the lease. The request waits in its first pool's queue. Its
 `records` are the slots the engine writes: the observations `reused` and
 `prefill` for each admission, and the attributes `admitted`, `first`,
 `last_reused` and `last_prefill` (`E.reused`, `E.prefill`) the caller reads
@@ -336,7 +341,7 @@ predicates and iteration-body guards, admission gates and assignments:
 | `Iteration` | a claim over the iterations of a step stage, evaluated when an iteration starts, after its batch is scheduled (where the cost is read); no `Attr`, no `Sample`, of the calls only arithmetic, `Queue`, `Busy`, `Used`, `Free`, `Holders`, `Queued`, an index a `Num` in range | `Ntok`, `Ndec`, `Npre`, `Nres`, `Kvb`, `Kvp`, `Attn`, `Demand`, `Served`, `Arrived`, `Now` |
 | `End` | a claim `at end`, evaluated once when the run ends, when no session is live; no `Attr`, no `Sample`, no `Call` but arithmetic; the only moment that reads `Agg` | `Now` |
 | `Request` | a `CRequest`'s units, `reserve`, `reuse` and `prefix`, and a `CConnector`'s load, read for the request the scheduler admits; no draw | `Input`, `Output`, `Known`, `Hit`, `Loaded`, `Requeued`, `Now` |
-| `Release` | a `CRequest`'s `cache` and a `CConnector`'s save, read when the request gives its pools back (`Finished` 0 at a preemption, 1 at its end) | `Input`, `Output`, `Known`, `Finished`, `Now` |
+| `Release` | a `CRequest`'s `cache` and `lease` and a `CConnector`'s save, read when the request gives its pools back (`Finished` 0 at a preemption, 1 at its end) | `Input`, `Output`, `Known`, `Finished`, `Now` |
 
 `Demand` is the tokens the stage's residents could take in the iteration
 if the budget were unlimited: `min(1, remaining)` for a decode, the

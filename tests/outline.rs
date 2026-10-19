@@ -55,7 +55,7 @@ fn a_pull_relation_its_queues_and_its_calls_are_found_in_the_text() {
     assert_eq!(p.roles, ["prefill"]);
     assert_eq!(p.family.as_deref(), Some("NP"));
     assert!(text(&src, p.range).starts_with("queue P[NP] : prefill {"));
-    assert!(text(&src, p.range).ends_with("lease kv (inf);\n    }\n  }"));
+    assert!(text(&src, p.range).ends_with("P (prompt, 1);\n    }\n  }"));
     let kinds: Vec<_> = p.members.iter().map(|m| m.kind.as_str()).collect();
     assert_eq!(kinds, ["device", "engine", "pool", "pool", "nic", "entry"]);
     assert_eq!(text(&src, p.members[4].range), "nic ps(BwP);");

@@ -453,13 +453,16 @@ pub struct Relation {
 }
 
 /// An engine's `taking P (u) [reserve (r)], … [reuse (e)] [prefix (…)]
-/// [cache (e)]`, read for each request (`ir::CRequest`).
+/// [cache (e)] [lease P (t)]`, read for each request (`ir::CRequest`).
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct RequestSpec {
     pub pools: Vec<(Ref, Expr, Option<Expr>)>,
     pub reuse: Option<Expr>,
     pub prefix: Option<Vec<(Expr, Expr)>>,
     pub cache: Option<Expr>,
+    /// `lease P (t)`: the pool the request keeps past its end, and for how
+    /// long at most.
+    pub lease: Option<(Ref, Expr)>,
 }
 
 /// An engine's `scheduler` as the kernel runs it.

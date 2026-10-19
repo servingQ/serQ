@@ -40,11 +40,12 @@ impl Parser {
         Ok(())
     }
 
-    /// `P (u) [reserve (r)], … [reuse (e)] [prefix (k: n, …)] [cache (e)]`:
-    /// the pools the admission takes and how much, what it may reuse of the
-    /// cache, what its sequence is made of, and what its release leaves
-    /// cached. The pools are checked where the engine ends, with its
-    /// capacities.
+    /// `P (u) [reserve (r)], … [reuse (e)] [prefix (k: n, …)] [cache (e)]
+    /// [lease P (t)]`: the pools the admission takes and how much, what it
+    /// may reuse of the cache, what its sequence is made of, what its
+    /// release leaves cached, and the pool it keeps past its end for `t`
+    /// seconds at most, as a hold's `lease`. The pools are checked where the
+    /// engine ends, with its capacities.
     fn taking(&mut self) -> PResult<RequestSpec> {
         let mut pools = vec![];
         loop {
@@ -99,11 +100,24 @@ impl Parser {
         } else {
             None
         };
+        let lease = if self.eat_kw("lease") {
+            let span = Some(self.span());
+            let name = self.ident()?;
+            let pool = Ref {
+                span,
+                name,
+                index: None,
+            };
+            Some((pool, self.engine_expr("lease", |p| p.paren_expr())?))
+        } else {
+            None
+        };
         Ok(RequestSpec {
             pools,
             reuse,
             prefix,
             cache,
+            lease,
         })
     }
 
@@ -155,6 +169,18 @@ impl Parser {
             if spec.pools[..k].iter().any(|(q, _, _)| q.name == r.name) {
                 return self.err_at(at, format!("`taking` names `{}` twice", r.name));
             }
+        }
+        if let Some((r, _)) = &spec.lease
+            && !spec.pools.iter().any(|(q, _, _)| q.name == r.name)
+        {
+            return self.err_at(
+                at,
+                format!(
+                    "engine `{engine}`'s `lease {}`: its `taking` does not take `{}`, so the \
+                     request has none of it to keep",
+                    r.name, r.name
+                ),
+            );
         }
         Ok(spec.clone())
     }

@@ -869,7 +869,7 @@ impl Walker<'_> {
                 }
                 // an engine's request: the hold of what its engine takes,
                 // around the engine's prefill and decode
-                CStmt::Request { stage, .. } => {
+                CStmt::Request { stage, output, .. } => {
                     let pools = match &self.p.stages[stage.base].kind {
                         CStageKind::Step(st) => st
                             .request
@@ -933,9 +933,12 @@ impl Walker<'_> {
                     self.visit_stage(stage.base, label, note);
                     let node = self.net.node_of(stage.base).unwrap();
                     self.place(node, &stage);
+                    // a request for one token samples it at its prefill's
+                    // end and decodes nothing (a prefiller's max_tokens = 1)
+                    let decodes = !self.value(&output).is_some_and(|(v, _)| v <= 1.0);
                     let n = &mut self.net.nodes[node];
                     for mode in [RunMode::Prefill, RunMode::Decode] {
-                        if !n.modes.contains(&mode) {
+                        if (mode == RunMode::Prefill || decodes) && !n.modes.contains(&mode) {
                             n.modes.push(mode);
                         }
                     }
@@ -944,6 +947,15 @@ impl Walker<'_> {
                     }
                     if !pools.is_empty() {
                         self.holds.retain(|&(_, h, _)| h != id);
+                    }
+                    // a leased pool stays held past the request, until the
+                    // `release` that takes it, as a hold's
+                    let lease = match &self.p.stages[stage.base].kind {
+                        CStageKind::Step(st) => st.request.as_ref().and_then(|r| r.lease.clone()),
+                        _ => None,
+                    };
+                    if let Some((r, _)) = lease {
+                        self.holds.push((r.base, id, true));
                     }
                 }
                 CStmt::Hold {
