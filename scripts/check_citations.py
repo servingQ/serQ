@@ -68,6 +68,8 @@ PATHS = {
     "sched/output.py": "vllm/v1/core/sched/output.py",
     # the model runner's side of a KV connector: load before or after the forward, save after it
     "kv_connector_model_runner_mixin.py": "vllm/v1/worker/kv_connector_model_runner_mixin.py",
+    # the model runner applying the scheduler's output: no allocation of its own
+    "gpu_model_runner.py": "vllm/v1/worker/gpu_model_runner.py",
     "input_processor.py": "vllm/v1/engine/input_processor.py",
     "nixl/push_worker.py": "vllm/distributed/kv_transfer/kv_connector/v1/nixl/push_worker.py",
     "config/scheduler.py": "vllm/config/scheduler.py",
