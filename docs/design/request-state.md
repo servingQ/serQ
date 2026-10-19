@@ -1,12 +1,14 @@
 # A request's state
 
-A session, or a leg of one (`fork`), is in one state while time passes, at
-about the resolution of vLLM's `RequestStatus`: waiting, preempted, loading
-its KV, running, and so on. The interpreter keeps it, the run log records
-every change of it, and the report gives the time spent in each. It covers
-every program, not only an engine's requests: a plain stage, a transfer
-over two NICs, a `join`, the client's think time. A program does not read
-it: no syntax, no IR change.
+**Status: design, for approval.** One request has exactly one status at any
+time, by the language's construction. The statuses are vLLM's, the
+request is the engine call `E (input, output)`, and the KV moves a
+connector makes are **transfers** attached to a request, on an axis of
+their own. A first step, the session-level image of the interpreter's two
+enums, is implemented on this branch (commit 9ebbf0c, [Step 0](#step-0-implemented-on-this-branch-the-sessions-state)
+below); this document says what replaces it and which language changes
+make one status per request true. Nothing of the language changes is
+implemented yet.
 
 ## In vLLM
 
@@ -42,13 +44,353 @@ request's blocks and sets `PREEMPTED`, keeping its tokens
 statuses: a `RUNNING` request is scheduled tokens each step, its prompt's
 first and then one at a time.
 
-A finished request may keep its blocks: the connector's `request_finished`
-asks to delay the free (`delay_free_blocks`), and the status is finished
-all the same (scheduler.py:2623-2624, 2653-2655). NIXL's pull mode keeps
-the prefiller's blocks until the decoder has read them, or a lease expires
-(nixl/pull_scheduler.py:248-262). The status says nothing of the blocks.
+**The transfers are a second axis.** A finished request may keep its
+blocks: the connector's `request_finished` asks to delay the free
+(`delay_free_blocks`), and the status is finished all the same
+(scheduler.py:2623-2624, 2653-2655). The blocks go when the worker reports
+the request's send done, or its receive done for a request that finished
+while it received (`finished_sending`, `finished_recving`,
+scheduler.py:3126-3138). NIXL registers the send at the prefiller's finish,
+before the decoder has started to read, with an expiry
+(nixl/pull_scheduler.py:248-262; `_reqs_need_send`,
+nixl/base_scheduler.py:119-120). LMCache's connector keeps a finished
+request's blocks until they are copied (lmcache_mp_connector.py:952). The
+status never says a transfer is in flight; the connector's sets do.
 
-## In serQ
+In P/D, the prefiller's request and the decoder's request are two
+`Request`s on two schedulers, each with its own status: the prefiller's is
+finished, its blocks kept for the send, while the decoder's is
+`WAITING_FOR_REMOTE_KVS`.
+
+## The design: one status, and transfers beside it
+
+### The request is the engine call
+
+A request is one call of an engine, `E (input, output)` (`CStmt::Request`),
+as vLLM's `Request` is one request to one engine. A P/D turn is two: the
+prefiller's call and the decoder's. A session is not a request: it is the
+client, and it may have two requests at once (a push P/D turn's prefill
+leg and its decode call), or none (its think time, a plain stage). A leg
+(`fork`) is not a request either: it is a session-side thread that calls
+an engine.
+
+This is the unit for which one status is true by construction: an engine
+call's progress is the engine's (`Req::phase`), and the only statements
+that run inside it are its connector's blocks, which the first change below
+turns into transfers.
+
+What each example's requests are:
+
+| program | requests (engine calls) | statuses reached | transfers |
+|---|---|---|---|
+| `tutorial/05-engine.sq`, `engines/*`, `multi-turn/vllm.sq` (4 workloads), `vllm_system_prompt.sq`, `replica.sq`, `oracle/*`, `replay/vllm_replay.sq`, `papers/*`, `single-turn/fastertransformer.sq`, `separate_phases.sq`, `vendors/*` | one call per turn, of the one engine or a replica | waiting, running, finished (some never wait) | none |
+| `multi-turn/thunderagent.sq` | one call per turn, of replica `E[home]` | waiting, running, preempted, finished | none |
+| `multi-turn/vllm_lmcache.sq` | one call per turn | waiting, waiting_for_kv, running, finished | load (from the L2), save (to the L2) |
+| `pd-disaggregation/llmd_nixl_pull.sq` | a remote turn: the prefiller's call, then the decoder's; a local turn: the decoder's | waiting, waiting_for_kv, running, finished | send (prefiller) = load (decoder), one copy |
+| `pd-disaggregation/pd_batching.sq` | the prefiller's call, then the decoder's | as above | as above |
+| `pd-disaggregation/vllm_nixl_push.sq` | the prefiller's call (in a leg, concurrent) and the decoder's | as above | as above, the source posting |
+| `tutorial/01`–`04`, `multi-turn/closed.sq`, `routing.sq`, `single-turn/mg1.sq`, `ps.sq`, `arguments.sq`, `pd_open.sq`, `pd_ps.sq`, `pd_tandem.sq`, `pd_two_fabrics.sq` | none: no engine | | |
+
+The P/D prefillers are engine calls only once #715 lands
+(`feat/prefiller-engine-request`): on main they are a `hold … { run P
+prefill … } lease kv (inf)` in the session, the kernel spelling of an
+engine request. This design builds on #715.
+
+### Statuses
+
+| status | the request | holds | vLLM |
+|---|---|---|---|
+| `waiting` | is in the engine's waiting queue, not scheduled | nothing, or the blocks of a load it has received | `WAITING` |
+| `waiting_for_kv` | is admitted to its blocks and not schedulable until its load is done | its blocks, no running slot | `WAITING_FOR_REMOTE_KVS` |
+| `running` | is a resident of the engine's batch; its mode, prefill or decode, is an attribute | its blocks and its slot | `RUNNING` |
+| `preempted` | is in the waiting queue again after a preemption, until it runs | nothing (its tokens) | `PREEMPTED` |
+| `finished` | has generated its output, or was refused | its blocks while a transfer of it is in flight | `FINISHED_*` |
+
+A `waiting` request may hold blocks: after its load it waits for a slot
+(`request_more`), as vLLM's request goes back to `WAITING` with its blocks
+(scheduler.py:3088-3091). So `waiting` is "in the waiting queue", not "not
+admitted"; the candidate's wording is corrected here.
+
+Today's `Phase` maps one to one: `Admitted` queued → `waiting` (or
+`preempted`); `Loading` → `waiting_for_kv`; `Waiting` → `waiting` (or
+`preempted`); `Prefill`, `Decode` → `running`; `Saving` → `finished`
+with a save in flight.
+
+### Transfers
+
+A transfer is a KV move attached to a request, with its own time: a job
+on the stages it crosses (a NIC pair, an L2's stage), and the destination
+room it may wait for.
+
+| transfer | of the request | while its status is | ends | vLLM |
+|---|---|---|---|---|
+| `load` | the KV it reads in, from an L2 or a source request's send | `waiting_for_kv` | the copy done: the request `waiting` | `finished_recving` (scheduler.py:3126-3134) |
+| `save` | the KV it writes to an L2 | `finished` (vLLM may also save while `running`; no serQ connector does) | the copy done | `delay_free_blocks` (lmcache_mp_connector.py:952) |
+| `send` | its KV, kept for a reader | `finished` | the reader's load done | `finished_sending` (scheduler.py:3135-3138) |
+
+A transfer has a lifecycle of its own: registered, moving, done. A send is
+registered when its request finishes and moves only when its reader's load
+does (the same copy is the source's send and the reader's load). The
+status table above is the only placement the IR can express: the
+connector's `load` is attached to the admission, its `save` to the finish,
+and a relation's `send` to the source's finish (the first change below), so
+no link check is needed: the IR has no place to write a load elsewhere.
+
+**The release rule.** A request's blocks go back when it is `finished`
+and no transfer of it is registered or in flight. This replaces a
+request's lease: the prefiller's blocks stay because its send is
+registered, not because the program wrote `lease kv (inf)`.
+
+The overlaps the earlier step reported as one state become a status and a
+transfer:
+
+| was (Step 0) | is |
+|---|---|
+| `loading` | `waiting_for_kv` + a `load` |
+| `saving` | `finished` + a `save` |
+| a prefiller's lease past its request | `finished` + a `send` |
+| `transferring` in a connector | the transfer itself |
+
+### What is not a status
+
+**growing.** A `growing` run stalled for room (`preempt none`: TGI's and
+TensorRT-LLM's `kv`) keeps its job among the engine's residents
+(`Status::Growing(…, Some(job))`): the request is `running`, not
+advancing, as a vLLM `RUNNING` request the step did not schedule is.
+A `grow` statement waiting for room is outside every engine call (the
+L2 save's `grow` becomes part of the `save` transfer): a session position,
+not a request's status. No language change.
+
+**joining.** A `join` is the session waiting for its legs: a session
+position. Its one use is the push connector's lowered block (below), which
+the first change removes; then no program writes `join` (open decision 3).
+
+**client, transferring outside an engine, a plain stage.** The session's
+position. 13 of the 39 example runs make no engine call at all.
+
+## The language changes
+
+### 1. A connector's load and save are transfers, not blocks
+
+The program text already writes a fixed shape; only the IR is more
+general than any text can be. `vllm_lmcache.sq` (at 9bb9417):
+
+```serq
+    connector lmc {
+      per_token (r);
+      load (request.preempted ? 0 : beyond(request.known, request.hit));
+      save (floor(request.input + request.output, chunk));
+    }
+```
+
+lowers to two statement blocks (`serq ir`, the statements of each):
+
+```text
+load:  Run lmc (loaded * r); Load kv (loaded)
+save:  Hold lmc.kv { Grow lmc.kv (saved - cached); Run lmc (…); Load lmc.kv (…) }
+```
+
+and the KV relation of `llmd_nixl_pull.sq`, `kvt.nixl_pull (P, D, latency =
+x0, share = share.maxmin);` with `connector P { load (request.preempted ?
+0 : request.input - request.hit); }`, to:
+
+```text
+load:  Run P.nic[from], D.nic (loaded, latency x0, share maxmin); Load D.kv (loaded); Release P.kv[from]
+```
+
+and `vllm_nixl_push.sq`'s (`kvt.nixl_push`, a leg forked) to the same
+with `Join` first (`src/frontend/link.rs`, the connector's lowering:
+"the source's KV is there once its leg has ended").
+
+While such a block runs the request's `Phase` is `Loading` or `Saving`
+and the session is `Queued`, `InStage` at a NIC or `Joining`: two states at
+once. After, `CConnector.load` and `.save` are a transfer each, of a fixed
+shape the interpreter runs as the engine's own action:
+
+```rust
+pub struct CTransfer {
+    pub amount: CExpr,            // the tokens, as today's expression
+    pub via: Vec<CRef>,           // the stages crossed: an L2's, or the two NICs
+    pub cost: CExpr,              // the work per token on them (`per_token`, or 1)
+    pub latency: Option<CExpr>,   // a relation's wait before the copy
+    pub share: Option<Share>,     // a fabric's policy, with two stages
+    pub poster: Option<usize>,    // which side posts it (the view's dot)
+    pub peer: Peer,               // L2 (its pool, cached) or Source (the relation's queue, `from`)
+}
+```
+
+The request is `waiting_for_kv` from its admission to the load's end,
+whatever the copy waits for; `finished` while its save runs, the save
+taking the L2's room itself (today's `Hold`/`Grow`). The program text does
+not change.
+
+- **IR**: `CConnector.load`/`.save` retyped from `(CExpr, BlockId)` to
+  `CTransfer`: a version, the blocks they named go. `Run.poster` leaves
+  `Run` if only the connector set it (to check). `scripts/gen_lean_oracle.py`
+  already refuses a connector (`Fragment("an engine's connector")`): no
+  Lean program moves, the generator's pin moves.
+- **Examples**: `vllm_lmcache.sq`, `llmd_nixl_pull.sq`, `pd_batching.sq`,
+  `vllm_nixl_push.sq`; text unchanged, IR changed.
+- **Reports**: expected identical: the transfer does today's statements in
+  today's order. To be checked line for line when implemented.
+
+### 2. A source request's send replaces its lease
+
+With #715, `llmd_nixl_pull.sq`'s prefiller is
+
+```serq
+          taking reqs (1),
+                 kv (min(request.known, request.hit + budget_left(P))) reserve (request.known)
+          reuse (floor(request.known - 1, bs))
+          cache (request.input)
+          lease kv (inf);
+    …
+    prefill (prompt) {
+      P (prompt, 1);
+    }
+```
+
+(on main, the `hold … { run P prefill … } lease kv (inf)` it replaces), and
+the reader's connector ends the lease with `Release P.kv[from]`. After,
+the relation `kvt.nixl_pull (P, D, …)` already says that P's requests are
+read: a P request registers a send at its finish, its blocks stay by the
+release rule, and the reader's load ends it. `lease kv (inf)` goes from the
+text and `CRequest.lease` from the IR; the lowered `Release` goes.
+
+- **IR**: `CRequest.lease`, which #715 adds as IR 15, is not needed. IR 14
+  is tagged (v0.1.7-alpha.1); while 15 is untagged, #715 and this change
+  are one version (`CLAUDE.md`, IR rules): best decided before #715
+  merges (open decision 1).
+- **Examples**: the three P/D programs.
+- **Where the candidate fails, and the fix.** (a) A send must exist from
+  its source's finish, before the reader starts: "no transfer in flight"
+  alone would free the prefiller's blocks at its finish. Fix: a send is
+  registered at the finish (vLLM registers `_reqs_need_send` then). (b) A
+  send nobody reads: a decoder whose `load (request.preempted ? 0 :
+  request.input - request.hit)` is 0 (preempted, or its own hit covers the
+  prompt) runs no load, so nothing ends the send. Today such a lease lasts until the session's end. Options:
+  end it at the session's end (reports identical), at the reader's
+  admission that loads nothing, or at an expiry the relation names
+  (`ttl`, vLLM's lease); open decision 2. (c) A session with two
+  registered sends to one source member: today's `Release` ends the
+  oldest lease (`release_early` → `lease_of`), which need not be the one
+  just read; a send is matched to its reader by the turn that made both.
+  Whether any example reaches two at once is to be checked when
+  implementing; if one does, its report moves, and that is a fix.
+
+### 3. The push mode needs no `join`
+
+`vllm_nixl_push.sq` (at 9bb9417):
+
+```serq
+      if (concurrent) {
+        fork { P.prefill (prompt); }     // asyncio.create_task: the prefill leg runs beside
+      } else {
+        P.prefill (prompt);              // the sidecar's order: the prefill's answer first
+      }
+      D.decode (prompt) from P;          // the decode request; it waits for the prefill's KV inside
+```
+
+The decoder's load waits with a `Join` for the leg. After, it waits for
+the source request's send to be registered: the decoder is
+`waiting_for_kv` until the prefiller has finished and the copy is done,
+as vLLM's decoder waits for the push. The `fork` stays (the client sends
+both at once). The text does not change.
+
+- **IR**: no lowered `Join`. The statement `join;` then has no program
+  (the corpus's one use was this lowering): open decision 3.
+- **Reports**: expected identical: the leg ends at its call's finish, the
+  instant its send is registered.
+
+### 4. `growing` and `joining` as statuses go
+
+No language change for `growing` (a stalled resident is `running`). For
+`joining`, change 3 and open decision 3.
+
+## Session positions
+
+The user's first brief wanted coverage beyond the engine. A session's
+position (a pool's queue, a plain stage, a run over a fabric, the client's
+tool, a `join`, a waiting `grow`, in an engine call) is a different thing
+from a request's status, and is not made one. Options:
+
+- **P1, no positions in the report.** The log keeps its actions (`wait`,
+  `admit`, `run`, `done`), which are the positions; the report keeps its
+  stage and pool tables and the client's metrics. Cost: the 13 runs with no
+  engine have no state table; nothing new to maintain.
+- **P2, a `position` table beside the `status` table.** Step 0's code,
+  renamed and narrowed: `queued`, `served`, `transfer`, `client`,
+  `joining`, `growing`, and `engine` (in a call: its status is in the
+  other table). Cost: two tables a reader must not confuse; the
+  positions overlap the stage and pool tables.
+
+The log: `status` events per request with a request id (a session's
+finished prefiller with a registered send and its decoder waiting for KV
+are two requests of one session at once), and `transfer` events (kind,
+registered, moving, done). Step 0's `state`, `lease` and `free` events
+were never released: they can be renamed or dropped without a
+`LOG_VERSION` bump.
+
+## Open decisions
+
+1. **Order with #715.** Land #715 with `CRequest.lease` and remove it here
+   (two changes to one untagged IR 15), or fold change 2 into #715 before
+   it merges.
+2. **An unread send.** End it at the session's end (reports identical), at
+   the reader's admission that loads nothing, or at a relation's `ttl`
+   (vLLM's). The latter two move the P/D reports wherever a decoder is
+   preempted before its read.
+3. **`join;`.** Remove it (`CStmt::Join`, a version, no program uses it
+   after change 3; `docs/design/subagents.md`'s fan-in would come back with
+   its own design), keeping today's run-time error for a session ending
+   before its legs, or letting such legs run on as orphans (the refused
+   session's rule today). Or keep it as a session position.
+4. **Session positions**: P1 or P2.
+5. **Step 0's code** on this branch: superseded by the implementation of
+   this design, kept as P2's base, or reverted before merge.
+
+## Self-critique (the design)
+
+**The session (or the turn) as the request.** It covers every example,
+but it is not vLLM's unit: a push P/D turn has the prefill and the decode
+at once, and a pull turn has the prefiller's finished request with its send
+while the decoder waits for KV. One status for the turn is false there.
+
+**A function of `Status` and `Phase`** (Step 0). Two control variables
+overlap while a connector's block runs; their image is one state only by a
+priority order the reader has to learn. Rejected for the request; kept at
+most as the session's position (P2).
+
+**Keeping the connector's blocks and checking them at link time.** A
+check that a connector's block only copies is the type `CTransfer` written
+as a predicate over statements. The text already has the fixed shape.
+
+**`saving`, `loading`, `transferring` as statuses.** Each is a status and a
+transfer at once: `loading` is waiting for KV and a load, `saving` is
+finished and a save. vLLM keeps them apart for the same reason.
+
+**A lease as a status, or `lease kv (inf)` kept on a request.** A lease
+the program writes says what the relation already says (P's requests are
+read), and its `inf` is the policy no program states the opposite of
+(criterion 2 is met by the `ttl` option, not by the clause). A hold's
+`lease` stays: ThunderAgent's `prog` and `pd_two_fabrics.sq`'s `kvP` are
+session allocations, not requests.
+
+**`join` folded into `waiting`.** "Waiting" would mean a queue and a
+child, two meanings (criterion 0).
+
+**A `grow` that waits refused at link time.** Possible (no example's
+`grow` statement waits after change 1), but it is a session position, not
+a request's status, and refusing it is not needed for one status per
+request.
+
+## Step 0, implemented on this branch: the session's state
+
+What commit 9ebbf0c implements, before the design above: one state per
+session and leg, read from the interpreter's `Status` and `Phase`. Kept
+here for its evidence (the two enums, the overlaps, the per-example
+table); the design above supersedes it, and its `growing` and `joining`
+go ("What is not a status").
 
 ### Before
 
@@ -305,7 +647,7 @@ runs): the JSON equal with `states` left out, the text equal with the
 state table left out. The tutorial and getting-started reports were
 reproduced exactly by the previous `serq` and regenerated with the table.
 
-## Every program
+### Every program (Step 0)
 
 Each example and tutorial program under its workload, seed 1, its `state`
 events counted by state (each is an entry into the state; `running` with
@@ -372,7 +714,7 @@ time passes (the sum of `number` above). What the table shows of them:
   programs between turns;
 - `growing` and `joining` no program reaches here (below).
 
-## Self-critique
+### Self-critique (Step 0)
 
 **One enum for `Status` and `Phase`.** Asked for, and rejected by the
 code: they are orthogonal while a connector's block runs, so one enum
