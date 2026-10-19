@@ -133,19 +133,23 @@ document's self-critique.
 
 ## Reviewing a change
 
-`.github/copilot-instructions.md` is the review checklist, for Copilot and
-for anyone else: the IR rules, the four design criteria, and six questions
-answered in order. A review that does not answer all six is not done; one
-that finds a bug also asks the two questions above. Comments are in Korean,
-short: the finding and the evidence.
+`.github/copilot-instructions.md` is the review checklist, for Copilot,
+CodeRabbit and anyone else: the IR rules, the four design criteria, and six
+questions answered in order. A review that does not answer all six is not
+done; one that finds a bug also asks the two questions above. Comments are
+in Korean, short: the finding and the evidence.
 
-Copilot reviews a pull request; when its review limit is reached, the
-subagents in `.claude/agents/` review instead, at most two in parallel:
-`design-reviewer` for the checklist and the code, `sim-reviewer` — only
-when the PR moves a number — for whether the numbers reproduce and support
-the claim. The session merges their findings into one comment on the pull
-request.
-
+Copilot and CodeRabbit review a pull request. CodeRabbit is set by
+`.coderabbit.yaml`: it writes in Korean, reads this file, the checklist and
+the writing guides as they stand (the config copies none of them), and
+skips the generated files. It reviews each commit once, so a force-push
+starts its review over; `@coderabbitai review` asks for one by hand. Each
+finding of either is answered on the pull request: fixed, or why not. When
+Copilot's review limit is reached, the subagents in `.claude/agents/`
+review instead, at most two in parallel: `design-reviewer` for the
+checklist and the code, `sim-reviewer` — only when the PR moves a number —
+for whether the numbers reproduce and support the claim. The session merges
+their findings into one comment on the pull request.
 ## Writing
 
 Follow [Writing readable programs](docs/writing-programs.md) for `.sq`
