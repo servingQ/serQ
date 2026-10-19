@@ -53,7 +53,8 @@ request at each `turn;`:
 ```
 
 Nothing else crosses: the server reads the parameters, never `K`, and the
-workload reads its own attributes and the reply. The client's tool time
+workload reads its own attributes, and the reply when the server declares
+`reply (…)`. The client's tool time
 above runs on a stage of its own, not the server's.
 [What crosses](language.md#what-crosses) and
 [Paired files](language.md#paired-files) give the rules.
