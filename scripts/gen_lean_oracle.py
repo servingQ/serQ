@@ -49,8 +49,14 @@ OUT = os.path.join(ROOT, "lean", "Serq", "Oracle.lean")
 # `also`), and no oracle program has one. Untagged, 14 also gains
 # `Run.poster`, which side of a copy posts it: only on a run with `also`,
 # already outside the fragment, and the run is the same whichever it is.
-IR_VERSION = 14
-SUPPORTED_IR_VERSIONS = (7, 8, 9, 10, 11, 12, 13, IR_VERSION)
+# 15 (docs/design/request-state.md) makes a connector's `load` and `save` a
+# `CTransfer` each where they were blocks, adds `CRequest.send` (a KV relation's
+# source keeps a request's blocks for the reader's load) and removes the
+# statement `Join`. A connector was outside the fragment and stays so (below),
+# a send is, and no oracle program had a `Join`: a 14 file and a 15 file
+# translate alike.
+IR_VERSION = 15
+SUPPORTED_IR_VERSIONS = (7, 8, 9, 10, 11, 12, 13, 14, IR_VERSION)
 
 
 def is_delay(kind):
@@ -485,8 +491,6 @@ class Lean:
                     continue
                 out.append(pad + "turn;")
                 continue
-            if st == "Join":
-                raise Fragment("statement Join (a request's legs)")
             (kind, v), = st.items()
             if kind == "Set":
                 slot, e = v
@@ -581,6 +585,8 @@ class Lean:
             return self.request_untaken(v, e, spec, pad, ind)
         if spec.get("prefix") is not None:
             raise Fragment("a request's prefix chain: the model's cache is per session")
+        if spec.get("send") is not None:
+            raise Fragment("an engine whose requests are sent is outside the fragment")
         mem = step["memory"]
         if mem is None or all(one_ref(r, "taking") != mem for r, _, _ in spec["pools"]):
             raise Fragment("a request that does not take the engine's memory")

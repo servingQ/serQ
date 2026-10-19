@@ -26,7 +26,7 @@ class ExecutionSettings(unittest.TestCase):
     def test_sessions_uses_explicit_conditions_and_the_requested_seed(self):
         report = sessions.run("split", "open", 0.01, 2)
         self.assertEqual((report["horizon"], report["warmup"], report["seed"]), (2000, 200, 2))
-        self.assertGreater(report["observes"]["p_tokens"]["count"], 0)
+        self.assertGreater(report["observes"]["P.prefill"]["count"], 0)
 
 
 class Results(unittest.TestCase):

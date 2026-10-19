@@ -152,6 +152,8 @@ pub struct Takes {
     pub push: bool,
     /// `share = share.maxmin`: how the copies divide the two NICs.
     pub share: crate::ir::Share,
+    /// `ttl = t`: how long an unread send keeps the source's blocks.
+    pub ttl: Option<f64>,
     /// Where `kvt.…` is written, for an error about the relation.
     pub at: usize,
 }
@@ -510,12 +512,7 @@ impl Ctx<'_> {
 
     fn stmt(&self, s: &Stmt) -> Result<Stmt, ExpandError> {
         Ok(match s {
-            Stmt::Side(_)
-            | Stmt::Route(_)
-            | Stmt::Turn
-            | Stmt::End
-            | Stmt::Request
-            | Stmt::Join => s.clone(),
+            Stmt::Side(_) | Stmt::Route(_) | Stmt::Turn | Stmt::End | Stmt::Request => s.clone(),
             Stmt::Declare(n, t) => Stmt::Declare(self.local(n), *t),
             Stmt::Set(n, e) => Stmt::Set(self.local(n), self.expr(e)?),
             Stmt::Observe(n, e) => Stmt::Observe(n.clone(), self.expr(e)?),

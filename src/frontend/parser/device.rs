@@ -36,6 +36,11 @@ pub(super) struct EngineDecl {
     pub connector: bool,
     /// Whether it admits requests (`taking`), whose records its caller reads.
     pub request: bool,
+    /// The device's pool its `taking` takes, its memory, by its bare name:
+    /// a queue's entry that calls it leaves its KV there, which a `from`
+    /// takes when a KV relation reads the queue (the request's send,
+    /// `ir::CRequest::send`).
+    pub kv: Option<String>,
 }
 
 /// What `pool NAME on …` names: the device or engine that owns the
@@ -629,6 +634,11 @@ impl Parser {
         // a queue's engine admits by its entries, which hold its pools
         let in_queue = device.contains('.');
         let mut taking = self.engine_request(&name, &takeable)?;
+        let kv = taking
+            .pools
+            .iter()
+            .find(|(r, _, _)| self.devices[dev].caps.iter().any(|c| c.name == r.name))
+            .map(|(r, _, _)| r.name.clone());
         if !in_queue {
             s.request = Some(taking);
         } else if !taking.pools.is_empty() {
@@ -651,6 +661,7 @@ impl Parser {
             caps,
             connector: s.connector.is_some(),
             request: s.request.is_some() || !in_queue,
+            kv,
         });
         prog.stages.push(StageDecl {
             span,

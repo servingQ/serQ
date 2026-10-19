@@ -12,6 +12,7 @@
 use std::fmt::Write as _;
 
 use crate::engine::report::{json_index, json_num, json_string};
+use crate::engine::state::{Moved, Status, Transfer};
 use crate::frontend::ast::RunMode;
 
 /// Version of `Log::json`'s shape, by the rules of `Report::json`'s
@@ -61,6 +62,24 @@ pub enum EventKind {
     Preempt { who: Who, pool: usize },
     /// Its lease of `pool` is revoked (`preempt leases by`).
     Revoke { who: Who, pool: usize },
+    /// Its `call`-th engine request, to engine `stage`, enters `status`
+    /// (`engine::state`), or its mode there changes (prefill, decode).
+    Status {
+        who: Who,
+        call: u32,
+        stage: usize,
+        status: Status,
+        mode: RunMode,
+    },
+    /// A transfer of that request is registered, starts its copy, or is
+    /// done. A send's is about the source's request, whoever holds it.
+    Transfer {
+        who: Who,
+        call: u32,
+        stage: usize,
+        kind: Transfer,
+        moved: Moved,
+    },
     /// An iteration of engine `stage` starts, over the requests of `reqs`,
     /// scheduling `tokens`, lasting `dur`.
     Iter {
@@ -175,11 +194,7 @@ impl Log {
                     who(&mut s, w);
                     let list: Vec<String> = stages.iter().map(|k| k.to_string()).collect();
                     let _ = write!(s, ",\"stages\":[{}]", list.join(","));
-                    match mode {
-                        RunMode::Plain => {}
-                        RunMode::Prefill => s.push_str(",\"mode\":\"prefill\""),
-                        RunMode::Decode => s.push_str(",\"mode\":\"decode\""),
-                    }
+                    write_mode(&mut s, *mode);
                 }
                 EventKind::Done { who: w, stage } => {
                     s.push_str(",\"ev\":\"done\"");
@@ -195,6 +210,38 @@ impl Log {
                     s.push_str(",\"ev\":\"revoke\"");
                     who(&mut s, w);
                     let _ = write!(s, ",\"pool\":{pool}");
+                }
+                EventKind::Status {
+                    who: w,
+                    call,
+                    stage,
+                    status,
+                    mode,
+                } => {
+                    s.push_str(",\"ev\":\"status\"");
+                    who(&mut s, w);
+                    let _ = write!(
+                        s,
+                        ",\"r\":{call},\"stage\":{stage},\"status\":\"{}\"",
+                        status.name()
+                    );
+                    write_mode(&mut s, *mode);
+                }
+                EventKind::Transfer {
+                    who: w,
+                    call,
+                    stage,
+                    kind,
+                    moved,
+                } => {
+                    s.push_str(",\"ev\":\"transfer\"");
+                    who(&mut s, w);
+                    let _ = write!(
+                        s,
+                        ",\"r\":{call},\"stage\":{stage},\"kind\":\"{}\",\"at\":\"{}\"",
+                        kind.name(),
+                        moved.name()
+                    );
                 }
                 EventKind::Iter {
                     stage,
@@ -230,6 +277,16 @@ impl Log {
     }
 }
 
+/// An engine's mode, `"mode"` in a `run` or a `status` event; none for
+/// `Plain`.
+fn write_mode(s: &mut String, mode: RunMode) {
+    match mode {
+        RunMode::Plain => {}
+        RunMode::Prefill => s.push_str(",\"mode\":\"prefill\""),
+        RunMode::Decode => s.push_str(",\"mode\":\"decode\""),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -254,6 +311,55 @@ mod tests {
         assert_eq!(
             l.json(),
             r#"{"version":0,"stages":[{"name":"E","index":null}],"pools":[],"truncated":true,"events":[{"t":0,"ev":"arrive","s":3}]}"#
+        );
+    }
+
+    #[test]
+    fn a_status_and_a_transfer_are_written_out() {
+        let mut l = Log {
+            stages: vec![("E".into(), None)],
+            pools: vec![],
+            events: vec![],
+            cap: 10,
+            truncated: false,
+        };
+        let w = Who {
+            serial: 2,
+            leg: Some(1),
+        };
+        l.push(
+            0.5,
+            EventKind::Status {
+                who: w,
+                call: 3,
+                stage: 0,
+                status: Status::Running,
+                mode: RunMode::Decode,
+            },
+        );
+        l.push(
+            1.0,
+            EventKind::Status {
+                who: w,
+                call: 3,
+                stage: 0,
+                status: Status::Finished,
+                mode: RunMode::Plain,
+            },
+        );
+        l.push(
+            1.0,
+            EventKind::Transfer {
+                who: w,
+                call: 3,
+                stage: 0,
+                kind: Transfer::Send,
+                moved: Moved::Registered,
+            },
+        );
+        assert_eq!(
+            l.json(),
+            r#"{"version":0,"stages":[{"name":"E","index":null}],"pools":[],"truncated":false,"events":[{"t":0.5,"ev":"status","s":2,"leg":1,"r":3,"stage":0,"status":"running","mode":"decode"},{"t":1,"ev":"status","s":2,"leg":1,"r":3,"stage":0,"status":"finished"},{"t":1,"ev":"transfer","s":2,"leg":1,"r":3,"stage":0,"kind":"send","at":"registered"}]}"#
         );
     }
 

@@ -1,18 +1,16 @@
-//! `fork { … }` and `join;`: a leg of the request runs beside the session
-//! (vLLM's push proxy sends the prefill and the decode request at once),
-//! and the session waits for its legs where it joins.
+//! `fork { … }`: a leg of the turn runs beside the session (vLLM's push
+//! proxy sends the prefill and the decode request at once). A leg calls an
+//! engine whose requests are sent, and the session waits for it only by
+//! reading that send: the decoder's load waits for KV until the leg's
+//! prefill has finished (`docs/design/request-state.md`). `join;` is gone.
 
 mod common;
 
-use serq::Overrides;
-
 /// One session of one request.
 const ONE: &str = "workload { arrive batch(1); session { turn; end; } }";
-/// Two sessions of one request each.
-const TWO: &str = "workload { arrive batch(2); session { turn; end; } }";
 
-fn run(src: &str, workload: &str, options: &Overrides) -> serq::Report {
-    common::run(&common::main_source(src), workload, options)
+fn run(src: &str, workload: &str) -> serq::Report {
+    common::run(&common::main_source(src), workload, &common::horizon(100.0))
         .unwrap_or_else(|e| panic!("{e}\n{src}\n{workload}"))
 }
 
@@ -37,195 +35,73 @@ fn samples(r: &serq::Report, name: &str) -> Vec<f64> {
     r.observe(name).unwrap().samples.clone()
 }
 
-/// The leg runs 5 s while the session runs 3: the session passes the
-/// `join` at 5, when the leg ends, not at 8.
-#[test]
-fn a_leg_runs_beside_the_session_and_join_waits_for_it() {
-    let r = run(
+/// A push P/D pair: the prefiller's engine computes a token per second, the
+/// decoder's reads the prompt over two NICs of 10 tokens/s after a wait of
+/// `latency` 1. `route` is the gateway's route, `kv` the two KV capacities.
+fn push(route: &str, kv: u32, per_token: f64) -> String {
+    format!(
         r#"
-        stage svc : delay;
-        server {
-          fork { run svc (cost(svc, 5)); observe leg_done = now; }
-          run svc (cost(svc, 3));
-          observe before_join = now;
-          join;
-          observe after_join = now;
-        }
-
-"#,
-        ONE,
-        &common::horizon(100.0),
-    );
-    assert_eq!(samples(&r, "leg_done"), [5.0]);
-    assert_eq!(samples(&r, "before_join"), [3.0]);
-    assert_eq!(samples(&r, "after_join"), [5.0]);
-}
-
-/// A `join` after the legs have ended does not wait.
-#[test]
-fn a_join_after_the_legs_end_passes() {
-    let r = run(
-        r#"
-        stage svc : delay;
-        server {
-          fork { run svc (cost(svc, 1)); }
-          run svc (cost(svc, 3));
-          join;
-          observe after_join = now;
-        }
-
-"#,
-        ONE,
-        &common::horizon(100.0),
-    );
-    assert_eq!(samples(&r, "after_join"), [3.0]);
-}
-
-/// A leg reads the session's attributes as they were at the fork, and its
-/// `set`s change its own copy: the session does not see them.
-#[test]
-fn a_leg_sets_its_own_copy() {
-    let r = run(
-        r#"
-        stage svc : delay;
-        server {
-          set x = 1;
-          fork { observe leg_reads = x; set x = 7; run svc (cost(svc, 1)); observe leg_after = x; }
-          set x = 2;
-          join;
-          observe session_x = x;
-        }
-
-"#,
-        ONE,
-        &common::horizon(100.0),
-    );
-    assert_eq!(samples(&r, "leg_reads"), [1.0]);
-    assert_eq!(samples(&r, "leg_after"), [7.0]);
-    assert_eq!(samples(&r, "session_x"), [2.0]);
-}
-
-/// A leg is part of the request, not a session: it is no arrival and no
-/// end in the run's counts.
-#[test]
-fn a_leg_is_not_a_session() {
-    let r = run(
-        r#"
-        stage svc : delay;
-        server {
-          fork { run svc (cost(svc, 1)); }
-          fork { run svc (cost(svc, 2)); }
-          join;
-        }
-
-"#,
-        TWO,
-        &common::horizon(100.0),
-    );
-    assert_eq!(r.arrivals, 2);
-    assert_eq!(r.ended, 2);
-}
-
-/// What a leg leases passes to its session when the leg ends: the
-/// session's `release` takes it, and the pool is free for the next.
-#[test]
-fn a_legs_lease_passes_to_its_session() {
-    let r = run(
-        r#"
-        pool kv { cap 10; }
-        stage svc : delay;
-        server {
-          fork { hold kv (cost(kv, 10)) { run svc (cost(svc, 1)); } lease kv (inf); }
-          join;
-          observe leased = free(kv);
-          run svc (cost(svc, 2));
-          release kv;
-          observe released = free(kv);
-        }
-
-"#,
-        ONE,
-        &common::horizon(100.0),
-    );
-    assert_eq!(samples(&r, "leased"), [0.0]);
-    assert_eq!(samples(&r, "released"), [10.0]);
-}
-
-/// The session's cached prefix is the request's: a leg's hold consumes and
-/// keeps it as the session's own would.
-#[test]
-fn a_leg_shares_the_sessions_cache() {
-    let r = run(
-        r#"
-        pool kv { cap 100; }
-        stage svc : delay;
-        server {
-          hold kv (cost(kv, 8)) { run svc (cost(svc, 1)); } cache (cost(kv, 8));
-          fork { hold kv (cost(kv, 8)) { observe hit = cached; run svc (cost(svc, 1)); } cache (cost(kv, 8)); }
-          join;
-        }
-
-"#,
-        ONE,
-        &common::horizon(100.0),
-    );
-    assert_eq!(samples(&r, "hit"), [8.0]);
-}
-
-/// The push this was written for: the decoder's blocks are taken while the
-/// prefill runs, and the write starts when the prefill ends.
-#[test]
-fn the_decode_leg_holds_its_blocks_during_the_prefill() {
-    let src = |concurrent: u32| {
-        format!(
-            r#"
-        queue gw : gateway {{
-          route {{
-            set t0 = now;
-            if ({concurrent}) {{ fork {{ P.prefill (prompt); }} }} else {{ P.prefill (prompt); }}
-            D.decode (prompt) from P;
-            observe parked_at = D.parked - t0;
-            observe written_at = D.written - t0;
-          }}
-        }}
+        queue gw : gateway {{ route {{ {route} }} }}
         queue P : prefill {{
-          pool kv {{ cap 100; }}
-          serve fifo;
+          device gpu {{ kv cap {kv}; }}
+          engine on gpu {{
+            reqs cap 4;
+            tokens cap inf;
+            scheduler {{ advance running; admit waiting while (running.preempted == 0) taking reqs (1), kv (request.known) cache (request.input); }}
+            worker {{ forward (batch.tokens * {per_token}); }}
+          }}
+          pool reqs on P {{ }}
+          pool kv on gpu {{ }}
           nic ps(10);
-          prefill (p) {{ hold kv (cost(kv, p)) {{ run (cost(P, p)); }} cache (cost(kv, p)) lease kv (inf); }}
+          prefill (p) {{ P (p, 1); }}
         }}
         queue D : agg, decode {{
-          device gpu {{ kv cap 100; }} pool kv on gpu {{ }}
-          engine on gpu {{ tokens cap inf; scheduler {{ advance running; admit waiting while (running.preempted == 0); }} worker {{ forward (1); }} }}
-          nic ps(10);
-          decode (p) {{ hold kv (cost(kv, p)) {{ run D prefill (cost(D, p)) growing kv; }} }}
-          decode (p) from P {{
-            hold kv (cost(kv, p)) {{
-              mark parked;
-              join;
-              transfer (p) from P to kv (p);
-              mark written;
-              run D prefill (cost(D, 1)) growing kv;
-            }}
+          device gpu {{ kv cap {kv}; }}
+          engine on gpu {{
+            reqs cap 4;
+            tokens cap inf;
+            connector P {{ load (request.input - request.hit); }}
+            scheduler {{ advance running; admit waiting while (running.preempted == 0) taking kv (request.known), reqs (request.loaded > 0 ? 0 : 1) cache (request.input); }}
+            worker {{ forward (1); }}
           }}
+          pool reqs on D {{ }}
+          pool kv on gpu {{ }}
+          nic ps(10);
+          decode (p) {{ D (p, 2); }}
+          decode (p) from P {{ D (p, 2); }}
         }}
         use "std/kvt"; use "std/share"; kvt.nixl_push (P, D, latency = 1, share = share.maxmin);
         server (prompt) {{ gw.route(); }}
-
     "#
-        )
-    };
-    // the prefill takes 10 s, the prefiller's wait 1 s, the copy 10 tokens at 10/s
-    let workload = "workload { arrive batch(1); init { set prompt = 10; } send (prompt); session { turn; end; } }";
-    let r = run(&src(1), workload, &common::horizon(100.0));
-    assert_eq!(samples(&r, "parked_at"), [0.0]);
-    assert_eq!(samples(&r, "written_at"), [12.0]);
-    let r = run(&src(0), workload, &common::horizon(100.0));
-    assert_eq!(samples(&r, "parked_at"), [10.0]);
-    assert_eq!(samples(&r, "written_at"), [12.0]);
+    )
 }
 
-/// The client of the crossing legs below: the second session arrives first.
+/// The decoder's request is admitted to its blocks at once and waits for
+/// KV while the leg prefills (10 s); the push starts when the prefill's
+/// send is there and takes the wait and a second. In order, the decoder is
+/// admitted when the prefill has ended. The KV arrives at 12 either way.
+#[test]
+fn the_decoder_waits_for_the_leg_s_send() {
+    let route = |concurrent: u32| {
+        format!(
+            "set t0 = now;
+             if ({concurrent}) {{ fork {{ P.prefill (prompt); }} }} else {{ P.prefill (prompt); }}
+             D.decode (prompt) from P;
+             observe admitted_at = D.admitted - t0;
+             observe loaded_at = D.load_done - t0;"
+        )
+    };
+    let workload = "workload { arrive batch(1); init { set prompt = 10; } send (prompt); session { turn; end; } }";
+    let r = run(&push(&route(1), 100, 1.0), workload);
+    assert_eq!(samples(&r, "admitted_at"), [0.0]);
+    assert_eq!(samples(&r, "loaded_at"), [12.0]);
+    let r = run(&push(&route(0), 100, 1.0), workload);
+    assert_eq!(samples(&r, "admitted_at"), [10.0]);
+    assert_eq!(samples(&r, "loaded_at"), [12.0]);
+}
+
+/// The client of the crossing requests below: the second session arrives
+/// first.
 const CROSSING: &str = "stage client_gate : delay;
         workload {
           arrive batch(2);
@@ -234,108 +110,116 @@ const CROSSING: &str = "stage client_gate : delay;
           session { run client_gate (cost(client_gate, serial == 0 ? 0.5 : 0)); turn; end; }
         }";
 
-/// Two requests whose legs wait for each other: A's decode leg holds the
-/// decoder's memory waiting for A's prefill, which waits for the
-/// prefiller's memory, which B's lease holds until B's decode leg, which
-/// waits for the decoder's memory. The run says so instead of ending as if
-/// the requests were merely slow.
+/// Two turns whose requests wait for each other: A's decoder request holds
+/// the decoder's memory waiting for A's send, A's prefill waits in the
+/// prefiller's queue for its memory, which B's send holds until B's decoder
+/// reads it, which waits for the decoder's memory. The run says so instead of ending
+/// as if the requests were merely slow.
 #[test]
-fn legs_that_wait_for_each_other_fail_the_run() {
-    let e = fails(
-        r#"
-        queue gw : gateway {
-          route {
-            fork { P.prefill (prompt); }
+fn requests_that_wait_for_each_other_fail_the_run() {
+    let route = "fork { P.prefill (prompt); }
             run gate (cost(gate, serial == 1 ? 1 : 0));
-            D.decode (prompt) from P;
-          }
-        }
-        queue P : prefill {
-          pool kv { cap 10; }
-          serve fifo;
-          nic ps(100);
-          prefill (p) { hold kv (cost(kv, p)) { run (cost(P, p)); } cache (cost(kv, p)) lease kv (inf); }
-        }
-        queue D : agg, decode {
-          device gpu { kv cap 10; } pool kv on gpu { }
-          engine on gpu { tokens cap inf; scheduler { advance running; admit waiting while (running.preempted == 0); } worker { forward (1); } }
-          nic ps(100);
-          decode (p) { hold kv (cost(kv, p)) { run D prefill (cost(D, p)) growing kv; } }
-          decode (p) from P { hold kv (cost(kv, p)) { join; transfer (p) from P to kv (p); run D prefill (cost(D, 1)) growing kv; } }
-        }
-        use "std/kvt"; use "std/share"; kvt.nixl_push (P, D, share = share.maxmin);
-        stage gate : delay;
-        server (prompt) { gw.route(); }
-
-    "#,
-        CROSSING,
-    );
+            D.decode (prompt) from P;";
+    let src = format!("{}\n        stage gate : delay;", push(route, 10, 0.01));
+    let e = fails(&src, CROSSING);
     assert!(e.contains("wait for each other"), "{e}");
-    assert!(e.contains("session 0 waits at a `join`"), "{e}");
-    assert!(e.contains("a leg of session 0 waits at `P.kv`"), "{e}");
+    assert!(
+        e.contains("session 0 waits for the send its load reads"),
+        "{e}"
+    );
+    assert!(e.contains("a leg of session 0 waits at `P.reqs`"), "{e}");
     assert!(e.contains("session 1 waits at `D.kv`"), "{e}");
 }
 
-/// A request one of whose holds can never fit is refused whole: a refused
-/// leg ends its session, and a leg of a refused session runs on and gives
-/// back what it leases.
+/// A leg's send is read on every way after its `fork` before the session
+/// ends: here the read is on one way of an `if` only, and the session
+/// could end while its leg runs. The program does not link.
 #[test]
-fn a_refused_leg_or_session_ends_the_request() {
-    let src = |leg: u32, session: u32| {
-        format!(
-            r#"
-        pool a {{ cap 10; }}
-        pool b {{ cap 10; }}
-        stage svc : delay;
-        server {{
-          set na = {leg};
-          set nb = {session};
-          fork {{ hold a (cost(a, na)) {{ run svc (cost(svc, 2)); }} lease a (inf); }}
-          run svc (cost(svc, 1));
-          hold b (cost(b, nb)) {{ join; release a; }}
-          observe done = now;
-        }}
-
-"#
-        )
-    };
-    let r = run(&src(5, 5), ONE, &common::horizon(100.0));
-    assert_eq!(samples(&r, "done"), [2.0]);
-    // the leg refused: the session ends at the refusal
-    let r = run(&src(50, 5), ONE, &common::horizon(100.0));
-    assert_eq!(r.ended, 1);
-    assert!(samples(&r, "done").is_empty());
-    // the session refused at 1: its leg runs on and ends its lease
-    let r = run(&src(5, 50), ONE, &common::horizon(100.0));
-    assert_eq!(r.ended, 1);
-    assert!(samples(&r, "done").is_empty());
-    assert_eq!(r.pool("a").unwrap().admissions, 1);
-}
-
-/// A session that ends while a leg it forked runs is an error: the
-/// program forgot a `join`.
-#[test]
-fn a_session_may_not_end_before_its_legs() {
-    let e = fails(
-        r#"
-        stage svc : delay;
-        server { set x = 0; fork { run svc (cost(svc, 5)); } run svc (cost(svc, 1)); if (x) { join; }
-        }
-
-"#,
-        ONE,
+fn a_leg_s_send_is_read_on_every_way() {
+    let route = "set x = 0; fork { P.prefill (prompt); } if (x) { D.decode (prompt) from P; }";
+    let workload = "workload { arrive batch(1); init { set prompt = 10; } send (prompt); session { turn; end; } }";
+    refused(
+        &push(route, 100, 1.0),
+        workload,
+        "a leg's send of `P.kv` is read on no way after its `fork`",
     );
-    assert!(e.contains("while a leg it forked runs"), "{e}");
+    // a leg calls its source once
+    refused(
+        &push(
+            "fork { P.prefill (prompt); P.prefill (prompt); } D.decode (prompt) from P;",
+            100,
+            1.0,
+        ),
+        workload,
+        "more than once",
+    );
+    // each leg's send is read: two legs of one source and one read leave
+    // one unread (PR #719's fourth review: one read cleared both)
+    refused(
+        &push(
+            "fork { P.prefill (prompt); } fork { P.prefill (prompt); } D.decode (prompt) from P;",
+            100,
+            1.0,
+        ),
+        workload,
+        "is read on no way after its `fork`",
+    );
+    // a call that takes its KV from no source reads no send (its review)
+    refused(
+        &push("fork { P.prefill (prompt); } D.decode (prompt);", 100, 1.0),
+        workload,
+        "is read on no way after its `fork`",
+    );
+    // and leases nothing: what it leaves its session is the send
+    refused(
+        &push("D.decode (prompt);", 100, 1.0).replace(
+            "server (prompt) { gw.route(); }",
+            "pool extra { cap 10; }
+        server (prompt) {
+          fork { P.prefill (prompt); hold extra (cost(extra, 1)) { } lease extra (inf); }
+          D.decode (prompt) from P;
+        }",
+        ),
+        workload,
+        "a `fork`'s leg may not lease",
+    );
 }
 
-/// A leg is a part of the request: it may not turn, end, fork or join.
+/// `join;` is gone, and says what replaced it.
+#[test]
+fn join_is_refused_with_what_replaced_it() {
+    refused(
+        "stage svc : delay;
+        server { run svc (cost(svc, 1)); join;
+        }
+        ",
+        ONE,
+        "`join;` is gone",
+    );
+}
+
+/// A leg calls an engine whose requests are sent: the session waits for a
+/// leg only by reading its send, and a leg that leaves none would run on
+/// unwaited for.
+#[test]
+fn a_leg_calls_a_source_engine() {
+    refused(
+        "stage svc : delay;
+        server { fork { run svc (cost(svc, 5)); } run svc (cost(svc, 1));
+        }
+        ",
+        ONE,
+        "calls no engine whose requests are sent",
+    );
+}
+
+/// A leg is a part of the turn: it may not turn, end or fork.
 #[test]
 fn a_leg_may_only_run_the_request() {
     for (stmt, what) in [
         ("turn;", "`turn`"),
         ("end;", "`end`"),
         ("fork { run svc (cost(svc, 1)); }", "fork"),
-        ("join;", "`join`"),
     ] {
         refused(
             "server {}",
@@ -343,7 +227,7 @@ fn a_leg_may_only_run_the_request() {
             &format!(
                 "stage svc : delay;
         workload {{ arrive batch(1); session {{
-            fork {{ run svc (cost(svc, 1)); {stmt} }} join; turn; end;
+            fork {{ run svc (cost(svc, 1)); {stmt} }} turn; end;
         }} }}"
             ),
             &format!("a `fork`'s leg may not {what}"),
@@ -351,141 +235,273 @@ fn a_leg_may_only_run_the_request() {
     }
 }
 
-#[test]
-fn a_join_needs_a_fork() {
-    refused(
-        "stage svc : delay;
-        server { run svc (cost(svc, 1)); join;
-        }
-        ",
-        ONE,
-        "a `join` in a program that forks no leg waits for nothing",
-    );
-}
+const PROMPT10: &str =
+    "workload { arrive batch(1); init { set prompt = 10; } send (prompt); session { turn; end; } }";
 
-/// A leg holds nothing of the session's: `release` in a leg of a pool the
-/// session holds around the fork is refused.
+/// A leg whose send expired (`ttl = 0.5`) before it ended (at 11, a second
+/// after its prefill): its session's load, waiting for a send no leg is
+/// left to register, does not wait for ever (PR #719's first review) and
+/// does not read the KV the prefiller has freed (its second): it takes its
+/// running slot and computes the prompt itself, its prefill at 11-12 and
+/// its decode at 12-13, where the read would have answered at 15.
 #[test]
-fn a_leg_does_not_act_on_the_sessions_holds() {
-    refused(
-        "pool kv { cap 10; }
-        stage svc : delay;
-        server { hold kv (cost(kv, 1)) { fork { grow kv (cost(kv, 1)); } join; }
-        }
-        ",
-        ONE,
-        "`grow kv` outside a hold of `kv`",
-    );
-}
-
-/// A leg's lease caches by the leg's attributes when it ends, after it has
-/// passed to the session: `cache (n)` reads the `n` the leg set.
-#[test]
-fn a_legs_lease_caches_by_the_legs_attributes() {
-    let r = run(
-        r#"
-        pool kv { cap 100; }
-        stage svc : delay;
-        server {
-          set n = 0;
-          fork { set n = 8; hold kv (cost(kv, 8)) { run svc (cost(svc, 1)); } cache (cost(kv, n)) lease kv (inf); }
-          join;
-          release kv;
-          hold kv (cost(kv, 8)) { observe hit = cached; } cache (cost(kv, 0));
-        }
-
-"#,
-        ONE,
+fn a_load_whose_send_expired_computes_the_prompt_itself() {
+    let route = "set t0 = now;
+         fork { P.prefill (prompt); run gate (cost(gate, 1)); }
+         D.decode (prompt) from P;
+         observe done_at = now - t0;
+         observe loaded_at = D.load_done - t0;";
+    let src = |ttl: &str| {
+        push(route, 100, 1.0).replace(
+            "share = share.maxmin);",
+            &format!("share = share.maxmin{ttl});\n        stage gate : delay;"),
+        )
+    };
+    let r = run(&src(", ttl = 0.5"), PROMPT10);
+    assert_eq!(samples(&r, "done_at"), [13.0]);
+    assert_eq!(r.stage("D.nic").map(|s| s.completed), Some(0));
+    // what the decoder's admission recorded (10 to load, 1 to prefill: its
+    // last token again) becomes what it did, not left as it was (PR #719's
+    // third review): nothing loaded, the 10 tokens prefilled
+    assert_eq!(samples(&r, "D.loaded"), [0.0]);
+    assert_eq!(samples(&r, "D.prefill"), [10.0]);
+    // and its load is over when it found no send, at 11, as the log says
+    // (PR #719's fourth review: `load_done` stayed unset, the load
+    // registered and never done)
+    assert_eq!(samples(&r, "loaded_at"), [11.0]);
+    let p = common::compile(
+        &common::main_source(&src(", ttl = 0.5")),
+        PROMPT10,
         &common::horizon(100.0),
-    );
-    assert_eq!(samples(&r, "hit"), [8.0]);
+    )
+    .unwrap();
+    let log = serq::run_ir_logged(&p, None, usize::MAX)
+        .unwrap()
+        .log
+        .unwrap();
+    use serq::engine::log::EventKind;
+    use serq::engine::state::{Moved, Transfer};
+    let loads: Vec<(Moved, f64)> = log
+        .events
+        .iter()
+        .filter_map(|e| match e.kind {
+            EventKind::Transfer {
+                kind: Transfer::Load,
+                moved,
+                ..
+            } => Some((moved, e.t)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(loads, [(Moved::Registered, 0.0), (Moved::Done, 11.0)]);
+    // without the `ttl`, the send is read: the copy, then the last token again
+    let r = run(&src(""), PROMPT10);
+    assert_eq!(samples(&r, "done_at"), [15.0]);
+    assert_eq!(samples(&r, "D.loaded"), [10.0]);
+    assert_eq!(samples(&r, "D.prefill"), [1.0]);
 }
 
-/// Waiting for a lease that expires is not waiting for each other: the
-/// crossing legs of `legs_that_wait_for_each_other_fail_the_run` with a
-/// finite lease, at a horizon before it expires, end as a slow run.
+/// The load ends the send its copy started on, not a later one: leg A's
+/// prefill ends at 10 and the copy (10 tokens over NICs of 1/s, after its
+/// wait of 1) runs to 21, while leg B's prefill, queued behind A's, sends at
+/// 20. The send that ends with the load is A's; B's is left to the
+/// session's end. (PR #719's review: the load used to look up the latest
+/// send again when it ended, which would have been B's.)
 #[test]
-fn a_lease_that_expires_is_not_a_deadlock() {
+fn a_load_ends_the_send_its_copy_read() {
+    use serq::engine::log::EventKind;
+    use serq::engine::state::{Moved, Transfer};
+    let route = "fork { P.prefill (prompt); }
+         fork { run gate (cost(gate, 0.5)); P.prefill (prompt); }
+         D.decode (prompt) from P;
+         D.decode (prompt) from P;";
+    let src = push(route, 100, 1.0).replace("nic ps(10);", "nic ps(1);")
+        + "\n        stage gate : delay;";
+    let p = common::compile(
+        &common::main_source(&src),
+        PROMPT10,
+        &common::horizon(100.0),
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    let r = serq::run_ir_logged(&p, None, usize::MAX).unwrap();
+    let log = r.log.as_ref().unwrap();
+    let load_done = log
+        .events
+        .iter()
+        .find(|e| {
+            matches!(
+                e.kind,
+                EventKind::Transfer {
+                    kind: Transfer::Load,
+                    moved: Moved::Done,
+                    ..
+                }
+            )
+        })
+        .unwrap()
+        .t;
+    assert_eq!(load_done, 21.0);
+    let sends: Vec<(Option<u32>, Moved, f64)> = log
+        .events
+        .iter()
+        .filter_map(|e| match e.kind {
+            EventKind::Transfer {
+                who,
+                kind: Transfer::Send,
+                moved,
+                ..
+            } => Some((who.leg, moved, e.t)),
+            _ => None,
+        })
+        .collect();
+    assert!(sends.contains(&(Some(0), Moved::Start, 10.0)), "{sends:?}");
+    assert!(
+        sends.contains(&(Some(1), Moved::Registered, 20.0)),
+        "{sends:?}"
+    );
+    assert!(sends.contains(&(Some(0), Moved::Done, 21.0)), "{sends:?}");
+    assert!(!sends.contains(&(Some(1), Moved::Done, 21.0)), "{sends:?}");
+}
+
+/// Two relations from one source name one `ttl`: a request of the source
+/// keeps its blocks for one send, whichever reader reads it.
+#[test]
+fn two_relations_from_one_source_name_one_ttl() {
+    let reader = |name: &str| {
+        format!(
+            "queue {name} : agg, decode {{
+          device gpu {{ kv cap 100; }}
+          engine on gpu {{
+            reqs cap 4;
+            tokens cap inf;
+            connector P {{ load (request.input - request.hit); }}
+            scheduler {{ advance running; admit waiting while (running.preempted == 0) taking kv (request.known), reqs (request.loaded > 0 ? 0 : 1) cache (request.input); }}
+            worker {{ forward (1); }}
+          }}
+          pool reqs on {name} {{ }}
+          pool kv on gpu {{ }}
+          nic ps(10);
+          decode (p) {{ {name} (p, 2); }}
+          decode (p) from P {{ {name} (p, 2); }}
+        }}"
+        )
+    };
+    let src = |t1: &str, t2: &str| {
+        push(
+            "P.prefill (prompt); if (prompt > 5) { D.decode (prompt) from P; } else { E.decode (prompt) from P; }",
+            100,
+            1.0,
+        )
+        .replace(
+            "use \"std/kvt\";",
+            &format!("{}\n        use \"std/kvt\";", reader("E")),
+        )
+        .replace(
+            "kvt.nixl_push (P, D, latency = 1, share = share.maxmin);",
+            &format!(
+                "kvt.nixl_pull (P, D, share = share.maxmin, ttl = {t1}); \
+                 kvt.nixl_pull (P, E, share = share.maxmin, ttl = {t2});"
+            ),
+        )
+    };
+    run(&src("2", "2"), PROMPT10);
+    let e = fails(&src("1", "2"), PROMPT10);
+    // where the second relation is written (PR #719's fourth review)
+    assert!(
+        e.starts_with("deployment.sq: ") && e.contains("kvt.nixl_pull (P, E"),
+        "{e}"
+    );
+    assert!(
+        e.contains("two KV relations from `P` name different `ttl`s"),
+        "{e}"
+    );
+}
+
+/// A leg shares its session's cached prefix: the second turn's prefill leg
+/// reads from `P.kv` what the first turn's left cached there (the session's
+/// own entry, its chain the session's), and computes only the rest.
+#[test]
+fn a_leg_reads_the_session_s_cached_prefix() {
+    let route = "fork { P.prefill (prompt); } D.decode (prompt) from P;";
+    let workload = "workload { arrive batch(1); init { set k = 0; } turn { set prompt = 16 * (k + 1); set k = k + 1; } send (prompt); session { turn; turn; end; } }";
     let r = run(
-        r#"
-        queue gw : gateway {
-          route {
-            fork { P.prefill (prompt); }
-            run gate (cost(gate, serial == 1 ? 1 : 0));
-            D.decode (prompt) from P;
-          }
-        }
-        queue P : prefill {
-          pool kv { cap 10; }
-          serve fifo;
-          nic ps(100);
-          prefill (p) { hold kv (cost(kv, p)) { run (cost(P, p)); } cache (cost(kv, p)) lease kv (50); }
-        }
-        queue D : agg, decode {
-          device gpu { kv cap 10; } pool kv on gpu { }
-          engine on gpu { tokens cap inf; scheduler { advance running; admit waiting while (running.preempted == 0); } worker { forward (1); } }
-          nic ps(100);
-          decode (p) { hold kv (cost(kv, p)) { run D prefill (cost(D, p)) growing kv; } }
-          decode (p) from P { hold kv (cost(kv, p)) { join; transfer (p) from P to kv (p); run D prefill (cost(D, 1)) growing kv; } }
-        }
-        use "std/kvt"; use "std/share"; kvt.nixl_push (P, D, share = share.maxmin);
-        stage gate : delay;
-        server (prompt) { gw.route(); }
-
-    "#,
-        CROSSING,
-        &common::horizon(30.0),
+        &push(route, 1000, 1.0).replace("pool kv on gpu { }", "pool kv on gpu { block 16; }"),
+        workload,
     );
-    assert_eq!(r.ended, 0);
+    assert_eq!(samples(&r, "P.reused"), [0.0, 16.0], "{}", r.text());
 }
 
-/// A preempted hold runs again from its start: a `fork` inside one would
-/// send a second leg.
+/// A leg that calls its source once on each way of an `if` calls it once:
+/// its send is read once (CodeRabbit on #719: both ways were counted, and
+/// one read left one pending). A leg that calls it on one way only is
+/// refused, as before.
 #[test]
-fn a_fork_in_a_hold_that_may_be_preempted_is_refused() {
+fn a_leg_calling_its_source_on_each_way_of_an_if_is_one_send() {
+    let workload = "workload { arrive batch(1); init { set prompt = 10; } send (prompt); session { turn; end; } }";
+    let r = run(
+        &push(
+            "fork { if (prompt > 5) { P.prefill (prompt); } else { P.prefill (prompt); } } \
+             D.decode (prompt) from P;",
+            100,
+            1.0,
+        ),
+        workload,
+    );
+    assert_eq!(r.ended, 1);
     refused(
-        "pool kv { cap 10; preempt lifo; }
-        stage svc : delay;
-        server { hold kv (cost(kv, 1)) { fork { run svc (cost(svc, 1)); } join; }
-        }
-        ",
-        ONE,
-        "`fork` inside a hold of `kv`, which may preempt it",
+        &push(
+            "fork { if (prompt > 5) { P.prefill (prompt); } } D.decode (prompt) from P;",
+            100,
+            1.0,
+        ),
+        workload,
+        "calls no engine whose requests are sent",
     );
 }
 
+/// A leg calls the same source on every way: one whose `if` calls `P` on
+/// one way and `Q` on the other leaves a send the session reads from one
+/// of them only, which the check could not tell apart (CodeRabbit on
+/// #719). It does not link; the same source on both ways does (above).
 #[test]
-fn a_fork_needs_a_join() {
+fn a_leg_calls_one_source_on_every_way() {
+    let base = push("LEG D.decode (prompt) from P;", 100, 1.0);
+    let p_start = base.find("queue P : prefill").unwrap();
+    let p_end = base.find("queue D : agg").unwrap();
+    let q = base[p_start..p_end]
+        .replace("queue P : prefill", "queue Q : prefill")
+        .replace("pool reqs on P", "pool reqs on Q")
+        .replace("P (p, 1)", "Q (p, 1)");
+    let d_start = p_end;
+    let d_end = base.find("use \"std/kvt\";").unwrap();
+    let e = base[d_start..d_end]
+        .replace("queue D : agg", "queue E : agg")
+        .replace("connector P", "connector Q")
+        .replace("pool reqs on D", "pool reqs on E")
+        .replace("from P", "from Q")
+        .replace("D (p, 2)", "E (p, 2)");
+    let src = |leg: &str| {
+        base.replace("LEG", leg)
+            .replace("use \"std/kvt\";", &format!("{q}{e}use \"std/kvt\";"))
+            .replace(
+                "share = share.maxmin);",
+                "share = share.maxmin); kvt.nixl_push (Q, E, latency = 1, share = share.maxmin);",
+            )
+    };
+    let workload = "workload { arrive batch(1); init { set prompt = 10; } send (prompt); session { turn; end; } }";
     refused(
-        "stage svc : delay;
-        server { fork { run svc (cost(svc, 1)); } run svc (cost(svc, 2));
-        }
-        ",
-        ONE,
-        "a program that forks a leg and never joins",
+        &src(
+            "fork { if (prompt > 5) { P.prefill (prompt); } else { Q.prefill (prompt); } } if (prompt > 100) { E.decode (prompt) from Q; }",
+        ),
+        workload,
+        "calls the same one on every way",
     );
-}
-
-/// The queue that posts the copies waits before each (the copy's run's
-/// `latency`): one relation per poster gives it a `latency`.
-#[test]
-fn a_queue_posts_the_copies_of_one_relation() {
-    refused(
-        "queue P : prefill { pool kv { cap 10; } serve fifo; nic ps(1);
-          prefill (p) { hold kv (cost(kv, p)) { run (cost(P, p)); } cache (cost(kv, p)) lease kv (inf); } }
-        queue D : agg, decode { device gpu { kv cap 10; } pool kv on gpu { }
-          engine on gpu { tokens cap inf; scheduler { advance running; admit waiting while (running.preempted == 0); } worker { forward (1); } } nic ps(1);
-          decode (p) { hold kv (cost(kv, p)) { run D prefill (cost(D, p)) growing kv; } }
-          decode (p) from P { hold kv (cost(kv, p)) { transfer (p) from P to kv (p); } } }
-        queue E : agg, decode { device gpu { kv cap 10; } pool kv on gpu { }
-          engine on gpu { tokens cap inf; scheduler { advance running; admit waiting while (running.preempted == 0); } worker { forward (1); } } nic ps(1);
-          decode (p) { hold kv (cost(kv, p)) { run E prefill (cost(E, p)) growing kv; } }
-          decode (p) from P { hold kv (cost(kv, p)) { transfer (p) from P to kv (p); } } }
-        use \"std/kvt\"; use \"std/share\"; kvt.nixl_push (P, D, latency = 1, share = share.maxmin);
-        kvt.nixl_push (P, E, latency = 1, share = share.maxmin);
-        server {
-        } ",
-        ONE,
-        "error[E-copy-latency]: `kvt.nixl_push (P, E)`: `P` waits before the copies of another relation already",
+    // one source on both ways links and runs
+    let r = run(
+        &src(
+            "fork { if (prompt > 5) { P.prefill (prompt); } else { P.prefill (prompt); } } if (prompt > 100) { Q.prefill (prompt); E.decode (prompt) from Q; }",
+        ),
+        workload,
     );
+    assert_eq!(r.ended, 1);
 }

@@ -713,7 +713,13 @@ impl Walker<'_> {
     /// A connector's block as its request's call says it: the engine's own
     /// member the call's (`D.nic[j]`, not member 0's), and the source the
     /// member the entry set `E.from` to (`P.nic[i]`).
-    fn at_call(&self, b: usize, call: &CRef, from: Option<usize>) -> Vec<CStmt> {
+    fn at_call(
+        &self,
+        b: usize,
+        call: &CRef,
+        from: Option<usize>,
+        source: Option<&CRef>,
+    ) -> Vec<CStmt> {
         let p = self.p;
         let from = from.and_then(|slot| {
             self.set_to
@@ -756,6 +762,9 @@ impl Walker<'_> {
             }
         };
         let mut stmts = p.blocks[b].clone();
+        // a read ends the source's send it reads, drawn as the `release` of
+        // the source's pool it is
+        stmts.extend(source.cloned().map(CStmt::Release));
         for s in &mut stmts {
             match s {
                 CStmt::Run { stage, also, .. } => {
@@ -769,6 +778,23 @@ impl Walker<'_> {
             }
         }
         stmts
+    }
+
+    /// The legs forked so far end where a read of their send starts: at
+    /// the source's side of the copy (`kvt.nixl_push`'s, the copy's run
+    /// next), the session at the reader's.
+    fn join_legs(&mut self) {
+        let mut ends = std::mem::take(&mut self.forked);
+        if !ends.is_empty() {
+            let mut session = std::mem::replace(&mut self.frontier, ends);
+            // a station a leg ends at reaches the copy by its NIC,
+            // whichever way the session came by it
+            session.retain(|(at, _)| !self.frontier.iter().any(|(leg, _)| leg == at));
+            self.joined = session;
+        } else {
+            self.frontier.append(&mut ends);
+            dedupe(&mut self.frontier);
+        }
     }
 
     fn walk_stmts(&mut self, stmts: Vec<CStmt>) {
@@ -787,8 +813,7 @@ impl Walker<'_> {
                 .collect()
         });
         let n = stmts.len();
-        let mut stmts = stmts.into_iter().enumerate().peekable();
-        while let Some((k, s)) = stmts.next() {
+        for (k, s) in stmts.into_iter().enumerate() {
             self.routes_at(&routes, k);
             match s {
                 CStmt::Run {
@@ -869,7 +894,7 @@ impl Walker<'_> {
                 }
                 // an engine's request: the hold of what its engine takes,
                 // around the engine's prefill and decode
-                CStmt::Request { stage, .. } => {
+                CStmt::Request { stage, output, .. } => {
                     let pools = match &self.p.stages[stage.base].kind {
                         CStageKind::Step(st) => st
                             .request
@@ -890,9 +915,14 @@ impl Walker<'_> {
                             .iter()
                             .any(|(s, e)| *s == slot && matches!(e, CExpr::Num(v) if *v < 0.0))
                     });
+                    let blocks = self.p.transfer_blocks.as_ref();
                     let load = connector
                         .as_ref()
-                        .and_then(|c| c.load.as_ref().map(|(_, b)| (*b, c.from)))
+                        .and_then(|c| {
+                            let b = blocks.and_then(|t| t.load[stage.base])?;
+                            let source = c.load.as_ref()?.source.clone();
+                            Some((b, c.from, source))
+                        })
                         .filter(|_| !sourceless);
                     // a pool it takes none of while it loads (its units 0 with
                     // `request.loaded` above 0) it takes once the load is done
@@ -920,8 +950,12 @@ impl Walker<'_> {
                             self.holds.push((r.base, id, encloses));
                         }
                     }
-                    if let Some((b, from)) = load {
-                        let stmts = self.at_call(b, &stage, from);
+                    if let Some((b, from, source)) = load {
+                        // a read waits for the send of the legs' source call
+                        if source.is_some() && !self.forked.is_empty() {
+                            self.join_legs();
+                        }
+                        let stmts = self.at_call(b, &stage, from, source.as_ref());
                         self.walk_stmts(stmts);
                     }
                     for q in later {
@@ -933,17 +967,34 @@ impl Walker<'_> {
                     self.visit_stage(stage.base, label, note);
                     let node = self.net.node_of(stage.base).unwrap();
                     self.place(node, &stage);
+                    // a request for one token samples it at its prefill's
+                    // end and decodes nothing (a prefiller's max_tokens = 1)
+                    let decodes = !self.value(&output).is_some_and(|(v, _)| v <= 1.0);
                     let n = &mut self.net.nodes[node];
                     for mode in [RunMode::Prefill, RunMode::Decode] {
-                        if !n.modes.contains(&mode) {
+                        if (mode == RunMode::Prefill || decodes) && !n.modes.contains(&mode) {
                             n.modes.push(mode);
                         }
                     }
-                    if let Some((_, b)) = connector.as_ref().and_then(|c| c.save.as_ref()) {
-                        self.walk(*b);
+                    if let Some(b) = self
+                        .p
+                        .transfer_blocks
+                        .as_ref()
+                        .and_then(|t| t.save[stage.base])
+                    {
+                        self.walk(b);
                     }
                     if !pools.is_empty() {
                         self.holds.retain(|&(_, h, _)| h != id);
+                    }
+                    // a source's memory stays held past the request, while
+                    // its send is registered, until the reader's load
+                    let sent = match &self.p.stages[stage.base].kind {
+                        CStageKind::Step(st) => crate::ir::sends(st).then_some(st.memory).flatten(),
+                        _ => None,
+                    };
+                    if let Some(m) = sent {
+                        self.holds.push((m, id, true));
                     }
                 }
                 CStmt::Hold {
@@ -1073,23 +1124,6 @@ impl Walker<'_> {
                     let leased = std::mem::replace(&mut self.holds, held);
                     self.holds.extend(leased);
                     self.forked.extend(leg);
-                }
-                CStmt::Join => {
-                    let mut ends = std::mem::take(&mut self.forked);
-                    // before a copy (`kvt.nixl_push`'s connector) the legs
-                    // end at the source, and the session does not pass
-                    // through it: the copy's run sorts the two out
-                    let copy = matches!(stmts.peek(), Some((_, CStmt::Run { also, .. })) if !also.is_empty());
-                    if copy && !ends.is_empty() {
-                        let mut session = std::mem::replace(&mut self.frontier, ends);
-                        // a station a leg ends at reaches the copy by its
-                        // NIC, whichever way the session came by it
-                        session.retain(|(at, _)| !self.frontier.iter().any(|(leg, _)| leg == at));
-                        self.joined = session;
-                    } else {
-                        self.frontier.append(&mut ends);
-                        dedupe(&mut self.frontier);
-                    }
                 }
                 CStmt::While(_, body) => {
                     self.known.clear();
@@ -1680,7 +1714,8 @@ pub fn request(p: &Program) -> Option<Program> {
 /// session program when it has no one request.
 pub fn project(p: &Program) -> Net {
     let owned = request(p);
-    let p = owned.as_ref().unwrap_or(p);
+    // the transfers' statements, which the walk follows (`Program::kernel`)
+    let p = &owned.as_ref().unwrap_or(p).kernel();
     let mut w = Walker {
         p,
         net: Net {
@@ -2061,7 +2096,8 @@ pub(crate) fn cache_targets(p: &Program) -> BTreeMap<usize, Vec<usize>> {
     let mut out = BTreeMap::new();
     walk(p, p.session, &mut vec![], &mut out);
     // a connector's save is a hold on its L2's pool that caches
-    for b in p.connectors().flat_map(|(_, c)| c.blocks()) {
+    let p = &p.kernel();
+    for b in (0..p.stages.len()).flat_map(|i| p.connector_blocks(i)) {
         walk(p, b, &mut vec![], &mut out);
     }
     out

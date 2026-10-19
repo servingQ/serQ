@@ -450,6 +450,9 @@ pub struct Relation {
     pub latency: Option<Expr>,
     pub push: bool,
     pub share: crate::ir::Share,
+    /// `ttl = t`: how long a send the reader does not read keeps the
+    /// source's blocks (`ir::CSend::ttl`); absent, until the session's end.
+    pub ttl: Option<f64>,
 }
 
 /// An engine's `taking P (u) [reserve (r)], … [reuse (e)] [prefix (…)]
@@ -637,10 +640,8 @@ pub enum Stmt {
     },
     End,
     /// `fork { … }`: the block runs beside the session, as a leg of the
-    /// same request (`CStmt::Fork`).
+    /// same turn (`CStmt::Fork`).
     Fork(Vec<Stmt>),
-    /// `join;`: wait until every leg forked so far has ended.
-    Join,
     /// `Q[i].verb (args) [from S[k]] [to P (m)];`: a queue's entry. Parse-time
     /// only: `assemble` puts the entry's body in its place (`crate::frontend::queue`),
     /// so the linker never sees one.
@@ -693,7 +694,6 @@ where
             | Stmt::Turn
             | Stmt::Request
             | Stmt::End
-            | Stmt::Join
             | Stmt::Mark(_) => {}
             Stmt::Set(_, e) | Stmt::Observe(_, e) => (parts.expr)(e),
             Stmt::Unread(args) => args.iter_mut().for_each(&mut parts.unread),

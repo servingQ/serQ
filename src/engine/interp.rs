@@ -19,6 +19,7 @@ use crate::engine::cache::{Seg, Trie};
 use crate::engine::dist::Dist;
 use crate::engine::log::{EventKind, Log, Who};
 use crate::engine::report::*;
+use crate::engine::state::{Moved, Status as ReqStatus, Transfer};
 use crate::engine::stats::*;
 
 use crate::frontend::ast::{BinOp, RunMode, UnOp};
@@ -134,8 +135,9 @@ enum Status {
     /// A failed `grow` waiting for room (pool policy `none`); resumes at
     /// the stage job it was in, if any.
     Growing(usize, f64, Option<(usize, u64)>),
-    /// At a `join`, until the legs the session forked have ended.
-    Joining,
+    /// A request's load waits for its source's send (`CTransfer::source`)
+    /// in pool `.0`: a push's leg's prefill, not ended yet.
+    AwaitingSend(usize),
     Ended,
 }
 
@@ -176,7 +178,7 @@ struct Hold<'p> {
     cache: Option<&'p CExpr>,
     chain: Chain,
     /// The pool whose allocation outlives the scope, and for how long.
-    lease: Option<(usize, &'p CExpr)>,
+    lease: Option<(usize, Expiry<'p>)>,
     body: BlockId,
     /// The hold of an engine's request: no body frame; a preemption puts
     /// the request back in the queue, and its end goes on with the request.
@@ -218,6 +220,19 @@ struct Req<'p> {
     /// Whether the first token has been sampled.
     first: bool,
     phase: Phase,
+    /// Its number among its session's (or leg's) calls, which names it in
+    /// the log with its engine.
+    call: u32,
+    /// Its status (`engine::state::Status`) and mode, as `restatus` last
+    /// read it, and since when.
+    status: Option<(ReqStatus, RunMode)>,
+    since: f64,
+    /// The source's send its load's copy reads (`Lease::id`), chosen when
+    /// the copy starts: the one its load ends.
+    reads: Option<u64>,
+    /// Its admission found the send it would read gone: it loads nothing,
+    /// and its load is over when it is admitted (`E.load_done`).
+    unread: bool,
 }
 
 /// Where a request stands, read when its session is ready again: admitted
@@ -232,6 +247,23 @@ enum Phase {
     Prefill,
     Decode,
     Saving,
+}
+
+/// When an allocation kept past its scope ends: after a hold's `lease`
+/// expression's seconds, read at its scope's end, or after a send's `ttl`
+/// (`CSend::ttl`; none, never).
+#[derive(Clone, Copy, Debug)]
+enum Expiry<'p> {
+    After(&'p CExpr),
+    Fixed(f64),
+}
+
+/// What a release keeps cached: its `cache` clause, read then, or an
+/// amount read before (an engine request's lease, `Lease::keep`).
+#[derive(Clone, Copy)]
+enum Keep<'p> {
+    Clause(&'p CExpr),
+    Read(f64),
 }
 
 /// An allocation that outlived its scope (`lease P (t)`): the session's
@@ -257,9 +289,28 @@ struct Lease<'p> {
     /// the lease ends: a leg's attributes are its own, and its lease passes
     /// to the session when it ends.
     attrs: Option<Vec<f64>>,
+    /// An engine request's lease: what its `cache` keeps, read when the
+    /// request ended (`Moment::Release`), not when the lease does, when the
+    /// session's request may be another.
+    keep: Option<f64>,
     /// Set aside by a tick under `suspend`: its units are the pool's again
     /// and `alloc` is what a later tick gives back.
     suspended: bool,
+    /// A source request's send (`CRequest::send`): who made the request, its
+    /// call and engine, and since when it is `finished`.
+    send: Option<SendOf>,
+    /// A reader's copy reads it: its `ttl` no longer ends it, the read does
+    /// (vLLM's decoder renews the lease while it reads).
+    reading: bool,
+}
+
+/// The request a send is of (`Lease::send`).
+#[derive(Clone, Copy, Debug)]
+struct SendOf {
+    who: Who,
+    call: u32,
+    stage: usize,
+    since: f64,
 }
 
 /// The allocation a `grow` enlarges: a hold's entry (the hold, the pool's
@@ -333,7 +384,7 @@ struct Pending<'p> {
     reuse: Option<&'p CExpr>,
     cache: Option<&'p CExpr>,
     chain: Chain,
-    lease: Option<(usize, &'p CExpr)>,
+    lease: Option<(usize, Expiry<'p>)>,
     body: BlockId,
     queued_at: f64,
     /// An engine's request's admission (`Hold::request`).
@@ -424,6 +475,8 @@ struct Session<'p> {
     forks: u64,
     /// The engine request in progress (`CStmt::Request`).
     req: Option<Req<'p>>,
+    /// Engine requests called so far (`Req::call`).
+    calls: u32,
 }
 
 impl Session<'_> {
@@ -905,6 +958,10 @@ pub struct Interp<'p> {
     events: u64,
     /// The log of the run (`engine::log`), when asked for (`logged`).
     log: Option<Log>,
+    /// Per engine request status (`ReqStatus::ALL`): the requests in it,
+    /// time-averaged, and its stays that ended after warm-up.
+    status_avg: Vec<TimeAverage>,
+    stays: Vec<LogHistogram>,
 }
 
 /// Tags of dead cache nodes (units past a `reuse` bound) start here, above
@@ -1076,6 +1133,8 @@ impl<'p> Interp<'p> {
             turns: 0,
             events: 0,
             log: None,
+            status_avg: ReqStatus::ALL.map(|_| TimeAverage::new(0.0, 0.0)).to_vec(),
+            stays: ReqStatus::ALL.map(|_| LogHistogram::default()).to_vec(),
         }
     }
 
@@ -1210,14 +1269,14 @@ impl<'p> Interp<'p> {
         let stuck = self.waiting_for_each_other();
         if stuck
             .iter()
-            .any(|&s| self.sessions[s].status == Status::Joining)
+            .any(|&s| matches!(self.sessions[s].status, Status::AwaitingSend(_)))
         {
             let who: Vec<String> = stuck.iter().map(|&s| self.waiting_at(s)).collect();
             return Err(format!(
                 "the run ends with sessions that wait for each other: {}. A leg waits for \
-                 memory that a lease holds until its session's copy, and the session waits \
-                 for the leg inside a hold another leg needs: a hold-and-wait cycle, which a \
-                 finite `lease` (the prefiller's lease expiry) breaks",
+                 memory that a send holds until its session's copy, and the session waits \
+                 for the leg's send inside a hold another leg needs: a hold-and-wait cycle, \
+                 which a finite `ttl` (the prefiller's lease expiry) breaks",
                 who.join("; ")
             ));
         }
@@ -1276,6 +1335,9 @@ impl<'p> Interp<'p> {
                 self.warm = true;
                 let now = self.now;
                 self.live_avg.reset(now);
+                for a in &mut self.status_avg {
+                    a.reset(now);
+                }
                 for st in &mut self.stages {
                     st.number_avg.reset(now);
                     st.busy_avg.reset(now);
@@ -1317,7 +1379,10 @@ impl<'p> Interp<'p> {
                             .flatten()
                             .map(|i| (s, i))
                     });
-                if let Some((s, i)) = owner {
+                // a send a copy reads ends with the read, not at its `ttl`
+                if let Some((s, i)) = owner
+                    && !self.sessions[s].leases[i].reading
+                {
                     self.end_lease(s, i);
                     self.try_admit_all();
                 }
@@ -1624,6 +1689,7 @@ impl<'p> Interp<'p> {
             legs: 0,
             forks: 0,
             req: None,
+            calls: 0,
         };
         let sid = match self.free.pop() {
             Some(i) => {
@@ -1874,12 +1940,14 @@ impl<'p> Interp<'p> {
         }
         if self.sessions[sid].legs > 0 {
             self.error = Some(format!(
-                "session {} ends at t = {} while a leg it forked runs: `join` before the end",
+                "session {} ends at t = {} while a leg it forked runs: a session waits for \
+                 a leg by reading its send, and nothing read this one",
                 self.sessions[sid].serial, self.now
             ));
             return;
         }
         self.log_who(sid, |who| EventKind::End { who });
+        self.abandon_request(sid);
         self.detach(sid);
         while let Some(h) = self.sessions[sid].holds.pop() {
             self.release_hold(sid, &h);
@@ -1942,6 +2010,7 @@ impl<'p> Interp<'p> {
             legs: 0,
             forks: 0,
             req: None,
+            calls: 0,
         };
         let lid = match self.free.pop() {
             Some(i) => {
@@ -1989,11 +2058,14 @@ impl<'p> Interp<'p> {
         }
     }
 
-    /// A leg reached the end of its block: what it leased passes to its
-    /// session, and a session waiting at a `join` for its last leg goes on.
-    /// An orphan's leases end with it.
+    /// A leg reached the end of its block: what it leased and the sends it
+    /// registered pass to its session, and a session whose load waits for a
+    /// send goes on once it holds one, or once no leg is left to register
+    /// one (it reads nothing there, as a read whose send expired). An
+    /// orphan's leases end with it.
     fn end_leg(&mut self, sid: usize) {
         self.log_who(sid, |who| EventKind::End { who });
+        self.abandon_request(sid);
         self.detach(sid);
         while let Some(h) = self.sessions[sid].holds.pop() {
             self.release_hold(sid, &h);
@@ -2019,18 +2091,21 @@ impl<'p> Interp<'p> {
         self.sessions[sid].status = Status::Ended;
         self.sessions[sid].frames.clear();
         self.free.push(sid);
-        let ps = &mut self.sessions[parent];
-        ps.legs -= 1;
-        if ps.legs == 0 && ps.status == Status::Joining {
-            ps.status = Status::Ready;
+        self.sessions[parent].legs -= 1;
+        // a load waiting for the send the leg left goes on (`send_ready`)
+        if let Status::AwaitingSend(pl) = self.sessions[parent].status
+            && self.send_ready(parent, pl)
+        {
+            self.sessions[parent].status = Status::Ready;
             self.ready.push_back(parent);
         }
     }
 
     /// The sessions and legs that wait for each other and nothing else: a
     /// hold that does not fit a pool every holder of which is one of them
-    /// (a lease's holder is its session), and a `join` whose live legs all
-    /// are. No event will release what they wait for.
+    /// (a lease's or a send's holder is its session), and a load waiting
+    /// for a send whose live legs all are. No event will release what they
+    /// wait for.
     fn waiting_for_each_other(&self) -> Vec<usize> {
         let n = self.sessions.len();
         let live_legs = |s: usize| {
@@ -2045,7 +2120,7 @@ impl<'p> Interp<'p> {
         let mut stuck: Vec<bool> = self
             .sessions
             .iter()
-            .map(|x| matches!(x.status, Status::Queued(_) | Status::Joining))
+            .map(|x| matches!(x.status, Status::Queued(_) | Status::AwaitingSend(_)))
             .collect();
         loop {
             let mut changed = false;
@@ -2054,9 +2129,8 @@ impl<'p> Interp<'p> {
                     continue;
                 }
                 let keep = match &self.sessions[s].status {
-                    Status::Joining => {
-                        live_legs(s).next().is_some() && live_legs(s).all(|l| stuck[l])
-                    }
+                    // no live leg will leave the send it waits for
+                    Status::AwaitingSend(_) => live_legs(s).all(|l| stuck[l]),
                     Status::Queued(_) => {
                         let pending = self.sessions[s].pending.as_ref().expect("queued");
                         let short: Vec<usize> = pending
@@ -2110,7 +2184,7 @@ impl<'p> Interp<'p> {
         };
         match x.status {
             Status::Queued(pl) => format!("{who} waits at `{}`", self.p.pools[pl].name),
-            _ => format!("{who} waits at a `join`"),
+            _ => format!("{who} waits for the send its load reads"),
         }
     }
 
@@ -2128,7 +2202,7 @@ impl<'p> Interp<'p> {
                     self.remove_job(st, j);
                 }
             }
-            Status::Ready | Status::Joining | Status::Ended => {}
+            Status::Ready | Status::AwaitingSend(_) | Status::Ended => {}
         }
         self.sessions[sid].status = Status::Ready;
     }
@@ -2207,12 +2281,6 @@ impl<'p> Interp<'p> {
                     return;
                 }
                 CStmt::Fork(b) => self.fork(sid, *b),
-                CStmt::Join => {
-                    if self.sessions[sid].legs > 0 {
-                        self.sessions[sid].status = Status::Joining;
-                        return;
-                    }
-                }
                 CStmt::While(c, b) => {
                     let v = self.eval(c, &Ctx::session(sid), Which::Session);
                     if v != 0.0 && v != 1.0 {
@@ -2297,7 +2365,9 @@ impl<'p> Interp<'p> {
                     lease,
                 } => {
                     let wanted = self.wanted(pools, sid);
-                    let lease = lease.as_ref().map(|(r, t)| (self.session_index(r, sid), t));
+                    let lease = lease
+                        .as_ref()
+                        .map(|(r, t)| (self.session_index(r, sid), Expiry::After(t)));
                     let chain = self.chain_of(prefix.as_deref(), sid);
                     let pending = Pending {
                         pools: wanted,
@@ -2368,6 +2438,8 @@ impl<'p> Interp<'p> {
                         unreachable!("validation: a request is to an engine")
                     };
                     let spec = step.request.as_deref();
+                    self.sessions[sid].calls += 1;
+                    let call = self.sessions[sid].calls;
                     self.sessions[sid].req = Some(Req {
                         stage: st,
                         spec,
@@ -2383,6 +2455,11 @@ impl<'p> Interp<'p> {
                         finished: false,
                         first: false,
                         phase: Phase::Admitted,
+                        call,
+                        status: None,
+                        since: f64::NAN,
+                        reads: None,
+                        unread: false,
                     });
                     if spec.is_some_and(|r| !r.pools.is_empty()) {
                         self.request_ask(sid, false);
@@ -2420,6 +2497,13 @@ impl<'p> Interp<'p> {
                     };
                     let what = format!("run {}{m}", self.p.stages[st].name);
                     let w = self.amount(work, sid, &what);
+                    // a connector's copy: its transfer starts (and a read's
+                    // source's send with it)
+                    if let Some(r) = &self.sessions[sid].req
+                        && matches!(r.phase, Phase::Loading | Phase::Saving)
+                    {
+                        self.copy_starts(sid);
+                    }
                     let wait = latency
                         .as_ref()
                         .map_or(0.0, |l| self.amount(l, sid, &format!("{what} latency")));
@@ -2452,12 +2536,22 @@ impl<'p> Interp<'p> {
             .expect("a request to an engine that takes");
         let pools = self.wanted(&spec.pools, sid);
         let chain = self.chain_of(spec.prefix.as_deref(), sid);
+        // a KV relation's source keeps the request's memory past its end, a
+        // send for the reader's load (`CRequest::send`)
+        let r = self.sessions[sid].req.as_ref().expect("a request");
+        let lease = match &self.p.stages[r.stage].kind {
+            CStageKind::Step(st) => (st.request.as_ref())
+                .and_then(|q| q.send.as_ref())
+                .zip(r.memory)
+                .map(|(sd, m)| (m, Expiry::Fixed(sd.ttl.unwrap_or(f64::INFINITY)))),
+            _ => None,
+        };
         let pending = Pending {
             pools,
             reuse: spec.reuse.as_ref(),
             cache: spec.cache.as_ref(),
             chain,
-            lease: None,
+            lease,
             body: 0,
             queued_at: self.now,
             request: true,
@@ -2485,18 +2579,32 @@ impl<'p> Interp<'p> {
             .connector(st)
             .and_then(|c| c.from)
             .is_none_or(|a| self.sessions[sid].attrs[a] >= 0.0);
+        let mut unread = false;
         let loaded = match self
             .connector(st)
             .and_then(|c| c.load.as_ref())
             .filter(|_| remote)
         {
-            Some((e, _)) => {
+            // a read of a send gone (its `ttl`) with no leg left to leave
+            // another reads nothing: the request computes the tokens
+            Some(t)
+                if t.source.as_ref().is_some_and(|src| {
+                    let pl = self.session_index(src, sid);
+                    self.send_of(sid, pl).is_none() && self.sessions[sid].legs == 0
+                }) =>
+            {
+                unread = true;
+                0.0
+            }
+            Some(t) => {
                 let what = format!("connector of {} load", self.p.stages[st].name);
-                self.amount(e, sid, &what)
+                self.amount(&t.amount, sid, &what)
             }
             None => 0.0,
         };
-        self.sessions[sid].req.as_mut().expect("a request").loaded = loaded;
+        let r = self.sessions[sid].req.as_mut().expect("a request");
+        r.loaded = loaded;
+        r.unread = unread;
     }
 
     /// The request's load has ended: when, and a request that has KV for
@@ -2572,6 +2680,13 @@ impl<'p> Interp<'p> {
         }
     }
 
+    /// The kernel block of engine `st`'s connector's load (`save` false) or
+    /// save (`Program::kernel`).
+    fn transfer_block(&self, st: usize, save: bool) -> Option<BlockId> {
+        let t = self.p.transfer_blocks.as_ref()?;
+        if save { t.save[st] } else { t.load[st] }
+    }
+
     /// Engine `st`'s connector, if it has one.
     fn connector(&self, st: usize) -> Option<&'p CConnector> {
         match &self.p.stages[st].kind {
@@ -2583,6 +2698,19 @@ impl<'p> Interp<'p> {
     /// Run block `b` of engine `st`'s connector for `sid`'s request, its
     /// attribute `slot` set to `v`, in phase `phase`.
     fn connector_block(&mut self, sid: usize, slot: usize, v: f64, b: BlockId, phase: Phase) {
+        let kind = if phase == Phase::Saving {
+            Transfer::Save
+        } else {
+            Transfer::Load
+        };
+        // a load waiting for its source's send was registered then
+        let waited = self.sessions[sid]
+            .req
+            .as_ref()
+            .is_some_and(|r| matches!(r.status, Some((ReqStatus::WaitingForKv, _))));
+        if !waited {
+            self.log_transfer(sid, kind, Moved::Registered);
+        }
         let s = &mut self.sessions[sid];
         s.attrs[slot] = v;
         let depth = s.frames.len();
@@ -2594,6 +2722,7 @@ impl<'p> Interp<'p> {
             pc: 0,
             kind: FrameKind::Plain,
         });
+        self.restatus(sid);
     }
 
     /// The request's hold and the place of the engine's memory pool in it.
@@ -2636,6 +2765,10 @@ impl<'p> Interp<'p> {
         if let Some(c) = self.connector(st) {
             self.observe_for(sid, c.record, loaded);
             self.sessions[sid].attrs[c.loaded] = loaded;
+            // a read of a send gone is over as it is admitted
+            if self.sessions[sid].req.as_ref().is_some_and(|r| r.unread) {
+                self.sessions[sid].attrs[c.load_done] = now;
+            }
         }
     }
 
@@ -2658,6 +2791,18 @@ impl<'p> Interp<'p> {
         // its load done: when, the last token computed again, and the pools
         // its admission takes now
         if r.phase == Phase::Loading {
+            // a read ends the source's send it read (vLLM frees the source's
+            // blocks at `finished_sending`, scheduler.py:3135-3138)
+            if let Some(src) = self
+                .connector(r.stage)
+                .and_then(|c| c.load.as_ref())
+                .and_then(|t| t.source.as_ref())
+            {
+                let pl = self.session_index(src, sid);
+                self.end_send(sid, pl);
+                self.try_admit_all();
+            }
+            self.log_transfer(sid, Transfer::Load, Moved::Done);
             self.load_ended(sid);
             if self.request_more(sid) {
                 return false;
@@ -2667,20 +2812,41 @@ impl<'p> Interp<'p> {
         // its connector loads first, into the hold it was admitted with
         let load = self
             .connector(r.stage)
-            .and_then(|c| c.load.as_ref().map(|(_, b)| (c.loaded, *b)));
+            .and_then(|c| c.load.as_ref().map(|t| (c.loaded, t.source.as_ref())))
+            .zip(self.transfer_block(r.stage, false));
         if r.phase == Phase::Admitted
             && r.loaded > 0.0
-            && let Some((slot, b)) = load
+            && let Some(((slot, source), b)) = load
         {
+            // a read waits for its source's send: a push's leg's prefill
+            if let Some(src) = source {
+                let pl = self.session_index(src, sid);
+                if !self.send_ready(sid, pl) {
+                    self.log_transfer(sid, Transfer::Load, Moved::Registered);
+                    self.sessions[sid].status = Status::AwaitingSend(pl);
+                    self.restatus(sid);
+                    return false;
+                }
+                // no send to read (expired, or no leg left to leave one):
+                // the source's blocks are gone, and the request computes
+                // those tokens itself, waiting first for the slot its
+                // admission left for after the load (vLLM: a read of
+                // invalid blocks is recomputed, scheduler.py:3140, 3254-3257)
+                if self.send_of(sid, pl).is_none() {
+                    self.load_nothing(sid);
+                    if self.request_more(sid) {
+                        return false;
+                    }
+                    let r = self.sessions[sid].req.clone().expect("a request");
+                    return self.request_prefill(sid, &r, grow);
+                }
+            }
             self.connector_block(sid, slot, r.loaded, b, Phase::Loading);
             return true;
         }
         match r.phase {
             Phase::Admitted | Phase::Loading | Phase::Waiting if r.known > 0.0 => {
-                let work = r.known - self.request_pos(sid);
-                self.sessions[sid].req.as_mut().unwrap().phase = Phase::Prefill;
-                self.start_job(r.stage, Some(sid), work, RunMode::Prefill, grow, 0.0);
-                return false;
+                return self.request_prefill(sid, &r, grow);
             }
             // nothing to prefill: it decodes from its first iteration
             Phase::Admitted | Phase::Loading | Phase::Waiting => {}
@@ -2704,16 +2870,20 @@ impl<'p> Interp<'p> {
                 // its connector saves before its pools go back
                 // (`request_finished` keeps the blocks, lmcache_mp_connector.py:952)
                 if let Some(c) = self.connector(r.stage)
-                    && let Some((e, b)) = &c.save
+                    && let Some(t) = &c.save
+                    && let Some(b) = self.transfer_block(r.stage, true)
                 {
                     let what = format!("connector of {} save", self.p.stages[r.stage].name);
-                    let n = self.amount(e, sid, &what);
-                    self.connector_block(sid, c.saved, n, *b, Phase::Saving);
+                    let n = self.amount(&t.amount, sid, &what);
+                    self.connector_block(sid, c.saved, n, b, Phase::Saving);
                     return true;
                 }
                 return self.request_end(sid);
             }
-            Phase::Saving => return self.request_end(sid),
+            Phase::Saving => {
+                self.log_transfer(sid, Transfer::Save, Moved::Done);
+                return self.request_end(sid);
+            }
         }
         let r = self.sessions[sid].req.as_mut().unwrap();
         r.phase = Phase::Decode;
@@ -2725,7 +2895,90 @@ impl<'p> Interp<'p> {
             self.decode_starts(sid);
         }
         self.start_job(stage, Some(sid), work, RunMode::Decode, grow, 0.0);
+        self.restatus(sid);
         false
+    }
+
+    /// The request admitted to load `loaded` tokens finds no send to read:
+    /// it loads nothing and computes them. What its admission recorded, the
+    /// loaded tokens and the prefill (`E.loaded`, `E.prefill`, and the
+    /// observations of each), becomes what it does: 0 loaded, its tokens
+    /// past what it read from the cache prefilled.
+    fn load_nothing(&mut self, sid: usize) {
+        let r = self.sessions[sid].req.as_ref().expect("a request");
+        let (st, spec, loaded, known) = (r.stage, r.spec, r.loaded, r.known);
+        // the load registered when it began to wait is over, having read
+        // nothing: when, as a load's end
+        self.log_transfer(sid, Transfer::Load, Moved::Done);
+        if let Some(c) = self.connector(st) {
+            self.sessions[sid].attrs[c.loaded] = 0.0;
+            self.sessions[sid].attrs[c.load_done] = self.now;
+            self.amend(sid, c.record, loaded, 0.0);
+        }
+        if let Some(spec) = spec {
+            let attrs = &self.sessions[sid].attrs;
+            let (was, read) = (
+                attrs[spec.records.last_prefill],
+                attrs[spec.records.last_reused],
+            );
+            let now = known - read;
+            self.sessions[sid].attrs[spec.records.last_prefill] = now;
+            self.amend(sid, spec.records.prefill, was, now);
+        }
+    }
+
+    /// Replace the latest sample `old` of observation `k` that `sid`'s
+    /// session recorded in its turn by `new`: a value its request recorded
+    /// at admission that the run then did otherwise (`load_nothing`). The
+    /// running statistics are rebuilt from the samples, in their order.
+    fn amend(&mut self, sid: usize, k: usize, old: f64, new: f64) {
+        if let Some(all) = &mut self.observed[k]
+            && let Some(x) = all.iter_mut().rev().find(|x| **x == old)
+        {
+            *x = new;
+        }
+        let s = &self.sessions[sid];
+        let (serial, turn) = (s.serial, s.attrs[self.p.slot_turn] as u32);
+        let o = &mut self.observes[k];
+        let at = o
+            .records
+            .iter()
+            .zip(&o.samples)
+            .rposition(|(r, x)| r.1 == serial && r.2 == turn && *x == old);
+        if let Some(i) = at {
+            o.samples[i] = new;
+            o.w = Welford::new();
+            for &x in &o.samples {
+                o.w.push(x);
+            }
+        }
+    }
+
+    /// Start the request's prefill: what of its tokens has no KV.
+    fn request_prefill(&mut self, sid: usize, r: &Req<'p>, grow: Option<usize>) -> bool {
+        let work = r.known - self.request_pos(sid);
+        self.sessions[sid].req.as_mut().unwrap().phase = Phase::Prefill;
+        self.start_job(r.stage, Some(sid), work, RunMode::Prefill, grow, 0.0);
+        self.restatus(sid);
+        false
+    }
+
+    /// The send of pool `pl` (a source's memory) a read of `sid`'s would
+    /// read: the latest it holds, its source's call the last before.
+    fn send_of(&self, sid: usize, pl: usize) -> Option<usize> {
+        self.sessions[sid]
+            .leases
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| l.pool == pl && !l.suspended && l.send.is_some())
+            .max_by_key(|(_, l)| l.id)
+            .map(|(i, _)| i)
+    }
+
+    /// Whether a read of `pl` by `sid` need wait no more: it holds a send of
+    /// it, or no leg is left to leave one (it then reads nothing).
+    fn send_ready(&self, sid: usize, pl: usize) -> bool {
+        self.send_of(sid, pl).is_some() || self.sessions[sid].legs == 0
     }
 
     /// The request has generated its output: it gives its pools back,
@@ -2735,7 +2988,11 @@ impl<'p> Interp<'p> {
         if let Some(hi) = self.sessions[sid].holds.iter().rposition(|h| h.request) {
             self.end_parts(sid);
             let h = self.sessions[sid].holds.remove(hi);
+            let leases = self.sessions[sid].leases.len();
             self.end_hold(sid, &h);
+            // its blocks kept for a reader: finished, with a send
+            let sent = (self.sessions[sid].leases.len() > leases).then_some(leases);
+            self.request_finished(sid, sent);
             for e in &h.pools {
                 self.sessions[sid].preempt_pos.remove(&e.pool);
             }
@@ -2744,9 +3001,202 @@ impl<'p> Interp<'p> {
             self.sessions[sid].req = None;
             self.try_admit_all();
         } else {
+            self.request_finished(sid, None);
             self.sessions[sid].req = None;
         }
         true
+    }
+
+    /// `sid`'s request has ended: `finished`, kept so while the send at
+    /// `sent` among its session's leases holds its blocks; its stay in the
+    /// status it was in ends (a save's `finished` goes on in its send).
+    fn request_finished(&mut self, sid: usize, sent: Option<usize>) {
+        let Some(r) = self.sessions[sid].req.as_mut() else {
+            return;
+        };
+        let (old, since) = (r.status.take(), r.since);
+        let now = self.now;
+        let was_finished = matches!(old, Some((ReqStatus::Finished, _)));
+        match (sent, old) {
+            (Some(i), _) => {
+                if !was_finished {
+                    if let Some((st, _)) = old {
+                        self.leave_status(st, since);
+                    }
+                    self.status_avg[ReqStatus::Finished.index()].add(now, 1.0);
+                }
+                let s = self.sessions[sid].leases[i].send.as_mut().expect("a send");
+                s.since = if was_finished { since } else { now };
+            }
+            (None, Some((st, _))) => self.leave_status(st, since),
+            (None, None) => {}
+        }
+        if !was_finished {
+            self.log_status(sid, ReqStatus::Finished, RunMode::Plain);
+        }
+        if sent.is_some() {
+            self.log_transfer(sid, Transfer::Send, Moved::Registered);
+        }
+    }
+
+    /// A reader's load has read the source's send in pool `pl`: the one its
+    /// copy chose when it started (`Req::reads`), which ends; gone (its
+    /// `ttl`), none. A copy that never started (no copy run) chose none: the
+    /// latest the session holds, or one a tick set aside.
+    fn end_send(&mut self, sid: usize, pl: usize) {
+        let reads = self.sessions[sid].req.as_mut().and_then(|r| r.reads.take());
+        let i = match reads {
+            Some(id) => self.sessions[sid].leases.iter().position(|l| l.id == id),
+            None => self.send_of(sid, pl),
+        };
+        if let Some(i) = i {
+            self.end_lease(sid, i);
+        }
+    }
+
+    /// The request's status as its session's state says (`ReqStatus`): `None`
+    /// while the session is ready (no time passes) or holds no request.
+    fn req_status(&self, sid: usize) -> Option<(ReqStatus, RunMode)> {
+        let s = &self.sessions[sid];
+        let r = s.req.as_ref()?;
+        let plain = |x| Some((x, RunMode::Plain));
+        match r.phase {
+            // whatever its connector's transfer waits for
+            Phase::Loading => return plain(ReqStatus::WaitingForKv),
+            Phase::Saving => return plain(ReqStatus::Finished),
+            _ => {}
+        }
+        let mode = |st: usize, id: u64| self.stages[st].jobs.get(&id).map(|j| j.mode);
+        match s.status {
+            Status::AwaitingSend(_) => plain(ReqStatus::WaitingForKv),
+            // vLLM's request is `PREEMPTED` until it runs, through its load
+            // (scheduler.py:3088-3091)
+            Status::Queued(_) if r.preempted => plain(ReqStatus::Preempted),
+            Status::Queued(_) => plain(ReqStatus::Waiting),
+            // a resident stalled for room to grow is running all the same
+            Status::InStage(st, id) | Status::Growing(_, _, Some((st, id))) if st == r.stage => {
+                Some((ReqStatus::Running, mode(st, id)?))
+            }
+            _ => None,
+        }
+    }
+
+    /// Read `sid`'s request's status again (`req_status`): on a change its
+    /// stay in the old one ends and the log says so; a change of mode alone
+    /// is no new stay.
+    fn restatus(&mut self, sid: usize) {
+        let Some(new) = self.req_status(sid) else {
+            return;
+        };
+        let r = self.sessions[sid].req.as_ref().expect("a request");
+        let (old, since) = (r.status, r.since);
+        if old == Some(new) {
+            return;
+        }
+        let now = self.now;
+        if old.map(|o| o.0) != Some(new.0) {
+            if let Some((st, _)) = old {
+                self.leave_status(st, since);
+            }
+            self.status_avg[new.0.index()].add(now, 1.0);
+            self.sessions[sid].req.as_mut().unwrap().since = now;
+        }
+        self.sessions[sid].req.as_mut().unwrap().status = Some(new);
+        self.log_status(sid, new.0, new.1);
+    }
+
+    /// A stay in `st` since `since` ends now.
+    fn leave_status(&mut self, st: ReqStatus, since: f64) {
+        let now = self.now;
+        self.status_avg[st.index()].add(now, -1.0);
+        if self.warm {
+            self.stays[st.index()].push(now - since);
+        }
+    }
+
+    /// `sid` ends with its request unfinished (refused): its stay ends.
+    fn abandon_request(&mut self, sid: usize) {
+        if self.sessions[sid].req.is_some() {
+            self.request_finished(sid, None);
+        }
+    }
+
+    /// The copy of `sid`'s request's transfer starts: the log's `start` of
+    /// it, and of the source's send a read reads.
+    fn copy_starts(&mut self, sid: usize) {
+        let r = self.sessions[sid].req.as_ref().expect("a request");
+        let (phase, st) = (r.phase, r.stage);
+        if phase == Phase::Saving {
+            self.log_transfer(sid, Transfer::Save, Moved::Start);
+            return;
+        }
+        self.log_transfer(sid, Transfer::Load, Moved::Start);
+        let Some(src) = self
+            .connector(st)
+            .and_then(|c| c.load.as_ref())
+            .and_then(|t| t.source.as_ref())
+        else {
+            return;
+        };
+        // the send it reads: the latest the session holds of that member,
+        // its source's call the last before the copy; the load ends that one
+        let pl = self.session_index(src, sid);
+        let read = self.send_of(sid, pl).map(|i| {
+            let l = &mut self.sessions[sid].leases[i];
+            l.reading = true;
+            (l.id, l.send)
+        });
+        self.sessions[sid].req.as_mut().expect("a request").reads = read.map(|r| r.0);
+        if let Some((_, Some(sd))) = read {
+            self.log(EventKind::Transfer {
+                who: sd.who,
+                call: sd.call,
+                stage: sd.stage,
+                kind: Transfer::Send,
+                moved: Moved::Start,
+            });
+        }
+    }
+
+    /// The log's `who` of `sid`.
+    fn who(&self, sid: usize) -> Who {
+        let s = &self.sessions[sid];
+        Who {
+            serial: s.serial,
+            leg: s.leg.number(),
+        }
+    }
+
+    fn log_status(&mut self, sid: usize, status: ReqStatus, mode: RunMode) {
+        if self.log.is_none() {
+            return;
+        }
+        let r = self.sessions[sid].req.as_ref().expect("a request");
+        let (call, stage) = (r.call, r.stage);
+        let who = self.who(sid);
+        self.log(EventKind::Status {
+            who,
+            call,
+            stage,
+            status,
+            mode,
+        });
+    }
+
+    fn log_transfer(&mut self, sid: usize, kind: Transfer, moved: Moved) {
+        if self.log.is_none() {
+            return;
+        }
+        let r = self.sessions[sid].req.as_ref().expect("a request");
+        let (call, stage) = (r.call, r.stage);
+        let who = self.who(sid);
+        self.log(EventKind::Transfer {
+            who,
+            call,
+            stage,
+            kind,
+            moved,
+        });
     }
 
     /// The member a session statement's pool or stage reference names.
@@ -2902,6 +3352,7 @@ impl<'p> Interp<'p> {
             self.pools[pl].queue.push_back(entry);
         }
         self.log_who(sid, |who| EventKind::Wait { who, pool: pl });
+        self.restatus(sid);
         self.schedule_queue_tick(pl);
         true
     }
@@ -3466,9 +3917,27 @@ impl<'p> Interp<'p> {
             let (q, alloc, computed) = (e.pool, e.alloc, e.computed(h.grown));
             match h.lease {
                 Some((lp, t)) if lp == q => {
-                    let t = self.eval(t, &Ctx::session(sid), Which::Session).max(0.0);
+                    let t = match t {
+                        Expiry::After(e) => {
+                            self.eval(e, &Ctx::session(sid), Which::Session).max(0.0)
+                        }
+                        Expiry::Fixed(t) => t,
+                    };
+                    let keep = h
+                        .cache
+                        .filter(|_| h.request)
+                        .map(|c| self.eval(c, &Ctx::session(sid), Which::Session).max(0.0));
                     let id = self.next_lease;
                     self.next_lease += 1;
+                    let send = h.request.then(|| {
+                        let r = self.sessions[sid].req.as_ref().expect("a request");
+                        SendOf {
+                            who: self.who(sid),
+                            call: r.call,
+                            stage: r.stage,
+                            since: self.now,
+                        }
+                    });
                     self.sessions[sid].leases.push(Lease {
                         id,
                         pool: q,
@@ -3480,7 +3949,10 @@ impl<'p> Interp<'p> {
                         path: e.path.clone(),
                         expires: self.now + t,
                         attrs: None,
+                        keep,
                         suspended: false,
+                        send,
+                        reading: false,
                     });
                     self.schedule_tick(q);
                     if t.is_finite() {
@@ -3499,6 +3971,17 @@ impl<'p> Interp<'p> {
     /// A lease ends: the units go back, `cache` applies.
     fn end_lease(&mut self, sid: usize, i: usize) {
         let l = self.sessions[sid].leases.remove(i);
+        // a send done: its request keeps its blocks no more
+        if let Some(sd) = l.send {
+            self.leave_status(ReqStatus::Finished, sd.since);
+            self.log(EventKind::Transfer {
+                who: sd.who,
+                call: sd.call,
+                stage: sd.stage,
+                kind: Transfer::Send,
+                moved: Moved::Done,
+            });
+        }
         // a lease set aside holds nothing any more
         if l.suspended {
             return;
@@ -3508,7 +3991,12 @@ impl<'p> Interp<'p> {
             .attrs
             .map(|a| std::mem::replace(&mut self.sessions[sid].attrs, a));
         let read = (&l.chain[..], l.shared, &l.path[..]);
-        self.release_units(sid, l.pool, l.alloc, l.computed, l.cache, read);
+        match l.keep {
+            Some(x) => {
+                self.release_kept(sid, l.pool, l.alloc, l.computed, Some(Keep::Read(x)), read)
+            }
+            None => self.release_units(sid, l.pool, l.alloc, l.computed, l.cache, read),
+        }
         if let Some(a) = saved {
             self.sessions[sid].attrs = a;
         }
@@ -3525,6 +4013,19 @@ impl<'p> Interp<'p> {
         alloc: f64,
         computed: f64,
         cache: Option<&'p CExpr>,
+        read: (&[Seg], f64, &[usize]),
+    ) {
+        self.release_kept(sid, q, alloc, computed, cache.map(Keep::Clause), read);
+    }
+
+    /// `release_units`, what `cache` keeps given as its clause or as read.
+    fn release_kept(
+        &mut self,
+        sid: usize,
+        q: usize,
+        alloc: f64,
+        computed: f64,
+        keep: Option<Keep<'p>>,
         (chain, shared, path): (&[Seg], f64, &[usize]),
     ) {
         let serial = self.sessions[sid].serial;
@@ -3540,8 +4041,11 @@ impl<'p> Interp<'p> {
             self.pools[q].holders.remove(i);
         }
         let mut delta = 0.0;
-        if let Some(c) = cache {
-            let want = self.eval(c, &Ctx::session(sid), Which::Session).max(0.0);
+        if let Some(k) = keep {
+            let want = match k {
+                Keep::Clause(c) => self.eval(c, &Ctx::session(sid), Which::Session).max(0.0),
+                Keep::Read(x) => x,
+            };
             let keep = self.round_down(q, want.min(computed));
             let snap = self.sessions[sid].attrs.clone();
             let rseq = self.next_release;
@@ -4070,7 +4574,7 @@ impl<'p> Interp<'p> {
                 CStmt::Hold {
                     lease: Some((r, t)),
                     ..
-                } => Some((self.session_index(r, victim), t)),
+                } => Some((self.session_index(r, victim), Expiry::After(t))),
                 _ => None,
             }
         };
@@ -6085,6 +6589,20 @@ impl<'p> Interp<'p> {
                 }
             })
             .collect();
+        let statuses = ReqStatus::ALL
+            .iter()
+            .map(|x| {
+                let (stays, avg) = (&self.stays[x.index()], &self.status_avg[x.index()]);
+                StatusReport {
+                    name: x.name().into(),
+                    stays: stays.count(),
+                    mean: stays.mean(),
+                    p50: stays.quantile(0.5),
+                    p99: stays.quantile(0.99),
+                    number: avg.mean(now),
+                }
+            })
+            .collect();
         let claims = (0..p.claims.len()).map(|k| self.claim_report(k)).collect();
         let stages = self
             .stages
@@ -6163,6 +6681,7 @@ impl<'p> Interp<'p> {
             observes,
             client,
             gauges,
+            statuses,
             claims,
             stages,
             pools,

@@ -272,6 +272,27 @@ records are attributes the caller reads after the call: `ENGINE.reused`,
 `ENGINE.prefill` and `ENGINE.loaded` are observations of the report too,
 one per admission.
 
+An engine that is a KV relation's source
+([`kvt.nixl_pull`](std/kvt.md)) keeps its memory past each request's end,
+with nothing written here: the request registers a *send*, and its blocks
+stay, neither evictable nor a preemption victim, until the reader's
+[`connector`](#connector) has read them, the relation's `ttl`, or the
+session's end (vLLM's NIXL connector returns `delay_free_blocks` when the
+request finishes, `nixl/pull_scheduler.py:248-262`); `cache` is read when
+the request ends and applies when the send does
+([the design](../design/request-state.md)).
+
+```serq
+admit waiting while (running.preempted == 0)
+  taking reqs (1),
+         kv (min(request.known, request.hit + budget_left(P))) reserve (request.known)
+  reuse (floor(request.known - 1, bs))
+  cache (request.input);
+```
+
+(`examples/pd-disaggregation/llmd_nixl_pull.sq`'s prefiller, whose entry is
+`prefill (prompt) { P (prompt, 1); }`.)
+
 A queue's engine admits the same way, and the queue's entries call it,
 `E (input, output);`; the server calls the entry, not the engine. A
 family's `taking` names its pools without an index, and each member takes
@@ -299,8 +320,9 @@ The engine's KV connector (vLLM's `KVConnector`). `QUEUE` is one of two:
 - the source of the engine's queue's KV relation (`kvt.nixl_pull (QUEUE,
   Q, …)` or `kvt.nixl_push`; NIXL's). A request its entry was called `from
   QUEUE[i]` with reads `n` tokens' KV over the two NICs the relation
-  declares (in a push, once the dispatch's leg has joined), and the lease
-  the entry took ends; one its entry took from no source loads nothing.
+  declares, once the source's request has registered its send (in a push,
+  the dispatch's leg's prefill), and the send ends; one its entry took
+  from no source loads nothing.
   It has `load` alone.
 
 `taking` reads `n` as `request.loaded`. After the load, a request that has

@@ -56,16 +56,14 @@ MODES = {
     "colocated_cache": ([*FOUR_DECODERS, CACHE_ROUTER], {"thr": 1e9}),
     "split": ([("let NP = 2;", "let NP = 3;"), ("let ND = 2;", "let ND = 1;")], {"thr": 1}),
 }
-# What the prefill pods compute of a prompt, which the program does not
-# observe: the decode pods' own prefill is the engine's record `D.prefill`.
-P_TOKENS = ("        run P prefill (cost(P, prompt - c)) growing kv;",
-            "        observe p_tokens = prompt - c;\n        run P prefill (cost(P, prompt - c)) growing kv;")
+# What a pod computes of a prompt is its engine's record: `P.prefill` on a
+# prefill pod, `D.prefill` on a decode pod that prefills itself.
 OPEN = [1, 2, 3]          # sessions per second
 CLOSED = [20, 40, 60]     # users
 
 
 def edits_of(mode, workload, x):
-    edits = [*MODES[mode][0], P_TOKENS]
+    edits = list(MODES[mode][0])
     if workload == "closed":
         edits.append(("arrive poisson(Lambda);", f"arrive closed({x});"))
     return edits
@@ -128,7 +126,7 @@ def row(mode, workload, x, seed, rep):
         "remote": obs["remote"]["mean"],
         # prompt tokens computed by whichever pod prefills, per prefill
         # (a turn, but for the few preempted and run again)
-        "prefill_tokens": obs["p_tokens" if split else "D.prefill"]["mean"],
+        "prefill_tokens": obs["P.prefill" if split else "D.prefill"]["mean"],
         "mean_itl": sum(w * g for w, g in zip(weight, gaps)) / sum(weight),
         "itl_p99": max([num(s["itl_p99"]) for s in dec], default=math.nan),
         "batch": mean([num(s["mean_decode_batch"]) for s in dec]),
@@ -137,9 +135,8 @@ def row(mode, workload, x, seed, rep):
         "prefill_busy": mean([s["prefill_only"] + s["mixed"] for s in pods if (s["name"] == "D") != split]),
         "preemptions_per_s": sum(p["preemptions"] for p in rep["pools"]) / span,
         "stuck": sum(p["stuck"] for p in rep["pools"]),
-        # the edits that make the deployment compared (not the observe,
-        # which every run has)
-        "edits": json.dumps([e for e in edits_of(mode, workload, x) if e[0] != P_TOKENS[0]]),
+        # the edits that make the deployment compared
+        "edits": json.dumps(edits_of(mode, workload, x)),
     }
 
 

@@ -67,14 +67,14 @@ fn main() {
       } else {
         choose i in NP by (holders(P[i].reqs) + queued(P[i].reqs));
         P[i].prefill (prompt);
-        set t_prefill = P.prefill_done;
+        set t_prefill = now;
         // a request parked for its read holds blocks, not a running slot
         choose j in ND by (holders(D[j].kv) + queued(D[j].kv));
         D[j].decode (prompt) from P[i];
         set first = D.first;
         observe admit_wait = D.admitted - t_prefill;  // the decoder's admission: the prompt's blocks
         observe transfer = D.load_done - D.admitted;  // the read: the wait before it and both NICs
-        observe lease = D.load_done - t_prefill;      // how long the prefiller's blocks stayed leased
+        observe send_held = D.load_done - t_prefill;  // how long the prefiller kept its blocks for the read
       }
       observe ttft = first - t0;
       observe decode_time = now - first;
@@ -107,7 +107,8 @@ fn main() {
   }
 
   // A prefill engine: the prompt, and a token the client never sees; its
-  // blocks stay leased until the decoder has read them. A request reserves
+  // blocks stay, its request's send (`kvt.nixl_pull` below), until the
+  // decoder has read them. A request reserves
   // its whole prompt at admission (scheduler_reserve_full_isl), so it is
   // never preempted here.
   queue P[NP] : prefill {
@@ -117,7 +118,8 @@ fn main() {
       tokens cap B;
       scheduler {
         exclusive prefill each at most (chunk_cap);
-        admit waiting while (running.preempted == 0) each at most (chunk_cap);
+        admit waiting while (running.preempted == 0) each at most (chunk_cap)
+          taking reqs (1), kv (min(request.known, budget_left(P))) reserve (request.known);
       }
       worker {
         forward (c0 + max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
@@ -127,10 +129,7 @@ fn main() {
     pool kv on gpu { block bs; evict lru; }
     nic ps(Bw);
     prefill (prompt) {
-      hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, budget_left(P)))) reserve (cost(kv, prompt)) {
-        run P prefill (cost(P, prompt)) growing kv;
-        mark prefill_done;
-      } lease kv (inf);
+      P (prompt, 1);
     }
   }
 

@@ -227,8 +227,7 @@ fn exprs_of(s: &CStmt) -> Vec<&CExpr> {
         | CStmt::Release(_)
         | CStmt::Loop(_)
         | CStmt::End
-        | CStmt::Fork(_)
-        | CStmt::Join => vec![],
+        | CStmt::Fork(_) => vec![],
     }
 }
 

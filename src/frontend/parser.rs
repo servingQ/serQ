@@ -841,22 +841,6 @@ fn transfers(stmts: &[Stmt]) -> bool {
     .is_some()
 }
 
-/// Whether `stmts` write a `join` anywhere.
-fn joins(stmts: &[Stmt]) -> bool {
-    find_stmt(stmts, false, &|s, _| matches!(s, Stmt::Join).then_some(())).is_some()
-}
-
-/// The first call of an entry of `queue` in a leg of `stmts` (`fork { … }`),
-/// where its queue is written and its verb.
-fn forked_call<'a>(stmts: &'a [Stmt], queue: &str) -> Option<(Option<Span>, &'a str)> {
-    find_stmt(stmts, false, &|s, leg| match s {
-        Stmt::Call { queue: q, verb, .. } if leg && q.name == queue => {
-            Some((q.span, verb.as_str()))
-        }
-        _ => None,
-    })
-}
-
 /// An argument of the statements `def` reads the clock or live state,
 /// which the body would read where it reads the parameter.
 fn live_message(def: &str, p: &str, what: &str) -> String {
@@ -1163,7 +1147,6 @@ fn stmt_reads(s: &Stmt, n: &str) -> bool {
         | Stmt::Turn
         | Stmt::Request
         | Stmt::End
-        | Stmt::Join
         | Stmt::Unread(_) => false,
         Stmt::Set(_, e) | Stmt::Observe(_, e) => expr_reads(e, n),
         Stmt::Hold { body, .. } => {
@@ -1503,15 +1486,24 @@ fn in_context(n: &str) -> bool {
 }
 
 /// An entry's body: what it `set`s or `choose`s, what it `mark`s, and the
-/// pools its holds lease.
+/// pools its holds lease, and its engine's requests (`request_kv`, the
+/// pool its `taking` leases).
 fn collect_entry(
     stmts: &[Stmt],
+    request_kv: Option<&str>,
     locals: &mut Vec<String>,
     marks: &mut Vec<String>,
     leased: &mut Vec<String>,
 ) {
     for s in stmts {
         match s {
+            Stmt::EngineRequest { .. } => {
+                if let Some(r) = request_kv
+                    && !leased.iter().any(|l| l == r)
+                {
+                    leased.push(r.to_string());
+                }
+            }
             Stmt::Set(n, _) | Stmt::Choose { var: n, .. } => {
                 if !locals.contains(n) {
                     locals.push(n.clone());
@@ -1528,14 +1520,14 @@ fn collect_entry(
                 {
                     leased.push(r.name.clone());
                 }
-                collect_entry(body, locals, marks, leased);
+                collect_entry(body, request_kv, locals, marks, leased);
             }
             Stmt::Loop(body) | Stmt::While(_, body) | Stmt::Fork(body) => {
-                collect_entry(body, locals, marks, leased)
+                collect_entry(body, request_kv, locals, marks, leased)
             }
             Stmt::Branch(_, a, b) => {
-                collect_entry(a, locals, marks, leased);
-                collect_entry(b, locals, marks, leased);
+                collect_entry(a, request_kv, locals, marks, leased);
+                collect_entry(b, request_kv, locals, marks, leased);
             }
             _ => {}
         }
@@ -1605,8 +1597,7 @@ fn split_reads<'a>(
             | Stmt::Turn
             | Stmt::End
             | Stmt::Request
-            | Stmt::Mark(_)
-            | Stmt::Join => {}
+            | Stmt::Mark(_) => {}
             Stmt::Set(n, e) => {
                 bodies.push(e);
                 above.push(n.clone());
@@ -1727,12 +1718,15 @@ fn split_reads<'a>(
 
 /// Whether every way through `stmts` leaves a lease: a `from` takes the KV
 /// the entry leased, and a way that leases nothing would leave none to take.
-fn always_leases(stmts: &[Stmt]) -> bool {
+/// `request_kv`: the entry's engine's requests lease (its `taking`).
+fn always_leaves_kv(stmts: &[Stmt], request_kv: bool) -> bool {
+    let leases = |b: &[Stmt]| always_leaves_kv(b, request_kv);
     for s in stmts {
         match s {
             Stmt::Hold { lease: Some(_), .. } => return true,
-            Stmt::Hold { body, .. } if always_leases(body) => return true,
-            Stmt::Branch(_, a, b) if always_leases(a) && always_leases(b) => return true,
+            Stmt::EngineRequest { .. } if request_kv => return true,
+            Stmt::Hold { body, .. } if leases(body) => return true,
+            Stmt::Branch(_, a, b) if leases(a) && leases(b) => return true,
             Stmt::End => return false,
             _ => {}
         }
@@ -1860,19 +1854,6 @@ impl Parser {
             col: t.col,
             msg,
         })
-    }
-
-    /// `err_at` the token a parsed span starts at (a `def`'s expansion noted
-    /// as there), or at `pos` when there is none.
-    fn err_span<T>(&self, span: Option<Span>, pos: usize, msg: impl Into<String>) -> PResult<T> {
-        let at = span
-            .and_then(|s| {
-                self.toks
-                    .iter()
-                    .position(|t| t.line == s.line && t.col == s.col)
-            })
-            .unwrap_or(pos);
-        self.err_at(at, msg)
     }
 
     fn advance(&mut self) -> Tok {
@@ -2449,6 +2430,9 @@ impl Parser {
     /// KV relation, which `kvt.nixl_pull (C, Q, …)` or `kvt.nixl_push`
     /// declared, below the engine as often as above it.
     fn relations(&self, prog: &mut Program) -> PResult<()> {
+        // per source, the `ttl` its first relation named: one send per
+        // request, whichever reader reads it
+        let mut ttls: Vec<(String, Option<f64>)> = vec![];
         for st in &mut prog.stages {
             let StageKind::Step(sp) = &mut st.kind else {
                 continue;
@@ -2518,6 +2502,40 @@ impl Parser {
                     ),
                 );
             };
+            // a connector reads a send, which an engine's request registers:
+            // a source whose entry holds and leases is the other spelling of
+            // the prefill, and its lease would not be the relation's
+            if let Some(e) = source.entries.iter().find(|e| {
+                find_stmt(&e.body, false, &|s, _| {
+                    matches!(s, Stmt::Hold { lease: Some(_), .. }).then_some(())
+                })
+                .is_some()
+            }) {
+                return self.err_at(
+                    source.at,
+                    format!(
+                        "engine `{}`'s `connector {}` reads the send of `{}`'s engine request, \
+                         and `{}.{}` holds and leases instead: write the entry as a call of \
+                         its engine, `{} (prompt, 1);`, whose request the relation sends",
+                        st.name, c.queue, c.queue, c.queue, e.verb, c.queue
+                    ),
+                );
+            }
+            match ttls.iter().find(|(s, _)| *s == source.name) {
+                Some((_, ttl)) if *ttl != t.ttl => {
+                    return self.err_at(
+                        t.at,
+                        format!(
+                            "two KV relations from `{0}` name different `ttl`s: a request of \
+                             `{0}` keeps its blocks for one send, whichever reader reads it; \
+                             write the same `ttl` on both",
+                            source.name
+                        ),
+                    );
+                }
+                Some(_) => {}
+                None => ttls.push((source.name.clone(), t.ttl)),
+            }
             c.kind = ConnectorKind::Relation(Some(Relation {
                 source: source.name.clone(),
                 leased: format!("{}.{leased}", source.name),
@@ -2525,6 +2543,7 @@ impl Parser {
                 latency: t.latency.clone(),
                 push: t.push,
                 share: t.share,
+                ttl: t.ttl,
             }));
         }
         // and the other way: a relation copies only through its reader's
@@ -2536,6 +2555,18 @@ impl Parser {
                 continue;
             };
             if q.entries.iter().any(|e| transfers(&e.body)) {
+                // an entry's `transfer` ends a lease: no send, no `ttl`
+                if t.ttl.is_some() {
+                    return self.err_at(
+                        t.at,
+                        format!(
+                            "`ttl` bounds a send a reader's connector reads, and `{}` copies \
+                             with an entry's `transfer … from {}`, which ends what the \
+                             source's hold leases",
+                            q.name, t.source
+                        ),
+                    );
+                }
                 continue;
             }
             let verb = if t.push { "push" } else { "pull" };
@@ -2592,51 +2623,6 @@ impl Parser {
                     ))
                 ),
             );
-        }
-        // the statements as written, before the calls are expanded
-        let bodies: Vec<&[Stmt]> = self
-            .server
-            .iter()
-            .chain(&self.wl_session)
-            .map(|(_, b)| b.as_slice())
-            .chain([prog.session.as_slice()])
-            .chain(
-                self.queues
-                    .iter()
-                    .flat_map(|q| &q.entries)
-                    .map(|e| e.body.as_slice()),
-            )
-            .collect();
-        // a pull: nothing waits for the leg the source's call is forked in,
-        // which a push's connector joins (a push toggled back)
-        let push = self
-            .queues
-            .iter()
-            .any(|q| q.takes.as_ref().is_some_and(|t| t.push));
-        if !push && !bodies.iter().any(|b| joins(b)) {
-            for q in &self.queues {
-                let Some(t) = &q.takes else {
-                    continue;
-                };
-                let Some((span, call)) = bodies.iter().find_map(|b| forked_call(b, &t.source))
-                else {
-                    continue;
-                };
-                let message = format!(
-                    "{}\nhelp: fix-it: take the call `{source}.{call} (…);` out of its \
-                     `fork {{ … }}`\nhelp: or make the copy a push: \
-                     `kvt.nixl_push ({source}, {reader}, …)`",
-                    Code::PullForked.message(format_args!(
-                        "`kvt.nixl_pull ({0}, {1})`: `{0}` is called in a leg (`fork`), and \
-                         in a pull nothing waits for that leg (`join`) as a push's connector \
-                         does, so the session could end while it runs",
-                        t.source, q.name
-                    )),
-                    source = t.source,
-                    reader = q.name,
-                );
-                return self.err_span(span, t.at, message);
-            }
         }
         Ok(())
     }
@@ -3252,28 +3238,64 @@ impl Parser {
         let reader = self.ident()?;
         let mut latency = None;
         let mut share = None;
+        let mut ttl = None;
         while self.eat(&Tok::Comma) {
             let n_at = self.pos;
             let name = self.ident()?;
             // the arguments' names, not keywords (`share` is std/share's)
-            let given = if name == "latency" {
+            let (is_latency, is_share) = (name == "latency", name == "share");
+            let is_ttl = name == "ttl";
+            let given = if is_latency {
                 latency.is_some()
-            } else if name == "share" {
+            } else if is_share {
                 share.is_some()
+            } else if is_ttl {
+                ttl.is_some()
             } else {
                 return self.err_at(
                     n_at,
-                    format!("`kvt.{function}` takes `latency = …` and `share = …`, found `{name}`"),
+                    format!(
+                        "`kvt.{function}` takes `latency = …`, `share = …` and `ttl = …`, \
+                         found `{name}`"
+                    ),
                 );
             };
             if given {
                 return self.err_at(n_at, format!("`kvt.{function}` takes `{name}` once"));
             }
             self.expect(&Tok::Assign)?;
-            if name == "latency" {
+            if is_latency {
                 latency = Some((self.pos, self.expr()?));
-            } else {
+            } else if is_share {
                 share = Some(self.share_policy()?);
+            } else {
+                // how long the source keeps a send nobody reads: a constant,
+                // as vLLM's lease is a setting
+                let t_at = self.pos;
+                let e = self.expr()?;
+                let v = match self.const_or_clash(&e) {
+                    Err(clash) => return self.err_at(t_at, clash),
+                    Ok(v) => v,
+                };
+                match v {
+                    Some(v) if v > 0.0 && v.is_finite() => ttl = Some(v),
+                    // the default, spelt: one meaning, one spelling
+                    Some(v) if v == f64::INFINITY => {
+                        return self.err_at(
+                            t_at,
+                            "`ttl = inf` is the default: leave `ttl` out for a send kept \
+                             until it is read or the session ends",
+                        );
+                    }
+                    _ => {
+                        return self.err_at(
+                            t_at,
+                            "`ttl` is a number above 0, or a constant over `let`s: how long \
+                             the source keeps the blocks of a send its reader does not read \
+                             (left out, until the session's end)",
+                        );
+                    }
+                }
             }
         }
         self.expect(&Tok::RParen)?;
@@ -3298,6 +3320,7 @@ impl Parser {
             (reader, b_at),
             latency,
             share,
+            ttl,
         )
     }
 
@@ -5014,7 +5037,20 @@ impl Parser {
         let mut locals = vec![];
         let mut marks = vec![];
         let mut leased = vec![];
-        collect_entry(&body, &mut locals, &mut marks, &mut leased);
+        // the queue's engine, declared above its entries, and what its
+        // requests lease
+        let request_kv = self
+            .engines
+            .iter()
+            .find(|e| e.name == qname)
+            .and_then(|e| e.kv.clone());
+        collect_entry(
+            &body,
+            request_kv.as_deref(),
+            &mut locals,
+            &mut marks,
+            &mut leased,
+        );
         if let Some(p) = locals.iter().find(|l| params.contains(l)) {
             return self.err_at(at, format!("`{qname}.{verb}` sets its parameter `{p}`"));
         }
@@ -5221,7 +5257,7 @@ impl Parser {
                 q.marks.push(m);
             }
         }
-        let leases = always_leases(&body);
+        let leases = always_leaves_kv(&body, request_kv.is_some());
         let q = &mut self.queues[qi];
         q.entries.push(queue::Entry {
             verb,
@@ -5990,11 +6026,11 @@ impl Parser {
                 self.forks_open -= 1;
                 Ok(Stmt::Fork(body?))
             }
-            "join" => {
-                self.advance();
-                self.expect(&Tok::Semi)?;
-                Ok(Stmt::Join)
-            }
+            "join" => self.err(
+                "`join;` is gone: a session waits for a leg by reading what it leaves, the \
+                 send of the engine request it calls, which the reader's load waits for \
+                 (`kvt.nixl_push`, `kvt.nixl_pull`; docs/design/request-state.md)",
+            ),
             "choose" => {
                 let at = self.pos;
                 self.advance();
@@ -6280,6 +6316,7 @@ impl Parser {
         (reader, r_at): (String, usize),
         latency: Option<(usize, Expr)>,
         share: crate::ir::Share,
+        ttl: Option<f64>,
     ) -> PResult<()> {
         let verb = if push { "push" } else { "pull" };
         let written = format!("`kvt.nixl_{verb} ({source}, {reader})`");
@@ -6444,6 +6481,7 @@ impl Parser {
             latency,
             push,
             share,
+            ttl,
             at,
         });
         Ok(())

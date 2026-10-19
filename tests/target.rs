@@ -298,7 +298,6 @@ fn the_newer_constructs_are_refused_and_vllms_schedule_taken() {
         common::compile(&common::main_source(&src), WORKLOAD, &common::horizon(10.0)).unwrap()
     };
     serq::target::vllm(&compile("", "", vllm, hold)).unwrap();
-    let legs = "fork { llm (n, 1); } join;";
     for (reserve, state, schedule, h, why) in [
         (
             "",
@@ -316,7 +315,6 @@ fn the_newer_constructs_are_refused_and_vllms_schedule_taken() {
             "has its own schedule",
         ),
         ("reserve held;", "", vllm, hold, "holds its reservations"),
-        ("", "", vllm, legs, "fork"),
     ] {
         let e = serq::target::vllm(&compile(reserve, state, schedule, h)).unwrap_err();
         assert!(e.contains(why), "{reserve} {schedule} {h}: {e}");

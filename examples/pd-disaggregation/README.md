@@ -2,9 +2,10 @@
 
 `llmd_nixl_pull.sq` describes a serving deployment. `vllm_nixl_push.sq`
 is vLLM's push proxy in front of one prefill and one decode instance on the
-A6000 testbed, replaying the short-context trace: the proxy's two legs as
-`fork` and `join`, and the copy as `kvt.nixl_push (P, D, …)`
-(`docs/design/push-mode.md`).
+A6000 testbed, replaying the short-context trace: the proxy's prefill leg
+as `fork`, which the decoder's load waits for by its send, and the copy as
+`kvt.nixl_push (P, D, …)` (`docs/design/push-mode.md`,
+`docs/design/request-state.md`).
 
 `pd_open.sq` and `pd_tandem.sq` are research comparison fixtures for
 serving-queue-theory's queueing models. The open model uses Poisson arrivals;

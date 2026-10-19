@@ -11,7 +11,7 @@
 //! o = r.client["response"]     # what each turn's client saw: o.mean, o.ci, ...; o.samples, o.times: what `--dump` writes
 //! g = pyserq.run(pyserq.compile("examples/pd-disaggregation/llmd_nixl_pull.sq", horizon=2000, warmup=200)).gauge("load_spread")
 //! g.mean, g.ci, g.min, g.max  # g.times, g.values: what `--dump` writes
-//! r.stage("svc").utilization; r.observes, r.client, r.gauges, r.claims, r.stages, r.pools: all of them
+//! r.stage("svc").utilization; r.observes, r.client, r.status, r.gauges, r.claims, r.stages, r.pools: all of them
 //! pyserq.run(pyserq.compile("examples/papers/kong_svf.sq", horizon=100000)).claim("queueing_bound").result  # "holds", ...
 //! pyserq.read_trace("examples/replay/data/short_base.csv")  # the sessions a replay draws from
 //! pyserq.draw("examples/multi-turn/vllm.sq")  # what `serq draw` prints
@@ -163,6 +163,17 @@ impl Report {
     #[getter]
     fn stages(&self) -> Vec<serq::engine::report::StageReport> {
         self.0.stages.clone()
+    }
+
+    /// Every engine request status by name
+    /// (`docs/design/request-state.md`): its stays and the requests in it.
+    #[getter]
+    fn status<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let d = PyDict::new(py);
+        for x in &self.0.statuses {
+            d.set_item(&x.name, x.clone())?;
+        }
+        Ok(d)
     }
 
     #[getter]
@@ -694,6 +705,7 @@ fn pyserq(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Gauge>()?;
     m.add_class::<Claim>()?;
     m.add_class::<serq::engine::report::StageReport>()?;
+    m.add_class::<serq::engine::report::StatusReport>()?;
     m.add_class::<serq::engine::report::PoolReport>()?;
     m.add_function(wrap_pyfunction!(compile, m)?)?;
     m.add_function(wrap_pyfunction!(run, m)?)?;

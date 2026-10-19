@@ -34,8 +34,14 @@ use serde::{Deserialize, Serialize};
 /// `share` from the program to each `Run` over several stages, one policy
 /// per fabric. 14 adds `Run.latency`, a fixed wait before the run's work
 /// at its stages, which was a delay stage of its own (`D.nic.latency`,
-/// `L.latency`) run before the transfer.
-pub const IR_VERSION: u32 = 14;
+/// `L.latency`) run before the transfer. 15 makes one status per engine
+/// request true by construction (`docs/design/request-state.md`): a
+/// connector's `load` and `save` are a `CTransfer` each, of a fixed shape,
+/// where they were blocks of statements; an engine that is a KV relation's
+/// source registers a send at each request's end (`CRequest::send`), which
+/// keeps its blocks until the reader's load ends it or its `ttl` does; and
+/// `Join` goes, the push mode's reader waiting for the send instead.
+pub const IR_VERSION: u32 = 15;
 
 /// A reason `Program::validate` refuses a program, and the statement it is
 /// about (block, index in it) when it is about one.
@@ -822,16 +828,18 @@ pub enum CStmt {
         key: Vec<CExpr>,
     },
     End,
-    /// Run the block beside the session, as a leg of the same request: it
+    /// Run the block beside the session, as a leg of the same turn: it
     /// starts now, with a copy of the session's attributes, at the same
     /// time as the statements after the fork. vLLM's push proxy sends the
     /// prefill and the decode request of one request at once this way. A
     /// leg's holds are its own and its `set`s change only its copy, which
-    /// ends with it; the leases it leaves pass to the session when it ends.
-    /// A leg may not `turn`, `end`, fork or join.
+    /// ends with it; the send it leaves passes to the session when it ends.
+    /// A leg may not `turn`, `end`, fork or lease; it calls an engine whose
+    /// requests are sent (`CRequest::send`) once on every way through it,
+    /// and the session reads that send on every way after the fork: the
+    /// session waits for a leg only by reading its send, the one thing a leg
+    /// leaves it.
     Fork(BlockId),
-    /// Wait until every leg the session has forked has ended.
-    Join,
     /// A request to an engine: `input` tokens of prompt, `output` tokens to
     /// generate. The engine keeps its state (the tokens it has, its KV
     /// position, what it has generated), admits it by its `request`, runs its
@@ -932,31 +940,47 @@ pub struct CStep {
     pub connector: Option<Box<CConnector>>,
 }
 
-/// An engine's KV connector to an L2 queue (vLLM's `KVConnector`, LMCache's
-/// in `lmcache_mp_connector.py`): the tokens a request loads from the L2 at
-/// its admission, read after `request.hit` (`get_num_new_matched_tokens`),
-/// and the tokens the L2 holds of it after it ends (`request_finished`,
-/// which keeps its blocks until the save is done). Each is the kernel block
-/// it means, which the session runs while the request holds its pools: a
-/// load `run C (cost(C, E.loaded · r)); load P (cost(P, E.loaded));` into
-/// the request's hold on the engine's memory `P`, a save the hold on the
-/// L2's pool that copies what the L2's entry lacks. The interpreter sets
-/// the attributes `loaded` and `saved` (`E.loaded`, `E.saved`) before it
-/// runs them.
+/// Whether an engine's requests are sent (`CRequest::send`).
+pub fn sends(st: &CStep) -> bool {
+    st.request.as_ref().is_some_and(|r| r.send.is_some())
+}
+
+/// A source engine's sends (`CRequest::send`).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CSend {
+    /// How long, at most, an unread send keeps the blocks, in seconds from
+    /// the request's end: the relation's `ttl`, a constant above 0. Absent,
+    /// until the session's end. A send a copy has begun to read stays until
+    /// the read is done.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ttl: Option<f64>,
+}
+
+/// An engine's KV connector (vLLM's `KVConnector`): the tokens a request
+/// loads at its admission, from an L2 (LMCache's `lmcache_mp_connector.py`)
+/// or a KV relation's source, read after `request.hit`
+/// (`get_num_new_matched_tokens`), and the tokens an L2 holds of it after it
+/// ends (`request_finished`, which keeps its blocks until the save is done).
+/// Each is a transfer of the request (`CTransfer`), which the engine runs
+/// while its status is `waiting_for_kv` (a load) or `finished` (a save). The
+/// interpreter sets the attributes `loaded` and `saved` (`E.loaded`,
+/// `E.saved`) first.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CConnector {
-    /// The tokens to load (`Moment::Request`), and the block that loads them.
+    /// What its requests load at admission (`amount` read at
+    /// `Moment::Request`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub load: Option<(CExpr, BlockId)>,
-    /// The tokens the L2 is to hold (`Moment::Release`, with
-    /// `request.finished` 1), and the block that saves them.
+    pub load: Option<CTransfer>,
+    /// What an L2 is to hold of its requests (`amount` read at
+    /// `Moment::Release`, with `request.finished` 1).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub save: Option<(CExpr, BlockId)>,
+    pub save: Option<CTransfer>,
     /// Attribute slots: what the latest admission loaded, what the save
     /// copies to.
     pub loaded: usize,
     pub saved: usize,
-    /// Attribute slot: when its latest load ended (`E.load_done`).
+    /// Attribute slot: when its latest load ended, or found its send gone
+    /// (`E.load_done`).
     pub load_done: usize,
     /// A KV relation's (`kvt.nixl_pull`): the attribute its request's entry
     /// sets to the source's member it took `from`, -1 for none, which loads
@@ -968,10 +992,102 @@ pub struct CConnector {
 }
 
 impl CConnector {
-    /// Its blocks, a load's then a save's.
-    pub fn blocks(&self) -> impl Iterator<Item = BlockId> + '_ {
-        self.load.iter().chain(&self.save).map(|(_, b)| *b)
+    /// Its transfers, a load's then a save's.
+    pub fn transfers(&self) -> impl Iterator<Item = &CTransfer> + '_ {
+        self.load.iter().chain(&self.save)
     }
+}
+
+/// A KV move of an engine's request (a connector's load or save), of one
+/// shape: a copy over its stages, the KV landing in a pool, and, for a
+/// save, the room it holds there; for a read of a KV relation, the source's
+/// send it ends. The engine runs it as its own action, not as statements of
+/// the program (`Program::kernel` writes the kernel statements it is).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CTransfer {
+    /// The tokens it moves; the interpreter sets `loaded` or `saved` to it.
+    pub amount: CExpr,
+    /// The copy: a run on `stage`, and on `also` held at once, of `work`,
+    /// after `latency`, its fabric's `share`, `poster` the side that posts
+    /// it (`CStmt::Run`'s fields).
+    pub stage: CRef,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub also: Vec<CRef>,
+    pub work: CExpr,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub share: Option<Share>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latency: Option<CExpr>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub poster: Option<usize>,
+    /// Where the KV lands, and its units there (`load P (n)`): the engine's
+    /// memory for a load, the L2's pool for a save.
+    pub into: CRef,
+    pub units: CExpr,
+    /// A save's room in `into`: what it holds there first (what the L2
+    /// holds of it), the growth by what it copies, what stays cached.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub room: Option<CRoom>,
+    /// A read of a KV relation: the source's memory, the member its entry
+    /// took `from`, whose registered send the read waits for and ends.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<CRef>,
+}
+
+/// A save's room in its L2's pool (`CTransfer::room`).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CRoom {
+    pub held: CExpr,
+    pub grow: CExpr,
+    pub cache: CExpr,
+}
+
+impl CTransfer {
+    /// The kernel statements the transfer is, a block of `blocks` (appended,
+    /// with a hold's body before it): `run; load` for a load, `hold into {
+    /// grow; run; load } cache` for a save. A read's end of its source's send
+    /// is the engine's, not a statement.
+    pub fn kernel(&self, blocks: &mut Vec<Vec<CStmt>>) -> BlockId {
+        let run = CStmt::Run {
+            stage: self.stage.clone(),
+            mode: RunMode::Plain,
+            work: self.work.clone(),
+            growing: None,
+            also: self.also.clone(),
+            share: self.share,
+            latency: self.latency.clone(),
+            poster: self.poster,
+        };
+        let load = CStmt::Load(self.into.clone(), self.units.clone());
+        let body = match &self.room {
+            None => vec![run, load],
+            Some(r) => {
+                blocks.push(vec![
+                    CStmt::Grow(self.into.clone(), r.grow.clone()),
+                    run,
+                    load,
+                ]);
+                vec![CStmt::Hold {
+                    pools: vec![(self.into.clone(), r.held.clone(), None)],
+                    reuse: None,
+                    body: blocks.len() - 1,
+                    cache: Some(r.cache.clone()),
+                    prefix: None,
+                    lease: None,
+                }]
+            }
+        };
+        blocks.push(body);
+        blocks.len() - 1
+    }
+}
+
+/// The kernel blocks of a program's transfers (`Program::kernel`): per
+/// stage, its connector's load's and its save's.
+#[derive(Clone, Debug, Default)]
+pub struct TransferBlocks {
+    pub load: Vec<Option<BlockId>>,
+    pub save: Vec<Option<BlockId>>,
 }
 
 /// How an engine admits and releases a request: a hold's header, read for
@@ -988,6 +1104,15 @@ pub struct CRequest {
     pub cache: Option<CExpr>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prefix: Option<Vec<(CExpr, CExpr)>>,
+    /// The engine is a KV relation's source (`kvt.nixl_pull (P, D, …)`):
+    /// each request registers a send of its blocks on the engine's memory
+    /// when it ends, and they stay until a reader's load ends the send, or
+    /// its `ttl` (vLLM's finished request whose free is delayed,
+    /// scheduler.py:2653-2655, until `finished_sending`,
+    /// scheduler.py:3135-3138, or the lease's expiry,
+    /// nixl/pull_scheduler.py:248-262). Set by the relation, not written.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub send: Option<CSend>,
     /// The observations the engine records of its requests.
     pub records: RequestRecords,
 }
@@ -1215,6 +1340,11 @@ pub struct Program {
     /// Stability). The deployment figure draws them as the gateway.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub routes: Vec<Route>,
+    /// Not the IR's: the kernel blocks of its transfers, appended to
+    /// `blocks` by `Program::kernel`, which the interpreter and the figure
+    /// run and walk. `None` in a program as linked or read.
+    #[serde(skip)]
+    pub transfer_blocks: Option<TransferBlocks>,
 }
 
 /// A gateway's `route`, expanded where the server called it: the
@@ -1332,6 +1462,45 @@ pub struct SessionInit {
 }
 
 impl Program {
+    /// The program with its transfers written as the kernel's statements
+    /// (`CTransfer::kernel`): blocks appended to `blocks`, of the server's
+    /// side, and `transfer_blocks` naming them. What the interpreter runs
+    /// and the figure walks; the IR keeps the transfers' fixed shape.
+    pub fn kernel(&self) -> Program {
+        let mut k = self.clone();
+        if k.transfer_blocks.is_some() {
+            return k;
+        }
+        let n = k.stages.len();
+        let mut tb = TransferBlocks {
+            load: vec![None; n],
+            save: vec![None; n],
+        };
+        for (i, st) in self.stages.iter().enumerate() {
+            let CStageKind::Step(sp) = &st.kind else {
+                continue;
+            };
+            let Some(c) = &sp.connector else { continue };
+            tb.load[i] = c.load.as_ref().map(|t| t.kernel(&mut k.blocks));
+            tb.save[i] = c.save.as_ref().map(|t| t.kernel(&mut k.blocks));
+        }
+        while k.sides.len() < k.blocks.len() {
+            let len = k.blocks[k.sides.len()].len();
+            k.sides.push(vec![Side::Server; len]);
+        }
+        k.transfer_blocks = Some(tb);
+        k
+    }
+
+    /// The kernel blocks of stage `st`'s connector, its load's then its
+    /// save's (`kernel`): none in a program not made by it.
+    pub fn connector_blocks(&self, st: usize) -> impl Iterator<Item = BlockId> + '_ {
+        self.transfer_blocks
+            .iter()
+            .flat_map(move |t| [t.load[st], t.save[st]])
+            .flatten()
+    }
+
     /// The policy of each stage some run over several stages holds, each
     /// array whole (a run's index is known only when it starts), and `None`
     /// for every other stage. The stages runs join, however indirectly, are
@@ -1422,8 +1591,8 @@ impl Program {
     fn blocks_are_a_tree(&self) -> Result<(), String> {
         let mut seen = vec![false; self.blocks.len()];
         let mut todo = vec![self.init, self.turn, self.session];
-        // an engine's connector runs its blocks inside a request
-        todo.extend(self.connectors().flat_map(|(_, c)| c.blocks()));
+        // an engine's transfers, as the kernel writes them (`kernel`)
+        todo.extend((0..self.stages.len()).flat_map(|i| self.connector_blocks(i)));
         while let Some(b) = todo.pop() {
             let Some(was) = seen.get_mut(b) else {
                 return Err(format!("block {b} out of range"));
@@ -1829,6 +1998,10 @@ impl Program {
     /// `validate`, with the statement an error is about, which the linker
     /// maps back to the program's text (#279).
     pub fn validate_located(&self) -> Result<(), Invalid> {
+        // the transfers' kernel blocks are checked with the program's
+        if self.transfer_blocks.is_none() {
+            return self.kernel().validate_located();
+        }
         self.validate_statements()?;
         self.stage_shares()?;
         self.validate_declarations()?;
@@ -1875,6 +2048,11 @@ impl Program {
         ] {
             v.block(blk).map_err(|e| format!("{k}: {e}"))?;
         }
+        // a leg's send is read before the session ends, on every way
+        let pending = v.legs_read(self.session, vec![])?;
+        if !pending.is_empty() {
+            return Err(v.unread(&pending).into());
+        }
         // a route names statements the program has: nothing reads it to
         // run, so one that names none would only draw a wrong figure
         for r in &self.routes {
@@ -1903,6 +2081,8 @@ impl Program {
                 ));
             }
         }
+        // what a hold leases, which a `release` outside every hold of it
+        // ends
         let leased: Vec<&CRef> = self
             .blocks
             .iter()
@@ -1917,7 +2097,14 @@ impl Program {
             .collect();
         // a connector's load computes into the request's hold on the
         // engine's memory, and its save runs inside every pool it takes
-        for (st, c) in self.connectors() {
+        for (i, st) in self.stages.iter().enumerate() {
+            let CStageKind::Step(st) = &st.kind else {
+                continue;
+            };
+            if st.connector.is_none() {
+                continue;
+            }
+            let blocks = self.transfer_blocks.as_ref();
             let pools: Vec<&CRef> = st
                 .request
                 .iter()
@@ -1927,26 +2114,17 @@ impl Program {
                 message: format!("a connector: {}", e.message),
                 ..e
             };
-            if let Some((_, b)) = &c.load {
+            if let Some(b) = blocks.and_then(|t| t.load[i]) {
                 let mut held: Vec<_> = pools
                     .iter()
                     .filter(|q| Some(q.base) == st.memory)
                     .map(|q| (*q, None))
                     .collect();
-                // a KV relation's load ends the lease its request's entry
-                // took `from` the source, the member `E.from` names
-                let mut leased = leased.clone();
-                if c.from.is_some() {
-                    leased.extend(self.blocks[*b].iter().filter_map(|s| match s {
-                        CStmt::Release(r) => Some(r),
-                        _ => None,
-                    }));
-                }
-                self.enclosed(*b, &mut held, &leased).map_err(fail)?;
+                self.enclosed(b, &mut held, &leased).map_err(fail)?;
             }
-            if let Some((_, b)) = &c.save {
+            if let Some(b) = blocks.and_then(|t| t.save[i]) {
                 let mut held: Vec<_> = pools.iter().map(|q| (*q, None)).collect();
-                self.enclosed(*b, &mut held, &leased).map_err(fail)?;
+                self.enclosed(b, &mut held, &leased).map_err(fail)?;
             }
         }
         self.enclosed(self.session, &mut vec![], &leased)
@@ -2055,7 +2233,7 @@ impl Program {
                         let load = st
                             .connector
                             .iter()
-                            .filter_map(|c| c.load.as_ref().map(|(e, _)| e));
+                            .filter_map(|c| c.load.as_ref().map(|t| &t.amount));
                         let admission = r
                             .pools
                             .iter()
@@ -2325,6 +2503,9 @@ impl Program {
                     }
                     if let Some(c) = &st.connector {
                         v.connector(st, c).map_err(at)?;
+                    }
+                    if let Some(sd) = st.request.as_ref().and_then(|r| r.send.as_ref()) {
+                        v.send(st, sd).map_err(at)?;
                     }
                     if let Some(g) = &st.granule {
                         let g = match g {
@@ -3198,7 +3379,8 @@ impl Validator<'_> {
                 .flat_map(|r| &r.pools)
                 .any(|(q, _, _)| q.base == m)
         });
-        if let Some((e, b)) = &c.load {
+        if let Some(t) = &c.load {
+            let e = &t.amount;
             if !takes_memory {
                 return Err(
                     "a connector loads into the engine's memory, which its requests do not take"
@@ -3216,9 +3398,32 @@ impl Validator<'_> {
             if draws(e) {
                 return Err("a connector's load may not draw".into());
             }
-            self.block_id(*b)?;
+            if let Some(src) = &t.source {
+                self.cref(src, self.p.pools.len(), "pool", Moment::Request)?;
+                if c.from.is_none() {
+                    return Err(
+                        "a connector reads a source's send, and its requests' entries name \
+                         no source (`from`)"
+                            .into(),
+                    );
+                }
+                // the source is an engine's memory whose requests are sent
+                let of = |m: usize| m >= src.base && m < src.base + src.count.max(1);
+                let sent = self.p.stages.iter().any(|x| match &x.kind {
+                    CStageKind::Step(sp) => sends(sp) && sp.memory.is_some_and(of),
+                    _ => false,
+                });
+                if !sent {
+                    return Err(format!(
+                        "a connector reads `{}`, which no engine whose requests are sent \
+                         keeps: a KV relation's source registers the send it reads",
+                        self.p.show_pool_ref(src)
+                    ));
+                }
+            }
         }
-        if let Some((e, b)) = &c.save {
+        if let Some(t) = &c.save {
+            let e = &t.amount;
             if st.request.as_ref().is_none_or(|r| r.pools.is_empty()) {
                 return Err(
                     "a connector saves before a request gives its pools back, and its \
@@ -3227,7 +3432,6 @@ impl Validator<'_> {
                 );
             }
             self.expr(e, Moment::Release)?;
-            self.block_id(*b)?;
         }
         if c.record >= self.p.observes.len() {
             return Err(format!(
@@ -3243,9 +3447,39 @@ impl Validator<'_> {
         self.attr(c.saved)
     }
 
-    fn block_id(&self, b: BlockId) -> Result<(), String> {
-        if b >= self.p.blocks.len() {
-            return Err(format!("block {b} out of range"));
+    /// A source engine's sends: of its memory, which its requests take,
+    /// read by some reader's load, kept at most `ttl`.
+    fn send(&self, st: &CStep, sd: &CSend) -> Result<(), String> {
+        let Some(m) = st.memory.filter(|&m| {
+            st.request
+                .iter()
+                .flat_map(|r| &r.pools)
+                .any(|(q, _, _)| q.base == m)
+        }) else {
+            return Err(
+                "an engine whose requests are sent keeps their blocks on its memory, which \
+                 its requests do not take"
+                    .into(),
+            );
+        };
+        if sd.ttl.is_some_and(|t| !(t > 0.0 && t.is_finite())) {
+            return Err(format!(
+                "a send's `ttl` {} is not a number above 0: leave it out for none",
+                sd.ttl.unwrap_or_default()
+            ));
+        }
+        let read = self.p.connectors().any(|(_, c)| {
+            c.load
+                .as_ref()
+                .and_then(|t| t.source.as_ref())
+                .is_some_and(|r| m >= r.base && m < r.base + r.count.max(1))
+        });
+        if !read {
+            return Err(
+                "an engine's requests are sent, and no reader's load reads them: their blocks \
+                 would stay for nobody"
+                    .into(),
+            );
         }
         Ok(())
     }
@@ -3590,51 +3824,196 @@ impl Validator<'_> {
             }
             CStmt::Fork(b) => {
                 self.block(*b)?;
-                if !self
-                    .p
-                    .blocks
-                    .iter()
-                    .flatten()
-                    .any(|s| matches!(s, CStmt::Join))
-                {
+                if let Some(what) = self.leg_may_not(*b) {
+                    return Err(format!(
+                        "a `fork`'s leg may not {what}: a leg is a part of the turn beside \
+                         it, and the session turns, ends and forks"
+                    ));
+                }
+                // a session waits for a leg only by reading what it leaves:
+                // the send of an engine request it calls
+                if !self.calls_a_source(*b) {
                     return Err(
-                        "a program that forks a leg and never joins: a session may not \
-                         end while its leg runs"
+                        "a `fork`'s leg calls no engine whose requests are sent (a KV \
+                         relation's source) on every way through it: the session waits for a \
+                         leg only by reading its send, and would not wait for this one"
                             .into(),
                     );
                 }
-                if let Some(what) = self.leg_may_not(*b) {
-                    return Err(format!(
-                        "a `fork`'s leg may not {what}: a leg is a part of the request beside \
-                         it, and the session turns, ends, forks and joins"
-                    ));
+                if !self.one_source(*b) {
+                    return Err(
+                        "a `fork`'s leg calls one KV relation's source on one way of an `if` \
+                         and another on the other: the session reads the leg's send from one \
+                         source, so the leg calls the same one on every way"
+                            .into(),
+                    );
+                }
+                if self.source_calls(*b) > 1 {
+                    return Err(
+                        "a `fork`'s leg calls an engine whose requests are sent more than \
+                         once: the session's read waits for one send, and the other would be \
+                         read by nobody"
+                            .into(),
+                    );
                 }
                 Ok(())
-            }
-            CStmt::Join => {
-                if self
-                    .p
-                    .blocks
-                    .iter()
-                    .flatten()
-                    .any(|s| matches!(s, CStmt::Fork(_)))
-                {
-                    Ok(())
-                } else {
-                    Err("a `join` in a program that forks no leg waits for nothing".into())
-                }
             }
         }
     }
 
+    /// Whether block `b` calls, on every way through it, an engine whose
+    /// requests are sent (`CRequest::send`).
+    fn calls_a_source(&self, b: BlockId) -> bool {
+        self.p.blocks[b].iter().any(|s| match s {
+            CStmt::Request { stage, .. } => (stage.base..stage.base + stage.count.max(1))
+                .all(|k| matches!(&self.p.stages[k].kind, CStageKind::Step(sp) if sends(sp))),
+            CStmt::Hold { body, .. } => self.calls_a_source(*body),
+            CStmt::Branch(_, x, y) => self.calls_a_source(*x) && self.calls_a_source(*y),
+            _ => false,
+        })
+    }
+
+    /// The calls of engines whose requests are sent in block `b`, on its
+    /// longest way, a loop's counting as many.
+    fn source_calls(&self, b: BlockId) -> usize {
+        self.p.blocks[b]
+            .iter()
+            .map(|s| match s {
+                CStmt::Request { stage, .. } => usize::from(matches!(
+                    &self.p.stages[stage.base].kind,
+                    CStageKind::Step(sp) if sends(sp)
+                )),
+                CStmt::Hold { body, .. } => self.source_calls(*body),
+                CStmt::Branch(_, x, y) => self.source_calls(*x).max(self.source_calls(*y)),
+                CStmt::Loop(body) | CStmt::While(_, body) => 2 * self.source_calls(*body),
+                _ => 0,
+            })
+            .sum()
+    }
+
+    /// The sources (their memory's first pool) whose sends the legs forked
+    /// in block `b` leave, `pending` before it, are read by none of the
+    /// requests after them on some way to the block's end: what is still
+    /// pending there. A session that ends with one pending would end while
+    /// its leg runs, or leave the send to nobody.
+    fn legs_read(&self, b: BlockId, mut pending: Vec<usize>) -> Result<Vec<usize>, String> {
+        // one send per leg, one read per send: a multiset of sources, a way
+        // through either branch keeping the more of each
+        let union = |a: Vec<usize>, b: Vec<usize>| {
+            let mut out = vec![];
+            for &x in a.iter().chain(&b) {
+                let n = a.iter().filter(|&&y| y == x).count();
+                let m = b.iter().filter(|&&y| y == x).count();
+                if out.iter().filter(|&&y| y == x).count() < n.max(m) {
+                    out.push(x);
+                }
+            }
+            out
+        };
+        // the constants this block has set its attributes to so far: a
+        // request whose entry took its KV `from` no source (`E.from` -1)
+        // reads nothing
+        let mut set: Vec<(usize, f64)> = vec![];
+        for s in &self.p.blocks[b] {
+            match s {
+                CStmt::Fork(body) => pending.extend(self.leg_sources(*body)),
+                CStmt::Set(slot, e) => {
+                    set.retain(|&(k, _)| k != *slot);
+                    if let CExpr::Num(v) = e {
+                        set.push((*slot, *v));
+                    }
+                }
+                CStmt::Request { stage, .. } => {
+                    if let CStageKind::Step(sp) = &self.p.stages[stage.base].kind
+                        && let Some(c) = sp.connector.as_ref()
+                        && let Some(src) = c.load.as_ref().and_then(|t| t.source.as_ref())
+                    {
+                        let sourceless = c
+                            .from
+                            .is_some_and(|f| set.iter().any(|&(k, v)| k == f && v < 0.0));
+                        if !sourceless && let Some(i) = pending.iter().position(|&m| m == src.base)
+                        {
+                            pending.remove(i);
+                        }
+                    }
+                }
+                CStmt::Hold { body, .. } => pending = self.legs_read(*body, pending)?,
+                CStmt::Branch(_, x, y) => {
+                    let a = self.legs_read(*x, pending.clone())?;
+                    let c = self.legs_read(*y, pending.clone())?;
+                    pending = union(a, c);
+                }
+                CStmt::Loop(body) | CStmt::While(_, body) => {
+                    let after = self.legs_read(*body, pending.clone())?;
+                    pending = union(pending, after);
+                }
+                CStmt::End if !pending.is_empty() => return Err(self.unread(&pending)),
+                _ => {}
+            }
+        }
+        Ok(pending)
+    }
+
+    /// Whether every `if` in a leg's block calls the same sources on both
+    /// ways: then any way's calls are the leg's (`leg_sources`).
+    fn one_source(&self, b: BlockId) -> bool {
+        self.p.blocks[b].iter().all(|s| match s {
+            CStmt::Hold { body, .. } => self.one_source(*body),
+            CStmt::Branch(_, x, y) => {
+                let (mut a, mut c) = (self.leg_sources(*x), self.leg_sources(*y));
+                a.sort_unstable();
+                c.sort_unstable();
+                a == c && self.one_source(*x) && self.one_source(*y)
+            }
+            _ => true,
+        })
+    }
+
+    /// The memories (first pool) of the sources a leg's block calls.
+    fn leg_sources(&self, b: BlockId) -> Vec<usize> {
+        let mut out = vec![];
+        for s in &self.p.blocks[b] {
+            match s {
+                CStmt::Request { stage, .. } => {
+                    if let CStageKind::Step(sp) = &self.p.stages[stage.base].kind
+                        && sends(sp)
+                        && let Some(m) = sp.memory
+                    {
+                        out.push(m);
+                    }
+                }
+                CStmt::Hold { body, .. } => out.extend(self.leg_sources(*body)),
+                // one way or the other: a way's calls, not both ways'
+                // (`calls_a_source`, `source_calls` and `one_source` hold
+                // every way to the same one)
+                CStmt::Branch(_, x, y) => {
+                    let (a, b) = (self.leg_sources(*x), self.leg_sources(*y));
+                    out.extend(if a.len() >= b.len() { a } else { b });
+                }
+                _ => {}
+            }
+        }
+        out
+    }
+
+    fn unread(&self, pending: &[usize]) -> String {
+        let name = &self.p.pools[pending[0]].name;
+        format!(
+            "a leg's send of `{name}` is read on no way after its `fork` to the session's \
+             end: the session waits for a leg only by reading its send; read it (a call \
+             `… from` the source) on every way before the session ends"
+        )
+    }
+
     /// The first thing a leg's block does that only the session may: a
-    /// `turn`, an `end`, a `fork` or a `join`, in it or a block in it.
+    /// `turn`, an `end`, a `fork` or a hold's `lease`, in it or a block in it.
     fn leg_may_not(&self, b: BlockId) -> Option<&'static str> {
         self.p.blocks[b].iter().find_map(|s| match s {
             CStmt::Turn => Some("`turn`"),
             CStmt::End => Some("`end`"),
             CStmt::Fork(_) => Some("fork"),
-            CStmt::Join => Some("`join`"),
+            // what a leg leaves its session is its request's send
+            CStmt::Hold { lease: Some(_), .. } => Some("lease (`hold … lease`)"),
             CStmt::Hold { body, .. } | CStmt::Loop(body) | CStmt::While(_, body) => {
                 self.leg_may_not(*body)
             }

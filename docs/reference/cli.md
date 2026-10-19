@@ -74,7 +74,7 @@ to 0 and `seed` to 1. JSON IR contains all resolved settings already.
 
 ## The JSON report
 
-`observes`, `client` and `gauges` are objects keyed by name; `stages` and `pools` are arrays.
+`observes`, `client`, `status` and `gauges` are objects keyed by name; `stages` and `pools` are arrays.
 
 ```bash
 serq run examples/multi-turn/vllm.sq --workload examples/workloads/chat.sq --horizon 2000 --warmup 200 --seed 1 --json | jq '.client.ttft.mean'
@@ -86,6 +86,7 @@ serq run examples/multi-turn/vllm.sq --workload examples/workloads/chat.sq --hor
 | top level | `serq_version` (the interpreter that ran, `serq --version`), `horizon` (the configured deadline), `end` (when the run ended: `horizon`, or earlier with `--arrivals`), `warmup`, `seed`, `events`, `arrivals` (sessions that arrived, warm-up included), `ended` (sessions that ended after warm-up), `turns` (`turn;` statements run after warm-up: each is one request to the `server`), `mean_live` (time-average sessions alive) |
 | `observes.<name>` | `count`, `mean`, `ci`, `cv2`, `p99` |
 | `client.ttft`, `client.tpot`, `client.response` | the same fields, of what each turn's client saw, in every program ([what the client sees](../language.md#what-the-client-sees)): `ttft` from the turn to its first output token, `tpot` the time per output token after the first, `response` from the turn to its answer. A turn that commits no token has no `ttft`, and one of a single output token no `tpot` |
+| `status.<status>` | every [engine request status](#request-statuses), visited or not: `stays` (stays in it that ended after warm-up), `mean`, `p50`, `p99` (their durations; `null` without any), `number` (time-average engine requests in it over `[warmup, end]`) |
 | `gauges.<name>` | `mean` (time average over `[warmup, end]`), `ci`, `min`, `max` |
 | `claims[]` | present when the program has a `claim`: `name`, `kind` (`every_iteration`, `some_iteration`, `at_end`), `result` (`holds`, `fails`, `witnessed`, `not_witnessed`, `not_evaluated`, `out_of_scope`), `checked` (iterations read, or 1 for a claim read at the end), `failures` (of those, the ones that read 0), `first` (the first failure, or a `some` claim's first witness; `null` when none), `note` (the sessions live at the end, or the session that failed `given`; `null` otherwise). The whole run, warm-up included |
 | `stages[]` | stage statistics, below |
@@ -96,6 +97,51 @@ Non-finite numbers are written as `null`, and as `NaN` in the text report:
 a mean with no sample, such as the `mean_wait` of a pool no hold waited at
 first, is one. For stages and pools, `name`
 identifies the resource and `index` its array member (`null` for a single resource).
+
+### Request statuses
+
+A request is one call of an engine, `E (input, output)`, as vLLM's
+`Request` is one request to one engine (a P/D turn is two: the
+prefiller's and the decoder's). It has exactly one status at any time
+([the design](../design/request-state.md)); a program does not read it.
+
+| Status | The request | vLLM |
+|---|---|---|
+| `waiting` | is in the engine's waiting queue, not scheduled; after a load, with its blocks, waiting for a running slot | `WAITING` |
+| `waiting_for_kv` | is admitted to its blocks and not schedulable until its connector's load is done (from an L2, or a KV relation's source, whose send it waits for) | `WAITING_FOR_REMOTE_KVS` |
+| `running` | is a resident of the engine's batch, in prefill or decode (its mode); a resident stalled for room to grow is one | `RUNNING` |
+| `preempted` | is in the waiting queue again after a preemption, until it runs | `PREEMPTED` |
+| `finished` | has generated its output; counted while it keeps its blocks for a save to an L2 or a send to a reader | `FINISHED_*`, with `delay_free_blocks` |
+
+Its KV moves are transfers beside the status, each with its own time, in
+the [run log](log.md): a `load` while `waiting_for_kv`, a `save` and a
+`send` while `finished`. A change of mode, prefill to decode, is no new
+stay. The text report prints the statuses some request was in, after the
+client's table; a program that calls no engine prints none:
+
+```text
+status          stays    mean     p50     p99  number
+--------------  -----  ------  ------  ------  ------
+waiting           155  0.0001  0.0000  0.0036   0.000
+waiting_for_kv     41  0.0120  0.0106  0.0347   0.016
+running           113  0.0369  0.0309  0.1037   0.139
+finished           41  0.0121  0.0106  0.0347   0.017
+```
+
+(`llmd_nixl_pull.sq` with `chat_reply.sq`, `--horizon 30`.) The 41
+`finished` stays are the prefiller's requests whose blocks waited for the
+decoder's read; the decoders' requests waited for that KV as long. The
+program's own `observe send_held` has 40 of them: it is taken after the
+decoder's call returns, and one decoder was still at work at the horizon.
+A request admitted at once still waited, for no time: the `waiting` median
+of 0. `running`'s `number` is the engines' residents, their stages'
+`number`.
+
+`stays` counts the stays that ended after warm-up, and `number` is a time
+average over the same span, so `number ≈ (stays / span) × mean` (Little's
+law) only near a steady state: a run that ends with long stays still open
+leaves them out of `stays` but not of `number` (`fastertransformer.sq` at
+`--horizon 60` is off by 99 %).
 
 ### Stage statistics
 

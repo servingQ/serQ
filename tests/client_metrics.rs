@@ -96,24 +96,6 @@ server {{ llm (0, 3); }}",
     assert_eq!(samples(&r, "response"), [3.0]);
 }
 
-/// A leg forked in one turn and joined in the next works for the first:
-/// its tokens are no token of the second, which only waits for it.
-#[test]
-fn a_leg_works_for_the_turn_it_was_forked_in() {
-    let r = run(
-        &format!(
-            "{}
-server (turn_no) {{
-  if (turn_no == 1) {{ fork {{ llm (0, 4); }} }} else {{ join; }}
-}}",
-            engine()
-        ),
-        "workload { arrive batch(1); send (turn_no); session { turn; turn; } }",
-    );
-    assert_eq!(samples(&r, "response"), [0.0, 4.0]);
-    assert_eq!(r.client("ttft").unwrap().count, 0);
-}
-
 /// A server that refuses a request ends the session there: the turn is not
 /// answered, so the client records nothing of it, and no turn follows.
 #[test]

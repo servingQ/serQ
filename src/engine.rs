@@ -5,4 +5,5 @@ pub mod dist;
 pub mod interp;
 pub mod log;
 pub mod report;
+pub mod state;
 pub mod stats;

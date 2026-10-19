@@ -83,6 +83,15 @@ class FragmentBoundaries(unittest.TestCase):
         with self.assertRaisesRegex(generator.Fragment, "lease"):
             generator.Lean(ir).block(ir["session"], 1)
 
+    def test_sends_are_not_silently_discarded(self):
+        # the engine keeps its requests' memory past their end for a
+        # reader's load (a P/D prefiller's blocks, `CRequest.send`)
+        ir = copy.deepcopy(self.ir)
+        step = ir["stages"][0]["kind"]["Step"]
+        step["request"]["send"] = {"ttl": {"Num": 1}}
+        with self.assertRaisesRegex(generator.Fragment, "sent"):
+            generator.Lean(ir).block(ir["session"], 1)
+
     def test_prefix_chains_are_not_silently_discarded(self):
         # the engine's admission reads a chain of segments
         ir = copy.deepcopy(self.ir)
