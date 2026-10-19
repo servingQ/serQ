@@ -1,5 +1,15 @@
 # The prefiller takes its request as an engine
 
+> **Folded into [one status per request](request-state.md), its last
+> clause not shipped.** The prefiller's entry is `P (prompt, 1);` as below,
+> but its `taking` does not end `lease kv (inf)`, and the IR has no
+> `CRequest.lease`: the relation `kvt.nixl_pull (P, D, …)` makes `P`'s
+> requests *sent*, each keeping its blocks until the reader's load ends
+> the send or the relation's `ttl` does (`CRequest.send`). The lease wrote
+> in the program what the relation already says, and its one parameter,
+> how long an unread send lasts, is vLLM's setting of the connector, so it
+> went to the relation. The record below is the change as #715 proposed it.
+
 [A queue's engine keeps its requests' state](queue-engine-request.md)
 moved the P/D decoder to the engine's request: its entry is `D (prompt,
 produced);`, and its engine's `taking` and `connector P` say the

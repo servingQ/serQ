@@ -358,7 +358,9 @@ pub fn run_ir_logged(p: &ir::Program, base: Option<&Path>, cap: usize) -> Result
 fn run_with(p: &ir::Program, base: Option<&Path>, log: Option<usize>) -> Result<Report, String> {
     p.validate()?;
     let corpus = load_trace(p, base)?;
-    let interp = engine::interp::Interp::new(p, corpus);
+    // its transfers as the kernel's statements (`ir::Program::kernel`)
+    let k = p.kernel();
+    let interp = engine::interp::Interp::new(&k, corpus);
     match log {
         Some(cap) => interp.logged(cap).run(),
         None => interp.run(),

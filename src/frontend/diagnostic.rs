@@ -61,8 +61,6 @@ macro_rules! codes {
 }
 
 codes! {
-    /// A pull's source called in a leg nothing joins.
-    PullForked => "E-pull-forked",
     /// A KV relation whose reader has no connector to load what it copies.
     CopyNoConnector => "E-copy-no-connector",
     /// A connector that loads into a memory the engine's `taking` does not

@@ -70,37 +70,6 @@ fn a_reserved_word_has_its_code_and_place() {
     assert!(r.to_json().contains("\"code\":\"E-reserved-word\""));
 }
 
-/// A pull whose source is called in a `fork` that holds the call alone:
-/// the fork taken away, it compiles.
-#[test]
-fn a_forked_pull_is_unforked() {
-    let (d, w) = pair(PULL);
-    let d = with(
-        &d,
-        "        P[i].prefill (input);",
-        "        fork { P[i].prefill (input); }",
-    );
-    let r = refused(&d, &w, Code::PullForked);
-    assert_eq!(r.fixes.len(), 1, "{}", r.message);
-    let after = fixed(&d, &r.fixes[0]);
-    assert!(after.contains("        P[i].prefill (input);"), "{after}");
-    let next = diagnose(&after, Some(&w), &Overrides::default());
-    assert!(next.is_none(), "{next:?}");
-}
-
-/// A fork with more than the call in it is the program's to divide: no fix.
-#[test]
-fn a_fork_with_more_in_it_has_no_fix() {
-    let (d, w) = pair(PULL);
-    let d = with(
-        &d,
-        "        P[i].prefill (input);",
-        "        fork { P[i].prefill (input); set t9 = now; }",
-    );
-    let r = refused(&d, &w, Code::PullForked);
-    assert!(r.fixes.is_empty());
-}
-
 /// A reader with no connector: what it loads is the program's, no fix.
 #[test]
 fn a_missing_connector_has_no_fix() {

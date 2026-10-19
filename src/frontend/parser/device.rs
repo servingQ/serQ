@@ -36,8 +36,10 @@ pub(super) struct EngineDecl {
     pub connector: bool,
     /// Whether it admits requests (`taking`), whose records its caller reads.
     pub request: bool,
-    /// The pool its `taking` leases (`lease kv (t)`), by its bare name: a
-    /// queue's entry that calls it leases that pool, which a `from` takes.
+    /// The device's pool its `taking` takes, its memory, by its bare name:
+    /// a queue's entry that calls it leaves its KV there, which a `from`
+    /// takes when a KV relation reads the queue (the request's send,
+    /// `ir::CRequest::send`).
     pub lease: Option<String>,
 }
 
@@ -162,10 +164,6 @@ fn qualify_request(r: &mut RequestSpec, f: &dyn Fn(&mut Ref)) {
     for (k, n) in r.prefix.iter_mut().flatten() {
         expr(k, f);
         expr(n, f);
-    }
-    if let Some((q, t)) = &mut r.lease {
-        f(q);
-        expr(t, f);
     }
 }
 
@@ -636,7 +634,11 @@ impl Parser {
         // a queue's engine admits by its entries, which hold its pools
         let in_queue = device.contains('.');
         let mut taking = self.engine_request(&name, &takeable)?;
-        let lease = taking.lease.as_ref().map(|(r, _)| r.name.clone());
+        let lease = taking
+            .pools
+            .iter()
+            .find(|(r, _, _)| self.devices[dev].caps.iter().any(|c| c.name == r.name))
+            .map(|(r, _, _)| r.name.clone());
         if !in_queue {
             s.request = Some(taking);
         } else if !taking.pools.is_empty() {

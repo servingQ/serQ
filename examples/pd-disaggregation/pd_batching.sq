@@ -107,7 +107,8 @@ fn main() {
   }
 
   // A prefill engine: the prompt, and a token the client never sees; its
-  // blocks stay leased until the decoder has read them. A request reserves
+  // blocks stay, its request's send (`kvt.nixl_pull` below), until the
+  // decoder has read them. A request reserves
   // its whole prompt at admission (scheduler_reserve_full_isl), so it is
   // never preempted here.
   queue P[NP] : prefill {
@@ -118,8 +119,7 @@ fn main() {
       scheduler {
         exclusive prefill each at most (chunk_cap);
         admit waiting while (running.preempted == 0) each at most (chunk_cap)
-          taking reqs (1), kv (min(request.known, budget_left(P))) reserve (request.known)
-          lease kv (inf);
+          taking reqs (1), kv (min(request.known, budget_left(P))) reserve (request.known);
       }
       worker {
         forward (c0 + max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));

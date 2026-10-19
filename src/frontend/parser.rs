@@ -841,22 +841,6 @@ fn transfers(stmts: &[Stmt]) -> bool {
     .is_some()
 }
 
-/// Whether `stmts` write a `join` anywhere.
-fn joins(stmts: &[Stmt]) -> bool {
-    find_stmt(stmts, false, &|s, _| matches!(s, Stmt::Join).then_some(())).is_some()
-}
-
-/// The first call of an entry of `queue` in a leg of `stmts` (`fork { … }`),
-/// where its queue is written and its verb.
-fn forked_call<'a>(stmts: &'a [Stmt], queue: &str) -> Option<(Option<Span>, &'a str)> {
-    find_stmt(stmts, false, &|s, leg| match s {
-        Stmt::Call { queue: q, verb, .. } if leg && q.name == queue => {
-            Some((q.span, verb.as_str()))
-        }
-        _ => None,
-    })
-}
-
 /// An argument of the statements `def` reads the clock or live state,
 /// which the body would read where it reads the parameter.
 fn live_message(def: &str, p: &str, what: &str) -> String {
@@ -1163,7 +1147,6 @@ fn stmt_reads(s: &Stmt, n: &str) -> bool {
         | Stmt::Turn
         | Stmt::Request
         | Stmt::End
-        | Stmt::Join
         | Stmt::Unread(_) => false,
         Stmt::Set(_, e) | Stmt::Observe(_, e) => expr_reads(e, n),
         Stmt::Hold { body, .. } => {
@@ -1614,8 +1597,7 @@ fn split_reads<'a>(
             | Stmt::Turn
             | Stmt::End
             | Stmt::Request
-            | Stmt::Mark(_)
-            | Stmt::Join => {}
+            | Stmt::Mark(_) => {}
             Stmt::Set(n, e) => {
                 bodies.push(e);
                 above.push(n.clone());
@@ -1872,19 +1854,6 @@ impl Parser {
             col: t.col,
             msg,
         })
-    }
-
-    /// `err_at` the token a parsed span starts at (a `def`'s expansion noted
-    /// as there), or at `pos` when there is none.
-    fn err_span<T>(&self, span: Option<Span>, pos: usize, msg: impl Into<String>) -> PResult<T> {
-        let at = span
-            .and_then(|s| {
-                self.toks
-                    .iter()
-                    .position(|t| t.line == s.line && t.col == s.col)
-            })
-            .unwrap_or(pos);
-        self.err_at(at, msg)
     }
 
     fn advance(&mut self) -> Tok {
@@ -2537,6 +2506,7 @@ impl Parser {
                 latency: t.latency.clone(),
                 push: t.push,
                 share: t.share,
+                ttl: t.ttl.clone(),
             }));
         }
         // and the other way: a relation copies only through its reader's
@@ -2604,51 +2574,6 @@ impl Parser {
                     ))
                 ),
             );
-        }
-        // the statements as written, before the calls are expanded
-        let bodies: Vec<&[Stmt]> = self
-            .server
-            .iter()
-            .chain(&self.wl_session)
-            .map(|(_, b)| b.as_slice())
-            .chain([prog.session.as_slice()])
-            .chain(
-                self.queues
-                    .iter()
-                    .flat_map(|q| &q.entries)
-                    .map(|e| e.body.as_slice()),
-            )
-            .collect();
-        // a pull: nothing waits for the leg the source's call is forked in,
-        // which a push's connector joins (a push toggled back)
-        let push = self
-            .queues
-            .iter()
-            .any(|q| q.takes.as_ref().is_some_and(|t| t.push));
-        if !push && !bodies.iter().any(|b| joins(b)) {
-            for q in &self.queues {
-                let Some(t) = &q.takes else {
-                    continue;
-                };
-                let Some((span, call)) = bodies.iter().find_map(|b| forked_call(b, &t.source))
-                else {
-                    continue;
-                };
-                let message = format!(
-                    "{}\nhelp: fix-it: take the call `{source}.{call} (…);` out of its \
-                     `fork {{ … }}`\nhelp: or make the copy a push: \
-                     `kvt.nixl_push ({source}, {reader}, …)`",
-                    Code::PullForked.message(format_args!(
-                        "`kvt.nixl_pull ({0}, {1})`: `{0}` is called in a leg (`fork`), and \
-                         in a pull nothing waits for that leg (`join`) as a push's connector \
-                         does, so the session could end while it runs",
-                        t.source, q.name
-                    )),
-                    source = t.source,
-                    reader = q.name,
-                );
-                return self.err_span(span, t.at, message);
-            }
         }
         Ok(())
     }
@@ -3264,28 +3189,56 @@ impl Parser {
         let reader = self.ident()?;
         let mut latency = None;
         let mut share = None;
+        let mut ttl = None;
         while self.eat(&Tok::Comma) {
             let n_at = self.pos;
             let name = self.ident()?;
             // the arguments' names, not keywords (`share` is std/share's)
-            let given = if name == "latency" {
+            let (is_latency, is_share) = (name == "latency", name == "share");
+            let is_ttl = name == "ttl";
+            let given = if is_latency {
                 latency.is_some()
-            } else if name == "share" {
+            } else if is_share {
                 share.is_some()
+            } else if is_ttl {
+                ttl.is_some()
             } else {
                 return self.err_at(
                     n_at,
-                    format!("`kvt.{function}` takes `latency = …` and `share = …`, found `{name}`"),
+                    format!(
+                        "`kvt.{function}` takes `latency = …`, `share = …` and `ttl = …`, \
+                         found `{name}`"
+                    ),
                 );
             };
             if given {
                 return self.err_at(n_at, format!("`kvt.{function}` takes `{name}` once"));
             }
             self.expect(&Tok::Assign)?;
-            if name == "latency" {
+            if is_latency {
                 latency = Some((self.pos, self.expr()?));
-            } else {
+            } else if is_share {
                 share = Some(self.share_policy()?);
+            } else {
+                // how long the source keeps a send nobody reads: a constant,
+                // as vLLM's lease is a setting
+                let t_at = self.pos;
+                let e = self.expr()?;
+                let v = match self.const_or_clash(&e) {
+                    Err(clash) => return self.err_at(t_at, clash),
+                    Ok(v) => v,
+                };
+                match v {
+                    Some(v) if v > 0.0 => ttl = Some(Expr::Num(v)),
+                    _ => {
+                        return self.err_at(
+                            t_at,
+                            "`ttl` is a number above 0, or a constant over `let`s: how long \
+                             the source keeps the blocks of a send its reader does not read \
+                             (`inf`, the default, until the session's end)",
+                        );
+                    }
+                }
             }
         }
         self.expect(&Tok::RParen)?;
@@ -3310,6 +3263,7 @@ impl Parser {
             (reader, b_at),
             latency,
             share,
+            ttl,
         )
     }
 
@@ -6015,11 +5969,11 @@ impl Parser {
                 self.forks_open -= 1;
                 Ok(Stmt::Fork(body?))
             }
-            "join" => {
-                self.advance();
-                self.expect(&Tok::Semi)?;
-                Ok(Stmt::Join)
-            }
+            "join" => self.err(
+                "`join;` is gone: a session waits for a leg by reading what it leaves, the \
+                 send of the engine request it calls, which the reader's load waits for \
+                 (`kvt.nixl_push`, `kvt.nixl_pull`; docs/design/request-state.md)",
+            ),
             "choose" => {
                 let at = self.pos;
                 self.advance();
@@ -6305,6 +6259,7 @@ impl Parser {
         (reader, r_at): (String, usize),
         latency: Option<(usize, Expr)>,
         share: crate::ir::Share,
+        ttl: Option<Expr>,
     ) -> PResult<()> {
         let verb = if push { "push" } else { "pull" };
         let written = format!("`kvt.nixl_{verb} ({source}, {reader})`");
@@ -6469,6 +6424,7 @@ impl Parser {
             latency,
             push,
             share,
+            ttl,
             at,
         });
         Ok(())

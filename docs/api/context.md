@@ -29,7 +29,7 @@ an `observe`, a `stage`, a `pool`, a `device`, an `engine`, a `queue`, a
 | `Iteration` | a claim over iterations | when an iteration starts, where the cost is read |
 | `End` | a claim `at end` | once, when the run ends |
 | `Request` | an engine's `taking`, `reuse` and `prefix`; its connector's `load` | for one request, when the scheduler admits it |
-| `Release` | an engine's `cache` and `lease`; its connector's `save` | for one request, when it gives its pools back |
+| `Release` | an engine's `cache`; its connector's `save` | for one request, when it gives its pools back |
 
 ## Variables
 

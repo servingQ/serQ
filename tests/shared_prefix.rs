@@ -404,41 +404,6 @@ fn drop_takes_the_session_s_entry_alone() {
     assert_eq!(r.observe("mid").unwrap().samples, [1200.0], "{}", r.text());
 }
 
-/// Two legs of one session read one system prompt at once, as two vLLM
-/// requests do (`ref_cnt`): the second leg used to find none while the
-/// first held it, unless another session's context hung off it (the second
-/// review of #374). The session's own context, which the first leg reads,
-/// is its consumed entry (#230); the prompt is not.
-#[test]
-fn two_legs_read_one_prompt() {
-    let src = deployment(
-        100_000,
-        "",
-        &format!(
-            "hold kv (cost(kv, 1600)) {CHAIN} {{
-               run llm (cost(llm, 1));
-             }} cache (cost(kv, 1600));
-             fork {{
-               hold kv (cost(kv, 2000)) {CHAIN} {{
-                 observe a = cached;
-                 run user (cost(user, 5));
-               }} cache (cost(kv, 2000));
-             }}
-             fork {{
-               run user (cost(user, 1));
-               hold kv (cost(kv, 2000)) {CHAIN} {{
-                 observe b = cached;
-                 run llm (cost(llm, 1));
-               }} cache (cost(kv, 2000));
-             }}
-             join;"
-        ),
-    );
-    let r = run(&src, &prompted(1, "7"), &options(100.0));
-    assert_eq!(r.observe("a").unwrap().samples, [1600.0], "{}", r.text());
-    assert_eq!(r.observe("b").unwrap().samples, [1200.0], "{}", r.text());
-}
-
 /// A segment of length 0 holds nothing: `prefix (sys: 0, serial: inf)` is
 /// the session's own chain, and a request reads its context back. The walk
 /// used to stop at the empty segment, so nothing was ever read and the
@@ -784,9 +749,7 @@ fn an_entry_keys_its_prefix_by_the_requests_serial() {
 /// Outside every hold of `kv`, `cachedin(kv)` reads `kv` by the chain the
 /// session last cached along there (#595; it read the own chain, and found
 /// 0 on every line below). A lease caches along its hold's chain when it is
-/// released (32). A leg shares the session's entries: it reads them by the
-/// session's chain, and the session reads what the leg cached by the leg's
-/// (64).
+/// released (32); a later hold's cache along its own (64).
 #[test]
 fn cachedin_outside_a_hold_reads_the_chain_cached_along() {
     let r = run(
@@ -798,12 +761,8 @@ fn cachedin_outside_a_hold_reads_the_chain_cached_along() {
             cache (cost(kv, 32)) lease kv (inf);
           release kv;
           observe released = cachedin(kv);
-          fork {
-            observe leg_reads = cachedin(kv);
-            hold kv (cost(kv, 64)) prefix (1: 16, serial: inf) { run svc (cost(svc, 1)); }
-              cache (cost(kv, 64));
-          }
-          join;
+          hold kv (cost(kv, 64)) prefix (1: 16, serial: inf) { run svc (cost(svc, 1)); }
+            cache (cost(kv, 64));
           observe after_leg = cachedin(kv);
         }
 "#,
@@ -812,7 +771,6 @@ fn cachedin_outside_a_hold_reads_the_chain_cached_along() {
     );
     let samples = |name: &str| r.observe(name).unwrap().samples.clone();
     assert_eq!(samples("released"), [32.0, 32.0], "{}", r.text());
-    assert_eq!(samples("leg_reads"), [32.0, 32.0]);
     assert_eq!(samples("after_leg"), [64.0, 64.0]);
 }
 

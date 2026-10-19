@@ -223,38 +223,3 @@ fn a_lease_taken_while_its_session_runs_leaves_the_run_alone() {
     assert_eq!(r.observe("left").unwrap().samples, vec![0.0]);
     assert_eq!(r.pool("prog").unwrap().preemptions, 1);
 }
-
-/// A lease a leg left to its session can be taken like the session's own.
-#[test]
-fn a_lease_passed_from_a_leg_can_be_taken() {
-    let src = r#"
-        stage svc : fifo(2);
-        pool prog { cap 10; preempt leases by (serial); }
-        server {
-          if (serial == 0) {
-            fork { hold prog (cost(prog, 4)) { } lease prog (inf); }
-            join;
-            run svc (cost(svc, 5));
-            observe left = allocated(prog);
-          } else {
-            hold prog (cost(prog, 4)) { } lease prog (inf);
-            run svc (cost(svc, 1));
-            grow prog (cost(prog, 4));
-            observe grown = allocated(prog);
-          }
-        }
-"#;
-    let r = common::run(
-        &common::main_source(src),
-        "workload { arrive batch(2); session { turn; } }\n",
-        &common::horizon(100.0),
-    )
-    .unwrap();
-    assert_eq!(
-        r.observe("grown").unwrap().samples,
-        vec![8.0],
-        "{}",
-        r.text()
-    );
-    assert_eq!(r.observe("left").unwrap().samples, vec![0.0]);
-}

@@ -266,7 +266,6 @@ fn the_cli_writes_the_log_to_a_file() {
         .iter()
         .map(|e| e["ev"].as_str().unwrap())
         .collect();
-    assert_eq!(evs, ["arrive", "turn", "run", "state", "done", "end"]);
+    assert_eq!(evs, ["arrive", "turn", "run", "done", "end"]);
     assert_eq!(log["events"][2]["stages"], serde_json::json!([0]));
-    assert_eq!(log["events"][3]["state"], "running");
 }

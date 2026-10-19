@@ -11,10 +11,17 @@ use serq::Overrides;
 /// Every program here serves one request of one turn.
 const WORKLOAD: &str = "workload { arrive batch(1); session { turn; end; } }";
 
+/// Two requests at once, A (serial 0) and B (serial 1).
+const TWO: &str = "workload { arrive batch(2); session { turn; end; } }";
+
 fn run(src: &str) -> serq::Report {
+    run_with(src, WORKLOAD)
+}
+
+fn run_with(src: &str, workload: &str) -> serq::Report {
     common::run(
         &common::main_source(src),
-        WORKLOAD,
+        workload,
         &Overrides {
             warmup: Some(0.0),
             seed: Some(1),
@@ -55,13 +62,11 @@ fn a_waiting_job_takes_no_share_until_its_wait_is_over() {
         let src = format!(
             "{stages}
             server {{
-              fork {{ {run_b} observe b_done = now; }}
-              {run_a}
-              observe a_done = now;
-              join;
+              if (serial == 1) {{ {run_b} observe b_done = now; }}
+              else {{ {run_a} observe a_done = now; }}
             }}"
         );
-        let r = run(&src);
+        let r = run_with(&src, TWO);
         assert_eq!(samples(&r, "b_done"), [1.5], "{}", r.text());
         assert_eq!(samples(&r, "a_done"), [2.0], "{}", r.text());
         let s = r.stages.iter().find(|s| s.completed > 0).unwrap();
@@ -80,13 +85,14 @@ fn a_waiting_job_takes_no_share_until_its_wait_is_over() {
 /// and 1.
 #[test]
 fn a_fifo_job_queues_after_its_wait() {
-    let r = run("stage f : fifo;
+    let r = run_with(
+        "stage f : fifo;
         server {
-          fork { run f (cost(f, 1)); observe b_done = now; }
-          run f (cost(f, 1), latency = 0.5);
-          observe a_done = now;
-          join;
-        }");
+          if (serial == 1) { run f (cost(f, 1)); observe b_done = now; }
+          else { run f (cost(f, 1), latency = 0.5); observe a_done = now; }
+        }",
+        TWO,
+    );
     assert_eq!(samples(&r, "b_done"), [1.0], "{}", r.text());
     assert_eq!(samples(&r, "a_done"), [2.0], "{}", r.text());
     let s = r.stage("f").unwrap();

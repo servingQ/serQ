@@ -600,8 +600,8 @@ impl Program {
             }
             if let Some(c) = &sp.connector {
                 let what = |x: &str| u(format!("engine `{n}`'s connector's `{x}`"), None);
-                check(c.load.as_ref().map(|l| &l.0), what("load"), request)?;
-                check(c.save.as_ref().map(|s| &s.0), what("save"), request)?;
+                check(c.load.as_ref().map(|l| &l.amount), what("load"), request)?;
+                check(c.save.as_ref().map(|s| &s.amount), what("save"), request)?;
             }
         }
         let on_engine = |r: &CRef| {

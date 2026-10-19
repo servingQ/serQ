@@ -1,5 +1,9 @@
 # The push mode
 
+> The `join` this document adds went with
+> [one status per request](request-state.md): the decoder's load waits for
+> the prefill leg's send instead, and a leg calls a KV relation's source.
+
 NIXL's push mode, as vLLM's push proxy runs it, sends the prefill request
 and the decode request of one request at once: the decoder allocates its
 blocks while the prefill runs, and the prefiller writes the KV into them as

@@ -12,7 +12,7 @@
 use std::fmt::Write as _;
 
 use crate::engine::report::{json_index, json_num, json_string};
-use crate::engine::state::State;
+use crate::engine::state::{Moved, Status, Transfer};
 use crate::frontend::ast::RunMode;
 
 /// Version of `Log::json`'s shape, by the rules of `Report::json`'s
@@ -60,23 +60,26 @@ pub enum EventKind {
     Done { who: Who, stage: usize },
     /// It is preempted from `pool`: back to the queue.
     Preempt { who: Who, pool: usize },
-    /// Its lease of `pool` is revoked (`preempt leases by`): it ends, a
-    /// `Free`, unless the pool's `suspend` sets it aside.
+    /// Its lease of `pool` is revoked (`preempt leases by`).
     Revoke { who: Who, pool: usize },
-    /// It enters `state` (`engine::state`), or its mode changes there: an
-    /// engine's resident's mode, prefill or decode, `Plain` otherwise.
-    State {
+    /// Its `call`-th engine request, to engine `stage`, enters `status`
+    /// (`engine::state`), or its mode there changes (prefill, decode).
+    Status {
         who: Who,
-        state: State,
+        call: u32,
+        stage: usize,
+        status: Status,
         mode: RunMode,
     },
-    /// A hold's allocation of `pool` outlives its scope (`lease`): lease
-    /// `id`, which its `Free` names again.
-    Lease { who: Who, pool: usize, id: u64 },
-    /// Lease `id` of `pool` ends and its units go back: a `release`, its
-    /// expiry, its holder's end, a revocation. `who` holds it then: a
-    /// leg's lease is its session's once the leg has ended.
-    Free { who: Who, pool: usize, id: u64 },
+    /// A transfer of that request is registered, starts its copy, or is
+    /// done. A send's is about the source's request, whoever holds it.
+    Transfer {
+        who: Who,
+        call: u32,
+        stage: usize,
+        kind: Transfer,
+        moved: Moved,
+    },
     /// An iteration of engine `stage` starts, over the requests of `reqs`,
     /// scheduling `tokens`, lasting `dur`.
     Iter {
@@ -208,25 +211,37 @@ impl Log {
                     who(&mut s, w);
                     let _ = write!(s, ",\"pool\":{pool}");
                 }
-                EventKind::State {
+                EventKind::Status {
                     who: w,
-                    state,
+                    call,
+                    stage,
+                    status,
                     mode,
                 } => {
-                    s.push_str(",\"ev\":\"state\"");
+                    s.push_str(",\"ev\":\"status\"");
                     who(&mut s, w);
-                    let _ = write!(s, ",\"state\":\"{}\"", state.name());
+                    let _ = write!(
+                        s,
+                        ",\"r\":{call},\"stage\":{stage},\"status\":\"{}\"",
+                        status.name()
+                    );
                     write_mode(&mut s, *mode);
                 }
-                EventKind::Lease { who: w, pool, id } => {
-                    s.push_str(",\"ev\":\"lease\"");
+                EventKind::Transfer {
+                    who: w,
+                    call,
+                    stage,
+                    kind,
+                    moved,
+                } => {
+                    s.push_str(",\"ev\":\"transfer\"");
                     who(&mut s, w);
-                    let _ = write!(s, ",\"pool\":{pool},\"id\":{id}");
-                }
-                EventKind::Free { who: w, pool, id } => {
-                    s.push_str(",\"ev\":\"free\"");
-                    who(&mut s, w);
-                    let _ = write!(s, ",\"pool\":{pool},\"id\":{id}");
+                    let _ = write!(
+                        s,
+                        ",\"r\":{call},\"stage\":{stage},\"kind\":\"{}\",\"at\":\"{}\"",
+                        kind.name(),
+                        moved.name()
+                    );
                 }
                 EventKind::Iter {
                     stage,
@@ -262,7 +277,7 @@ impl Log {
     }
 }
 
-/// An engine's mode, `"mode"` in a `run` or a `state` event; none for
+/// An engine's mode, `"mode"` in a `run` or a `status` event; none for
 /// `Plain`.
 fn write_mode(s: &mut String, mode: RunMode) {
     match mode {
@@ -300,10 +315,10 @@ mod tests {
     }
 
     #[test]
-    fn a_state_and_a_lease_are_written_out() {
+    fn a_status_and_a_transfer_are_written_out() {
         let mut l = Log {
             stages: vec![("E".into(), None)],
-            pools: vec![("kv".into(), None)],
+            pools: vec![],
             events: vec![],
             cap: 10,
             truncated: false,
@@ -314,42 +329,37 @@ mod tests {
         };
         l.push(
             0.5,
-            EventKind::State {
+            EventKind::Status {
                 who: w,
-                state: State::Running,
+                call: 3,
+                stage: 0,
+                status: Status::Running,
                 mode: RunMode::Decode,
             },
         );
         l.push(
-            0.5,
-            EventKind::State {
+            1.0,
+            EventKind::Status {
                 who: w,
-                state: State::Loading,
+                call: 3,
+                stage: 0,
+                status: Status::Finished,
                 mode: RunMode::Plain,
             },
         );
         l.push(
             1.0,
-            EventKind::Lease {
+            EventKind::Transfer {
                 who: w,
-                pool: 0,
-                id: 4,
-            },
-        );
-        l.push(
-            2.0,
-            EventKind::Free {
-                who: Who {
-                    serial: 2,
-                    leg: None,
-                },
-                pool: 0,
-                id: 4,
+                call: 3,
+                stage: 0,
+                kind: Transfer::Send,
+                moved: Moved::Registered,
             },
         );
         assert_eq!(
             l.json(),
-            r#"{"version":0,"stages":[{"name":"E","index":null}],"pools":[{"name":"kv","index":null}],"truncated":false,"events":[{"t":0.5,"ev":"state","s":2,"leg":1,"state":"running","mode":"decode"},{"t":0.5,"ev":"state","s":2,"leg":1,"state":"loading"},{"t":1,"ev":"lease","s":2,"leg":1,"pool":0,"id":4},{"t":2,"ev":"free","s":2,"pool":0,"id":4}]}"#
+            r#"{"version":0,"stages":[{"name":"E","index":null}],"pools":[],"truncated":false,"events":[{"t":0.5,"ev":"status","s":2,"leg":1,"r":3,"stage":0,"status":"running","mode":"decode"},{"t":1,"ev":"status","s":2,"leg":1,"r":3,"stage":0,"status":"finished"},{"t":1,"ev":"transfer","s":2,"leg":1,"r":3,"stage":0,"kind":"send","at":"registered"}]}"#
         );
     }
 

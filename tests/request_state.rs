@@ -1,11 +1,12 @@
-//! A request's state (`serq::engine::state`, `docs/design/request-state.md`):
-//! where a session or a leg stands while time passes, at about the
-//! resolution of vLLM's `RequestStatus`, in the run log and the report.
+//! An engine request's status and its transfers (`serq::engine::state`,
+//! `docs/design/request-state.md`): one status per request at any time,
+//! vLLM's `RequestStatus`, and the KV moves of it beside the status, in the
+//! run log and the report.
 
 mod common;
 
 use serq::engine::log::{EventKind, Log, Who};
-use serq::engine::state::State;
+use serq::engine::state::{Moved, Status, Transfer};
 use serq::frontend::ast::RunMode;
 use serq::{run_ir, run_ir_logged};
 use std::path::{Path, PathBuf};
@@ -28,35 +29,54 @@ const SESSION: Who = Who {
     leg: None,
 };
 
-/// The states `who` entered, in order, an engine resident's with its mode.
-fn states(log: &Log, who: Who) -> Vec<String> {
+/// The statuses request `call` of `who` entered, in order, with its mode.
+fn statuses(log: &Log, who: Who, call: u32) -> Vec<String> {
     log.events
         .iter()
         .filter_map(|e| match &e.kind {
-            EventKind::State {
+            EventKind::Status {
                 who: w,
-                state,
+                call: c,
+                status,
                 mode,
-            } if *w == who => Some(match mode {
-                RunMode::Plain => state.name().to_string(),
-                RunMode::Prefill => format!("{} prefill", state.name()),
-                RunMode::Decode => format!("{} decode", state.name()),
+                ..
+            } if *w == who && *c == call => Some(match mode {
+                RunMode::Plain => status.name().to_string(),
+                RunMode::Prefill => format!("{} prefill", status.name()),
+                RunMode::Decode => format!("{} decode", status.name()),
             }),
             _ => None,
         })
         .collect()
 }
 
-fn state(r: &serq::Report, s: State) -> &serq::engine::report::StateReport {
-    r.states.iter().find(|x| x.name == s.name()).unwrap()
+/// The transfer events of request `call` of `who`: (kind, moved, t).
+fn transfers(log: &Log, who: Who, call: u32) -> Vec<(Transfer, Moved, f64)> {
+    log.events
+        .iter()
+        .filter_map(|e| match &e.kind {
+            EventKind::Transfer {
+                who: w,
+                call: c,
+                kind,
+                moved,
+                ..
+            } if *w == who && *c == call => Some((*kind, *moved, e.t)),
+            _ => None,
+        })
+        .collect()
+}
+
+fn status(r: &serq::Report, s: Status) -> &serq::engine::report::StatusReport {
+    r.statuses.iter().find(|x| x.name == s.name()).unwrap()
 }
 
 /// `preempt.json`, the vLLM oracle's scenario: two requests prefill at
 /// t = 0; at t = 1 the second's growth does not fit and it is preempted
 /// (`_preempt_request`, scheduler.py:1560 sets `PREEMPTED`), waits until the
-/// first finishes at t = 30, and runs again: preempted for 29 s, its prefill
-/// and decode one stay of running each time. vLLM keeps `PREEMPTED` until
-/// it is scheduled (scheduler.py:1306, 1319).
+/// first finishes at t = 30, and runs again (scheduler.py:1306, 1319):
+/// preempted for 29 s. Its prefill and decode are one stay of running each
+/// time.
 #[test]
 fn a_preempted_request_is_preempted_until_it_runs_again() {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tools/oracle");
@@ -70,202 +90,204 @@ fn a_preempted_request_is_preempted_until_it_runs_again() {
         leg: None,
     };
     assert_eq!(
-        states(log, second),
+        statuses(log, second, 1),
         [
             "waiting",
             "running prefill",
             "preempted",
             "running prefill",
-            "running decode"
+            "running decode",
+            "finished"
         ]
     );
     assert_eq!(
-        states(log, SESSION),
-        ["waiting", "running prefill", "running decode"]
+        statuses(log, SESSION, 1),
+        ["waiting", "running prefill", "running decode", "finished"]
     );
-    let pre = state(&r, State::Preempted);
+    let pre = status(&r, Status::Preempted);
     assert_eq!((pre.stays, pre.mean), (1, 29.0), "{}", r.text());
-    // the first's prefill and decode are one stay; the second's two
-    assert_eq!(state(&r, State::Running).stays, 3);
-    assert!(r.text().contains("\nstate "), "{}", r.text());
+    assert_eq!(status(&r, Status::Running).stays, 3);
+    // a request that frees its blocks at its end is not counted finished
+    assert_eq!(status(&r, Status::Finished).stays, 0);
+    assert!(r.text().contains("\nstatus "), "{}", r.text());
 }
 
-/// `llmd_nixl_pull.sq`'s first session: the prefiller's hold waits and
-/// prefills; the decoder's request is admitted to its blocks, and its
-/// connector's load, the read over both NICs, is `loading` (vLLM's
-/// `WAITING_FOR_REMOTE_KVS`, scheduler.py:1267); with its KV it waits again
-/// for a running slot (`WAITING` again, scheduler.py:3088-3091), and runs.
-/// The prefiller's blocks are leased from its prefill's end until the read
-/// is done: vLLM's finished request whose free is delayed
-/// (scheduler.py:2653-2655), a `lease` and a `free`, not a state.
+/// `llmd_nixl_pull.sq`'s first session, a remote prefill: the prefiller's
+/// request (call 1) runs and finishes with a send registered, its blocks
+/// kept (vLLM's `delay_free_blocks`, scheduler.py:2653-2655); the decoder's
+/// (call 2) is admitted to its blocks and waits for its KV while its load
+/// reads the send (`WAITING_FOR_REMOTE_KVS`, scheduler.py:1267), waits for a
+/// slot (`WAITING` again, scheduler.py:3088-3091), and runs. The send is
+/// done when the load is (`finished_sending`, scheduler.py:3135-3138): the
+/// prefiller's request is finished from its end to then.
 #[test]
-fn a_connector_load_is_loading_and_the_prefillers_blocks_are_leased() {
+fn a_read_is_waiting_for_kv_and_the_prefiller_s_send_keeps_it_finished() {
     let r = logged("llmd_nixl_pull", 30.0);
     let log = r.log.as_ref().unwrap();
     assert_eq!(
-        &states(log, SESSION)[..7],
+        statuses(log, SESSION, 1),
+        ["waiting", "running prefill", "finished"]
+    );
+    assert_eq!(
+        statuses(log, SESSION, 2),
         [
             "waiting",
-            "running prefill",
-            "waiting",
-            "loading",
+            "waiting_for_kv",
             "waiting",
             "running prefill",
-            "running decode"
+            "running decode",
+            "finished"
         ]
     );
-    let at = |f: &dyn Fn(&EventKind) -> bool| log.events.iter().position(|e| f(&e.kind)).unwrap();
-    let lease = at(&|k| matches!(k, EventKind::Lease { who, .. } if *who == SESSION));
-    let EventKind::Lease { id, pool, .. } = log.events[lease].kind else {
-        unreachable!()
-    };
-    assert_eq!(log.pools[pool].0, "P.kv");
-    let loading = at(
-        &|k| matches!(k, EventKind::State { who, state: State::Loading, .. } if *who == SESSION),
+    let send = transfers(log, SESSION, 1);
+    let load = transfers(log, SESSION, 2);
+    let kinds = |v: &[(Transfer, Moved, f64)]| v.iter().map(|x| (x.0, x.1)).collect::<Vec<_>>();
+    assert_eq!(
+        kinds(&send),
+        [
+            (Transfer::Send, Moved::Registered),
+            (Transfer::Send, Moved::Start),
+            (Transfer::Send, Moved::Done)
+        ]
     );
-    let free = at(&|k| matches!(k, EventKind::Free { id: i, .. } if *i == id));
-    assert!(lease < loading && loading < free);
-    // freed when the read is done, at the end of its loading
-    let done = log.events[loading..]
-        .iter()
-        .find(|e| matches!(e.kind, EventKind::Done { who, .. } if who == SESSION))
-        .unwrap();
-    assert_eq!(log.events[free].t, done.t);
+    assert_eq!(
+        kinds(&load),
+        [
+            (Transfer::Load, Moved::Registered),
+            (Transfer::Load, Moved::Start),
+            (Transfer::Load, Moved::Done)
+        ]
+    );
+    // one copy: the send starts and ends with the load
+    assert_eq!((send[1].2, send[2].2), (load[1].2, load[2].2));
+    assert!(send[0].2 <= load[0].2);
+    // the prefiller's request is finished while its send holds its blocks:
+    // the program's own `lease` observation (taken after the decoder's call
+    // returns) is that time, sample for sample
+    let mut held: Vec<f64> = vec![];
+    let mut since = std::collections::HashMap::new();
+    for e in &log.events {
+        if let EventKind::Transfer {
+            who,
+            call,
+            kind: Transfer::Send,
+            moved,
+            ..
+        } = &e.kind
+        {
+            match moved {
+                Moved::Registered => {
+                    since.insert((who.serial, who.leg, *call), e.t);
+                }
+                Moved::Done => held.push(e.t - since[&(who.serial, who.leg, *call)]),
+                Moved::Start => {}
+            }
+        }
+    }
+    let lease = r.observe("lease").unwrap();
+    assert!(lease.count > 0);
+    assert_eq!(status(&r, Status::Finished).stays as usize, held.len());
+    for x in &lease.samples {
+        assert!(held.iter().any(|h| (h - x).abs() < 1e-12), "{x} {held:?}");
+    }
 }
 
-/// `vllm_nixl_push.sq`: the prefill is a leg (`fork`), which waits and
-/// prefills; its blocks are leased when its prefill ends, and it ends
-/// (`finished`) with the lease passed to its session, which frees it when
-/// the push is done. The decoder's request waits for the push inside its
-/// connector's load, a `join` of the leg: `loading`, not `joining`.
+/// `vllm_nixl_push.sq`: the prefill is a leg's request, the decoder's is the
+/// session's, at once. The decoder's request waits for KV until the leg's
+/// prefill has finished and the push is done; nothing joins. Each request
+/// has one status at a time.
 #[test]
-fn a_leg_finishes_with_its_blocks_leased() {
+fn a_push_s_reader_waits_for_kv_until_the_leg_s_send() {
     let r = logged("vllm_nixl_push", 5.0);
     let log = r.log.as_ref().unwrap();
     let leg = Who {
         serial: 0,
         leg: Some(0),
     };
-    assert_eq!(states(log, leg), ["waiting", "running prefill"]);
-    let s = states(log, SESSION);
-    assert_eq!(&s[..3], ["running", "waiting", "loading"], "{s:?}");
-    assert!(!s.contains(&"joining".to_string()), "{s:?}");
-    let pos = |f: &dyn Fn(&EventKind) -> bool| log.events.iter().position(|e| f(&e.kind)).unwrap();
-    let lease = pos(&|k| matches!(k, EventKind::Lease { who, .. } if *who == leg));
-    let EventKind::Lease { id, .. } = log.events[lease].kind else {
-        unreachable!()
-    };
-    let end = pos(&|k| matches!(k, EventKind::End { who } if *who == leg));
-    let free = pos(&|k| matches!(k, EventKind::Free { id: i, .. } if *i == id));
-    assert!(lease < end && end < free);
-    // the session holds it when it is freed
-    assert!(matches!(log.events[free].kind, EventKind::Free { who, .. } if who == SESSION));
-    assert!(log.events[free].t > log.events[end].t);
-}
-
-/// `pd_two_fabrics.sq`: the KV read over a prefiller's port and a
-/// decoder's at once, outside any connector, is `transferring`.
-#[test]
-fn a_transfer_over_two_stages_is_transferring() {
-    let r = logged("pd_two_fabrics", 5.0);
-    let log = r.log.as_ref().unwrap();
     assert_eq!(
-        states(log, SESSION),
-        ["waiting", "running", "waiting", "transferring", "running"]
+        statuses(log, leg, 1),
+        ["waiting", "running prefill", "finished"]
     );
-    assert!(state(&r, State::Transferring).stays > 0);
+    let d = statuses(log, SESSION, 1);
+    assert_eq!(&d[..3], ["waiting", "waiting_for_kv", "waiting"], "{d:?}");
+    let registered = transfers(log, leg, 1)[0];
+    assert_eq!(
+        (registered.0, registered.1),
+        (Transfer::Send, Moved::Registered)
+    );
+    let load = transfers(log, SESSION, 1);
+    // the decoder waited for KV from before the send existed
+    assert!(load[0].2 < registered.2, "{load:?} {registered:?}");
+    assert_eq!(
+        load[1].2, registered.2,
+        "the copy starts when the send is there"
+    );
 }
 
-/// `vllm_lmcache.sq`: the connector's save, before the request's blocks go
-/// back, is `saving`; a turn whose prompt the L2 holds loads it first.
+/// `vllm_lmcache.sq`: the connector's save runs after the request has
+/// generated its output, its blocks kept until the copy is done: finished,
+/// with a save. A turn whose prompt the L2 holds waits for KV while it
+/// loads.
 #[test]
-fn a_connector_save_is_saving() {
+fn a_save_keeps_its_request_finished() {
     let r = logged("vllm_lmcache", 60.0);
     let log = r.log.as_ref().unwrap();
     assert_eq!(
-        states(log, SESSION)[..4],
-        ["waiting", "running prefill", "running decode", "saving"]
+        statuses(log, SESSION, 1),
+        ["waiting", "running prefill", "running decode", "finished"]
     );
-    assert!(state(&r, State::Saving).stays > 0);
-    assert!(state(&r, State::Loading).stays > 0);
+    let t = transfers(log, SESSION, 1);
+    assert_eq!(
+        t.iter().map(|x| (x.0, x.1)).collect::<Vec<_>>(),
+        [
+            (Transfer::Save, Moved::Registered),
+            (Transfer::Save, Moved::Start),
+            (Transfer::Save, Moved::Done)
+        ]
+    );
+    assert!(status(&r, Status::Finished).stays > 0);
+    assert!(status(&r, Status::WaitingForKv).stays > 0);
 }
 
-/// The closed M/M/1//N of `closed.sq`: a session waits in the FIFO stage's
-/// queue (`waiting`), is served (`running`) and thinks at its user station,
-/// a run the workload issues (`client`). The states hold every session:
-/// the ones waiting and served are the stage's, the one served its
-/// utilization.
+/// A program that calls no engine has no request: no status in the log,
+/// and no table in the report (its stages and pools say where its sessions
+/// are).
 #[test]
-fn a_fifo_queue_is_waiting_and_a_think_time_is_the_client() {
-    let r = common::run_example("examples/multi-turn/closed.sq", &common::horizon(2000.0)).unwrap();
-    let (w, run, c) = (
-        state(&r, State::Waiting).number,
-        state(&r, State::Running).number,
-        state(&r, State::Client).number,
-    );
-    let svc = r.stage("svc").unwrap();
-    let close = |a: f64, b: f64| (a - b).abs() < 1e-9 * b.abs().max(1.0);
-    assert!(close(run, svc.utilization), "{run} {}", svc.utilization);
-    assert!(
-        close(w + run, svc.mean_number),
-        "{w} {run} {}",
-        svc.mean_number
-    );
-    assert!(close(w + run + c, r.mean_live), "{}", r.text());
-    assert!(close(r.mean_live, 8.0));
-}
-
-/// A `grow` that does not fit under `preempt none` waits for room
-/// (`growing`), here 1 s; a session at a `join` waits for its leg
-/// (`joining`), here 5 - 3 = 2 s.
-#[test]
-fn a_growth_that_waits_is_growing_and_a_join_is_joining() {
-    let grow = r#"
-        pool kv { cap 100; preempt none; }
-        stage svc : fifo(2);
-        stage gate : delay;
-        server {
-          run gate (cost(gate, serial));
-          hold kv (cost(kv, 50)) {
-            run svc (cost(svc, 5));
-            if (serial == 0) { grow kv (cost(kv, 30)); }
-          }
-        }
-"#;
-    let two = "workload { arrive batch(2); session { turn; end; } }";
-    let r = common::run(&common::main_source(grow), two, &common::horizon(100.0)).unwrap();
-    let g = state(&r, State::Growing);
-    assert_eq!((g.stays, g.mean), (1, 1.0), "{}", r.text());
-
-    let join = r#"
-        stage svc : delay;
-        server {
-          fork { run svc (cost(svc, 5)); }
-          run svc (cost(svc, 3));
-          join;
-        }
-"#;
-    let one = "workload { arrive batch(1); session { turn; end; } }";
-    let p = common::compile(&common::main_source(join), one, &common::horizon(100.0)).unwrap();
-    let r = run_ir_logged(&p, None, usize::MAX).unwrap();
-    let j = state(&r, State::Joining);
-    assert_eq!((j.stays, j.mean), (1, 2.0), "{}", r.text());
+fn a_program_without_an_engine_has_no_request() {
+    let r = logged("pd_two_fabrics", 5.0);
     let log = r.log.as_ref().unwrap();
-    assert_eq!(states(log, SESSION), ["running", "joining"]);
-    let leg = Who {
-        serial: 0,
-        leg: Some(0),
-    };
-    assert_eq!(states(log, leg), ["running"]);
+    assert!(!log.events.iter().any(|e| matches!(
+        e.kind,
+        EventKind::Status { .. } | EventKind::Transfer { .. }
+    )));
+    assert!(r.statuses.iter().all(|x| x.stays == 0 && x.number == 0.0));
+    assert!(!r.text().contains("\nstatus "), "{}", r.text());
 }
 
-/// In every example program a session or a leg that is live is in one
-/// state, save for no time while it is ready: the time-average numbers in
-/// the states add up to the live sessions, and to more when legs run
-/// beside them. The log's state events are the report's stays, and two in
-/// a row about one session or leg differ.
+/// A resident stalled for room to grow (`preempt none`) is running all the
+/// same: in vLLM's batch, not advancing. The engine's residents are the
+/// running requests.
 #[test]
-fn the_states_add_up_to_the_live_sessions() {
+fn the_running_requests_are_the_engine_s_residents() {
+    for name in ["tgi", "vllm"] {
+        let (p, base) = load(&serq::program_path(name), common::horizon(200.0));
+        let r = run_ir(&p, Some(&base)).unwrap();
+        let engine = r.stages.iter().find(|s| s.iterations > 0).unwrap();
+        let running = status(&r, Status::Running).number;
+        assert!(
+            (running - engine.mean_number).abs() <= 1e-9 * running.max(1.0),
+            "{name}: {running} {}",
+            engine.mean_number
+        );
+    }
+}
+
+/// In every example a request has one status at a time: two status events
+/// in a row about one request differ, a request's events end at
+/// `finished`, and every transfer registered is done or still in flight at
+/// the end, in order. The report is the same with or without the log.
+#[test]
+fn every_request_has_one_status_at_a_time() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples");
     let mut n = 0;
     for group in std::fs::read_dir(&root).unwrap().flatten() {
@@ -280,36 +302,48 @@ fn the_states_add_up_to_the_live_sessions() {
             let (p, base) = load(&path, common::horizon(20.0));
             let r = run_ir_logged(&p, Some(&base), usize::MAX).unwrap();
             let log = r.log.as_ref().unwrap();
-            let total: f64 = r.states.iter().map(|x| x.number).sum();
-            let forks = log
-                .events
-                .iter()
-                .any(|e| matches!(e.kind, EventKind::Fork { .. }));
-            let eps = 1e-9 * r.mean_live.max(1.0);
-            if forks {
-                assert!(total >= r.mean_live - eps, "{}", path.display());
-            } else {
-                assert!(
-                    (total - r.mean_live).abs() <= eps,
-                    "{}: {total} != {}",
-                    path.display(),
-                    r.mean_live
-                );
-            }
-            let mut last: std::collections::HashMap<(u64, Option<u32>), (State, RunMode)> =
-                Default::default();
+            type Key = (u64, Option<u32>, u32);
+            let mut last: std::collections::HashMap<Key, (Status, RunMode)> = Default::default();
+            let mut moved: std::collections::HashMap<(Key, &str), Moved> = Default::default();
             for e in &log.events {
-                if let EventKind::State { who, state, mode } = e.kind {
-                    let prev = last.insert((who.serial, who.leg), (state, mode));
-                    assert_ne!(prev, Some((state, mode)), "{}", path.display());
-                }
-                if let EventKind::End { who } = e.kind {
-                    last.remove(&(who.serial, who.leg));
+                match &e.kind {
+                    EventKind::Status {
+                        who,
+                        call,
+                        status,
+                        mode,
+                        ..
+                    } => {
+                        let k = (who.serial, who.leg, *call);
+                        let prev = last.insert(k, (*status, *mode));
+                        assert_ne!(prev, Some((*status, *mode)), "{}", path.display());
+                        assert!(
+                            !matches!(prev, Some((Status::Finished, _))),
+                            "{}: a request after its finish",
+                            path.display()
+                        );
+                    }
+                    EventKind::Transfer {
+                        who,
+                        call,
+                        kind,
+                        moved: m,
+                        ..
+                    } => {
+                        let k = ((who.serial, who.leg, *call), kind.name());
+                        let prev = moved.insert(k, *m);
+                        let ok = match m {
+                            Moved::Registered => prev.is_none(),
+                            Moved::Start => prev == Some(Moved::Registered),
+                            Moved::Done => prev.is_some_and(|p| p != Moved::Done),
+                        };
+                        assert!(ok, "{}: {k:?} {prev:?} then {m:?}", path.display());
+                    }
+                    _ => {}
                 }
             }
-            // the report is the same without the log
             let plain = run_ir(&p, Some(&base)).unwrap();
-            for (a, b) in plain.states.iter().zip(&r.states) {
+            for (a, b) in plain.statuses.iter().zip(&r.statuses) {
                 assert_eq!(a.stays, b.stays, "{}", path.display());
             }
             n += 1;

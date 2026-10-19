@@ -111,7 +111,7 @@ def attrs(x):
 
 
 SAMPLES = {"samples", "times", "sessions", "turns"}
-LOOKUPS = {"json", "observes", "client", "states", "gauges", "claims", "stages", "pools", "observe", "gauge", "claim", "stage", "stages_named", "pool", "pools_named"}
+LOOKUPS = {"json", "observes", "client", "status", "gauges", "claims", "stages", "pools", "observe", "gauge", "claim", "stage", "stages_named", "pool", "pools_named"}
 
 
 def test_the_report_is_its_json_by_name():
@@ -125,7 +125,7 @@ def test_the_report_is_its_json_by_name():
     assert fails.claim("none").result == "fails" and fails.claim("none").first == fails.end
     for r in [pyserq.run(pyserq.compile(MG1, workload=PAIRS[MG1], seed=4, horizon=20000.0, warmup=1000.0)), arrays, replay, kong, live, fails]:
         js = json.loads(r.json())
-        scalars = {k: v for k, v in js.items() if k not in ("observes", "client", "states", "gauges", "claims", "stages", "pools")}
+        scalars = {k: v for k, v in js.items() if k not in ("observes", "client", "status", "gauges", "claims", "stages", "pools")}
         # every field, both ways: nothing JSON has is missing, nothing it lacks is added
         assert attrs(r) == set(scalars) | LOOKUPS
         assert all(same(getattr(r, k), v) for k, v in scalars.items())
@@ -156,10 +156,10 @@ def test_the_report_is_its_json_by_name():
                 members = [m.index for m in named(x.name)]
                 assert members in ([None], list(range(len(members))))
         assert list(r.gauges) == list(js["gauges"])
-        # every request state, by name, as the JSON has it
-        assert list(r.states) == list(js["states"])
-        for name, x in js["states"].items():
-            st = r.states[name]
+        # every engine request status, by name, as the JSON has it
+        assert list(r.status) == list(js["status"])
+        for name, x in js["status"].items():
+            st = r.status[name]
             assert attrs(st) == set(x) | {"name"} and all(same(getattr(st, k), v) for k, v in x.items())
         # the JSON leaves `claims` out when the program has none
         assert list(r.claims) == [c["name"] for c in js.get("claims", [])]

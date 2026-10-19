@@ -149,27 +149,26 @@ pub struct PoolReport {
     pub growing_stalled: bool,
 }
 
-/// A request state (`engine::state`) over the run: the stays in it and
-/// the sessions and legs in it.
+/// An engine request's status (`engine::state::Status`) over the run: the
+/// stays in it and the requests in it.
 #[derive(Clone, Debug)]
 #[cfg_attr(
     feature = "python",
-    pyo3::pyclass(get_all, frozen, name = "State", module = "pyserq")
+    pyo3::pyclass(get_all, frozen, name = "Status", module = "pyserq")
 )]
-pub struct StateReport {
-    /// The state's name (`State::name`).
+pub struct StatusReport {
+    /// The status's name (`Status::name`).
     pub name: String,
     /// The stays in it that ended after warm-up: how many, their mean
     /// duration, and their median and 99th percentile within 0.5 % (NaN
-    /// without any). A change of an engine resident's mode, prefill to
-    /// decode, is not a new stay.
+    /// without any). A change of mode, prefill to decode, is not a new
+    /// stay; `finished` counts only the time a request keeps its blocks
+    /// past its end (a save, a send).
     pub stays: u64,
     pub mean: f64,
     pub p50: f64,
     pub p99: f64,
-    /// Time-average sessions and legs in it over `[warmup, end]`: summed
-    /// over the states, the sessions and legs live (a ready one is in none,
-    /// for no time).
+    /// Time-average engine requests in it over `[warmup, end]`.
     pub number: f64,
 }
 
@@ -289,9 +288,9 @@ pub struct Report {
     /// (`docs/design/client-metrics.md`).
     pub client: Vec<ObserveReport>,
     pub gauges: Vec<GaugeReport>,
-    /// Every request state, in `State::ALL`'s order
+    /// Every engine request status, in `Status::ALL`'s order
     /// (`docs/design/request-state.md`).
-    pub states: Vec<StateReport>,
+    pub statuses: Vec<StatusReport>,
     /// The program's claims, in order; empty (and absent from the JSON)
     /// when it has none.
     pub claims: Vec<ClaimReport>,
@@ -414,10 +413,10 @@ impl Report {
                 "\nnote: no turn was answered after warm-up: the client saw none"
             );
         }
-        // the states some session or leg was in
-        let visited = |x: &&StateReport| x.stays > 0 || x.number > 0.0;
-        if self.states.iter().any(|x| visited(&x)) {
-            let rows = self.states.iter().filter(visited).map(|x| {
+        // the statuses some engine request was in: none without an engine
+        let visited = |x: &&StatusReport| x.stays > 0 || x.number > 0.0;
+        if self.statuses.iter().any(|x| visited(&x)) {
+            let rows = self.statuses.iter().filter(visited).map(|x| {
                 vec![
                     x.name.clone(),
                     x.stays.to_string(),
@@ -429,7 +428,7 @@ impl Report {
             });
             table(
                 &mut s,
-                &["state", "stays", "mean", "p50", "p99", "number"],
+                &["status", "stays", "mean", "p50", "p99", "number"],
                 rows,
             );
         }
@@ -631,8 +630,8 @@ impl Report {
             }
             s.push('}');
         }
-        s.push_str(",\"states\":{");
-        for (i, x) in self.states.iter().enumerate() {
+        s.push_str(",\"status\":{");
+        for (i, x) in self.statuses.iter().enumerate() {
             if i > 0 {
                 s.push(',');
             }

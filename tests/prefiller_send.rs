@@ -1,8 +1,8 @@
 //! The P/D prefiller as an engine request
-//! (`docs/design/prefiller-engine-request.md`): its `taking` keeps the
-//! prompt's blocks past the request, `lease kv (inf)`, as vLLM's NIXL
-//! connector keeps them (`delay_free_blocks`) until the decoder's connector
-//! has read them and ends the lease.
+//! (`docs/design/request-state.md`): a KV relation's source registers a send
+//! of each request's blocks at its end, which keeps them as vLLM's NIXL
+//! connector does (`delay_free_blocks`) until the decoder's load has read
+//! them, or the relation's `ttl`.
 
 use std::path::{Path, PathBuf};
 
@@ -16,7 +16,8 @@ fn example(path: &str) -> (String, PathBuf) {
 }
 
 /// The report of a deployment under the workload file `workload`, seed 1,
-/// without the lines of the observations `but`.
+/// without the lines of the observations `but`, nor its requests' statuses
+/// (a hold is no engine request).
 fn report(src: &str, workload: &Path, but: &[&str]) -> String {
     let w = std::fs::read_to_string(workload).unwrap();
     let ov = serq::Overrides {
@@ -27,8 +28,13 @@ fn report(src: &str, workload: &Path, but: &[&str]) -> String {
     };
     let r = serq::run_paired(src, &w, common::NAMES, &ov, workload.parent())
         .unwrap_or_else(|e| panic!("{e}\n{src}"));
-    r.text()
-        .lines()
+    let text = r.text();
+    let mut status = false;
+    text.lines()
+        .filter(|l| {
+            status = (status || l.starts_with("status ")) && !l.is_empty();
+            !status
+        })
         .filter(|l| !but.iter().any(|b| l.starts_with(&format!("{b} "))))
         .collect::<Vec<_>>()
         .join("\n")
@@ -41,8 +47,7 @@ const REQUEST: &str = "      scheduler {
           taking reqs (1),
                  kv (min(request.known, request.hit + budget_left(P))) reserve (request.known)
           reuse (floor(request.known - 1, bs))
-          cache (request.input)
-          lease kv (inf);
+          cache (request.input);
       }";
 
 const ENTRY: &str = "    prefill (prompt) {
@@ -64,7 +69,7 @@ const HOLD_ENTRY: &str = "    prefill (prompt) {
 /// The prefiller's request runs as its hold did: llm-d's example gives the
 /// report line for line, split and with every request split (`thr = 0`),
 /// but for the engine's records of the prefiller's admissions, which the
-/// hold did not keep. The lease is what the decoder reads: a prefiller that
+/// hold did not keep. The send is what the decoder reads: a prefiller that
 /// gave its blocks back at the request's end would let them be evicted.
 #[test]
 fn the_prefiller_s_request_runs_as_its_hold_did() {
@@ -86,54 +91,65 @@ fn the_prefiller_s_request_runs_as_its_hold_did() {
     }
 }
 
-/// A prefiller engine whose `taking` is written `TAKING`, called by the
-/// server; nothing reads its KV.
-fn alone(taking: &str) -> String {
-    format!(
-        "queue P : prefill {{
-           device gpu {{ kv cap 1000; }}
-           engine on gpu {{
-             reqs cap 4;
-             tokens cap inf;
-             scheduler {{ advance running; admit waiting while (running.preempted == 0) taking {taking}; }}
-             worker {{ forward (1); }}
-           }}
-           pool reqs on P {{ }}
-           pool kv on gpu {{ block 16; }}
-           prefill (prompt) {{ P (prompt, 1); }}
-         }}
-         server {{ P.prefill (100); }}"
+/// llm-d's example with the relation's `ttl` written `t`.
+fn with_ttl(t: &str) -> String {
+    let (src, _) = example("examples/pd-disaggregation/llmd_nixl_pull.sq");
+    let rel = "kvt.nixl_pull (P, D, latency = x0, share = share.maxmin);";
+    assert!(src.contains(rel));
+    src.replace(
+        rel,
+        &format!("kvt.nixl_pull (P, D, latency = x0, share = share.maxmin, ttl = {t});"),
     )
 }
 
-fn refused(src: &str, needle: &str) {
-    let e = match common::compile(
-        &common::main_source(src),
-        "workload { arrive batch(1); }",
-        &common::horizon(100.0),
-    ) {
-        Err(e) => e,
-        Ok(_) => panic!("accepted:\n{src}"),
+/// An unread send ends at the relation's `ttl` (vLLM's lease on a finished
+/// request's blocks, `_kv_lease_duration`, nixl/pull_scheduler.py:248-262):
+/// `inf`, the default, is the program as written; a `ttl` shorter than the
+/// reads frees the prefiller's blocks before some are read, and a read of a
+/// send gone reads nothing there.
+#[test]
+fn an_unread_send_ends_at_the_relation_s_ttl() {
+    let (src, workload) = example("examples/pd-disaggregation/llmd_nixl_pull.sq");
+    assert_eq!(
+        report(&with_ttl("inf"), &workload, &[]),
+        report(&src, &workload, &[])
+    );
+    let w = std::fs::read_to_string(&workload).unwrap();
+    let ov = serq::Overrides {
+        horizon: Some(300.0),
+        seed: Some(1),
+        ..Default::default()
     };
-    assert!(e.contains(needle), "{src}\n  {e}");
+    let r = serq::run_paired(
+        &with_ttl("0.005"),
+        &w,
+        common::NAMES,
+        &ov,
+        workload.parent(),
+    )
+    .unwrap();
+    let fin = r.statuses.iter().find(|x| x.name == "finished").unwrap();
+    assert!(fin.stays > 0);
+    // within the quantile's 0.5 %
+    assert!(fin.p99 <= 0.005 * 1.005, "{}", r.text());
 }
 
-/// A lease nothing ends would keep the blocks until the session's end,
-/// read by nobody: the program does not link, and the message names what
-/// ends one (CLAUDE.md, "Should the language have refused the program?").
+/// A `ttl` is a positive constant: a setting of the relation, read once.
 #[test]
-fn a_request_s_lease_nothing_reads_is_refused() {
-    refused(
-        &alone("reqs (1), kv (request.known) lease kv (inf)"),
-        "no `release P.kv` ends it",
-    );
-}
-
-/// The pool a request keeps is one its admission takes.
-#[test]
-fn a_request_leases_a_pool_it_takes() {
-    refused(
-        &alone("reqs (1) lease kv (inf)"),
-        "engine `P`'s `lease kv`: its `taking` does not take `kv`",
-    );
+fn a_ttl_is_a_positive_constant() {
+    let (_, workload) = example("examples/pd-disaggregation/llmd_nixl_pull.sq");
+    let w = std::fs::read_to_string(&workload).unwrap();
+    for t in ["0", "-1", "now"] {
+        let e = match serq::run_paired(
+            &with_ttl(t),
+            &w,
+            common::NAMES,
+            &common::horizon(10.0),
+            workload.parent(),
+        ) {
+            Err(e) => e,
+            Ok(_) => panic!("accepted ttl = {t}"),
+        };
+        assert!(e.contains("`ttl` is a number above 0"), "{e}");
+    }
 }

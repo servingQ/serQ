@@ -120,5 +120,7 @@ illustrative model results, not measurements of a subagent runtime.
 - Children have no parent identity. Scheduling and statistics cannot follow
   an actual task tree.
 
-The language's `fork`/`join` runs parallel legs of one request; it does not
-create the independent child sessions this workload approximates.
+The language's `fork` runs a leg of one turn that calls a KV relation's
+source (the push P/D proxy's prefill), which the session waits for only by
+reading its send; it does not create the independent child sessions this
+workload approximates, nor wait for them.

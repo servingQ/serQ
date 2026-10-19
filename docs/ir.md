@@ -98,27 +98,34 @@ delay stage is `Ps(Ctx(N))`, `ps(present)` (`CStageKind::delay`).
 
 A `CRequest` is a hold's header read for a request: `pools: [(pool,
 units, reserve?)]`, `reuse?`, `prefix?` (read at `Request`), `cache?` and
-`lease?` (read at `Release`). `lease: (pool, t)`, one of `pools`, keeps
-that pool's allocation past the request's end as a hold's `lease` keeps
-it past the scope, `cache` read when the request ends and applied when
-the lease does (the P/D prefiller's blocks, kept for the decoder's read:
-vLLM's `delay_free_blocks`); a program in which no `Release` names the
-pool is refused, since nothing would end the lease. The request waits in its first pool's queue. Its
+`send?` (read at `Release`). `send: {ttl}` marks the engine a KV
+relation's source: each request registers a send of its allocation of the
+engine's `memory` (a pool it takes) when it ends, which keeps it, as a
+hold's `lease` keeps one, until a reader's load ends the send, `ttl`
+seconds pass, or the session ends; `cache` is read when the request ends
+and applied when the send does (the P/D prefiller's blocks, kept for the
+decoder's read: vLLM's `delay_free_blocks`). An engine whose requests are
+sent and that no connector's `source` reads is refused, since nothing
+would read the send. The request waits in its first pool's queue. Its
 `records` are the slots the engine writes: the observations `reused` and
 `prefill` for each admission, and the attributes `admitted`, `first`,
 `last_reused` and `last_prefill` (`E.reused`, `E.prefill`) the caller reads
 after the call. A family engine's members each have their own `CStep`,
 whose `CRequest` names the member's pools. A `CConnector` has `load?` and
-`save?`, each an amount and the kernel block it means: the amount is read
-at `Request` (after `Hit`) or at `Release`, stored in the attribute
-`loaded` or `saved`, and the block run while the request holds its pools —
-an L2's load is a `Run` on the L2's stage and a `Load` into the request's
-hold on the engine's memory; a KV relation's (`from?` present) is `Join`
-in a push, a `Run` over the source's NIC and the reader's with the
-relation's `latency` and its `poster`, the `Load`, and the `Release` of the source's lease, the
-source member being the attribute `from?`, which the request's entry sets
-(-1: no source, nothing loaded); a save is an L2's `Hold` on its pool that
-grows by what its entry lacks, copies it and caches the whole. `record` is
+`save?`, each a `CTransfer` of one shape: `amount`, read at `Request`
+(after `Hit`) or at `Release` and stored in the attribute `loaded` or
+`saved`; the copy, a run on `stage` (and `also`, held at once) of `work`
+after `latency?`, with `share?` and `poster?` as a `Run`'s; `into` and
+`units`, where the KV lands (a `Load`); `room?: {held, grow, cache}`, a
+save's room in an L2's pool, held first, grown by what the L2's entry
+lacks, cached whole; and `source?`, a KV relation's read: the source's
+memory, its member the attribute `from?` (which the request's entry sets;
+-1: no source, nothing loaded), whose registered send the load waits for
+and ends. The engine runs a transfer as its own action while the
+request's status is `waiting_for_kv` (a load) or `finished` (a save);
+`Program::kernel` writes the statements it is (`Run; Load`, or `Hold {
+Grow; Run; Load }`) for the interpreter and the figure, which the IR does
+not hold. One status per request (`docs/design/request-state.md`). `record` is
 the observation of what each admission loaded, `load_done` the attribute
 of when its latest load ended. After a load the interpreter computes the
 request's last token again if every one has KV, and reads the `CRequest`
@@ -172,7 +179,7 @@ between simulation checks and proofs.
 | `Run {stage, mode, work, growing?, also?, share?, latency?, poster?}` | work at a stage; `mode` `Plain`, `Prefill`, `Decode` (step stages); `growing` the pool that grows with the tokens computed, whose innermost hold's position, when the run ends, is its position at the run's start plus `work`; `also` further stages the same job holds at once, a flow, omitted when empty; `share` `MaxMin` or `Bottleneck`, how the flows of its fabric divide the stages' capacity, present exactly when `also` is not empty; `latency` seconds the job waits at its stages before its work starts, present there and taking no capacity (posting a NIXL READ and the step that polls its completion), read at the run's start like `work`, not on a step stage, omitted when none: the stage report counts it as the run's wait, and a run of zero work with one completes when it ends; `poster` which of its stages (`stage` 0, `also[k]` `k + 1`) posts the copy, set by a KV relation (`kvt.nixl_pull`: the reader's NIC; `kvt.nixl_push`: the source's), omitted when no side is named: it says who starts the copy, for the figure, and the run is the same whichever it is |
 | `While(guard, body)` | test `guard` before each pass (exactly 0 or 1); run `body` for 1, continue after the loop for 0; reevaluate after each completed body |
 | `Branch(e, then, else)`, `Loop(body)`, `Choose {var, count, key}` (`key` a list, compared in order), `End` | control; `End` ends the session |
-| `Fork(body)`, `Join` | `Fork` runs `body` beside the session as a leg of the request: from now, with a copy of the attributes, its own holds and stream; the leases it leaves pass to the session when it ends. `Join` waits until every leg the session forked has ended |
+| `Fork(body)` | runs `body` beside the session as a leg of the turn: from now, with a copy of the attributes, its own holds and stream; the leases and sends it leaves pass to the session when it ends. The body calls an engine whose requests are sent on every path; the session waits for the leg by its reader's load of that send |
 | `Request {stage, input, output}` | a request to step stage `stage`, `input` tokens of prompt and `output` to generate, both read at the call: the engine keeps its state (the tokens it has, its KV position on `memory`, what it has generated), admits it by its `CRequest` (none: as it is called), runs its connector's load, computes what of its tokens has no KV, samples a token when they all have it, decodes the rest, runs its connector's save, and gives its pools back; a preempted request keeps its tokens, `known = max(known, computed + 1)`, and waits again; the session goes on when the request has generated `output` |
 
 ### Types and statement authority
@@ -254,10 +261,10 @@ text and directly constructed IR meet the same rules. Validation covers:
   An index read again inside the hold cannot depend on state or time.
   Preemptible holds cannot use such indices or `cached`/`computed` in
   their pool indices.
-- **Parallel legs.** A `Fork` body contains no `Turn`, `End`, `Fork` or
-  `Join` and cannot act on its parent's holds. A fork cannot sit inside a
-  hold whose pool may preempt. A program with either `Fork` or `Join`
-  must contain the other.
+- **Parallel legs.** A `Fork` body contains no `Turn`, `End` or `Fork`
+  and cannot act on its parent's holds. A fork cannot sit inside a hold
+  whose pool may preempt. Its body calls, on every path, an engine whose
+  requests are sent (`CRequest.send`).
 - **Progress and amounts.** Every `Loop` or `While` body path reaches a `Run` with positive
   or nonconstant work, a hold whose body does so, or `End`.
   Constant work and resource amounts cannot be negative or NaN. A
@@ -341,7 +348,7 @@ predicates and iteration-body guards, admission gates and assignments:
 | `Iteration` | a claim over the iterations of a step stage, evaluated when an iteration starts, after its batch is scheduled (where the cost is read); no `Attr`, no `Sample`, of the calls only arithmetic, `Queue`, `Busy`, `Used`, `Free`, `Holders`, `Queued`, an index a `Num` in range | `Ntok`, `Ndec`, `Npre`, `Nres`, `Kvb`, `Kvp`, `Attn`, `Demand`, `Served`, `Arrived`, `Now` |
 | `End` | a claim `at end`, evaluated once when the run ends, when no session is live; no `Attr`, no `Sample`, no `Call` but arithmetic; the only moment that reads `Agg` | `Now` |
 | `Request` | a `CRequest`'s units, `reserve`, `reuse` and `prefix`, and a `CConnector`'s load, read for the request the scheduler admits; no draw | `Input`, `Output`, `Known`, `Hit`, `Loaded`, `Requeued`, `Now` |
-| `Release` | a `CRequest`'s `cache` and `lease` and a `CConnector`'s save, read when the request gives its pools back (`Finished` 0 at a preemption, 1 at its end) | `Input`, `Output`, `Known`, `Finished`, `Now` |
+| `Release` | a `CRequest`'s `cache` and `send`'s `ttl` and a `CConnector`'s save, read when the request gives its pools back (`Finished` 0 at a preemption, 1 at its end) | `Input`, `Output`, `Known`, `Finished`, `Now` |
 
 `Demand` is the tokens the stage's residents could take in the iteration
 if the budget were unlimited: `min(1, remaining)` for a decode, the
@@ -407,7 +414,7 @@ iteration cost uses supported terms in `tokens`, `prefilled`, `decoders`,
 `kv_decode` and `attention`, with natural coefficients and a constant term
 of at least 1 (`cost 1` is the step clock; attention coefficients must be even), delay stages, explicit sessions with preset attributes and turns, and the
 statements `Turn`, `Hold`, `Run`, `Set`, `Observe`, `Branch`, `Loop`, `While`, `End`
-(not `Release`, `Load`, `Fork`, `Join` or a hold with a `lease`)
+(not `Release`, `Load`, `Fork`, a hold with a `lease` or an engine whose requests are sent)
 with expressions built from integer constants, attributes, `Now`,
 `CachedIn`, `BudgetLeft`, `min`, `max`, `+`, `-` (truncated at 0), `*`,
 `floor(a / b)`, `ceil(a / k)` with a constant `k`, comparisons, `!`, `&&`,

@@ -998,6 +998,12 @@ fn a_relations_copy_names_its_poster() {
     let posters = |name: &str| -> Vec<Option<usize>> {
         let path = serq::program_path(name);
         let p = compiled(&path, &short());
+        // a connector's copy is its load's transfer, a hand-written one a run
+        let copies = p
+            .connectors()
+            .filter_map(|(_, c)| c.load.as_ref())
+            .filter(|t| !t.also.is_empty())
+            .map(|t| t.poster);
         p.blocks
             .iter()
             .flatten()
@@ -1005,6 +1011,7 @@ fn a_relations_copy_names_its_poster() {
                 CStmt::Run { also, poster, .. } if !also.is_empty() => Some(*poster),
                 _ => None,
             })
+            .chain(copies)
             .collect()
     };
     let pull = posters("llmd_nixl_pull");

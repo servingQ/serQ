@@ -60,8 +60,7 @@ fn main() {
           taking reqs (1),
                  kv (min(request.known, request.hit + budget_left(P))) reserve (request.known)
           reuse (floor(request.known - 1, bs))
-          cache (request.input)
-          lease kv (inf);
+          cache (request.input);
       }
       worker {
         forward (c0 + max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));

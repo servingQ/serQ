@@ -4,9 +4,9 @@
 it to `LOG.json`; with `--json`, the report carries the same object as
 `log`. The report is a summary of the run; the log is the run itself, as a
 replay would need it: a session arriving, waiting in a pool's queue,
-admitted, running on a stage, preempted, ending, each change of its
-[state](cli.md#request-states), and each iteration of an engine with the
-requests in its batch. [serq-lar](https://github.com/servingQ/serq-lar)
+admitted, running on a stage, preempted, ending, each change of an engine
+request's [status](cli.md#request-statuses) and each move of its KV, and
+each iteration of an engine with the requests in its batch. [serq-lar](https://github.com/servingQ/serq-lar)
 animates it over the [deployment view](../visualization/deployment.md).
 
 The log is off unless asked for, and the run is the same with it: the
@@ -35,30 +35,36 @@ sessions and the engines' iterations left out, `…`):
     {"t": 0, "ev": "arrive", "s": 0},
     {"t": 0, "ev": "turn", "s": 0, "turn": 1},
     {"t": 0, "ev": "wait", "s": 0, "pool": 0},
-    {"t": 0, "ev": "state", "s": 0, "state": "waiting"},
+    {"t": 0, "ev": "status", "s": 0, "r": 1, "stage": 0, "status": "waiting"},
     {"t": 0, "ev": "admit", "s": 0, "pool": 0},
     {"t": 0, "ev": "run", "s": 0, "stages": [0], "mode": "prefill"},
-    {"t": 0, "ev": "state", "s": 0, "state": "running", "mode": "prefill"},
+    {"t": 0, "ev": "status", "s": 0, "r": 1, "stage": 0, "status": "running", "mode": "prefill"},
     {"t": 0, "ev": "iter", "stage": 0, "dur": 0.027420000000000003, "tokens": 1371, "reqs": [[0]]},
     …
     {"t": 0.027420000000000003, "ev": "done", "s": 0, "stage": 0},
-    {"t": 0.027420000000000003, "ev": "lease", "s": 0, "pool": 2, "id": 0},
+    {"t": 0.027420000000000003, "ev": "status", "s": 0, "r": 1, "stage": 0, "status": "finished"},
+    {"t": 0.027420000000000003, "ev": "transfer", "s": 0, "r": 1, "stage": 0, "kind": "send", "at": "registered"},
     {"t": 0.027420000000000003, "ev": "wait", "s": 0, "pool": 6},
-    {"t": 0.027420000000000003, "ev": "state", "s": 0, "state": "waiting"},
+    {"t": 0.027420000000000003, "ev": "status", "s": 0, "r": 2, "stage": 4, "status": "waiting"},
     {"t": 0.027420000000000003, "ev": "admit", "s": 0, "pool": 6},
+    {"t": 0.027420000000000003, "ev": "transfer", "s": 0, "r": 2, "stage": 4, "kind": "load", "at": "registered"},
+    {"t": 0.027420000000000003, "ev": "status", "s": 0, "r": 2, "stage": 4, "status": "waiting_for_kv"},
+    {"t": 0.027420000000000003, "ev": "transfer", "s": 0, "r": 2, "stage": 4, "kind": "load", "at": "start"},
+    {"t": 0.027420000000000003, "ev": "transfer", "s": 0, "r": 1, "stage": 0, "kind": "send", "at": "start"},
     {"t": 0.027420000000000003, "ev": "run", "s": 0, "stages": [2, 6]},
-    {"t": 0.027420000000000003, "ev": "state", "s": 0, "state": "loading"},
     {"t": 0.036275, "ev": "done", "s": 0, "stage": 2},
-    {"t": 0.036275, "ev": "free", "s": 0, "pool": 2, "id": 0},
+    {"t": 0.036275, "ev": "transfer", "s": 0, "r": 1, "stage": 0, "kind": "send", "at": "done"},
+    {"t": 0.036275, "ev": "transfer", "s": 0, "r": 2, "stage": 4, "kind": "load", "at": "done"},
     {"t": 0.036275, "ev": "wait", "s": 0, "pool": 4},
-    {"t": 0.036275, "ev": "state", "s": 0, "state": "waiting"},
+    {"t": 0.036275, "ev": "status", "s": 0, "r": 2, "stage": 4, "status": "waiting"},
     {"t": 0.036275, "ev": "admit", "s": 0, "pool": 4},
     {"t": 0.036275, "ev": "run", "s": 0, "stages": [4], "mode": "prefill"},
-    {"t": 0.036275, "ev": "state", "s": 0, "state": "running", "mode": "prefill"},
+    {"t": 0.036275, "ev": "status", "s": 0, "r": 2, "stage": 4, "status": "running", "mode": "prefill"},
     {"t": 0.036477752, "ev": "done", "s": 0, "stage": 4},
     {"t": 0.036477752, "ev": "run", "s": 0, "stages": [4], "mode": "decode"},
-    {"t": 0.036477752, "ev": "state", "s": 0, "state": "running", "mode": "decode"},
+    {"t": 0.036477752, "ev": "status", "s": 0, "r": 2, "stage": 4, "status": "running", "mode": "decode"},
     {"t": 0.052298968, "ev": "done", "s": 0, "stage": 4},
+    {"t": 0.052298968, "ev": "status", "s": 0, "r": 2, "stage": 4, "status": "finished"},
     {"t": 0.052298968, "ev": "end", "s": 0},
     …
   ]
@@ -87,10 +93,9 @@ report's `arrivals`. The keys are short because the events are many.
 | `run` | `s`, `stages`, `mode` | it runs on `stages`, one usually; two or more for a run that holds shared stages at once, a KV transfer over both NICs (`also`). `mode` is `prefill` or `decode` on an engine, absent otherwise |
 | `done` | `s`, `stage` | its run on `stage` (the first of several) is done; the session is ready again |
 | `preempt` | `s`, `pool` | it is preempted from `pool`: back to the queue, where a `wait` follows |
-| `revoke` | `s`, `pool` | its lease of `pool` is taken (`preempt leases by`): a `free` follows, unless the pool's `suspend` sets the lease aside to give it back at a later tick |
-| `state` | `s`, `state`, `mode` | it enters [`state`](cli.md#request-states) (`waiting`, `preempted`, `loading`, `running`, `transferring`, `saving`, `growing`, `joining`, `client`), or its `mode` there changes: `prefill` or `decode` for an engine's resident, absent otherwise |
-| `lease` | `s`, `pool`, `id` | a hold's allocation of `pool` outlives its scope (`lease`): lease `id` |
-| `free` | `s`, `pool`, `id` | lease `id` ends and its units go back (a `release`, its expiry, a revocation, its holder's end); `s` is who holds it then, the session once the leg that leased it has ended |
+| `revoke` | `s`, `pool` | its lease of `pool` is taken (`preempt leases by`) |
+| `status` | `s`, `r`, `stage`, `status`, `mode` | its engine request `r` (its `r`-th call, from 1) to engine `stage` enters [`status`](cli.md#request-statuses) (`waiting`, `waiting_for_kv`, `running`, `preempted`, `finished`), or its `mode` there changes: `prefill` or `decode` while `running`, absent otherwise |
+| `transfer` | `s`, `r`, `stage`, `kind`, `at` | a KV move of that request: `kind` `load`, `save` or `send`, `at` `registered` (it exists: a load or save begun, a send its request's end left), `start` (its copy runs) or `done` (copied, read, or expired) |
 | `iter` | `stage`, `dur`, `tokens`, `reqs` | an iteration of engine `stage` starts: it lasts `dur`, schedules `tokens`, over the requests `reqs` in the batch's order, each `[s]` for a session's or `[s, leg]` for a leg's |
 | `end` | `s` (`leg`) | the session (the leg) ends |
 
@@ -100,23 +105,27 @@ pools, then a `run` in `prefill` mode and, once its prefill is done, one in
 a `wait` and an `admit` again. A session at a `tool` runs on the tool's
 stage.
 
-A `state` event follows the event that moved the session or leg there, at
-the same instant: `waiting` after a `wait`, `running` after a `run`. Two in
-a row about one session or leg differ; a session that is ready, executing
-statements, enters no state, and one that ends is finished, its `end`. A
-session at a `join` and a failed `grow` waiting for room (the pool's
-`growing_at_end`) are logged only by their state, `joining` and `growing`.
-A prefiller's blocks leased past its request's end, which vLLM keeps by a
-finished request (`delay_free_blocks`), are a `lease` and a `free` beside
-whatever state the session is in then: in `llmd_nixl_pull.sq` above, its
-read's `loading`.
+A request is a call of an engine (`E (input, output)`, vLLM's `Request`):
+the session or leg `s` that called it, its call number `r` and the engine
+`stage` name it, and a P/D turn's prefill and decode are two. A `status`
+event follows the event that moved it there, at the same instant; two in a
+row about one request differ, and `finished` is its last. A send is about
+the source's request whoever holds it: a leg's prefill's send passes to its
+session, and the read that ends it is the session's (`vllm_nixl_push.sq`).
+Above, the prefiller's request (`r` 1) is `finished` from its end until the
+decoder's load reads its send, while the decoder's (`r` 2) is
+`waiting_for_kv`: one status each, the copy one move of both
+([the design](../design/request-state.md)). A session that calls no engine
+has neither.
 
 Not logged, since no time passes or no session is there: a run of no work
-(a decode of zero tokens, a transfer of nothing: no `run`, no `done`), and
-a spill's transfer, which no session runs (`spill … via`).
+(a decode of zero tokens, a transfer of nothing: no `run`, no `done`); a
+failed `grow` waiting for room (the pool's `growing_at_end`; a request's
+resident stalled so stays `running`); and a spill's transfer, which no
+session runs (`spill … via`).
 
 Not in version 0: a request's token counts beyond `iter`'s total, the
 units a hold takes, and what a pool's cache holds; a columnar encoding
 for long runs. A renamed, removed or retyped field bumps `version`
 (`LOG_VERSION`); an added one does not, nor an added event a reader may
-pass over (`state`, `lease` and `free` came after version 0 did).
+pass over (`status` and `transfer` came after version 0 did).

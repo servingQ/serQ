@@ -69,7 +69,7 @@ fn main() {
   // (scheduler_reserve_full_isl). When the one token is sampled the slot goes
   // and the blocks stay leased for the write, renewed by the decoder's
   // heartbeats while it waits (nixl/base_scheduler.py:199-238), so in effect
-  // until the write.
+  // until the write: the request's send, which `kvt.nixl_push` below makes.
   queue P : prefill {
     device gpu { kv cap blocksP * bs; }
     engine on gpu {
@@ -81,8 +81,7 @@ fn main() {
           taking reqs (1),
                  kv (min(request.known, request.hit + budget_left(P))) reserve (request.known)
           reuse (floor(request.known - 1, bs))
-          cache (request.input)
-          lease kv (inf);
+          cache (request.input);
       }
       worker {
         forward (aP * batch.prefilled + bP * batch.attention);

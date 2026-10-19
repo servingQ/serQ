@@ -1,89 +1,103 @@
-//! A request's state: where a session, or a leg of one (`fork`), stands
-//! while time passes, at about the resolution of vLLM's `RequestStatus`
-//! (`vllm/v1/request.py`, request.py:370), for every program and not only
-//! for an engine's requests (`docs/design/request-state.md`).
-//!
-//! The interpreter keeps two things about a session that this is the image
-//! of: where its statements stand (a pool's queue, a job at a stage, a
-//! `grow` waiting for room, a `join`) and how far its engine request has
-//! gone (admitted, its connector loading, prefill, decode, its connector
-//! saving). They are not one: a connector's load is a block of statements,
-//! which waits in queues and runs on stages of its own. The state is the one
-//! function of the two that the run log and the report read
-//! (`Interp::state_of`). A program does not read it.
-//!
-//! A session that is ready, executing statements, is in no state: no time
-//! passes then. One that has ended is finished: the log's `end`.
+//! A request's status: where one call of an engine (`E (input, output)`,
+//! vLLM's `Request`) stands with the engine, exactly one at any time, and
+//! the KV moves of it in flight (`Transfer`), on an axis of their own
+//! (`docs/design/request-state.md`). vLLM keeps the same two apart: a
+//! request's `RequestStatus` (`vllm/v1/request.py`, request.py:370) and its
+//! connector's sends and receives (`finished_sending`, `finished_recving`,
+//! scheduler.py:3126-3138). A program does not read either.
 
-/// What a session or a leg is doing while time passes.
+/// Where an engine's request stands.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum State {
-    /// Queued: in a pool's queue for a hold or an engine's admission, or in
-    /// a FIFO stage's queue for a server. vLLM's `WAITING`.
+pub enum Status {
+    /// In the engine's waiting queue, not scheduled; after a load, with
+    /// its blocks, waiting for a running slot. vLLM's `WAITING`.
     Waiting,
-    /// Queued again after a preemption: the hold that was preempted, or a
-    /// request preempted since it was called. vLLM's `PREEMPTED`
-    /// (scheduler.py:1560), kept until it runs again (scheduler.py:3088-3091).
-    Preempted,
-    /// Its engine's connector loads its KV: whatever the connector's `load`
-    /// block does, waiting or running. vLLM's `WAITING_FOR_REMOTE_KVS`
-    /// (scheduler.py:1267).
-    Loading,
-    /// A job at a stage: an engine's resident (with its mode, prefill or
-    /// decode, as an attribute), a server's job, a `ps` or `delay` stage's.
-    /// vLLM's `RUNNING`.
+    /// Admitted to its blocks, not schedulable until its load is done.
+    /// vLLM's `WAITING_FOR_REMOTE_KVS` (scheduler.py:1264-1267).
+    WaitingForKv,
+    /// A resident of the engine's batch, its mode (prefill, decode) beside
+    /// it; a resident stalled for room to grow is one too. vLLM's
+    /// `RUNNING`.
     Running,
-    /// A run over shared stages, held at once (`also`, `transfer on`): a
-    /// KV transfer between two NICs. No vLLM status: the connector's.
-    Transferring,
-    /// Its engine's connector saves its KV before its pools go back
-    /// (`save`): vLLM's finished request whose blocks the connector keeps
-    /// (`delay_free_blocks`, scheduler.py:2653-2655).
-    Saving,
-    /// A `grow` that did not fit, waiting for room (the pool's `preempt
-    /// none`, or no victim). No vLLM status: vLLM preempts instead.
-    Growing,
-    /// At a `join`, waiting for the legs it forked.
-    Joining,
-    /// A run the workload issues: the client's tool or think time, between
-    /// a turn's answer and the next. No vLLM request exists then.
-    Client,
+    /// In the waiting queue again after a preemption, until it runs.
+    /// vLLM's `PREEMPTED` (scheduler.py:1560, 3088-3091).
+    Preempted,
+    /// It has generated its output (or was refused). The report counts it
+    /// only while it keeps its blocks: while a save or a send of it is
+    /// registered or in flight (vLLM's `delay_free_blocks`,
+    /// scheduler.py:2653-2655).
+    Finished,
 }
 
-impl State {
-    /// Every state, in the report's order.
-    pub const ALL: [State; 9] = [
-        State::Waiting,
-        State::Preempted,
-        State::Loading,
-        State::Running,
-        State::Transferring,
-        State::Saving,
-        State::Growing,
-        State::Joining,
-        State::Client,
+impl Status {
+    /// Every status, in the report's order.
+    pub const ALL: [Status; 5] = [
+        Status::Waiting,
+        Status::WaitingForKv,
+        Status::Running,
+        Status::Preempted,
+        Status::Finished,
     ];
 
     /// Its name in the log and the report.
     pub fn name(self) -> &'static str {
         match self {
-            State::Waiting => "waiting",
-            State::Preempted => "preempted",
-            State::Loading => "loading",
-            State::Running => "running",
-            State::Transferring => "transferring",
-            State::Saving => "saving",
-            State::Growing => "growing",
-            State::Joining => "joining",
-            State::Client => "client",
+            Status::Waiting => "waiting",
+            Status::WaitingForKv => "waiting_for_kv",
+            Status::Running => "running",
+            Status::Preempted => "preempted",
+            Status::Finished => "finished",
         }
     }
 
     /// Its place in `ALL`.
     pub fn index(self) -> usize {
-        State::ALL
+        Status::ALL
             .iter()
             .position(|&s| s == self)
-            .expect("every state is in ALL")
+            .expect("every status is in ALL")
+    }
+}
+
+/// A KV move of a request (`ir::CTransfer`, or a source's send).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Transfer {
+    /// The KV it reads in at its admission, while `waiting_for_kv`.
+    Load,
+    /// The KV it writes to an L2 before its blocks go back, `finished`.
+    Save,
+    /// Its KV kept for a reader's load, `finished`: a KV relation's source.
+    Send,
+}
+
+impl Transfer {
+    pub fn name(self) -> &'static str {
+        match self {
+            Transfer::Load => "load",
+            Transfer::Save => "save",
+            Transfer::Send => "send",
+        }
+    }
+}
+
+/// How far a transfer has gone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Moved {
+    /// It exists: a load or a save its request has begun, a send its
+    /// request's end has left for a reader.
+    Registered,
+    /// Its copy runs (after any wait for its source, its link or its room).
+    Start,
+    /// It is over: copied, or a send read or expired.
+    Done,
+}
+
+impl Moved {
+    pub fn name(self) -> &'static str {
+        match self {
+            Moved::Registered => "registered",
+            Moved::Start => "start",
+            Moved::Done => "done",
+        }
     }
 }

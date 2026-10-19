@@ -952,8 +952,9 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
             expr,
         });
     }
-    // an engine's connector: its blocks after the session's, which keep
-    // their numbers; a family's, one per member
+    // an engine's connector: its transfers, lowered after the session's
+    // blocks, which keep their numbers; a family's, one per member
+    let mut sends: Vec<(String, Option<Expr>)> = vec![];
     let mut at = 0;
     for decl in &prog.stages {
         for i in 0..decl.count {
@@ -972,6 +973,27 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
                 }
                 let member = decl.array.then_some(i);
                 step.connector = Some(Box::new(lk.connector(c, &decl.name, taken, member)?));
+                if let ConnectorKind::Relation(Some(rel)) = &c.kind {
+                    sends.push((rel.source.clone(), rel.ttl.clone()));
+                }
+            }
+        }
+    }
+    // a KV relation's source engine registers a send of each request's
+    // blocks, which the reader's load ends, or its `ttl`: an engine that
+    // takes its memory (a source whose entries hold and lease keeps the
+    // lease they write)
+    for (source, ttl) in &sends {
+        let ttl = ttl
+            .as_ref()
+            .map_or(Ok(CExpr::Num(f64::INFINITY)), |e| lk.expr(e))?;
+        for st in stages.iter_mut().filter(|st| st.name == *source) {
+            if let CStageKind::Step(step) = &mut st.kind
+                && let Some(m) = step.memory
+                && let Some(r) = &mut step.request
+                && r.pools.iter().any(|(q, _, _)| q.base == m)
+            {
+                r.send = Some(crate::ir::CSend { ttl: ttl.clone() });
             }
         }
     }
@@ -995,6 +1017,7 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
         claims,
         registers: lk.registers.clone(),
         routes: std::mem::take(&mut lk.routes),
+        transfer_blocks: None,
         version: IR_VERSION,
         hidden,
         slot_cached: slot(&lk, "cached"),
@@ -1056,6 +1079,62 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
 /// The refusal of an engine whose connector loads into its memory, the KV
 /// pool on its device, which its `taking` does not take: the load would
 /// grow a hold the request does not have.
+/// A connector's lowered statements as its transfer (`ir::CTransfer`):
+/// `blocks[0]` is `run; load; [release S]` for a load, `hold P { grow; run;
+/// load } cache` for a save (its body `blocks[1]`). The lowering above writes
+/// only these shapes.
+fn transfer(amount: CExpr, blocks: Vec<Vec<CStmt>>) -> crate::ir::CTransfer {
+    let (stmts, room) = match &blocks[0][..] {
+        [CStmt::Hold { pools, cache, .. }] => {
+            let body = &blocks[1];
+            let [CStmt::Grow(_, grow), ..] = &body[..] else {
+                unreachable!("a save grows its room first")
+            };
+            let room = crate::ir::CRoom {
+                held: pools[0].1.clone(),
+                grow: grow.clone(),
+                cache: cache.clone().expect("a save caches"),
+            };
+            (body[1..].to_vec(), Some(room))
+        }
+        b => (b.to_vec(), None),
+    };
+    let mut source = None;
+    let mut run = None;
+    let mut load = None;
+    for st in stmts {
+        match st {
+            CStmt::Run {
+                stage,
+                work,
+                also,
+                share,
+                latency,
+                poster,
+                ..
+            } => run = Some((stage, work, also, share, latency, poster)),
+            CStmt::Load(r, e) => load = Some((r, e)),
+            CStmt::Release(r) => source = Some(r),
+            s => unreachable!("a connector's lowering writes no {s:?}"),
+        }
+    }
+    let (stage, work, also, share, latency, poster) = run.expect("a transfer copies");
+    let (into, units) = load.expect("a transfer lands");
+    crate::ir::CTransfer {
+        amount,
+        stage,
+        also,
+        work,
+        share,
+        latency,
+        poster,
+        into,
+        units,
+        room,
+        source,
+    }
+}
+
 fn connector_untaken(engine: &str, sp: &StepSpec) -> LinkError {
     use crate::frontend::diagnostic::Code;
     let message = format!(
@@ -1578,8 +1657,7 @@ fn hidden_in_server(
                 | Stmt::Request
                 | Stmt::Call { .. }
                 | Stmt::Mark(_)
-                | Stmt::Unread(_)
-                | Stmt::Join => {}
+                | Stmt::Unread(_) => {}
             }
         }
         Ok(())
@@ -1692,10 +1770,6 @@ fn request_member(r: &mut crate::ir::CRequest, i: usize, n: usize, who: &str) ->
     for (k, m) in r.prefix.iter_mut().flatten() {
         expr(k, i, n, who)?;
         expr(m, i, n, who)?;
-    }
-    if let Some((q, t)) = &mut r.lease {
-        at(q, i, n, who)?;
-        expr(t, i, n, who)?;
     }
     Ok(())
 }
@@ -2420,11 +2494,8 @@ impl Linker<'_> {
             reuse: r.reuse.as_ref().map(|e| self.expr(e)).transpose()?,
             cache: r.cache.as_ref().map(|e| self.expr(e)).transpose()?,
             prefix,
-            lease: r
-                .lease
-                .as_ref()
-                .map(|(q, t)| Ok::<_, _>((self.pool_ref(q)?, self.expr(t)?)))
-                .transpose()?,
+            // a KV relation's source: set with the relations
+            send: None,
             // the attributes now, so that the caller's `E.first` reads one
             records: crate::ir::RequestRecords {
                 reused: 0,
@@ -2507,15 +2578,9 @@ impl Linker<'_> {
                                 .then(|| Box::new(var(&format!("{engine}.{}", RELATION_FROM)))),
                             name,
                         };
+                        // the reader waits for the source's send to be
+                        // registered (a push's leg), which its load ends
                         let mut out = vec![];
-                        // the source's KV is there once its leg has ended;
-                        // with no leg forked anywhere the source's call has
-                        // ended before the reader's, and there is nothing to
-                        // wait for (a push dispatched in order, as the
-                        // sidecar does with `concurrent = 0`)
-                        if rel.push && (forks(&self.prog.server) || forks(&self.prog.session)) {
-                            out.push(Stmt::Join);
-                        }
                         // the side that posts the copy waits before it: the
                         // copy's run's `latency`
                         let nic = own(&format!("{}.nic", rel.reader));
@@ -2551,6 +2616,7 @@ impl Linker<'_> {
                     Stmt::Load(kv.clone(), Expr::cost(one(&kv), var(&loaded))),
                 );
                 self.member_of.set(member.map(|_| size));
+                let first = self.blocks.len();
                 let compiled = self.expr(n).and_then(|e| Ok((e, self.block(&body)?)));
                 self.member_of.set(None);
                 let (mut amount, b) = compiled?;
@@ -2558,7 +2624,7 @@ impl Linker<'_> {
                     member_expr(&mut amount, i, size, engine)?;
                     self.member_block(b, i, size, engine)?;
                 }
-                Some((amount, b))
+                Some(transfer(amount, self.take_blocks(first)))
             }
         };
         let save = match (&c.save, &c.kind) {
@@ -2614,7 +2680,10 @@ impl Linker<'_> {
                     prefix: None,
                     lease: None,
                 }];
-                Some((self.expr(n)?, self.block(&body)?))
+                let amount = self.expr(n)?;
+                let first = self.blocks.len();
+                self.block(&body)?;
+                Some(transfer(amount, self.take_blocks(first)))
             }
         };
         self.side = side;
@@ -2628,6 +2697,14 @@ impl Linker<'_> {
                 .then(|| self.attr(&format!("{engine}.{RELATION_FROM}"))),
             record: self.observe_slot(&loaded),
         })
+    }
+
+    /// The blocks from `first` on, taken out of the program: a connector's,
+    /// which `transfer` reads as its transfer's fixed shape.
+    fn take_blocks(&mut self, first: usize) -> Vec<Vec<CStmt>> {
+        self.spans.truncate(first);
+        self.sides.truncate(first);
+        self.blocks.split_off(first)
     }
 
     /// `member_ref` for the references of a connector's block.
@@ -2854,7 +2931,6 @@ impl Linker<'_> {
                 Stmt::Loop(b) => CStmt::Loop(self.block(b)?),
                 Stmt::While(c, b) => CStmt::While(self.expr(c)?, self.block(b)?),
                 Stmt::Fork(b) => CStmt::Fork(self.block(b)?),
-                Stmt::Join => CStmt::Join,
                 Stmt::Choose { var, count, key } => CStmt::Choose {
                     var: self.attr_index[var],
                     count: self.expr(count)?,
@@ -3195,15 +3271,4 @@ pub fn binop(op: BinOp, a: f64, b: f64) -> f64 {
 /// keeps its own.
 pub(crate) fn bind_index(e: &mut Expr, j: &str, k: f64) {
     e.substitute(&[(j.to_string(), Expr::Num(k))]);
-}
-
-/// Whether `stmts` fork a leg, in a block in them as well: whether a
-/// `join` would have anything to wait for.
-fn forks(stmts: &[Stmt]) -> bool {
-    stmts.iter().any(|s| match s {
-        Stmt::Fork(_) => true,
-        Stmt::Branch(_, a, b) => forks(a) || forks(b),
-        Stmt::Hold { body, .. } | Stmt::While(_, body) | Stmt::Loop(body) => forks(body),
-        _ => false,
-    })
 }

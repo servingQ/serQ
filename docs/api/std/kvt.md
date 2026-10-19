@@ -12,8 +12,8 @@ queues and roles these calls name.
 ## `kvt.nixl_pull` and `kvt.nixl_push`
 
 ```serq
-kvt.nixl_pull (SOURCE, READER, latency = x, share = POLICY);
-kvt.nixl_push (SOURCE, READER, latency = x, share = POLICY);
+kvt.nixl_pull (SOURCE, READER, latency = x, share = POLICY, ttl = t);
+kvt.nixl_push (SOURCE, READER, latency = x, share = POLICY, ttl = t);
 ```
 
 NIXL's two modes of one copy between two queues with a `nic`, declared
@@ -33,7 +33,13 @@ over both NICs.
 | `READER` | queue | The queue the KV arrives in; it has a `nic` and an entry `from SOURCE`. |
 | `latency = x` | `const` | The wait before each copy; optional. |
 | `share = POLICY` | [std/share](share.md) | How concurrent copies divide the two NICs, `share.maxmin` or `share.bottleneck`; required. |
+| `ttl = t` | `const` | How long, at most, the source keeps the blocks of a request whose send the reader does not read; optional, `inf` (until the session's end) by default. vLLM's lease on a finished request's blocks (`_kv_lease_duration`, `nixl/pull_scheduler.py:248-262`). |
 
+The relation makes the source's requests *sent*: an engine request of
+`SOURCE` (its entry `P (prompt, 1);`) registers a send at its end and keeps
+its blocks until the reader's connector has read them, or `ttl`; the
+reader's load waits for that send (in a push, the leg the prefill was
+forked in), and ends it ([one status per request](../../design/request-state.md)).
 A reader with no entry `from` the source is refused at the call.
 Concurrent copies divide the two NICs by the relation's `share`, which
 has no default; two relations whose copies cross one NIC are one fabric and

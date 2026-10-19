@@ -116,33 +116,19 @@ fn a_push_whose_reader_has_no_connector_names_the_connector() {
     assert!(!e.contains("fix-it"), "{e}");
 }
 
-/// A push toggled back to a pull, its source's call still forked: a pull's
-/// connector joins no leg, so the refusal names the fork, not a `join` the
-/// program never had (#657).
+/// A push toggled back to a pull, its source's call still forked: the
+/// reader's load waits for the source's send in either mode, so it runs,
+/// the same numbers as the push (only who posts the copy differs, which the
+/// figure draws). `E-pull-forked` refused it while a pull's reader waited
+/// for nothing (#657).
 #[test]
-fn a_pull_whose_source_is_forked_names_the_fork() {
+fn a_pull_whose_source_is_forked_runs_as_the_push() {
     let (src, workload) = example("examples/pd-disaggregation/vllm_nixl_push.sq");
     let push = "kvt.nixl_push (P, D,";
     assert!(src.contains(push));
-    let e = refused(&src.replace(push, "kvt.nixl_pull (P, D,"), &workload);
-    assert!(!e.contains("never joins"), "{e}");
-    assert!(
-        e.contains("error[E-pull-forked]: `kvt.nixl_pull (P, D)`"),
-        "{e}"
-    );
-    assert!(
-        e.contains(" 57:16: error[E-pull-forked]"),
-        "at the call: {e}"
-    );
-    assert!(
-        e.contains("help: fix-it: take the call `P.prefill (…);` out of its `fork { … }`\n"),
-        "{e}"
-    );
-    // the other way out is a choice, its own help
-    assert!(
-        e.contains("help: or make the copy a push: `kvt.nixl_push (P, D, …)`"),
-        "{e}"
-    );
+    let ov = common::horizon(300.0);
+    let pull = run(&src.replace(push, "kvt.nixl_pull (P, D,"), &workload, &ov);
+    assert_eq!(pull.text(), run(&src, &workload, &ov).text());
 }
 
 /// The other half of the connector's rule: what it loads, the engine's
@@ -160,7 +146,7 @@ fn a_connector_whose_engine_does_not_take_its_memory_names_the_taking() {
         "{e}"
     );
     assert!(
-        e.contains(" 103:9: error[E-connector-untaken]"),
+        e.contains(" 102:9: error[E-connector-untaken]"),
         "at `D`: {e}"
     );
     assert!(!e.contains("link error"), "{e}");

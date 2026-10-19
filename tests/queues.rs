@@ -550,7 +550,7 @@ fn a_header_does_not_read_a_local_set_below_or_beside_it() {
             "",
             "",
         ),
-        ("fork { set kept = prompt; } join;", "", ""),
+        ("fork { set kept = prompt; }", "", ""),
     ] {
         refused(
             &format!(
@@ -1786,7 +1786,7 @@ fn std_kvt_names_the_relation() {
             "use \"std/kvt\"; use \"std/share\"; kvt.nixl_pull (P, D, wait = 1, share = share.maxmin);",
         ),
         workload,
-        "`kvt.nixl_pull` takes `latency = …` and `share = …`, found `wait`",
+        "`kvt.nixl_pull` takes `latency = …`, `share = …` and `ttl = …`, found `wait`",
     );
     refused(
         &program("use \"std/kvt\"; kvt.nixl_pull (P, D, share = maxmin);"),
