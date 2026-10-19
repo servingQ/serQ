@@ -2821,9 +2821,7 @@ impl<'p> Interp<'p> {
                 // admission left for after the load (vLLM: a read of
                 // invalid blocks is recomputed, scheduler.py:3140, 3254-3257)
                 if self.send_of(sid, pl).is_none() {
-                    if let Some(c) = self.connector(r.stage) {
-                        self.sessions[sid].attrs[c.loaded] = 0.0;
-                    }
+                    self.load_nothing(sid);
                     if self.request_more(sid) {
                         return false;
                     }
@@ -2887,6 +2885,57 @@ impl<'p> Interp<'p> {
         self.start_job(stage, Some(sid), work, RunMode::Decode, grow, 0.0);
         self.restatus(sid);
         false
+    }
+
+    /// The request admitted to load `loaded` tokens finds no send to read:
+    /// it loads nothing and computes them. What its admission recorded, the
+    /// loaded tokens and the prefill (`E.loaded`, `E.prefill`, and the
+    /// observations of each), becomes what it does: 0 loaded, its tokens
+    /// past what it read from the cache prefilled.
+    fn load_nothing(&mut self, sid: usize) {
+        let r = self.sessions[sid].req.as_ref().expect("a request");
+        let (st, spec, loaded, known) = (r.stage, r.spec, r.loaded, r.known);
+        if let Some(c) = self.connector(st) {
+            self.sessions[sid].attrs[c.loaded] = 0.0;
+            self.amend(sid, c.record, loaded, 0.0);
+        }
+        if let Some(spec) = spec {
+            let attrs = &self.sessions[sid].attrs;
+            let (was, read) = (
+                attrs[spec.records.last_prefill],
+                attrs[spec.records.last_reused],
+            );
+            let now = known - read;
+            self.sessions[sid].attrs[spec.records.last_prefill] = now;
+            self.amend(sid, spec.records.prefill, was, now);
+        }
+    }
+
+    /// Replace the latest sample `old` of observation `k` that `sid`'s
+    /// session recorded in its turn by `new`: a value its request recorded
+    /// at admission that the run then did otherwise (`load_nothing`). The
+    /// running statistics are rebuilt from the samples, in their order.
+    fn amend(&mut self, sid: usize, k: usize, old: f64, new: f64) {
+        if let Some(all) = &mut self.observed[k]
+            && let Some(x) = all.iter_mut().rev().find(|x| **x == old)
+        {
+            *x = new;
+        }
+        let s = &self.sessions[sid];
+        let (serial, turn) = (s.serial, s.attrs[self.p.slot_turn] as u32);
+        let o = &mut self.observes[k];
+        let at = o
+            .records
+            .iter()
+            .zip(&o.samples)
+            .rposition(|(r, x)| r.1 == serial && r.2 == turn && *x == old);
+        if let Some(i) = at {
+            o.samples[i] = new;
+            o.w = Welford::new();
+            for &x in &o.samples {
+                o.w.push(x);
+            }
+        }
     }
 
     /// Start the request's prefill: what of its tokens has no KV.

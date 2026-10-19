@@ -242,9 +242,16 @@ fn a_load_whose_send_expired_computes_the_prompt_itself() {
     let r = run(&src(", ttl = 0.5"), PROMPT10);
     assert_eq!(samples(&r, "done_at"), [13.0]);
     assert_eq!(r.stage("D.nic").map(|s| s.completed), Some(0));
+    // what the decoder's admission recorded (10 to load, 1 to prefill: its
+    // last token again) becomes what it did, not left as it was (PR #719's
+    // third review): nothing loaded, the 10 tokens prefilled
+    assert_eq!(samples(&r, "D.loaded"), [0.0]);
+    assert_eq!(samples(&r, "D.prefill"), [10.0]);
     // without the `ttl`, the send is read: the copy, then the last token again
     let r = run(&src(""), PROMPT10);
     assert_eq!(samples(&r, "done_at"), [15.0]);
+    assert_eq!(samples(&r, "D.loaded"), [10.0]);
+    assert_eq!(samples(&r, "D.prefill"), [1.0]);
 }
 
 /// The load ends the send its copy started on, not a later one: leg A's
