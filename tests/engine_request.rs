@@ -103,8 +103,10 @@ queue llm : prefill {
   pool reqs on llm { queue fifo; }
   prefill (prompt) {
     set kept = prompt;
-    hold reqs (cost(reqs, 1)), kv (cost(kv, min(known, budget_left(llm)))) reserve (cost(kv, known))
-         at admission (known = max(kept, computed + 1)) {
+    hold reqs (cost(reqs, 1)),
+         kv (cost(kv, min(max(kept, computed + 1), budget_left(llm))))
+         reserve (cost(kv, max(kept, computed + 1))) {
+      set known = max(kept, computed + 1);
       set kept = known;
       run llm prefill (cost(llm, known - cached)) growing kv;
       run llm decode (cost(llm, o - 1 - (known - prompt))) growing kv;

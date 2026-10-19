@@ -96,11 +96,8 @@ fn format_with(
 
     let mut out = String::new();
     let mut depth = 0usize;
-    // a `hold` header over several lines: its clauses under the pools, and
-    // the bindings of `at admission (` under the first
+    // a `hold` header over several lines: its clauses under the pools
     let mut hold_base: Option<usize> = None;
-    let mut at_started = false;
-    let mut previous_comma = false;
     let mut continuation = false;
     // a run of blank lines waiting for the next line, written as one unless
     // that line closes a block or the run opens one or the file
@@ -129,7 +126,6 @@ fn format_with(
         let first = row.first().map(|t| t.text.as_str()).unwrap_or("");
         if first == "hold" {
             hold_base = Some(base);
-            at_started = false;
         }
         let original_indent = raw.chars().take_while(|c| c.is_whitespace()).count();
         let indent = if row.is_empty() && commented[line] && original_indent > base {
@@ -137,13 +133,8 @@ fn format_with(
             // wrapped explanation under a `let`) belongs to that comment.
             original_indent
         } else if let Some(hold) = hold_base {
-            if matches!(first, "at" | "prefix" | "reuse" | "reserve") {
-                if first == "at" {
-                    at_started = true;
-                }
+            if matches!(first, "prefix" | "reuse" | "reserve") {
                 hold + 5
-            } else if at_started && previous_comma && !closing {
-                hold + 19
             } else if continuation && !closing && first != "hold" {
                 original_indent.max(base)
             } else {
@@ -171,10 +162,8 @@ fn format_with(
         }
         if row.iter().any(|t| t.tok == Tok::LBrace) {
             hold_base = None;
-            at_started = false;
         }
         if let Some(last) = row.last() {
-            previous_comma = last.tok == Tok::Comma;
             continuation = !matches!(last.tok, Tok::Semi | Tok::LBrace | Tok::RBrace)
                 && !raw.trim_end().ends_with(';');
         }

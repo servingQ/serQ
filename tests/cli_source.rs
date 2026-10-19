@@ -111,7 +111,7 @@ fn an_argument_its_definition_does_not_read_is_still_resolved() {
     // bound where the use stands is not a misspelt one
     run(
         "set b = 1; take(b);",
-        "set a = one(kv) + max j in 3 (one(j));\n hold kv (cost(kv, one(need))) at admission (need = 1) { }",
+        "set a = one(kv) + max j in 3 (one(j));\n hold kv (cost(kv, one(a))) { }",
     )
     .unwrap();
     // in a queue's entry, by the entry's rules: its parameter, not a name
@@ -128,9 +128,8 @@ fn an_argument_its_definition_does_not_read_is_still_resolved() {
             &common::horizon(1.0),
         )
     };
-    // in a hold's body, an unread argument sees the header's binding and is
-    // not a read of it: the body sets nothing for it
-    let hold = |body: &str, need: &str| {
+    // in a hold's body, an unread argument is resolved and read nowhere
+    let hold = |body: &str| {
         // a stage no statement runs does not link: those the body runs
         let svc = if body.contains("run svc ") {
             "stage svc : fifo;"
@@ -144,31 +143,28 @@ fn an_argument_its_definition_does_not_read_is_still_resolved() {
         };
         let src = format!(
             "def one(x) {{ 1 }}\n{svc}\n{f}\npool kv {{ cap 10; }}\n\
-             pool g[2] {{ cap 10; }}\nserver (s) {{ hold kv (cost(kv, 1)) at admission (need = {need}) {{ {body} \
-             }} }}\n"
+             pool g[2] {{ cap 10; }}\nserver (s) {{ hold kv (cost(kv, 1)) {{ {body} }} }}\n"
         );
         let workload = "workload { arrive batch(1); send (s); session { set s = 1; turn; end; } }";
         common::compile(&common::main_source(&src), workload, &common::horizon(1.0))
             .map(|p| serde_json::to_string(&p).unwrap())
     };
     assert_eq!(
-        hold("run svc (cost(svc, s + one(need)));", "s + 1").unwrap(),
-        hold("run svc (cost(svc, s + 1));", "s + 1").unwrap()
+        hold("run svc (cost(svc, s + one(s)));").unwrap(),
+        hold("run svc (cost(svc, s + 1));").unwrap()
     );
-    // a binding the body may not read (it reads live state) may be passed unread
-    hold("run svc (cost(svc, s + one(need)));", "cachedin(kv)").unwrap();
-    // so it does in a reference's index: a nested hold's pool, a run's stage
+    // so it is in a reference's index: a nested hold's pool, a run's stage
     for (unread, read) in [
         (
-            "hold g[one(need)] (cost(g[0], 1)) { }",
+            "hold g[one(s)] (cost(g[0], 1)) { }",
             "hold g[1] (cost(g[0], 1)) { }",
         ),
         (
-            "run f[one(need)] (cost(f[0], s));",
+            "run f[one(s)] (cost(f[0], s));",
             "run f[1] (cost(f[0], s));",
         ),
     ] {
-        assert_eq!(hold(unread, "1").unwrap(), hold(read, "1").unwrap());
+        assert_eq!(hold(unread).unwrap(), hold(read).unwrap());
     }
     // the boundary: it is resolved as the use is parsed, so a check of
     // the use itself still applies (a statement definition's `turn;`
@@ -222,16 +218,16 @@ fn duplicate_declarations_point_to_both_sites() {
 }
 
 #[test]
-fn desugaring_keeps_server_and_header_binding_locations() {
+fn desugaring_keeps_server_and_header_locations() {
     let ov = common::horizon(10.0);
     let src = "stage svc : fifo;\nserver {\n  run svcc (cost(svcc, 1));\n}\n";
     let err = common::compile(&common::main_source(src), WORKLOAD, &ov).unwrap_err();
     assert!(err.contains("3:7:"), "{err}");
     assert!(err.contains("3 |   run svcc (cost(svcc, 1));"), "{err}");
-    let src = "pool kv { cap 10; }\nserver {\n  hold kv (cost(kv, amount)) at admission (amount = missing) { }\n}\n";
+    let src = "pool kv { cap 10; }\nserver {\n  hold kv (cost(kv, missing)) { }\n}\n";
     let err = common::compile(&common::main_source(src), WORKLOAD, &ov).unwrap_err();
-    // `missing`, in the binding, is where the failed expression was written.
-    assert!(err.contains("3:53:"), "{err}");
+    // `missing`, in the header, is where the failed expression was written.
+    assert!(err.contains("3:21:"), "{err}");
     assert!(err.contains("unknown name `missing`"), "{err}");
 }
 

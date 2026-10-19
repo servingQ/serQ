@@ -5,9 +5,9 @@
 //! A queue is parse-time sugar (`docs/design/queue.md`). The parser records
 //! each queue's pools (renamed `Q.p`), its stage (named `Q`) and its entries
 //! with their bodies as written; `expand` then puts an entry's body in place
-//! of every call, with the parameters substituted like a `where` binding,
-//! the own pools and stage indexed by the call's member, the entry's `set`s
-//! renamed `Q.x`, `mark x` written as `set Q.x = now`, and a `from S[k]`
+//! of every call, with the parameters substituted, the own pools and stage
+//! indexed by the call's member, the entry's `set`s renamed `Q.x`, and a
+//! `from S[k]`
 //! bound to the pool `S`'s entry leases. The linker sees the kernel program
 //! it saw before queues existed.
 
@@ -127,8 +127,6 @@ pub struct QueueDecl {
     pub entries: Vec<Entry>,
     /// The bare name of the pool an entry leases, when one does.
     pub leased: Option<String>,
-    /// Names `mark`ed in some entry.
-    pub marks: Vec<String>,
     /// A link's `serve … latency x;`: every transfer over it first waits
     /// `x` (the transfer run's `latency`).
     pub latency: Option<Expr>,
@@ -519,7 +517,6 @@ impl Ctx<'_> {
             Stmt::Unread(args) => {
                 Stmt::Unread(args.iter().map(|a| self.arg(a)).collect::<Result<_, _>>()?)
             }
-            Stmt::Mark(n) => Stmt::Set(format!("{}.{n}", self.q.name), Expr::Var("now".into())),
             Stmt::EngineRequest {
                 stage,
                 input,

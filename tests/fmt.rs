@@ -13,17 +13,14 @@ fn formatting_preserves_program_and_comments_and_is_idempotent() {
         pool kv on gpu { }\n\
         server {\n\
           hold kv (cost(kv, 1))\n\
-          at admission (hit = 1,\n\
-          value = hit + 1) {\n\
+          reserve (cost(kv, 2)) {\n\
             llm (1, 1);\n\
           } cache (cost(kv, 1));\n\
         }\n\
         \n";
     let formatted = format(&common::main_source(source)).unwrap();
     assert!(
-        formatted.contains(
-            "    hold kv (cost(kv, 1))\n         at admission (hit = 1,\n                       value = hit + 1) {"
-        ),
+        formatted.contains("    hold kv (cost(kv, 1))\n         reserve (cost(kv, 2)) {"),
         "{formatted}"
     );
     assert!(formatted.contains("let B=10;         // token budget"));

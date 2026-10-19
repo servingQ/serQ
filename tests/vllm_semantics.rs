@@ -293,8 +293,10 @@ fn preempted_twice_in_a_queue(set_kept: &str, known_is: &str) -> (String, &'stat
           pool reqs on D {{ queue fifo; }}
           decode (prompt) {{
             set kept = prompt;
-            hold reqs (cost(reqs, 1)), kv (cost(kv, min(known, budget_left(D)))) reserve (cost(kv, known))
-            at admission (known = {known_is}) {{
+            hold reqs (cost(reqs, 1)),
+                 kv (cost(kv, min({known_is}, budget_left(D))))
+                 reserve (cost(kv, {known_is})) {{
+              set known = {known_is};
               {set_kept}
               if (prompt == 32) {{ observe known_at = known; observe at = computed; }}
               run D prefill (cost(D, known)) growing kv;

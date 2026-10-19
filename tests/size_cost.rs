@@ -391,7 +391,7 @@ fn typed_declarations_do_not_override_resource_or_side_checks() {
         (
             "Cost processing = { mem: 1 }; run svc (processing.absent);",
             "Size items = 3;",
-            "no entry of `processing` marks or sets `absent`, and `processing` has no pool `absent`",
+            "no entry of `processing` sets `absent`, and `processing` has no pool `absent`",
         ),
     ] {
         let e = compile(server, turn).unwrap_err();

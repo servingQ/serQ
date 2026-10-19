@@ -739,7 +739,7 @@ fn a_context_variable_name_cannot_be_an_attribute_or_a_constant() {
     .expect_err("rejected");
     assert!(e.contains("a `let` constant named `present`"), "{e}");
     // `inf` is folded at parse time, so the answer would be right, but the
-    // name is the language's, as it is for a binding or an aggregate's index.
+    // name is the language's, as it is for an aggregate's index.
     let e = check(&PS.replace("SET", "set inf = 500;"), CLOSED).expect_err("rejected");
     assert!(
         e.contains("`inf` is a name the language supplies, read in every expression"),
@@ -913,87 +913,7 @@ fn a_declaration_cannot_share_its_name_with_an_attribute() {
         e.contains("help: rename the declaration or the attribute"),
         "{e}"
     );
-    // a header's binding the body reads is set at the top of the body
-    let bound = observe("k").replace(
-        "run svc (cost(svc, 1));",
-        "hold kv (cost(kv, 1)) at admission (k = computed + 1) { run svc (cost(svc, k)); }",
-    );
-    let e = refusal(&format!("pool kv {{ cap 4; }} {bound}"), CLOSED);
-    assert!(
-        e.contains(&format!("an observation named `k` {two_things}")),
-        "{e}"
-    );
     check(&observe("hit"), &set(&set(CLOSED, "warm"), "more")).expect("links");
-}
-
-/// #484: a hold header's binding the body does not read is no attribute,
-/// and no declaration may share its name either. vLLM's `at admission
-/// (hit = …)` was a token count, and `observe hit` three lines below a 0/1
-/// flag; a pool or a stage named so was refused only when the body read
-/// the binding.
-#[test]
-fn a_declaration_cannot_share_its_name_with_a_binding() {
-    const SRC: &str = "pool kv { cap 4; }
-        stage svc : fifo;
-        DECL
-        server {
-          hold kv (cost(kv, k)) at admission (k = computed + 1) { run svc (cost(svc, 1)); }
-          observe response = now;
-        }
-        ";
-    let two_things = "would make the one word mean two things";
-    for (decl, kind) in [
-        ("def k(x) { x }", "a definition"),
-        ("gauge k = 1;", "a gauge"),
-        ("stage k : delay;", "a stage"),
-        ("pool k { cap 1; }", "a pool"),
-        ("stage k[2] : fifo;", "a stage"),
-    ] {
-        let e = check(&SRC.replace("DECL", decl), CLOSED).expect_err(decl);
-        assert!(
-            e.contains(&format!(
-                "`k` is a hold's binding at 5:47; {kind} named `k` {two_things}"
-            )),
-            "{decl}: {e}"
-        );
-        assert!(
-            e.contains("help: rename the declaration or the binding"),
-            "{e}"
-        );
-    }
-    let src = SRC.replace("DECL", "");
-    let e = check(
-        &src.replace("observe response", "observe k = 1; observe response"),
-        CLOSED,
-    )
-    .expect_err("refused");
-    assert!(
-        e.contains(&format!("an observation named `k` {two_things}")),
-        "{e}"
-    );
-    // the binding is the hold's alone: another hold may bind the name again
-    check(
-        &src.replace(
-            "observe response",
-            "hold kv (cost(kv, k)) at admission (k = 1) { run svc (cost(svc, 1)); } observe response",
-        ),
-        CLOSED,
-    )
-    .expect("links");
-    // a queue's own pool is a declaration of the program too
-    let e = check(
-        "queue gw : gateway { route { E.decode (prompt); } }
-         queue E : agg { device gpu { kv cap 100; } pool kv on gpu { } engine on gpu { tokens cap inf; scheduler { advance running; admit waiting while (running.preempted == 0); } worker { forward (1); } }
-           decode (prompt) { hold kv (cost(kv, prompt)) at admission (kv = prompt) { run E prefill (cost(E, 1)) growing kv; } } }
-         server (prompt) { gw.route(); }
-         ",
-        "workload { arrive batch(1); init { set prompt = 3; } send (prompt); session { turn; end; } }",
-    )
-    .expect_err("refused");
-    assert!(
-        e.contains(&format!("a pool of queue `E` named `kv` {two_things}")),
-        "{e}"
-    );
 }
 
 /// #486: nor may two declarations of different kinds share a name.
@@ -1146,58 +1066,4 @@ fn a_declaration_cannot_share_its_name_with_another() {
         )
         .expect(&decl);
     }
-}
-
-/// #484: a binding the body does not read is substituted into the header,
-/// where a name the language supplies, a built-in attribute, a `let` or an
-/// attribute the program sets would read the binding instead of itself:
-/// `at admission (now = 1)` made `cost(kv, now)` read 1.
-#[test]
-fn a_binding_has_a_name_of_its_own() {
-    const SRC: &str = "PRE
-        pool kv { cap 4; }
-        stage svc : fifo;
-        server {
-          hold kv (cost(kv, 1)) at admission (BIND) { run svc (cost(svc, 1)); }
-          observe response = now;
-        }
-        ";
-    let two_things = "would make the one word mean two things";
-    for (pre, set, bind, refused) in [
-        (
-            "",
-            "",
-            "now = 1",
-            "`now` is a name the language supplies, read in every expression; a binding named `now`",
-        ),
-        (
-            "",
-            "",
-            "computed = 1",
-            "`computed` is an attribute the scheduler sets; a binding named `computed`",
-        ),
-        (
-            "let k = 3;",
-            "",
-            "k = 1",
-            "`k` is a `let` constant; a binding named `k`",
-        ),
-        (
-            "",
-            "set k = 5;",
-            "k = 1",
-            "`k` is an attribute the program sets; a binding named `k`",
-        ),
-    ] {
-        let e = check(
-            &SRC.replace("PRE", pre).replace("BIND", bind),
-            &CLOSED.replace("session { ", &format!("session {{ {set} ")),
-        )
-        .expect_err(bind);
-        assert!(
-            e.contains(&format!("{refused} {two_things}")),
-            "{bind}: {e}"
-        );
-    }
-    check(&SRC.replace("PRE", "").replace("BIND", "k = 1"), CLOSED).expect("links");
 }

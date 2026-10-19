@@ -443,8 +443,8 @@ serq run model.sq --workload workload.sq --horizon 10
 
 Observables read state that eviction and admission change, so a `set` that
 reads one and reaches a hold's header is a link error: the header is read at
-admission and the `set` was read before the session queued. Use
-[`at admission`](statements.md#hold).
+admission and the `set` was read before the session queued. Write the
+expression in the [`hold`](statements.md#hold)'s header.
 
 ## See also
 

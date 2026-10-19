@@ -15,7 +15,7 @@ an `observe`, a `stage`, a `pool`, a `device`, an `engine`, a `queue`, a
 | Moment | Where an expression is evaluated | Evaluated |
 |---|---|---|
 | `Session` | a statement of `init`, `turn`, `session`, `server`; a run's work; a hold's `cache` | by the session, when it gets there |
-| `Admit` | a hold's units, `reserve`, `reuse`, `at admission` | for one session at admission |
+| `Admit` | a hold's units, `reserve`, `reuse` | for one session at admission |
 | `Select` | a pool's `queue by` keys | for every waiting hold before each selection |
 | `Evict` | an eviction key; a `spill` clause | for one cache entry |
 | `Ps` | a `ps` stage's capacity | for the stage's jobs |

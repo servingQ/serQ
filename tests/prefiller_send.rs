@@ -36,8 +36,9 @@ const HOLD_SCHEDULER: &str =
     "      scheduler { advance running; admit waiting while (running.preempted == 0); }";
 
 const HOLD_ENTRY: &str = "    prefill (prompt) {
-      hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, reused + budget_left(P)))) reserve (cost(kv, prompt))
-           at admission (reused = min(cachedin(kv), floor(prompt - 1, bs))) {
+      hold reqs (cost(reqs, 1)),
+           kv (cost(kv, min(prompt, min(cachedin(kv), floor(prompt - 1, bs)) + budget_left(P))))
+           reserve (cost(kv, prompt)) {
         set c = cached;
         run P prefill (cost(P, prompt - c)) growing kv;
       } cache (cost(reqs, kv, prompt)) lease kv (inf);
