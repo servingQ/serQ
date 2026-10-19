@@ -153,7 +153,7 @@ pub struct Takes {
     /// `share = share.maxmin`: how the copies divide the two NICs.
     pub share: crate::ir::Share,
     /// `ttl = t`: how long an unread send keeps the source's blocks.
-    pub ttl: Option<Expr>,
+    pub ttl: Option<f64>,
     /// Where `kvt.…` is written, for an error about the relation.
     pub at: usize,
 }

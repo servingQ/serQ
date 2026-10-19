@@ -103,8 +103,8 @@ uncached prompt suffix with `thr`. The prefiller is the one with the prefix,
 then the least loaded, then a draw: `choose` breaks a tie by the smallest
 index, which would send every cold prompt of a lightly loaded deployment to
 `P[0]` and leave `P[1]` idle, where llm-d's picker rotates. It runs the
-prefill entry before the decode entry. `observe lease` is how long the prefiller's blocks stayed
-leased. The router reads the model's actual cache state rather than a
+prefill entry before the decode entry. `observe send_held` is how long the prefiller kept its
+blocks for the decoder's read, its request's send. The router reads the model's actual cache state rather than a
 delayed or approximate cache index. The model uses `thr = 1` for
 always-remote prefill and larger thresholds to keep short uncached suffixes
 on the decoder.
@@ -344,9 +344,12 @@ memory is available.
 
 ### Limits
 
-- Leases use `inf`: expiry, heartbeats and failure recovery are not modeled.
-  vLLM grants and tracks a bounded lease (`nixl/pull_scheduler.py:248-269`)
-  and extends it with heartbeats (`nixl/base_worker.py:3010-3030`).
+- The examples write no `ttl`: a send lasts until it is read or the session
+  ends. A relation's `ttl = t` bounds it from the request's end until a
+  read begins, after which a late decoder computes the prompt itself;
+  vLLM's lease (`nixl/pull_scheduler.py:248-269`) is also renewed by the
+  decoder's heartbeats (`nixl/base_worker.py:3010-3030`), which are not
+  modeled, and a failed read is recomputed rather than read.
 - Transfers do not model bidirectional KV reuse between turns, accelerator
   host buffers or tensor-parallel fan-out.
 - Prefix caches are per session, without cross-session content sharing.

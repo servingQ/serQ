@@ -544,7 +544,7 @@ Six roles are built into the parser, and a queue declares which it plays:
 | Role | Entries | The queue |
 |---|---|---|
 | `gateway` | `route { … }` | `Q.route();` enters this queue's `route`; each gateway is a single queue |
-| `prefill` | `prefill (prompt)` | computes the prompt; how it leaves the KV (its engine's send when a relation reads the queue, `cache`, a hold's `lease`) is its engine's or the entry's |
+| `prefill` | `prefill (prompt)` | computes the prompt, `P (prompt, 1);`; a KV relation that reads the queue makes its engine's request leave the KV as a send |
 | `agg` | `decode (prompt)` | aggregated: prefills the prompt and decodes on its own engine |
 | `decode` | `decode (prompt) from Q` | disaggregated: decodes with the KV `Q`'s entry leased for this request |
 | `link` | `transfer (n)`, or none | the NIC: the body is the time to read `n` tokens; without one, the `serve` is the cost, and its `latency` a wait before it |
@@ -575,12 +575,13 @@ or without.
 The deployment calls an entry where the request goes: `P[i].prefill
 (prompt);` and `D[j].decode (prompt) from P[i];`. The entry names the
 queue its KV comes from, `decode (prompt) from P`: a queue declared above,
-every entry of which leases its pool on every way through it (a hold's
-`lease`, or a call of its engine, whose request registers a send when a
-relation reads the queue), so that
-whichever one the request went through left the KV; a `from` on a queue
-that leases nothing, or on one not declared above, does not link, and a
-call `from` another queue is refused. Inside the entry `P` is that lease,
+every entry of which leaves its KV on every way through it, so that
+whichever one the request went through left the KV: a call of its engine,
+whose request the relation sends, when the reader reads with its
+connector (a source whose entry holds and leases instead does not link
+then), or a hold's `lease` when the reader's entry `transfer`s it by hand.
+A `from` on a queue that leaves nothing, or on one not declared above, does
+not link, and a call `from` another queue is refused. Inside the entry `P` is that lease,
 the pool `P`'s entry leased for this request on the member `P[i]` the call
 names (`transfer … from P to kv …`); it is not a number, not even in an
 index.
@@ -703,9 +704,10 @@ pool its `from` names. That is the `hidden` rule
 at the queue's boundary: vLLM's scheduler knows `max_tokens`, not the length,
 so `o` is not a parameter of `decode` and the body alone reads it. What the
 body `set`s is the queue's (`D.known`); what it `observe`s is the program's;
-a moment the caller needs is `mark prefill_done;`, read afterwards as
-`P.prefill_done` (`examples/pd-disaggregation/pd_batching.sq`) — the
-request's attribute, so without a member index. The gateway is the exception on the session's side: its
+a moment the caller needs is `mark NAME;`, read afterwards as `Q.NAME` —
+the request's attribute, so without a member index (no program here uses
+`mark` since the prefillers became engine calls, whose records say when).
+ The gateway is the exception on the session's side: its
 `route` reads the request's attributes as a `server` does and sets the ones
 the session reads back (`prompt`).
 
@@ -1330,7 +1332,7 @@ the session goes on. An engine that is a KV relation's source
 (`kvt.nixl_pull (P, D, …)`, *Queues*) keeps instead its allocation of its
 memory past the request's end: the request registers a *send*, and its
 blocks stay, neither evictable nor a preemption victim, until the reader's
-load has read them, the relation's `ttl` (`inf` by default), or the
+load has read them, the relation's `ttl` (none by default) before a read begins, or the
 session's end; `cache` is read when the request ends and applies when the
 send does. It is the P/D prefiller's: llm-d's prefill request samples one
 token (`max_tokens = 1`), `P (prompt, 1);`, and its blocks stay for the
@@ -1396,9 +1398,14 @@ with, the `n` tokens' KV crosses `P`'s NIC and the decoder's, as the
 relation says, once the source's request has registered its send (in a
 push, the dispatch's leg's prefill), and the send ends: the latest the
 session holds of that member, its source's call the last before the read.
-A request its entry took from no source loads nothing; a read whose send
-expired (`ttl`) reads nothing there. Such a connector has no `per_token`
-or `save`.
+A request its entry took from no source loads nothing. A read whose send
+has ended before its copy began (its `ttl`, with no leg left to leave
+another) has no KV to read: the source's blocks are gone, `request.loaded`
+is 0, and the request computes those tokens itself, as vLLM recomputes a
+read of invalid blocks; a push's reader that finds no send once its last
+leg has ended first takes the running slot its admission left for after
+the load. A send whose copy has begun stays until the copy is done. Such
+a connector has no `per_token` or `save`.
 
 After any connector's load, a request that has KV for every token it has
 computes its last again, to sample the next (`scheduler.py:3075-3076`),
@@ -1903,13 +1910,11 @@ the A100 cost fit, calibration, comparison runs and their limitations.
   session's text is the session's. A chain cannot be spilled to a tier yet.
   The Lean model's cache is per session: a program with `prefix` is outside
   its fragment.
-* A leg's lease does not expire when its session is slow to ask for it:
-  vLLM's prefiller frees a pushed request's blocks after its lease
-  duration when no decoder has registered, and the request fails; the
-  program's lease is one number, and a copy after it reads nothing
-  ([the push mode](https://github.com/servingQ/serQ/blob/main/docs/design/push-mode.md)).
-* A lease's bound is one number; the heartbeat that renews it is not a
-  construct ([the KV transfer](https://github.com/servingQ/serQ/blob/main/docs/design/pd-transfer.md)).
+* A send's `ttl` is one number, counted from its request's end until a
+  reader's copy begins: the heartbeat that renews vLLM's lease while the
+  decoder waits is not a construct, and a decoder that comes after the
+  `ttl` computes the prompt itself where vLLM's read would fail and be
+  recomputed ([one status per request](https://github.com/servingQ/serQ/blob/main/docs/design/request-state.md)).
 * One eviction order per pool; a priced order uses `price(stage, …)` with
   the stage's online estimates.
 * The Lean model covers a fragment, and there is no proof that the

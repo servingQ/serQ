@@ -74,7 +74,7 @@ fn main() {
         set first = D.first;
         observe admit_wait = D.admitted - t_prefill;  // the decoder's admission: the prompt's blocks
         observe transfer = D.load_done - D.admitted;  // the read: the wait before it and both NICs
-        observe lease = D.load_done - t_prefill;      // how long the prefiller's blocks stayed leased
+        observe send_held = D.load_done - t_prefill;  // how long the prefiller kept its blocks for the read
       }
       observe ttft = first - t0;
       observe decode_time = now - first;

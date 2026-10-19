@@ -131,15 +131,41 @@ fn requests_that_wait_for_each_other_fail_the_run() {
     assert!(e.contains("session 1 waits at `D.kv`"), "{e}");
 }
 
-/// A session that ends while a leg it forked runs is an error, which no
-/// static check sees here: the read that would have waited for the leg is
-/// on a way the run does not take.
+/// A leg's send is read on every way after its `fork` before the session
+/// ends: here the read is on one way of an `if` only, and the session
+/// could end while its leg runs. The program does not link.
 #[test]
-fn a_session_may_not_end_before_its_legs() {
+fn a_leg_s_send_is_read_on_every_way() {
     let route = "set x = 0; fork { P.prefill (prompt); } if (x) { D.decode (prompt) from P; }";
     let workload = "workload { arrive batch(1); init { set prompt = 10; } send (prompt); session { turn; end; } }";
-    let e = fails(&push(route, 100, 1.0), workload);
-    assert!(e.contains("while a leg it forked runs"), "{e}");
+    refused(
+        &push(route, 100, 1.0),
+        workload,
+        "a leg's send of `P.kv` is read on no way after its `fork`",
+    );
+    // a leg calls its source once
+    refused(
+        &push(
+            "fork { P.prefill (prompt); P.prefill (prompt); } D.decode (prompt) from P;",
+            100,
+            1.0,
+        ),
+        workload,
+        "more than once",
+    );
+    // and leases nothing: what it leaves its session is the send
+    refused(
+        &push("D.decode (prompt);", 100, 1.0).replace(
+            "server (prompt) { gw.route(); }",
+            "pool extra { cap 10; }
+        server (prompt) {
+          fork { P.prefill (prompt); hold extra (cost(extra, 1)) { } lease extra (inf); }
+          D.decode (prompt) from P;
+        }",
+        ),
+        workload,
+        "a `fork`'s leg may not lease",
+    );
 }
 
 /// `join;` is gone, and says what replaced it.
@@ -197,21 +223,28 @@ const PROMPT10: &str =
 
 /// A leg whose send expired (`ttl = 0.5`) before it ended (at 11, a second
 /// after its prefill): its session's load, waiting for a send no leg is
-/// left to register, reads nothing there, as a read in order would, rather
-/// than wait for ever. The copy still takes its wait and its second: the KV
-/// arrives at 13. (PR #719's review: the wake asked for the send only.)
+/// left to register, does not wait for ever (PR #719's first review) and
+/// does not read the KV the prefiller has freed (its second): it takes its
+/// running slot and computes the prompt itself, its prefill at 11-12 and
+/// its decode at 12-13, where the read would have answered at 15.
 #[test]
-fn a_load_whose_last_leg_left_no_send_reads_nothing() {
+fn a_load_whose_send_expired_computes_the_prompt_itself() {
     let route = "set t0 = now;
          fork { P.prefill (prompt); run gate (cost(gate, 1)); }
          D.decode (prompt) from P;
-         observe loaded_at = D.load_done - t0;";
-    let src = push(route, 100, 1.0).replace(
-        "share = share.maxmin);",
-        "share = share.maxmin, ttl = 0.5);\n        stage gate : delay;",
-    );
-    let r = run(&src, PROMPT10);
-    assert_eq!(samples(&r, "loaded_at"), [13.0]);
+         observe done_at = now - t0;";
+    let src = |ttl: &str| {
+        push(route, 100, 1.0).replace(
+            "share = share.maxmin);",
+            &format!("share = share.maxmin{ttl});\n        stage gate : delay;"),
+        )
+    };
+    let r = run(&src(", ttl = 0.5"), PROMPT10);
+    assert_eq!(samples(&r, "done_at"), [13.0]);
+    assert_eq!(r.stage("D.nic").map(|s| s.completed), Some(0));
+    // without the `ttl`, the send is read: the copy, then the last token again
+    let r = run(&src(""), PROMPT10);
+    assert_eq!(samples(&r, "done_at"), [15.0]);
 }
 
 /// The load ends the send its copy started on, not a later one: leg A's
@@ -322,4 +355,18 @@ fn two_relations_from_one_source_name_one_ttl() {
         e.contains("two KV relations from `P` name different `ttl`s"),
         "{e}"
     );
+}
+
+/// A leg shares its session's cached prefix: the second turn's prefill leg
+/// reads from `P.kv` what the first turn's left cached there (the session's
+/// own entry, its chain the session's), and computes only the rest.
+#[test]
+fn a_leg_reads_the_session_s_cached_prefix() {
+    let route = "fork { P.prefill (prompt); } D.decode (prompt) from P;";
+    let workload = "workload { arrive batch(1); init { set k = 0; } turn { set prompt = 16 * (k + 1); set k = k + 1; } send (prompt); session { turn; turn; end; } }";
+    let r = run(
+        &push(route, 1000, 1.0).replace("pool kv on gpu { }", "pool kv on gpu { block 16; }"),
+        workload,
+    );
+    assert_eq!(samples(&r, "P.reused"), [0.0, 16.0], "{}", r.text());
 }

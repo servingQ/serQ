@@ -80,7 +80,7 @@ fn a_missing_connector_has_no_fix() {
             "      connector P { load (request.preempted ? 0 : request.input - request.hit); }\n",
             "",
         ),
-        "        observe lease = D.load_done - t1;\n",
+        "        observe send_held = D.load_done - t1;\n",
         "",
     );
     let r = refused(&d, &w, Code::CopyNoConnector);

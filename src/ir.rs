@@ -833,10 +833,12 @@ pub enum CStmt {
     /// time as the statements after the fork. vLLM's push proxy sends the
     /// prefill and the decode request of one request at once this way. A
     /// leg's holds are its own and its `set`s change only its copy, which
-    /// ends with it; the leases and sends it leaves pass to the session when
-    /// it ends. A leg may not `turn`, `end` or fork, and it calls an engine
-    /// whose requests are sent (`CRequest::send`): the session waits for a leg
-    /// by reading that send, the only thing a leg leaves it.
+    /// ends with it; the send it leaves passes to the session when it ends.
+    /// A leg may not `turn`, `end`, fork or lease; it calls an engine whose
+    /// requests are sent (`CRequest::send`) once on every way through it,
+    /// and the session reads that send on every way after the fork: the
+    /// session waits for a leg only by reading its send, the one thing a leg
+    /// leaves it.
     Fork(BlockId),
     /// A request to an engine: `input` tokens of prompt, `output` tokens to
     /// generate. The engine keeps its state (the tokens it has, its KV
@@ -946,10 +948,12 @@ pub fn sends(st: &CStep) -> bool {
 /// A source engine's sends (`CRequest::send`).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CSend {
-    /// How long, at most, an unread send keeps the blocks, in seconds, read
-    /// at the request's end (`Moment::Release`): the relation's `ttl`, `inf`
-    /// by default, when the session's end does.
-    pub ttl: CExpr,
+    /// How long, at most, an unread send keeps the blocks, in seconds from
+    /// the request's end: the relation's `ttl`, a constant above 0. Absent,
+    /// until the session's end. A send a copy has begun to read stays until
+    /// the read is done.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ttl: Option<f64>,
 }
 
 /// An engine's KV connector (vLLM's `KVConnector`): the tokens a request
@@ -2042,6 +2046,11 @@ impl Program {
             ("session", self.session),
         ] {
             v.block(blk).map_err(|e| format!("{k}: {e}"))?;
+        }
+        // a leg's send is read before the session ends, on every way
+        let pending = v.legs_read(self.session, vec![])?;
+        if !pending.is_empty() {
+            return Err(v.unread(&pending).into());
         }
         // a route names statements the program has: nothing reads it to
         // run, so one that names none would only draw a wrong figure
@@ -3396,22 +3405,16 @@ impl Validator<'_> {
                             .into(),
                     );
                 }
-                // the source is an engine's memory whose requests are sent,
-                // or a pool a hold leases (the kernel's spelling of the
-                // prefiller's request)
+                // the source is an engine's memory whose requests are sent
                 let of = |m: usize| m >= src.base && m < src.base + src.count.max(1);
                 let sent = self.p.stages.iter().any(|x| match &x.kind {
                     CStageKind::Step(sp) => sends(sp) && sp.memory.is_some_and(of),
                     _ => false,
                 });
-                let leased =
-                    self.p.blocks.iter().flatten().any(
-                        |s| matches!(s, CStmt::Hold { lease: Some((r, _)), .. } if of(r.base)),
-                    );
-                if !sent && !leased {
+                if !sent {
                     return Err(format!(
-                        "a connector reads `{}`, which no engine whose requests are sent keeps \
-                         and no hold leases: a KV relation's source registers the send it reads",
+                        "a connector reads `{}`, which no engine whose requests are sent \
+                         keeps: a KV relation's source registers the send it reads",
                         self.p.show_pool_ref(src)
                     ));
                 }
@@ -3457,9 +3460,11 @@ impl Validator<'_> {
                     .into(),
             );
         };
-        self.expr(&sd.ttl, Moment::Release)?;
-        if draws(&sd.ttl) {
-            return Err("a send's `ttl` may not draw".into());
+        if sd.ttl.is_some_and(|t| !(t > 0.0 && t.is_finite())) {
+            return Err(format!(
+                "a send's `ttl` {} is not a number above 0: leave it out for none",
+                sd.ttl.unwrap_or_default()
+            ));
         }
         let read = self.p.connectors().any(|(_, c)| {
             c.load
@@ -3828,8 +3833,16 @@ impl Validator<'_> {
                 if !self.calls_a_source(*b) {
                     return Err(
                         "a `fork`'s leg calls no engine whose requests are sent (a KV \
-                         relation's source): the session waits for a leg only by reading its \
-                         send, and would not wait for this one"
+                         relation's source) on every way through it: the session waits for a \
+                         leg only by reading its send, and would not wait for this one"
+                            .into(),
+                    );
+                }
+                if self.source_calls(*b) > 1 {
+                    return Err(
+                        "a `fork`'s leg calls an engine whose requests are sent more than \
+                         once: the session's read waits for one send, and the other would be \
+                         read by nobody"
                             .into(),
                     );
                 }
@@ -3850,13 +3863,117 @@ impl Validator<'_> {
         })
     }
 
+    /// The calls of engines whose requests are sent in block `b`, on its
+    /// longest way, a loop's counting as many.
+    fn source_calls(&self, b: BlockId) -> usize {
+        self.p.blocks[b]
+            .iter()
+            .map(|s| match s {
+                CStmt::Request { stage, .. } => usize::from(matches!(
+                    &self.p.stages[stage.base].kind,
+                    CStageKind::Step(sp) if sends(sp)
+                )),
+                CStmt::Hold { body, .. } => self.source_calls(*body),
+                CStmt::Branch(_, x, y) => self.source_calls(*x).max(self.source_calls(*y)),
+                CStmt::Loop(body) | CStmt::While(_, body) => 2 * self.source_calls(*body),
+                _ => 0,
+            })
+            .sum()
+    }
+
+    /// The sources (their memory's first pool) whose sends the legs forked
+    /// in block `b` leave, `pending` before it, are read by none of the
+    /// requests after them on some way to the block's end: what is still
+    /// pending there. A session that ends with one pending would end while
+    /// its leg runs, or leave the send to nobody.
+    fn legs_read(&self, b: BlockId, mut pending: Vec<usize>) -> Result<Vec<usize>, String> {
+        let union = |mut a: Vec<usize>, b: Vec<usize>| {
+            for x in b {
+                if !a.contains(&x) {
+                    a.push(x);
+                }
+            }
+            a
+        };
+        for s in &self.p.blocks[b] {
+            match s {
+                CStmt::Fork(body) => {
+                    for m in self.leg_sources(*body) {
+                        if !pending.contains(&m) {
+                            pending.push(m);
+                        }
+                    }
+                }
+                CStmt::Request { stage, .. } => {
+                    if let CStageKind::Step(sp) = &self.p.stages[stage.base].kind
+                        && let Some(src) = sp
+                            .connector
+                            .as_ref()
+                            .and_then(|c| c.load.as_ref())
+                            .and_then(|t| t.source.as_ref())
+                    {
+                        pending.retain(|&m| m != src.base);
+                    }
+                }
+                CStmt::Hold { body, .. } => pending = self.legs_read(*body, pending)?,
+                CStmt::Branch(_, x, y) => {
+                    let a = self.legs_read(*x, pending.clone())?;
+                    let c = self.legs_read(*y, pending.clone())?;
+                    pending = union(a, c);
+                }
+                CStmt::Loop(body) | CStmt::While(_, body) => {
+                    let after = self.legs_read(*body, pending.clone())?;
+                    pending = union(pending, after);
+                }
+                CStmt::End if !pending.is_empty() => return Err(self.unread(&pending)),
+                _ => {}
+            }
+        }
+        Ok(pending)
+    }
+
+    /// The memories (first pool) of the sources a leg's block calls.
+    fn leg_sources(&self, b: BlockId) -> Vec<usize> {
+        let mut out = vec![];
+        for s in &self.p.blocks[b] {
+            match s {
+                CStmt::Request { stage, .. } => {
+                    if let CStageKind::Step(sp) = &self.p.stages[stage.base].kind
+                        && sends(sp)
+                        && let Some(m) = sp.memory
+                    {
+                        out.push(m);
+                    }
+                }
+                CStmt::Hold { body, .. } => out.extend(self.leg_sources(*body)),
+                CStmt::Branch(_, x, y) => {
+                    out.extend(self.leg_sources(*x));
+                    out.extend(self.leg_sources(*y));
+                }
+                _ => {}
+            }
+        }
+        out
+    }
+
+    fn unread(&self, pending: &[usize]) -> String {
+        let name = &self.p.pools[pending[0]].name;
+        format!(
+            "a leg's send of `{name}` is read on no way after its `fork` to the session's \
+             end: the session waits for a leg only by reading its send; read it (a call \
+             `… from` the source) on every way before the session ends"
+        )
+    }
+
     /// The first thing a leg's block does that only the session may: a
-    /// `turn`, an `end` or a `fork`, in it or a block in it.
+    /// `turn`, an `end`, a `fork` or a hold's `lease`, in it or a block in it.
     fn leg_may_not(&self, b: BlockId) -> Option<&'static str> {
         self.p.blocks[b].iter().find_map(|s| match s {
             CStmt::Turn => Some("`turn`"),
             CStmt::End => Some("`end`"),
             CStmt::Fork(_) => Some("fork"),
+            // what a leg leaves its session is its request's send
+            CStmt::Hold { lease: Some(_), .. } => Some("lease (`hold … lease`)"),
             CStmt::Hold { body, .. } | CStmt::Loop(body) | CStmt::While(_, body) => {
                 self.leg_may_not(*body)
             }

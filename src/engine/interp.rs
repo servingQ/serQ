@@ -178,7 +178,7 @@ struct Hold<'p> {
     cache: Option<&'p CExpr>,
     chain: Chain,
     /// The pool whose allocation outlives the scope, and for how long.
-    lease: Option<(usize, &'p CExpr)>,
+    lease: Option<(usize, Expiry<'p>)>,
     body: BlockId,
     /// The hold of an engine's request: no body frame; a preemption puts
     /// the request back in the queue, and its end goes on with the request.
@@ -246,6 +246,15 @@ enum Phase {
     Saving,
 }
 
+/// When an allocation kept past its scope ends: after a hold's `lease`
+/// expression's seconds, read at its scope's end, or after a send's `ttl`
+/// (`CSend::ttl`; none, never).
+#[derive(Clone, Copy, Debug)]
+enum Expiry<'p> {
+    After(&'p CExpr),
+    Fixed(f64),
+}
+
 /// What a release keeps cached: its `cache` clause, read then, or an
 /// amount read before (an engine request's lease, `Lease::keep`).
 #[derive(Clone, Copy)]
@@ -287,6 +296,9 @@ struct Lease<'p> {
     /// A source request's send (`CRequest::send`): who made the request, its
     /// call and engine, and since when it is `finished`.
     send: Option<SendOf>,
+    /// A reader's copy reads it: its `ttl` no longer ends it, the read does
+    /// (vLLM's decoder renews the lease while it reads).
+    reading: bool,
 }
 
 /// The request a send is of (`Lease::send`).
@@ -369,7 +381,7 @@ struct Pending<'p> {
     reuse: Option<&'p CExpr>,
     cache: Option<&'p CExpr>,
     chain: Chain,
-    lease: Option<(usize, &'p CExpr)>,
+    lease: Option<(usize, Expiry<'p>)>,
     body: BlockId,
     queued_at: f64,
     /// An engine's request's admission (`Hold::request`).
@@ -1364,7 +1376,10 @@ impl<'p> Interp<'p> {
                             .flatten()
                             .map(|i| (s, i))
                     });
-                if let Some((s, i)) = owner {
+                // a send a copy reads ends with the read, not at its `ttl`
+                if let Some((s, i)) = owner
+                    && !self.sessions[s].leases[i].reading
+                {
                     self.end_lease(s, i);
                     self.try_admit_all();
                 }
@@ -2074,10 +2089,9 @@ impl<'p> Interp<'p> {
         self.sessions[sid].frames.clear();
         self.free.push(sid);
         self.sessions[parent].legs -= 1;
-        // a load waiting for the send the leg left goes on, and one that no
-        // leg is left to send to reads nothing there (`request_next`)
+        // a load waiting for the send the leg left goes on (`send_ready`)
         if let Status::AwaitingSend(pl) = self.sessions[parent].status
-            && (self.lease_of(parent, pl).is_some() || self.sessions[parent].legs == 0)
+            && self.send_ready(parent, pl)
         {
             self.sessions[parent].status = Status::Ready;
             self.ready.push_back(parent);
@@ -2348,7 +2362,9 @@ impl<'p> Interp<'p> {
                     lease,
                 } => {
                     let wanted = self.wanted(pools, sid);
-                    let lease = lease.as_ref().map(|(r, t)| (self.session_index(r, sid), t));
+                    let lease = lease
+                        .as_ref()
+                        .map(|(r, t)| (self.session_index(r, sid), Expiry::After(t)));
                     let chain = self.chain_of(prefix.as_deref(), sid);
                     let pending = Pending {
                         pools: wanted,
@@ -2523,7 +2539,7 @@ impl<'p> Interp<'p> {
             CStageKind::Step(st) => (st.request.as_ref())
                 .and_then(|q| q.send.as_ref())
                 .zip(r.memory)
-                .map(|(sd, m)| (m, &sd.ttl)),
+                .map(|(sd, m)| (m, Expiry::Fixed(sd.ttl.unwrap_or(f64::INFINITY)))),
             _ => None,
         };
         let pending = Pending {
@@ -2564,6 +2580,16 @@ impl<'p> Interp<'p> {
             .and_then(|c| c.load.as_ref())
             .filter(|_| remote)
         {
+            // a read of a send gone (its `ttl`) with no leg left to leave
+            // another reads nothing: the request computes the tokens
+            Some(t)
+                if t.source.as_ref().is_some_and(|src| {
+                    let pl = self.session_index(src, sid);
+                    self.send_of(sid, pl).is_none() && self.sessions[sid].legs == 0
+                }) =>
+            {
+                0.0
+            }
             Some(t) => {
                 let what = format!("connector of {} load", self.p.stages[st].name);
                 self.amount(&t.amount, sid, &what)
@@ -2783,13 +2809,26 @@ impl<'p> Interp<'p> {
             // a read waits for its source's send: a push's leg's prefill
             if let Some(src) = source {
                 let pl = self.session_index(src, sid);
-                // a leg forked may still leave it; with none, the read goes on
-                // as a read of nothing there (an expired send's)
-                if self.lease_of(sid, pl).is_none() && self.sessions[sid].legs > 0 {
+                if !self.send_ready(sid, pl) {
                     self.log_transfer(sid, Transfer::Load, Moved::Registered);
                     self.sessions[sid].status = Status::AwaitingSend(pl);
                     self.restatus(sid);
                     return false;
+                }
+                // no send to read (expired, or no leg left to leave one):
+                // the source's blocks are gone, and the request computes
+                // those tokens itself, waiting first for the slot its
+                // admission left for after the load (vLLM: a read of
+                // invalid blocks is recomputed, scheduler.py:3140, 3254-3257)
+                if self.send_of(sid, pl).is_none() {
+                    if let Some(c) = self.connector(r.stage) {
+                        self.sessions[sid].attrs[c.loaded] = 0.0;
+                    }
+                    if self.request_more(sid) {
+                        return false;
+                    }
+                    let r = self.sessions[sid].req.clone().expect("a request");
+                    return self.request_prefill(sid, &r, grow);
                 }
             }
             self.connector_block(sid, slot, r.loaded, b, Phase::Loading);
@@ -2797,11 +2836,7 @@ impl<'p> Interp<'p> {
         }
         match r.phase {
             Phase::Admitted | Phase::Loading | Phase::Waiting if r.known > 0.0 => {
-                let work = r.known - self.request_pos(sid);
-                self.sessions[sid].req.as_mut().unwrap().phase = Phase::Prefill;
-                self.start_job(r.stage, Some(sid), work, RunMode::Prefill, grow, 0.0);
-                self.restatus(sid);
-                return false;
+                return self.request_prefill(sid, &r, grow);
             }
             // nothing to prefill: it decodes from its first iteration
             Phase::Admitted | Phase::Loading | Phase::Waiting => {}
@@ -2852,6 +2887,33 @@ impl<'p> Interp<'p> {
         self.start_job(stage, Some(sid), work, RunMode::Decode, grow, 0.0);
         self.restatus(sid);
         false
+    }
+
+    /// Start the request's prefill: what of its tokens has no KV.
+    fn request_prefill(&mut self, sid: usize, r: &Req<'p>, grow: Option<usize>) -> bool {
+        let work = r.known - self.request_pos(sid);
+        self.sessions[sid].req.as_mut().unwrap().phase = Phase::Prefill;
+        self.start_job(r.stage, Some(sid), work, RunMode::Prefill, grow, 0.0);
+        self.restatus(sid);
+        false
+    }
+
+    /// The send of pool `pl` (a source's memory) a read of `sid`'s would
+    /// read: the latest it holds, its source's call the last before.
+    fn send_of(&self, sid: usize, pl: usize) -> Option<usize> {
+        self.sessions[sid]
+            .leases
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| l.pool == pl && !l.suspended && l.send.is_some())
+            .max_by_key(|(_, l)| l.id)
+            .map(|(i, _)| i)
+    }
+
+    /// Whether a read of `pl` by `sid` need wait no more: it holds a send of
+    /// it, or no leg is left to leave one (it then reads nothing).
+    fn send_ready(&self, sid: usize, pl: usize) -> bool {
+        self.send_of(sid, pl).is_some() || self.sessions[sid].legs == 0
     }
 
     /// The request has generated its output: it gives its pools back,
@@ -2920,14 +2982,7 @@ impl<'p> Interp<'p> {
         let reads = self.sessions[sid].req.as_mut().and_then(|r| r.reads.take());
         let i = match reads {
             Some(id) => self.sessions[sid].leases.iter().position(|l| l.id == id),
-            None => self.sessions[sid]
-                .leases
-                .iter()
-                .enumerate()
-                .filter(|(_, l)| l.pool == pl && !l.suspended)
-                .max_by_key(|(_, l)| l.id)
-                .map(|(i, _)| i)
-                .or_else(|| self.set_aside_of(sid, pl)),
+            None => self.send_of(sid, pl),
         };
         if let Some(i) = i {
             self.end_lease(sid, i);
@@ -3021,12 +3076,11 @@ impl<'p> Interp<'p> {
         // the send it reads: the latest the session holds of that member,
         // its source's call the last before the copy; the load ends that one
         let pl = self.session_index(src, sid);
-        let read = self.sessions[sid]
-            .leases
-            .iter()
-            .filter(|l| l.pool == pl && !l.suspended)
-            .max_by_key(|l| l.id)
-            .map(|l| (l.id, l.send));
+        let read = self.send_of(sid, pl).map(|i| {
+            let l = &mut self.sessions[sid].leases[i];
+            l.reading = true;
+            (l.id, l.send)
+        });
         self.sessions[sid].req.as_mut().expect("a request").reads = read.map(|r| r.0);
         if let Some((_, Some(sd))) = read {
             self.log(EventKind::Transfer {
@@ -3798,7 +3852,12 @@ impl<'p> Interp<'p> {
             let (q, alloc, computed) = (e.pool, e.alloc, e.computed(h.grown));
             match h.lease {
                 Some((lp, t)) if lp == q => {
-                    let t = self.eval(t, &Ctx::session(sid), Which::Session).max(0.0);
+                    let t = match t {
+                        Expiry::After(e) => {
+                            self.eval(e, &Ctx::session(sid), Which::Session).max(0.0)
+                        }
+                        Expiry::Fixed(t) => t,
+                    };
                     let keep = h
                         .cache
                         .filter(|_| h.request)
@@ -3828,6 +3887,7 @@ impl<'p> Interp<'p> {
                         keep,
                         suspended: false,
                         send,
+                        reading: false,
                     });
                     self.schedule_tick(q);
                     if t.is_finite() {
@@ -4449,7 +4509,7 @@ impl<'p> Interp<'p> {
                 CStmt::Hold {
                     lease: Some((r, t)),
                     ..
-                } => Some((self.session_index(r, victim), t)),
+                } => Some((self.session_index(r, victim), Expiry::After(t))),
                 _ => None,
             }
         };

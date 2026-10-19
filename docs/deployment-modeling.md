@@ -118,7 +118,7 @@ are taken and given back by the session's own statements instead: a `hold`,
 | Release | a request has generated its output | the request gives its pools back and leaves its prefix cached | `cache (n)` |
 | Connector load | admission of a request whose KV comes from elsewhere | the request is given blocks for the KV it loads and no new work until the KV arrives: a `load` transfer, while the request is `waiting_for_kv` | `connector C { load (n); }` |
 | Connector save | a request has generated its output, its engine's connector saving to an L2 | the request keeps its blocks until a `save` transfer has copied them, then releases | `connector C { save (n); }` |
-| Send | a request of an engine that a KV relation reads from ends | the relation registers a send on the request: its blocks stay, neither evictable nor preempted, until the reader's load has read them, the relation's `ttl` runs out, or the session ends | `kvt.nixl_pull (P, D, …, ttl = t)`; `ttl` is `inf` by default |
+| Send | a request of an engine that a KV relation reads from ends | the relation registers a send on the request: its blocks stay, neither evictable nor preempted, until the reader's load has read them, the relation's `ttl` runs out before a read begins, or the session ends; a reader that comes after the `ttl` computes the tokens itself | `kvt.nixl_pull (P, D, …, ttl = t)`; without `ttl`, until the read or the session's end |
 
 A request's blocks go back when it is finished and no transfer of it (a
 save, a send) is registered or in flight.

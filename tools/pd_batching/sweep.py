@@ -154,7 +154,7 @@ def row(experiment, mode, lam, prompt, seed, rep, edits=()):
     r["preemptions_per_s"] = sum(p["preemptions"] for p in pool(rep, "E.kv" if mode == 0 else "D.kv")) / span
     # the prefill engines' blocks, leased until the decoder reads them
     r["p_kv_used"] = sum(p["mean_used"] for p in pool(rep, "P.kv"))
-    for k in ["admit_wait", "transfer", "lease"]:
+    for k in ["admit_wait", "transfer", "send_held"]:
         r[k] = obs[k]["mean"] if obs.get(k, {}).get("count") else math.nan
     for role in ["E", "P", "D"]:
         st = stages(rep, role)

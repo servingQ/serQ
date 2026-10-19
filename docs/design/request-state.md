@@ -134,9 +134,10 @@ and no transfer of it is registered or in flight. A send is *registered*
 from the source's finish, before the reader has started (vLLM registers
 `_reqs_need_send` then, nixl/base_scheduler.py:119-120): "no transfer in
 flight" alone would free the prefiller's blocks before the decoder reads
-them. A send nobody reads ends at the relation's `ttl` (vLLM's lease,
-`_kv_lease_duration`, nixl/pull_scheduler.py:248-262), `inf` by default,
-when the session's end does, as the lease did.
+them. A send no copy has begun to read ends at the relation's `ttl`
+(vLLM's lease, `_kv_lease_duration`, nixl/pull_scheduler.py:248-262), or,
+without one, at the session's end, as the lease did; a reader that comes
+after computes the tokens itself (4).
 
 ## The language changes
 
@@ -235,13 +236,16 @@ its last clause went (`docs/design/prefiller-engine-request.md`).
 Before, the decoder's connector block began with a `Join`. After, the
 read waits for the leg's send (the session's place `AwaitingSend`, the
 request's status `waiting_for_kv`, as vLLM's decoder waits for the push),
-woken when the leg ends and its send passes to the session; in a pull,
-with no leg live, a read whose send has expired reads nothing there.
+woken when the leg ends and its send passes to the session, or when no
+leg is left to leave one (`send_ready`, the one rule both places read).
 `CStmt::Join` and `join;` go: the parser refuses `join;` saying what
 replaced it. The fork rule "a program that forks must join" becomes what
-the language now needs: a leg calls, on every way through it, an engine
-whose requests are sent, since the session waits for a leg only by reading
-its send; a session ending while a leg runs stays a run-time error.
+the language now needs, all checked when the program links: a leg calls,
+once on every way through it, an engine whose requests are sent, and
+leases nothing, since the session waits for a leg only by reading its
+send; and every way of the session after the `fork` reaches a call whose
+connector reads that source before the session ends. A session ending
+while a leg runs stays a run-time error behind those checks.
 `E-pull-forked` goes too: a forked pull's reader waits for the send as a
 push's does, and runs the push's numbers (`tests/copy_diagnostics.rs`).
 
@@ -252,14 +256,60 @@ IR 15, untagged (14 is tagged, v0.1.7-alpha.1):
 - `CConnector.load`, `.save`: `(CExpr, BlockId)` → `CTransfer {amount,
   stage, also, work, share?, latency?, poster?, into, units, room?,
   source?}`, with `CRoom {held, grow, cache}`;
-- `CRequest.send?: CSend {ttl}`, set by the linker on a relation's source;
-- `CStmt::Join` removed;
+- `CRequest.send?: CSend {ttl?: f64}`, set by the linker on a relation's
+  source, the `ttl` a constant above 0 (absent: none);
+- `CStmt::Join` removed; a `Fork`'s body calls a source once and leases
+  nothing, and its send is read on every way after it (validation);
 - `CRequest.lease` (#715) never added.
 
 `scripts/gen_lean_oracle.py` already refused a connector and refuses a
 send; no oracle program had a `Join`: no program leaves the fragment,
 `make lean` passes. No oracle, claims or golden IR file moves (none has a
 connector). `tools/metrics.json`: `CStmt` 18 → 17.
+
+### 4. A send that has ended is not read
+
+A send registered at the source's end lasts until a reader's copy begins
+to read it, then until the copy is done (vLLM's decoder renews the lease
+while it reads, `nixl/base_scheduler.py:199-238`). If it has ended before
+(the relation's `ttl`, with no leg left to leave another), the prefiller's
+blocks are gone and the read is invalid: the request's load is 0, its
+admission takes its running slot, and it computes those tokens itself, as
+vLLM recomputes a read of invalid blocks (`_update_requests_with_invalid_blocks`,
+scheduler.py:3140, 3254-3257). PR #719's second review found the first
+version reading an expired send in full, so that a finite `ttl` freed the
+prefiller's memory at no cost to the decoder. A sweep of `ttl` on
+`llmd_nixl_pull.sq` (seed 1, `--horizon 300`, `--blocksD 1000` so that
+decoders wait for memory; means):
+
+| `ttl` | D.loaded | D.prefill | ttft | P.kv used |
+|---|---|---|---|---|
+| none | 5044.8 | 20.1 | 47.80 ms | 1499.1 |
+| 0.05 | 4934.4 | 141.4 | 49.89 ms | 1458.0 |
+| 0.02 | 4840.7 | 190.9 | 50.86 ms | 1402.0 |
+| 0.01 | 4899.3 | 222.0 | 51.93 ms | 1406.1 |
+| 0.005 | 4837.2 | 207.7 | 51.04 ms | 1397.2 |
+| 0.002 | 4836.4 | 242.6 | 52.21 ms | 1387.0 |
+
+The shorter the `ttl`, the less the prefillers hold, the more the
+decoders compute, and the later the first token (not monotone point by
+point: each `ttl` is another path of the run). At the example's own
+settings a decoder is admitted when the prefill ends and no `ttl` above
+0.005 changes anything. The `ttl` is a constant above 0 (`CSend.ttl:
+Option<f64>`), `ttl = inf` is refused as the default spelled twice, and
+two relations from one source with different `ttl`s do not link.
+
+### 5. One spelling of the source
+
+A connector reads a send, which an engine's request registers. A source
+queue whose entry holds and leases (`hold … { run P prefill … } lease kv
+(inf)`, the kernel's spelling of the same prefill) no longer links as a
+connector's source, and the message names `P (prompt, 1);`: its lease was
+not the relation's (its `ttl` never reached it). A reader that copies by
+hand, an entry's `transfer … from P`, still reads a hold's lease; a `ttl`
+on such a relation is refused. No program here uses the refused form;
+serving-queue-theory's companion `pd_batching.sq` does, and must move to
+the engine form.
 
 ## What moved
 
@@ -336,14 +386,25 @@ status (entries; `running` with its modes) and its transfers by kind;
   theirs running); the report's `finished` counts only the time a save or
   a send kept the blocks.
 
+## Follow-ups
+
+- `at admission` and `mark` are in no program now (the prefillers'
+  records say when); removing them is a change of their own
+  (`docs/design/prefiller-engine-request.md`).
+- serving-queue-theory's `pd_batching.sq` moves to the engine form of the
+  prefiller (5).
+
 ## Decisions
 
 1. **#715 folds in.** Its prefiller as an engine request stays; its
    `lease` clause does not ship; one IR version carries both.
-2. **An unread send ends at the relation's `ttl`**, `inf` by default
-   (the session's end, the reports as before).
+2. **An unread send ends at the relation's `ttl`**, none by default
+   (the session's end, the reports as before); a reader after it
+   computes the tokens itself (4).
 3. **`join` goes**, refused with what replaced it; a leg calls a source
-   engine; a session ending before its legs stays a run-time error.
+   engine once and leases nothing, and its send is read on every way
+   after it, checked when the program links; a session ending before its
+   legs stays a run-time error behind that check.
 4. **No session positions in the report** (P1): the status table is per
    engine request; the log's actions (`wait`, `admit`, `run`, `done`) are
    the positions.
@@ -400,265 +461,19 @@ on the relation, read once.
 
 ## Step 0: the session's state, reverted
 
-The first step, built and then reverted: one state per session and leg,
-read from the interpreter's `Status` and `Phase`. Kept here for its
-evidence (the two enums, the overlaps it found, the per-example table);
-the design above replaces it.
-
-### Before
-
-The interpreter kept two enums. Where a session's statements stand
-(src/engine/interp.rs:127-140 at 9bb9417):
-
-```rust
-#[derive(Clone, Debug, PartialEq)]
-enum Status {
-    Ready,
-    /// Waiting in the queue of a pool for a hold.
-    Queued(usize),
-    /// A job at a stage.
-    InStage(usize, u64),
-    /// A failed `grow` waiting for room (pool policy `none`); resumes at
-    /// the stage job it was in, if any.
-    Growing(usize, f64, Option<(usize, u64)>),
-    /// At a `join`, until the legs the session forked have ended.
-    Joining,
-    Ended,
-}
-```
-
-and how far its engine request has gone (interp.rs:222-235):
-
-```rust
-/// Where a request stands, read when its session is ready again: admitted
-/// (or called, taking nothing), its connector loading, its prefill ended,
-/// its decode ended, its connector saving.
-#[derive(Clone, Copy, Debug, PartialEq)]
-enum Phase {
-    Admitted,
-    Loading,
-    /// Loaded, waiting for the pools its admission takes now.
-    Waiting,
-    Prefill,
-    Decode,
-    Saving,
-}
-```
-
-Neither was reported. The log recorded actions, and a reader had to
-reconstruct the state from them, which it could not always do. The first
-session of `llmd_nixl_pull.sq` (`serq run
-examples/pd-disaggregation/llmd_nixl_pull.sq --workload
-examples/workloads/chat_reply.sq --horizon 30 --log log.json`, its events
-without the engines' iterations):
-
-```json
-{"t": 0, "ev": "arrive", "s": 0}
-{"t": 0, "ev": "turn", "s": 0, "turn": 1}
-{"t": 0, "ev": "wait", "s": 0, "pool": 0}
-{"t": 0, "ev": "admit", "s": 0, "pool": 0}
-{"t": 0, "ev": "run", "s": 0, "stages": [0], "mode": "prefill"}
-{"t": 0.027420000000000003, "ev": "done", "s": 0, "stage": 0}
-{"t": 0.027420000000000003, "ev": "wait", "s": 0, "pool": 6}
-{"t": 0.027420000000000003, "ev": "admit", "s": 0, "pool": 6}
-{"t": 0.027420000000000003, "ev": "run", "s": 0, "stages": [2, 6]}
-{"t": 0.036275, "ev": "done", "s": 0, "stage": 2}
-{"t": 0.036275, "ev": "wait", "s": 0, "pool": 4}
-{"t": 0.036275, "ev": "admit", "s": 0, "pool": 4}
-{"t": 0.036275, "ev": "run", "s": 0, "stages": [4], "mode": "prefill"}
-{"t": 0.036477752, "ev": "done", "s": 0, "stage": 4}
-{"t": 0.036477752, "ev": "run", "s": 0, "stages": [4], "mode": "decode"}
-{"t": 0.052298968, "ev": "done", "s": 0, "stage": 4}
-{"t": 0.052298968, "ev": "end", "s": 0}
-```
-
-The `run` on stages 2 and 6 is the decoder's connector reading the KV
-(vLLM's `WAITING_FOR_REMOTE_KVS`), but nothing says so: the same event is
-a plain transfer in `pd_two_fabrics.sq`. The prefiller's blocks stay
-leased from 0.0274 until the read is done, and nothing says that either.
-A session at a `join` and a `grow` waiting for room were not logged at all
-(`docs/reference/log.md`, "Not logged"). A client's think time was a `run`
-like an engine's.
-
-### The two enums stay; the state is their image
-
-`Status` and `Phase` are not two spellings of one thing. A connector's
-`load` is a block of statements (`kvt.nixl_pull`'s read over two NICs,
-`kvt.nixl_push`'s `join` of the prefill leg), run while `Phase` is
-`Loading`: the session is `Queued` in a pool, `InStage` at a NIC, or
-`Joining`, in that one phase. One enum for both would be their product.
-They stay what they are, the interpreter's control, and the state is one
-function of them, `Interp::state_of`, which the runtime keeps per session
-and per leg (`Session::state`, read again by `Interp::restate` where either
-moves):
-
-```rust
-pub enum State {
-    Waiting,       // queued: a pool's queue (a hold, an engine's admission), a FIFO stage's
-    Preempted,     // queued again after a preemption
-    Loading,       // its engine's connector's `load` block, whatever it does
-    Running,       // a job at a stage; an engine resident's mode beside it
-    Transferring,  // a run over shared stages at once, outside a connector
-    Saving,        // its engine's connector's `save` block
-    Growing,       // a `grow` waiting for room
-    Joining,       // at a `join`, waiting for its legs
-    Client,        // a run the workload issues: a tool or think time
-}
-```
-
-`state_of` reads, in this order:
-
-| The session | State | vLLM |
-|---|---|---|
-| `Ready`, or `Ended` | none: ready takes no time, ended is `end` | |
-| `Queued`, its hold asked again after a preemption, or its request preempted since its call | `preempted` | `PREEMPTED` (scheduler.py:1560, 3088-3089 after a load) |
-| its request's `Phase` is `Loading` | `loading` | `WAITING_FOR_REMOTE_KVS` (scheduler.py:1267) |
-| its request's `Phase` is `Saving` | `saving` | finished, `delay_free_blocks` (scheduler.py:2653-2655) |
-| `Joining` | `joining` | |
-| `Growing` | `growing` | |
-| `Queued` | `waiting` | `WAITING` (request.py:100; scheduler.py:3091 after a load) |
-| `InStage`, the `run` the workload's (`Program::sides`) | `client` | |
-| `InStage` at a shared stage (`Run.also`, `transfer on`) | `transferring` | |
-| `InStage` at a FIFO stage, its work begun and not started | `waiting` | `WAITING` |
-| `InStage` otherwise | `running`, with the job's mode | `RUNNING` (scheduler.py:1319) |
-
-The order is the rules: a connector's block is its load or its save,
-whatever its statements wait for (a push connector's `join` is the
-decoder's request waiting for its KV, not a session joining); a request
-asked again after a preemption is preempted until it runs, through its
-load and its second admission, as vLLM's is.
-
-Every state is reached in some program or test:
-
-- **waiting** and **preempted** are vLLM's two queued statuses. A hold
-  always passes through its pool's queue, even when it is admitted at
-  once (the interpreter enqueues, then admits); a FIFO stage's job that
-  finds a free server never waits. `waiting` covers both queues: queued
-  and not yet served, one meaning.
-- **loading** is the connector's `load` block, from the request's
-  admission to its blocks until the block is done; the second admission
-  that follows, for a running slot, is `waiting` (or `preempted`), as in
-  vLLM.
-- **running** has the engine's mode as an attribute, not as two states:
-  vLLM has one `RUNNING`, and an iteration that chunks a prefill beside
-  decodes runs both.
-- **transferring** is a run over stages held at once: a fabric's flow.
-  Inside a connector it is `loading`; `pd_two_fabrics.sq` transfers in the
-  server itself.
-- **saving** is the connector's `save` block, before the request's pools
-  go back (`vllm_lmcache.sq`'s copy to the L2).
-- **growing** and **joining** are serQ's: vLLM preempts rather than waits
-  for room, and its proxy, not its scheduler, awaits the legs. No example
-  reaches either at its default settings; the tests do
-  (`tests/request_state.rs`).
-- **client** is a statement of the workload: the turn has been answered
-  and the client thinks or calls a tool. vLLM has no request then.
-- **finished** is the log's `end`. A refused hold (`refuse`, then `end`) is
-  vLLM's request that can never be scheduled, `FINISHED_IGNORED`
-  (request.py:401-403).
-
-A leg has its own state, its log events carrying its number. A **lease**
-that outlives its hold is not a state: in `llmd_nixl_pull.sq` the session
-is `loading` at the decoder while it leases the prefiller's blocks, and in
-`vllm_nixl_push.sq` the prefill leg has ended, `finished`, its lease passed
-to its session. vLLM keeps the request `FINISHED` and delays the free; the
-log keeps the state and says `lease` when the allocation outlives its scope
-and `free` when it goes back, by the lease's `id`.
-
-### After
-
-The same run, with its `state`, `lease` and `free` events:
-
-```json
-{"t": 0, "ev": "arrive", "s": 0}
-{"t": 0, "ev": "turn", "s": 0, "turn": 1}
-{"t": 0, "ev": "wait", "s": 0, "pool": 0}
-{"t": 0, "ev": "state", "s": 0, "state": "waiting"}
-{"t": 0, "ev": "admit", "s": 0, "pool": 0}
-{"t": 0, "ev": "run", "s": 0, "stages": [0], "mode": "prefill"}
-{"t": 0, "ev": "state", "s": 0, "state": "running", "mode": "prefill"}
-{"t": 0.027420000000000003, "ev": "done", "s": 0, "stage": 0}
-{"t": 0.027420000000000003, "ev": "lease", "s": 0, "pool": 2, "id": 0}
-{"t": 0.027420000000000003, "ev": "wait", "s": 0, "pool": 6}
-{"t": 0.027420000000000003, "ev": "state", "s": 0, "state": "waiting"}
-{"t": 0.027420000000000003, "ev": "admit", "s": 0, "pool": 6}
-{"t": 0.027420000000000003, "ev": "run", "s": 0, "stages": [2, 6]}
-{"t": 0.027420000000000003, "ev": "state", "s": 0, "state": "loading"}
-{"t": 0.036275, "ev": "done", "s": 0, "stage": 2}
-{"t": 0.036275, "ev": "free", "s": 0, "pool": 2, "id": 0}
-{"t": 0.036275, "ev": "wait", "s": 0, "pool": 4}
-{"t": 0.036275, "ev": "state", "s": 0, "state": "waiting"}
-{"t": 0.036275, "ev": "admit", "s": 0, "pool": 4}
-{"t": 0.036275, "ev": "run", "s": 0, "stages": [4], "mode": "prefill"}
-{"t": 0.036275, "ev": "state", "s": 0, "state": "running", "mode": "prefill"}
-{"t": 0.036477752, "ev": "done", "s": 0, "stage": 4}
-{"t": 0.036477752, "ev": "run", "s": 0, "stages": [4], "mode": "decode"}
-{"t": 0.036477752, "ev": "state", "s": 0, "state": "running", "mode": "decode"}
-{"t": 0.052298968, "ev": "done", "s": 0, "stage": 4}
-{"t": 0.052298968, "ev": "end", "s": 0}
-```
-
-A `state` event follows the action that moved the session there; two in a
-row about one session or leg differ. The vLLM oracle's `preempt` scenario
-(`serq run tools/oracle/preempt.ir.json --log log.json`), the second
-request:
-
-```json
-{"t": 0, "ev": "state", "s": 1, "state": "waiting"}
-{"t": 0, "ev": "state", "s": 1, "state": "running", "mode": "prefill"}
-{"t": 1, "ev": "preempt", "s": 1, "pool": 1}
-{"t": 1, "ev": "wait", "s": 1, "pool": 0}
-{"t": 1, "ev": "state", "s": 1, "state": "preempted"}
-{"t": 30, "ev": "state", "s": 1, "state": "running", "mode": "prefill"}
-{"t": 31, "ev": "state", "s": 1, "state": "running", "mode": "decode"}
-```
-
-The report gains the states some session or leg was in, after the
-client's table (`llmd_nixl_pull.sq`, `--horizon 30`):
-
-```text
-state    stays    mean     p50     p99  number
--------  -----  ------  ------  ------  ------
-waiting    155  0.0001  0.0000  0.0036   0.000
-loading     41  0.0120  0.0106  0.0347   0.016
-running    113  0.0369  0.0309  0.1037   0.139
-client      56  2.0661  1.6395  7.2678   4.731
-```
-
-`stays` are the stays that ended after warm-up, their duration's mean,
-median and 99th percentile (within 0.5 %, the stages' `LogHistogram`);
-`number` is the time-average sessions and legs in the state. A change of
-mode, prefill to decode, is no new stay. Summed over the states, `number`
-is `mean_live` in a program without legs, and more with them: a ready
-session is in no state for no time (`tests/request_state.rs`). In the
-M/M/1 of the getting-started page, `waiting` and `running` are the
-queue's wait and service, and add up to the stage's `number`:
-
-```text
-state     stays    mean     p50      p99  number
--------  ------  ------  ------  -------  ------
-waiting  142452  4.8424  3.3835  21.9678   3.066
-running  179174  0.9993  0.6955   4.6061   0.796
-```
-
-The JSON has every state, visited or not:
-`"states": {"waiting": {"stays", "mean", "p50", "p99", "number"}, …}`;
-pyserq's `Report.states` the same, by name.
-
-### What did not move
-
-No syntax and no IR: `IR_VERSION` stays. The state is read from what the
-interpreter already keeps, and no expression reads it. The log's version
-stays 0 and the report's 1: by their rules (`LOG_VERSION`,
-`REPORT_VERSION`, `docs/ir.md` Stability) an added field or an added event
-a reader may pass over does not bump them, and no existing field moved.
-
-Every example's report is the same, number for number, apart from the
-state table. Checked at seed 1, `--horizon 60`, every program under every
-workload `examples/pairs.json` gives it, the tutorial's included (39
-runs): the JSON equal with `states` left out, the text equal with the
-state table left out. The tutorial and getting-started reports were
-reproduced exactly by the previous `serq` and regenerated with the table.
+The first step kept one state per session and leg, read by a priority
+order from the interpreter's `Status` (where the session's statements
+stand) and `Phase` (how far its engine request has gone), and reported
+nine states (`waiting`, `preempted`, `loading`, `running`, `transferring`,
+`saving`, `growing`, `joining`, `client`). It changed no syntax and no IR,
+and every report stayed the same but for its table. It was reverted
+because the two enums overlap while a connector's block runs, so its one
+state per session was one by a priority order the reader had to learn,
+not by construction: a decoder's request was `loading` while its session
+was `joining` a leg or queued at a NIC's pool, and a lease outlived the
+request whose state it was. Its evidence is the table below, which
+showed where a request was in two states at once and which states no
+program reached (`growing`, `joining`).
 
 ### Every program (Step 0)
 
@@ -727,64 +542,3 @@ time passes (the sum of `number` above). What the table shows of them:
   programs between turns;
 - `growing` and `joining` no program reaches here (below).
 
-### Self-critique (Step 0)
-
-**One enum for `Status` and `Phase`.** Asked for, and rejected by the
-code: they are orthogonal while a connector's block runs, so one enum
-would be their product, and every `match` on where the session is would
-have to name the phase it does not care about. The state is the one place
-that combines them, `state_of`; the two stay the interpreter's control.
-
-**Prefill and decode as two states.** vLLM has one `RUNNING`, and a chunked
-prefill beside decodes is one iteration of both; a request preempted
-mid-decode would have to be "decoding" while it prefills again. The mode
-is the `running` state's attribute, in the log; the client's `ttft` and
-`tpot` and the step stages' fractions already say how the time divides.
-
-**A `request.state` a program reads.** No program needs it: a program that
-branches on a preemption reads `request.preempted`, and one that measures
-a phase observes the clock. It would be a context variable with moment
-rules to settle, an IR change, for no program (CLAUDE.md, "a construct
-some program uses").
-
-**A lease as a state (`finished, leased`).** A session leases while it is
-elsewhere: `llmd_nixl_pull.sq`'s session is `loading` at the decoder with
-the prefiller's blocks leased, so a lease cannot be a state of it without
-the two colliding. vLLM itself keeps `FINISHED` and delays the free. A
-lease is the `lease` and `free` events; its length is the program's own
-observation where it matters (`pd_batching.sq`'s `observe lease`). A
-report row for leases was left out: it would be a resource's, not a
-state's.
-
-**`transferring` inside a connector.** vLLM's `WAITING_FOR_REMOTE_KVS`
-spans the whole wait for the KV, the transfer and what precedes it, so a
-connector's block is `loading` throughout. The price: `transferring` is
-reached by one example.
-
-**A one-stage NIC run as `transferring`.** The IR does not tell a NIC's
-`ps` stage from a compute `ps` stage; only a run over stages held at once,
-a fabric's flow, is a transfer by its shape. Marking a stage as a link
-would be an IR field for the report alone.
-
-**`ready` as a state.** No time passes in it: a session is ready between
-two events of one instant. Kept out, so that the states' `number`s add up
-to the sessions live.
-
-**A state at a FIFO stage's queue other than `waiting`.** Queued and not
-served is one meaning, whether for a pool's admission or a server; the log
-says which (`wait`, or a `run` with no `state running` yet). The asymmetry
-that stays: a hold always passes through its pool's queue, so a hold
-admitted at once is a `waiting` stay of no time, while a FIFO job that
-finds a server free never waits. Dropping the stays of no time was
-considered: it would hide the admissions the pool's `wait` counts.
-
-**Replacing the log's `wait` and `run` with `state` events.** Rejected:
-serq-lar reads them, and `LOG_VERSION` would bump for no gain. The two
-overlap for `waiting` and `running`; the state says what the actions
-cannot (`client` against `running`, `loading`, `saving`, `joining`,
-`growing`).
-
-**`growing` and `joining` with no example.** Kept: each is a wait of a
-construct the language has (`grow` under `preempt none`; `join` outside a
-connector) and has a different cause from every other state. Folding
-them into `waiting` would make that state mean two things.

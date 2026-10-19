@@ -130,10 +130,18 @@ finished           41  0.0121  0.0106  0.0347   0.017
 
 (`llmd_nixl_pull.sq` with `chat_reply.sq`, `--horizon 30`.) The 41
 `finished` stays are the prefiller's requests whose blocks waited for the
-decoder's read, the program's own `observe lease`; the decoders' requests
-waited for that KV as long. A request admitted at once still waited, for
-no time: the `waiting` median of 0. `running`'s `number` is the engines'
-residents, their stages' `number`.
+decoder's read; the decoders' requests waited for that KV as long. The
+program's own `observe send_held` has 40 of them: it is taken after the
+decoder's call returns, and one decoder was still at work at the horizon.
+A request admitted at once still waited, for no time: the `waiting` median
+of 0. `running`'s `number` is the engines' residents, their stages'
+`number`.
+
+`stays` counts the stays that ended after warm-up, and `number` is a time
+average over the same span, so `number ≈ (stays / span) × mean` (Little's
+law) only near a steady state: a run that ends with long stays still open
+leaves them out of `stays` but not of `number` (`fastertransformer.sq` at
+`--horizon 60` is off by 99 %).
 
 ### Stage statistics
 

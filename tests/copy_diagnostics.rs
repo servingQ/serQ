@@ -160,7 +160,7 @@ fn a_connector_whose_engine_does_not_take_its_memory_names_the_taking() {
 #[test]
 fn a_pull_whose_reader_has_no_connector_names_the_connector() {
     let (src, workload) = example("examples/pd-disaggregation/llmd_nixl_pull.sq");
-    let lease = "        observe lease = D.load_done - t1;\n";
+    let lease = "        observe send_held = D.load_done - t1;\n";
     assert!(src.contains(CONNECTOR) && src.contains(lease));
     let e = refused(&src.replace(CONNECTOR, "").replace(lease, ""), &workload);
     // not "declare `kvt.nixl_pull`", which the program declares

@@ -40,7 +40,7 @@ pub(super) struct EngineDecl {
     /// a queue's entry that calls it leaves its KV there, which a `from`
     /// takes when a KV relation reads the queue (the request's send,
     /// `ir::CRequest::send`).
-    pub lease: Option<String>,
+    pub kv: Option<String>,
 }
 
 /// What `pool NAME on …` names: the device or engine that owns the
@@ -634,7 +634,7 @@ impl Parser {
         // a queue's engine admits by its entries, which hold its pools
         let in_queue = device.contains('.');
         let mut taking = self.engine_request(&name, &takeable)?;
-        let lease = taking
+        let kv = taking
             .pools
             .iter()
             .find(|(r, _, _)| self.devices[dev].caps.iter().any(|c| c.name == r.name))
@@ -661,7 +661,7 @@ impl Parser {
             caps,
             connector: s.connector.is_some(),
             request: s.request.is_some() || !in_queue,
-            lease,
+            kv,
         });
         prog.stages.push(StageDecl {
             span,

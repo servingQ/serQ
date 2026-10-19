@@ -33,7 +33,7 @@ over both NICs.
 | `READER` | queue | The queue the KV arrives in; it has a `nic` and an entry `from SOURCE`. |
 | `latency = x` | `const` | The wait before each copy; optional. |
 | `share = POLICY` | [std/share](share.md) | How concurrent copies divide the two NICs, `share.maxmin` or `share.bottleneck`; required. |
-| `ttl = t` | `const` | How long, at most, the source keeps the blocks of a request whose send the reader does not read; optional, `inf` (until the session's end) by default. vLLM's lease on a finished request's blocks (`_kv_lease_duration`, `nixl/pull_scheduler.py:248-262`). |
+| `ttl = t` | `const` | How long, at most, the source keeps the blocks of a request whose send no reader's copy has begun to read, a number above 0; left out, until the session's end. A decoder that comes after it computes the prompt itself. vLLM's lease on a finished request's blocks, `kv_lease_duration`, 30 s by default (`nixl/base_scheduler.py:81-85`; `nixl/pull_scheduler.py:248-262`, `nixl/push_scheduler.py:260-271`), renewed by the decoder's heartbeats while it waits (`nixl/base_scheduler.py:199-238`), which serQ does not model. |
 
 The relation makes the source's requests *sent*: an engine request of
 `SOURCE` (its entry `P (prompt, 1);`) registers a send at its end and keeps

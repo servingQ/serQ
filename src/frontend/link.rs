@@ -954,7 +954,7 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
     }
     // an engine's connector: its transfers, lowered after the session's
     // blocks, which keep their numbers; a family's, one per member
-    let mut sends: Vec<(String, Option<Expr>)> = vec![];
+    let mut sends: Vec<(String, Option<f64>)> = vec![];
     let mut at = 0;
     for decl in &prog.stages {
         for i in 0..decl.count {
@@ -974,7 +974,7 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
                 let member = decl.array.then_some(i);
                 step.connector = Some(Box::new(lk.connector(c, &decl.name, taken, member)?));
                 if let ConnectorKind::Relation(Some(rel)) = &c.kind {
-                    sends.push((rel.source.clone(), rel.ttl.clone()));
+                    sends.push((rel.source.clone(), rel.ttl));
                 }
             }
         }
@@ -983,10 +983,7 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
     // blocks, which the reader's load ends, or its `ttl`: an engine that
     // takes its memory (a source whose entries hold and lease keeps the
     // lease they write)
-    for (source, ttl) in &sends {
-        let ttl = ttl
-            .as_ref()
-            .map_or(Ok(CExpr::Num(f64::INFINITY)), |e| lk.expr(e))?;
+    for &(ref source, ttl) in &sends {
         for st in stages.iter_mut().filter(|st| st.name == *source) {
             if let CStageKind::Step(step) = &mut st.kind
                 && let Some(m) = step.memory
@@ -1002,7 +999,7 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
                          write the same `ttl` on both"
                     )));
                 }
-                r.send = Some(crate::ir::CSend { ttl: ttl.clone() });
+                r.send = Some(crate::ir::CSend { ttl });
             }
         }
     }
@@ -1085,9 +1082,6 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
     Ok((linked, lk.spans))
 }
 
-/// The refusal of an engine whose connector loads into its memory, the KV
-/// pool on its device, which its `taking` does not take: the load would
-/// grow a hold the request does not have.
 /// A connector's lowered statements as its transfer (`ir::CTransfer`):
 /// `blocks[0]` is `run; load; [release S]` for a load, `hold P { grow; run;
 /// load } cache` for a save (its body `blocks[1]`). The lowering above writes
@@ -1144,6 +1138,9 @@ fn transfer(amount: CExpr, blocks: Vec<Vec<CStmt>>) -> crate::ir::CTransfer {
     }
 }
 
+/// The refusal of an engine whose connector loads into its memory, the KV
+/// pool on its device, which its `taking` does not take: the load would
+/// grow a hold the request does not have.
 fn connector_untaken(engine: &str, sp: &StepSpec) -> LinkError {
     use crate::frontend::diagnostic::Code;
     let message = format!(

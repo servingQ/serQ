@@ -572,7 +572,7 @@ fn the_pd_program_survives_decoder_memory_pressure() {
         .unwrap();
     assert!(r.pool("D.kv").unwrap().preemptions > 0, "{}", r.text());
     assert!(
-        r.observe("lease").unwrap().samples.len() > 100,
+        r.observe("send_held").unwrap().samples.len() > 100,
         "{}",
         r.text()
     );

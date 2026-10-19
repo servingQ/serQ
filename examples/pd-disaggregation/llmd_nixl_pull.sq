@@ -39,7 +39,7 @@ fn main() {
         P[i].prefill (input);
         set t1 = now;
         D[j].decode (input) from P[i];
-        observe lease = D.load_done - t1;
+        observe send_held = D.load_done - t1;
       } else {
         D[j].decode (input);
       }

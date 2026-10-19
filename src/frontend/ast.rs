@@ -451,8 +451,8 @@ pub struct Relation {
     pub push: bool,
     pub share: crate::ir::Share,
     /// `ttl = t`: how long a send the reader does not read keeps the
-    /// source's blocks (`ir::CSend::ttl`); absent, `inf`.
-    pub ttl: Option<Expr>,
+    /// source's blocks (`ir::CSend::ttl`); absent, until the session's end.
+    pub ttl: Option<f64>,
 }
 
 /// An engine's `taking P (u) [reserve (r)], … [reuse (e)] [prefix (…)]
