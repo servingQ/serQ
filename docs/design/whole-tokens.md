@@ -344,6 +344,8 @@ What the rounding changes is the workload, not only its arithmetic:
   the program says, and a constant that is a whole number by accident is
   rare; `floor` says it.
 
-What is left: the interpreter's tolerance on token comparisons
-(`EPS` in `src/engine/cache.rs`, and #479's run end) is now unnecessary on
-token counts; removing it is a change of its own, #701.
+The interpreter's tolerance on token comparisons, now unnecessary, went in
+#701: the trie compares lengths exactly (`EPS` is gone from
+`src/engine/cache.rs`), and a growing run moves its hold by each chunk's
+tokens, the last as the others (#479's pinned run end is gone). The
+oracles, the claims and every example's report are unchanged.
