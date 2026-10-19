@@ -3,7 +3,7 @@
 A serQ program describes a serving deployment. Before you write one, it helps
 to know the model of a serving engine the language assumes, so that you can
 place each part of a real engine. An engine has two components: a scheduler
-that decides what each iteration computes and owns every resource, and a
+that decides what each iteration computes and owns the engine's resources, and a
 worker that turns the scheduled batch into time. This page explains how the
 two divide the work, where resources are taken and given back, and which
 invariants every program keeps.
@@ -49,11 +49,14 @@ timing. The linker enforces this split; the table in
 [Engines on devices](language.md#engines-on-devices) lists which value each
 clause may read.
 
-## The scheduler takes and gives back every resource
+## The scheduler takes and gives back the engine's resources
 
-Every allocation and every release happens at one of the scheduler's events.
-The worker never allocates or frees anything. Each row below is an event the
-language knows, and a program states the amounts in its scheduler's clauses:
+On the pools an engine admits, every allocation and every release happens at
+one of the events below, and the worker never allocates or frees anything.
+Each row says where the program states the amounts. Pools no engine admits
+are taken and given back by the session's own statements instead: a `hold`,
+`grow`, `shrink`, `release` or `drop`, retried as each instant settles
+([Events and settling](language.md#events-and-settling)).
 
 | Event | When | What happens to the pools | Where the program says it |
 |---|---|---|---|
@@ -62,7 +65,7 @@ language knows, and a program states the amounts in its scheduler's clauses:
 | Preemption | a growth does not fit | the victim gives its pools back and caches what it computed; it keeps its tokens and waits again | `preempt lifo`, `preempt by (…) requeue head` |
 | Release | a request has generated its output | the request gives its pools back and leaves its prefix cached | `cache (n)` |
 | Connector load | admission of a request whose KV comes from elsewhere | the request is given blocks for the KV it loads and no new work until the KV arrives | `connector C { load (n); }` |
-| Lease | a hold's scope ends while another component still reads its KV | the allocation outlives the hold until a `release` takes it, its time runs out, or the session ends | a hold's `lease P (t)` |
+| Lease | a hold's scope ends while another component still reads its KV | the allocation outlives the hold until a `release` takes it, its time runs out, or the session ends | the hold in the queue entry that calls the engine's stage: `hold … lease kv (inf)` |
 
 The amounts are read at the event, from what the scheduler sees then:
 `request.hit` is read when the request is admitted, and `cache` when it
@@ -72,8 +75,8 @@ read are listed in [Moments](ir.md#moments).
 ### Holding KV after the request ends
 
 A prefill instance in a disaggregated deployment must keep a request's KV
-after the request has finished, until the decode instance has read it. This
-too is the scheduler's decision, written in the program as a lease: the
+after the request has finished, until the decode instance has read it. The
+program says this with a lease on the hold its prefill entry writes: the
 prefiller's `lease kv (inf)` keeps the blocks past the request, and the
 decoder's connector ends the lease when its load is done
 ([Prefill/decode over NIXL](use-cases/pd.md)). The worker plays no part in
@@ -95,15 +98,22 @@ Work that is not the forward runs on other stages, beside the iteration:
 
 ## Invariants
 
-A program can rely on the following invariants. Each one names the check that
-holds it: the linker refuses a program that would break it, the run fails
-with an error, or the Lean model proves it.
+A program can rely on the following invariants. Each one says what holds it:
+
+- *Semantics*: the language defines it so, and no check can fail;
+- *Linker* or *Validation*: a program that would break it does not link, or
+  its IR does not validate;
+- *Run-time check*: the run ends with an error;
+- *Debug check*: checked at every settled instant in a debug build, which
+  `make check`'s test run is; a release `serq run` does not check it;
+- *Lean*: a theorem of the Lean model, within the fragment it covers.
 
 ### Time and iterations
 
 1. **Only the batch passes from the scheduler to the worker.** `forward`
    reads `batch.…` and nothing of the residents or the queues. The scheduler
-   reads nothing of the forward's time. *Linker.*
+   reads nothing of the forward's time. *Linker* (of the text; the IR's
+   `Step` moment also allows the resident count).
 2. **Decisions take no time.** Statements, admissions, growths, preemptions
    and releases happen at an instant. Time passes only at stages: an
    engine's iteration, a `fifo`, `ps` or `delay` stage, a NIC.
@@ -122,33 +132,36 @@ with an error, or the Lean model proves it.
    a `run` with work, a `hold` whose body does, or `end`. A schedule that can
    neither advance nor admit does not link. What the linker cannot see is
    reported at run time: `stuck` sessions and `idle: engine …`
-   ([diagnostics](reference/cli.md)). *Linker and run-time check.*
+   ([the report](reference/cli.md)). *Linker and run-time check.*
 
 ### Resources
 
-7. **Admission is all or nothing.** The head of a queue is admitted when
+7. **Admission is all or nothing.** The head of a queue is admitted only when
    every pool it takes has room for `max(units, reserve)` beside what is
    allocated, and, on a pool with `reserve held`, beside what earlier holds
    reserved and have not yet allocated. A cached prefix never blocks an
-   admission: it is evicted to make room. *Semantics* ([Pools](language.md#pools)).
+   admission: it is evicted to make room. On an engine's pool the iteration's
+   budget, `while` and `only` may hold it back too. *Semantics*
+   ([Pools](language.md#pools)); *Lean* for the cache
+   (`SerqLang.admit_guard_units_only`).
 8. **Memory is bounded.** On every pool, allocated plus cached is at most
    `cap` in every reachable configuration. A pool that preempts its leases
    at ticks may pass `cap` between ticks, and then nothing is cached.
-   *Lean* (`SerqLang.Step.invariant` in `lean/Serq/Core.lean`) *and a check on
-   every debug run.*
+   *Lean* for the model's one-pool commands (`SerqLang.Step.invariant` in
+   `lean/Serq/Core.lean`); *Debug check* for the interpreter.
 9. **Every unit is accounted for.** A pool's `used` equals what its holds and
    leases have allocated, with a prefix that several holds read counted
    once. Its `cached` equals the cached entries of its trie. A pool has one
-   holder per hold and per lease. An allocation released twice, or never
+   holder per hold and per lease, a lease set aside by `suspend` excepted. An allocation released twice, or never
    released, fails this check even when the pool stays within its cap.
-   *Check on every debug run.*
+   *Debug check.*
 10. **A reservation is kept.** On a pool with `reserve held`, what is
     allocated plus what live holds have reserved but not yet allocated fits
     `cap`, so a hold that grows within its reservation always finds room.
-    *Check on every debug run.*
-11. **An allocation has one owner.** `grow`, `shrink`, `load`, `release` and
-    a `growing` run act on the enclosing hold of the same pool, or on a lease
-    the session took. A hold leases only its own pool. *Validation*
+    *Debug check.*
+11. **An allocation has one owner.** `load` and a `growing` run act on the
+    enclosing hold of the same pool; `grow`, `shrink` and `release` act on it
+    or on a lease the session took. A hold leases only its own pool. *Validation*
     ([Validation](ir.md#validation)).
 
 ### Requests
@@ -178,9 +191,7 @@ These assumptions affect how you read a result:
 - **Scheduling is free.** The scheduler's CPU time is not modelled. Its cost
   appears only if the program adds it to `forward`.
 - **Releases take effect at once.** A release frees its blocks for the next
-  iteration. An engine that overlaps scheduling with the forward, and
-  processes a batch's results after it launches the next batch, frees them
-  one iteration later.
+  iteration.
 - **An empty step costs a forward.** A step that only preempts lasts
   `forward` at zero tokens, where an engine may skip the forward.
 - The prefix cache, leases and the Lean fragment have further limits, listed
