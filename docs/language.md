@@ -88,9 +88,10 @@ eitem    := NAME [ '[' N ']' ] cap expr ;    -- a capacity the engine holds (`re
 sstmt    := advance running [only ( expr )] [admission | by ( expr , ... ) | decode first] [each at most ( expr )] ;
           | admit waiting [only ( expr )] [while ( expr )] [each at most ( expr )]
                 [taking POOL ( expr ) [reserve ( expr )] , ... [reuse ( expr )]
-                        [prefix ( expr : expr , ... )] [cache ( expr )]] ;
+                        [prefix ( expr : expr , ... )] [cache ( expr )] [lease POOL ( expr )]] ;
                                              -- what the admission takes of a request, reads of its
-                                             -- cache, and what its release leaves cached
+                                             -- cache, what its release leaves cached, and the pool
+                                             -- it keeps past its end (*An engine's request*)
           | exclusive prefill [each at most ( expr )] ;
           | if ( expr ) { sstmt* } [else ( { sstmt* } | if … )]
           | set NAME = expr ;
@@ -501,15 +502,24 @@ whole:
 ```
 queue P[NP] : prefill {
   device gpu { …; kv cap blocksP * bs; }
-  engine on gpu { reqs cap max_seqsP; tokens cap B; scheduler { … } worker { forward (…); } }
+  engine on gpu {
+    reqs cap max_seqsP;
+    tokens cap B;
+    scheduler {
+      advance running;
+      admit waiting while (running.preempted == 0)
+        taking reqs (1),
+               kv (min(request.known, request.hit + budget_left(P))) reserve (request.known)
+        reuse (floor(request.known - 1, bs))
+        cache (request.input)
+        lease kv (inf);
+    }
+    worker { forward (…); }
+  }
   pool reqs on P { queue fifo; }
   pool kv on gpu { block bs; evict lru; preempt lifo; }
   prefill (prompt) {
-    hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, reused + budget_left(P)))) reserve (cost(kv, prompt))
-         at admission (reused = min(cachedin(kv), floor(prompt - 1, bs))) {
-      set c = cached;
-      run P prefill (cost(P, prompt - c)) growing kv;
-    } cache (cost(reqs, kv, prompt)) lease kv (inf);
+    P (prompt, 1);
   }
 }
 ```
@@ -536,7 +546,7 @@ Six roles are built into the parser, and a queue declares which it plays:
 | Role | Entries | The queue |
 |---|---|---|
 | `gateway` | `route { … }` | `Q.route();` enters this queue's `route`; each gateway is a single queue |
-| `prefill` | `prefill (prompt)` | computes the prompt; how it leaves the KV (`lease`, `cache`, a transfer) is the entry's |
+| `prefill` | `prefill (prompt)` | computes the prompt; how it leaves the KV (`lease`, `cache`, a transfer) is its engine's `taking`'s, or the entry's |
 | `agg` | `decode (prompt)` | aggregated: prefills the prompt and decodes on its own engine |
 | `decode` | `decode (prompt) from Q` | disaggregated: decodes with the KV `Q`'s entry leased for this request |
 | `link` | `transfer (n)`, or none | the NIC: the body is the time to read `n` tokens; without one, the `serve` is the cost, and its `latency` a wait before it |
@@ -567,7 +577,8 @@ or without.
 The deployment calls an entry where the request goes: `P[i].prefill
 (prompt);` and `D[j].decode (prompt) from P[i];`. The entry names the
 queue its KV comes from, `decode (prompt) from P`: a queue declared above,
-every entry of which leases its pool on every way through it, so that
+every entry of which leases its pool on every way through it (a hold's
+`lease`, or a call of its engine whose `taking` leases), so that
 whichever one the request went through left the KV; a `from` on a queue
 that leases nothing, or on one not declared above, does not link, and a
 call `from` another queue is refused. Inside the entry `P` is that lease,
@@ -1308,7 +1319,19 @@ gives its pools back, caching what it computed, keeps its tokens and what
 it generated (`scheduler.py:1561`), and waits at the head of the queue (or
 the tail, `requeue tail`); its `known` is then `max(known, computed + 1)`.
 When it has generated `output` it gives its pools back with `cache`, and
-the session goes on. Every `admit waiting` of the engine writes the same
+the session goes on. With `lease P (t)`, the last clause, it keeps its
+allocation of `P`, one of the pools it takes, past its end, as a hold's
+`lease` keeps one past its scope: neither evictable nor a preemption
+victim, until a `release` of it (a KV relation's connector, below), `t`
+seconds, or the session's end; `cache` is read when the request ends and
+applies when the lease does. It is the P/D prefiller's: llm-d's prefill
+request samples one token (`max_tokens = 1`), `P (prompt, 1);`, and its
+blocks stay for the decoder's read, as vLLM's NIXL connector keeps them
+when the request finishes (`delay_free_blocks`,
+`nixl/pull_scheduler.py:248-262`, `scheduler.py:2653-2655`) and frees
+them when the worker reports them sent (`scheduler.py:3135-3138`). A
+request's lease that no `release` in the program ends would keep its
+blocks for nobody until the session's end, and does not link. Every `admit waiting` of the engine writes the same
 `taking`, which names the engine's capacities and its device's; an engine
 without `taking` takes nothing and admits a request as it is called.
 
@@ -1344,7 +1367,7 @@ its `taking` as any engine does, and the queue's entries call it, `E
 the gateway call the entry (`E[j].decode (prompt);`), not the engine. A
 family's `taking` names its pools without an index, and each member takes
 its own. An entry may still run its engine in the kernel's words (`run E
-prefill (…)`, the prefillers of `examples/pd-disaggregation/`).
+prefill (…)`), which no program here does any more.
 
 An engine's `connector C { per_token (r); load (n); save (n); }` copies a
 request's KV through the L2 queue `C` (vLLM's KV connector; *Queues*). At
@@ -1363,7 +1386,8 @@ source of its queue's KV relation (`kvt.nixl_pull (P, D, …)`,
 `kvt.nixl_push`; *Queues*): for a request its entry was called `from P[i]`
 with, the `n` tokens' KV crosses `P`'s NIC and the decoder's, as the
 relation says (in a push, once the dispatch's leg has joined), and the
-lease the entry took ends; a request its entry took from no source loads
+lease the source's request took (`lease kv (inf)` in its `taking`, above)
+ends; a request its entry took from no source loads
 nothing. Such a connector has no `per_token` or `save`.
 
 After any connector's load, a request that has KV for every token it has
@@ -1389,8 +1413,9 @@ Everything in a hold's header — the units, `reserve`,
 `reuse` — is evaluated when the session is admitted, and a `set` above the
 hold is not (`cache` is read when the session releases, `Serq/Exec.lean`'s
 `release` and the interpreter agree). `at admission (x = e)` gives the
-header a place to name what it is written in terms of, as the prefiller of
-`examples/pd-disaggregation/vllm_nixl_push.sq` does:
+header a place to name what it is written in terms of, as the P/D
+prefillers' holds did before their engines took their requests
+([the design](design/prefiller-engine-request.md)):
 
 ```
 hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, reused + budget_left(P)))) reserve (cost(kv, prompt))

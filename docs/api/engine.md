@@ -259,7 +259,7 @@ each:
 
 ```serq
 admit waiting … taking POOL (units) [reserve (units)], …
-  [reuse (e)] [prefix (k: n, …)] [cache (e)];
+  [reuse (e)] [prefix (k: n, …)] [cache (e)] [lease POOL (t)];
 ```
 
 `taking` names the engine's capacities and its device's, and reads the
@@ -271,6 +271,28 @@ records are attributes the caller reads after the call: `ENGINE.reused`,
 `ENGINE.loaded`, `ENGINE.saved` and `ENGINE.load_done`); `ENGINE.reused`,
 `ENGINE.prefill` and `ENGINE.loaded` are observations of the report too,
 one per admission.
+
+`lease POOL (t)` names a pool the admission takes whose allocation the
+request keeps past its end, as a hold's [`lease`](statements.md#hold):
+neither evictable nor a preemption victim, until a `release` of it, `t`
+seconds, or the session's end; `cache` is read when the request ends and
+applies when the lease does. It is the P/D prefiller's, whose blocks stay
+for the decoder's read (vLLM's NIXL connector returns `delay_free_blocks`
+when the request finishes, `nixl/pull_scheduler.py:248-262`); the reader's
+[`connector`](#connector) ends it. `t` is seconds and reads no `request.…`.
+A lease no `release` in the program ends does not link.
+
+```serq
+admit waiting while (running.preempted == 0)
+  taking reqs (1),
+         kv (min(request.known, request.hit + budget_left(P))) reserve (request.known)
+  reuse (floor(request.known - 1, bs))
+  cache (request.input)
+  lease kv (inf);
+```
+
+(`examples/pd-disaggregation/llmd_nixl_pull.sq`'s prefiller, whose entry is
+`prefill (prompt) { P (prompt, 1); }`.)
 
 A queue's engine admits the same way, and the queue's entries call it,
 `E (input, output);`; the server calls the entry, not the engine. A
@@ -300,7 +322,8 @@ The engine's KV connector (vLLM's `KVConnector`). `QUEUE` is one of two:
   Q, …)` or `kvt.nixl_push`; NIXL's). A request its entry was called `from
   QUEUE[i]` with reads `n` tokens' KV over the two NICs the relation
   declares (in a push, once the dispatch's leg has joined), and the lease
-  the entry took ends; one its entry took from no source loads nothing.
+  the source's request took ends (`lease kv (inf)` in its `taking`); one
+  its entry took from no source loads nothing.
   It has `load` alone.
 
 `taking` reads `n` as `request.loaded`. After the load, a request that has

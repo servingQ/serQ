@@ -3,6 +3,7 @@
     "Pow"
   ],
   "RunMode": [
+    "Prefill",
     "Decode"
   ],
   "CtxVar": [

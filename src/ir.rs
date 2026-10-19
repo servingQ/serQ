@@ -34,8 +34,11 @@ use serde::{Deserialize, Serialize};
 /// `share` from the program to each `Run` over several stages, one policy
 /// per fabric. 14 adds `Run.latency`, a fixed wait before the run's work
 /// at its stages, which was a delay stage of its own (`D.nic.latency`,
-/// `L.latency`) run before the transfer.
-pub const IR_VERSION: u32 = 14;
+/// `L.latency`) run before the transfer. 15 adds `CRequest.lease`, an
+/// engine request's pool that outlives it as a lease (the P/D prefiller's
+/// blocks, kept for the decoder's read), which a reader must keep to run
+/// the program (`docs/design/prefiller-engine-request.md`).
+pub const IR_VERSION: u32 = 15;
 
 /// A reason `Program::validate` refuses a program, and the statement it is
 /// about (block, index in it) when it is about one.
@@ -988,6 +991,18 @@ pub struct CRequest {
     pub cache: Option<CExpr>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prefix: Option<Vec<(CExpr, CExpr)>>,
+    /// The pool (one of `pools`) whose allocation outlives the request as a
+    /// lease of its session, and for how long at most (seconds, read at
+    /// `Moment::Release`), as a hold's `lease`: when the request ends it
+    /// gives its other pools back and keeps this one, neither evictable nor
+    /// a preemption victim, until a `release` of it (a KV relation's
+    /// connector, which has read it), the expiry or the session's end. What
+    /// `cache` keeps of it is read when the request ends. vLLM's prefiller
+    /// keeps a finished request's blocks this way for the decoder's read:
+    /// the NIXL connector's scheduler side returns `delay_free_blocks`
+    /// (`nixl/pull_scheduler.py:248-262`, `scheduler.py:2653-2655`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lease: Option<(CRef, CExpr)>,
     /// The observations the engine records of its requests.
     pub records: RequestRecords,
 }
@@ -1903,6 +1918,8 @@ impl Program {
                 ));
             }
         }
+        // what a hold or an engine's request leases, which a `release`
+        // outside every hold of it ends
         let leased: Vec<&CRef> = self
             .blocks
             .iter()
@@ -1914,6 +1931,10 @@ impl Program {
                 } => Some(r),
                 _ => None,
             })
+            .chain(self.stages.iter().filter_map(|st| match &st.kind {
+                CStageKind::Step(sp) => sp.request.as_ref()?.lease.as_ref().map(|(r, _)| r),
+                _ => None,
+            }))
             .collect();
         // a connector's load computes into the request's hold on the
         // engine's memory, and its save runs inside every pool it takes
@@ -3163,6 +3184,30 @@ impl Validator<'_> {
         }
         if let Some(e) = &r.cache {
             self.expr(e, Moment::Release)?;
+        }
+        if let Some((q, t)) = &r.lease {
+            let name = self.p.show_pool_ref(q);
+            if !r.pools.iter().any(|(p, _, _)| p == q) {
+                return Err(format!(
+                    "a request's `lease {name}`: its admission does not take that pool"
+                ));
+            }
+            self.expr(t, Moment::Release)?;
+            no_draw(t, "`lease`")?;
+            // a lease is KV kept for another instance's read, which ends it;
+            // one that nothing ends is held until the session's end, for
+            // nobody (`kvt.nixl_pull`'s connector writes the `release`)
+            let released = self.p.blocks.iter().flatten().any(|s| {
+                matches!(s, CStmt::Release(p)
+                    if (p.base..p.base + p.count.max(1)).contains(&q.base))
+            });
+            if !released {
+                return Err(format!(
+                    "a request's `lease {name}`: no `release {name}` ends it, so the blocks would \
+                     stay until the session's end, read by nobody; a KV relation from the queue \
+                     (`kvt.nixl_pull (P, D, …)`) and the reader's `connector P` end it"
+                ));
+            }
         }
         for (k, n) in r.prefix.iter().flatten() {
             for e in [k, n] {

@@ -1693,6 +1693,10 @@ fn request_member(r: &mut crate::ir::CRequest, i: usize, n: usize, who: &str) ->
         expr(k, i, n, who)?;
         expr(m, i, n, who)?;
     }
+    if let Some((q, t)) = &mut r.lease {
+        at(q, i, n, who)?;
+        expr(t, i, n, who)?;
+    }
     Ok(())
 }
 
@@ -2416,6 +2420,11 @@ impl Linker<'_> {
             reuse: r.reuse.as_ref().map(|e| self.expr(e)).transpose()?,
             cache: r.cache.as_ref().map(|e| self.expr(e)).transpose()?,
             prefix,
+            lease: r
+                .lease
+                .as_ref()
+                .map(|(q, t)| Ok::<_, _>((self.pool_ref(q)?, self.expr(t)?)))
+                .transpose()?,
             // the attributes now, so that the caller's `E.first` reads one
             records: crate::ir::RequestRecords {
                 reused: 0,

@@ -1503,15 +1503,24 @@ fn in_context(n: &str) -> bool {
 }
 
 /// An entry's body: what it `set`s or `choose`s, what it `mark`s, and the
-/// pools its holds lease.
+/// pools its holds lease, and its engine's requests (`request_lease`, the
+/// pool its `taking` leases).
 fn collect_entry(
     stmts: &[Stmt],
+    request_lease: Option<&str>,
     locals: &mut Vec<String>,
     marks: &mut Vec<String>,
     leased: &mut Vec<String>,
 ) {
     for s in stmts {
         match s {
+            Stmt::EngineRequest { .. } => {
+                if let Some(r) = request_lease
+                    && !leased.iter().any(|l| l == r)
+                {
+                    leased.push(r.to_string());
+                }
+            }
             Stmt::Set(n, _) | Stmt::Choose { var: n, .. } => {
                 if !locals.contains(n) {
                     locals.push(n.clone());
@@ -1528,14 +1537,14 @@ fn collect_entry(
                 {
                     leased.push(r.name.clone());
                 }
-                collect_entry(body, locals, marks, leased);
+                collect_entry(body, request_lease, locals, marks, leased);
             }
             Stmt::Loop(body) | Stmt::While(_, body) | Stmt::Fork(body) => {
-                collect_entry(body, locals, marks, leased)
+                collect_entry(body, request_lease, locals, marks, leased)
             }
             Stmt::Branch(_, a, b) => {
-                collect_entry(a, locals, marks, leased);
-                collect_entry(b, locals, marks, leased);
+                collect_entry(a, request_lease, locals, marks, leased);
+                collect_entry(b, request_lease, locals, marks, leased);
             }
             _ => {}
         }
@@ -1727,12 +1736,15 @@ fn split_reads<'a>(
 
 /// Whether every way through `stmts` leaves a lease: a `from` takes the KV
 /// the entry leased, and a way that leases nothing would leave none to take.
-fn always_leases(stmts: &[Stmt]) -> bool {
+/// `request_lease`: the entry's engine's requests lease (its `taking`).
+fn always_leases(stmts: &[Stmt], request_lease: bool) -> bool {
+    let leases = |b: &[Stmt]| always_leases(b, request_lease);
     for s in stmts {
         match s {
             Stmt::Hold { lease: Some(_), .. } => return true,
-            Stmt::Hold { body, .. } if always_leases(body) => return true,
-            Stmt::Branch(_, a, b) if always_leases(a) && always_leases(b) => return true,
+            Stmt::EngineRequest { .. } if request_lease => return true,
+            Stmt::Hold { body, .. } if leases(body) => return true,
+            Stmt::Branch(_, a, b) if leases(a) && leases(b) => return true,
             Stmt::End => return false,
             _ => {}
         }
@@ -5014,7 +5026,20 @@ impl Parser {
         let mut locals = vec![];
         let mut marks = vec![];
         let mut leased = vec![];
-        collect_entry(&body, &mut locals, &mut marks, &mut leased);
+        // the queue's engine, declared above its entries, and what its
+        // requests lease
+        let request_lease = self
+            .engines
+            .iter()
+            .find(|e| e.name == qname)
+            .and_then(|e| e.lease.clone());
+        collect_entry(
+            &body,
+            request_lease.as_deref(),
+            &mut locals,
+            &mut marks,
+            &mut leased,
+        );
         if let Some(p) = locals.iter().find(|l| params.contains(l)) {
             return self.err_at(at, format!("`{qname}.{verb}` sets its parameter `{p}`"));
         }
@@ -5221,7 +5246,7 @@ impl Parser {
                 q.marks.push(m);
             }
         }
-        let leases = always_leases(&body);
+        let leases = always_leases(&body, request_lease.is_some());
         let q = &mut self.queues[qi];
         q.entries.push(queue::Entry {
             verb,

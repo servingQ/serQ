@@ -42,7 +42,7 @@ ROOT = os.path.join(os.path.dirname(__file__), "..")
 CDIR = os.path.join(ROOT, "tools", "claims")
 OUT = os.path.join(ROOT, "lean", "Serq", "Claims.lean")
 PROVED = os.path.join(ROOT, "examples", "papers", "ClaimsProved.lean")
-IR_VERSION = 14
+IR_VERSION = 15
 # the fragment's bound on the number of sessions, under which the fuel of
 # `settleLoop`, `drain` and `admitHeads` is shown to suffice (examples/papers/Kong.lean)
 MAX_SESSIONS = 500

@@ -67,7 +67,7 @@ fn main() {
       } else {
         choose i in NP by (holders(P[i].reqs) + queued(P[i].reqs));
         P[i].prefill (prompt);
-        set t_prefill = P.prefill_done;
+        set t_prefill = now;
         // a request parked for its read holds blocks, not a running slot
         choose j in ND by (holders(D[j].kv) + queued(D[j].kv));
         D[j].decode (prompt) from P[i];
@@ -117,7 +117,9 @@ fn main() {
       tokens cap B;
       scheduler {
         exclusive prefill each at most (chunk_cap);
-        admit waiting while (running.preempted == 0) each at most (chunk_cap);
+        admit waiting while (running.preempted == 0) each at most (chunk_cap)
+          taking reqs (1), kv (min(request.known, budget_left(P))) reserve (request.known)
+          lease kv (inf);
       }
       worker {
         forward (c0 + max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
@@ -127,10 +129,7 @@ fn main() {
     pool kv on gpu { block bs; evict lru; }
     nic ps(Bw);
     prefill (prompt) {
-      hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, budget_left(P)))) reserve (cost(kv, prompt)) {
-        run P prefill (cost(P, prompt)) growing kv;
-        mark prefill_done;
-      } lease kv (inf);
+      P (prompt, 1);
     }
   }
 

@@ -235,6 +235,14 @@ enum Phase {
     Saving,
 }
 
+/// What a release keeps cached: its `cache` clause, read then, or an
+/// amount read before (an engine request's lease, `Lease::keep`).
+#[derive(Clone, Copy)]
+enum Keep<'p> {
+    Clause(&'p CExpr),
+    Read(f64),
+}
+
 /// An allocation that outlived its scope (`lease P (t)`): the session's
 /// until its `release` of the pool, the expiry or its end, then cached per
 /// `cache`. Not a hold: no `growing` run. A `grow` outside every hold of
@@ -258,6 +266,10 @@ struct Lease<'p> {
     /// the lease ends: a leg's attributes are its own, and its lease passes
     /// to the session when it ends.
     attrs: Option<Vec<f64>>,
+    /// An engine request's lease: what its `cache` keeps, read when the
+    /// request ended (`Moment::Release`), not when the lease does, when the
+    /// session's request may be another.
+    keep: Option<f64>,
     /// Set aside by a tick under `suspend`: its units are the pool's again
     /// and `alloc` is what a later tick gives back.
     suspended: bool,
@@ -2573,12 +2585,16 @@ impl<'p> Interp<'p> {
             .expect("a request to an engine that takes");
         let pools = self.wanted(&spec.pools, sid);
         let chain = self.chain_of(spec.prefix.as_deref(), sid);
+        let lease = spec
+            .lease
+            .as_ref()
+            .map(|(r, t)| (self.session_index(r, sid), t));
         let pending = Pending {
             pools,
             reuse: spec.reuse.as_ref(),
             cache: spec.cache.as_ref(),
             chain,
-            lease: None,
+            lease,
             body: 0,
             queued_at: self.now,
             request: true,
@@ -3591,6 +3607,10 @@ impl<'p> Interp<'p> {
             match h.lease {
                 Some((lp, t)) if lp == q => {
                     let t = self.eval(t, &Ctx::session(sid), Which::Session).max(0.0);
+                    let keep = h
+                        .cache
+                        .filter(|_| h.request)
+                        .map(|c| self.eval(c, &Ctx::session(sid), Which::Session).max(0.0));
                     let id = self.next_lease;
                     self.next_lease += 1;
                     self.sessions[sid].leases.push(Lease {
@@ -3604,6 +3624,7 @@ impl<'p> Interp<'p> {
                         path: e.path.clone(),
                         expires: self.now + t,
                         attrs: None,
+                        keep,
                         suspended: false,
                     });
                     self.log_who(sid, |who| EventKind::Lease { who, pool: q, id });
@@ -3638,7 +3659,12 @@ impl<'p> Interp<'p> {
             .attrs
             .map(|a| std::mem::replace(&mut self.sessions[sid].attrs, a));
         let read = (&l.chain[..], l.shared, &l.path[..]);
-        self.release_units(sid, l.pool, l.alloc, l.computed, l.cache, read);
+        match l.keep {
+            Some(x) => {
+                self.release_kept(sid, l.pool, l.alloc, l.computed, Some(Keep::Read(x)), read)
+            }
+            None => self.release_units(sid, l.pool, l.alloc, l.computed, l.cache, read),
+        }
         if let Some(a) = saved {
             self.sessions[sid].attrs = a;
         }
@@ -3655,6 +3681,19 @@ impl<'p> Interp<'p> {
         alloc: f64,
         computed: f64,
         cache: Option<&'p CExpr>,
+        read: (&[Seg], f64, &[usize]),
+    ) {
+        self.release_kept(sid, q, alloc, computed, cache.map(Keep::Clause), read);
+    }
+
+    /// `release_units`, what `cache` keeps given as its clause or as read.
+    fn release_kept(
+        &mut self,
+        sid: usize,
+        q: usize,
+        alloc: f64,
+        computed: f64,
+        keep: Option<Keep<'p>>,
         (chain, shared, path): (&[Seg], f64, &[usize]),
     ) {
         let serial = self.sessions[sid].serial;
@@ -3670,8 +3709,11 @@ impl<'p> Interp<'p> {
             self.pools[q].holders.remove(i);
         }
         let mut delta = 0.0;
-        if let Some(c) = cache {
-            let want = self.eval(c, &Ctx::session(sid), Which::Session).max(0.0);
+        if let Some(k) = keep {
+            let want = match k {
+                Keep::Clause(c) => self.eval(c, &Ctx::session(sid), Which::Session).max(0.0),
+                Keep::Read(x) => x,
+            };
             let keep = self.round_down(q, want.min(computed));
             let snap = self.sessions[sid].attrs.clone();
             let rseq = self.next_release;

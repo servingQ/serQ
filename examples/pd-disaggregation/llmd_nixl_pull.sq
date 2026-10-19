@@ -54,7 +54,15 @@ fn main() {
     engine on gpu {
       reqs cap max_seqsP;
       tokens cap B;
-      scheduler { advance running; admit waiting while (running.preempted == 0); }
+      scheduler {
+        advance running;
+        admit waiting while (running.preempted == 0)
+          taking reqs (1),
+                 kv (min(request.known, request.hit + budget_left(P))) reserve (request.known)
+          reuse (floor(request.known - 1, bs))
+          cache (request.input)
+          lease kv (inf);
+      }
       worker {
         forward (c0 + max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
       }
@@ -62,12 +70,10 @@ fn main() {
     pool reqs on P { queue fifo; }
     pool kv on gpu { block bs; evict lru; preempt lifo; }
     nic ps(BwP);
+    // the prompt, and one token sampled and discarded (llm-d's prefill
+    // request has max_tokens = 1)
     prefill (prompt) {
-      hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, reused + budget_left(P)))) reserve (cost(kv, prompt))
-           at admission (reused = min(cachedin(kv), floor(prompt - 1, bs))) {
-        set c = cached;
-        run P prefill (cost(P, prompt - c)) growing kv;
-      } cache (cost(reqs, kv, prompt)) lease kv (inf);
+      P (prompt, 1);
     }
   }
   // --8<-- [end:prefiller]
