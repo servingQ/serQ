@@ -1,17 +1,69 @@
 # Deployment modeling
 
 A serQ program describes a serving deployment. Before you write one, it helps
-to know the model of a serving engine the language assumes, so that you can
-place each part of a real engine. An engine has two components: a scheduler
-that decides what each iteration computes and owns the engine's resources, and a
-worker that turns the scheduled batch into time. This page explains how the
-two divide the work, where resources are taken and given back, and which
-invariants every program keeps.
+to know the model of a deployment the language assumes, so that you can
+place each part of a real system. This page starts from the outside: a
+serving system is a client and a server; the deployment is the server, and
+the client's behaviour, the workload, is a file apart. Then it goes inside
+the server's engines: each has a scheduler that decides what each iteration
+computes and owns the engine's resources, and a worker that turns the
+scheduled batch into time. It explains how the two divide the work, where
+resources are taken and given back, and which invariants every program
+keeps.
 
 The language reference defines each construct:
+[The two sides](language.md#the-two-sides),
 [Engines](language.md#engines),
 [Engines on devices](language.md#engines-on-devices) and
 [An engine's request](language.md#an-engines-request). This page connects them.
+
+## A serving system is a client and a server
+
+A serving system has two sides. The **client** sends a request and waits for
+its reply; between requests it reads, thinks or calls a tool. The
+**server** takes each request and replies to it: its gateways route it, its
+engines compute it. serQ keeps the two sides in two files:
+
+| Side | File | What it says |
+|---|---|---|
+| Server | the program, the deployment (`examples/multi-turn/vllm.sq`) | the `server` that takes each request, its gateways, queues, engines, devices and pools |
+| Client | the workload (`examples/workloads/chat.sq`) | how sessions arrive, what each turn draws and sends, what the client does between turns |
+
+The workload is not part of the deployment. One deployment runs under
+several workloads, and one workload runs on several deployments; the two are
+paired only when the program runs:
+
+```sh
+serq run examples/multi-turn/vllm.sq --workload examples/workloads/chat.sq --horizon 600
+```
+
+The only thing the two sides share is the server's signature, as an API's
+provider writes one. The server declares what a request carries (and, with
+`reply (…)`, what its reply carries):
+
+```serq title="examples/multi-turn/vllm.sq"
+--8<-- "examples/multi-turn/vllm.sq:server"
+```
+
+and the workload binds those parameters once, with `send`, and submits a
+request at each `turn;`:
+
+```serq title="examples/workloads/chat.sq"
+--8<-- "examples/workloads/chat.sq:workload"
+```
+
+Nothing else crosses: the server reads the parameters, never `K`, and the
+workload reads its own attributes, and the reply when the server declares
+`reply (…)`. The client's tool time
+above runs on a stage of its own, not the server's.
+[What crosses](language.md#what-crosses) and
+[Paired files](language.md#paired-files) give the rules.
+
+This split is what makes a result comparable. The workload is the
+experiment's input and the deployment is the system under test, so changing
+one leaves the other as it was. What the client saw of each turn (time to
+first token, time per output token, response time) has its own table in the
+report ([What the client sees](language.md#what-the-client-sees)).
 
 ## An engine is a scheduler and a worker
 
