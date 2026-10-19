@@ -145,7 +145,10 @@ the writing guides as they stand (the config copies none of them), and
 skips the generated files. It reviews again on each push, the commits since
 its last review, and pauses after five reviewed commits:
 `@coderabbitai review` asks for one while it is paused, `@coderabbitai full
-review` reviews the whole pull request again. Each finding of either is answered on the pull request: fixed, or why not. When
+review` reviews the whole pull request again. Each finding of either is answered on the pull request: fixed, or why not. A pull request merges
+into main only once CodeRabbit has reviewed its head commit: the
+"CodeRabbit review" ruleset requires its `CodeRabbit` status, and
+automerge waits for it. When
 Copilot's review limit is reached, the subagents in `.claude/agents/`
 review instead, at most two in parallel: `design-reviewer` for the
 checklist and the code, `sim-reviewer` — only when the PR moves a number —
