@@ -82,7 +82,9 @@ it.
 ## The worker only takes time
 
 `forward (T)` is the only item a worker has. `T` is read after the batch is
-scheduled and can read only the batch. Within an engine, time passes only
+scheduled and reads the batch (`batch.…`), the device's time resources,
+the constants and the program's definitions, never the residents or the
+queues. Within an engine, time passes only
 here. Scheduling, admission, growth and release take no time.
 
 Work that is not the forward runs on other stages, beside the iteration:
@@ -126,8 +128,9 @@ with an error, or the Lean model proves it.
 
 7. **Admission is all or nothing.** The head of a queue is admitted when
    every pool it takes has room for `max(units, reserve)` beside what is
-   allocated. A cached prefix never blocks an admission: it is evicted to
-   make room. *Semantics* ([Pools](language.md#pools)).
+   allocated, and, on a pool with `reserve held`, beside what earlier holds
+   reserved and have not yet allocated. A cached prefix never blocks an
+   admission: it is evicted to make room. *Semantics* ([Pools](language.md#pools)).
 8. **Memory is bounded.** On every pool, allocated plus cached is at most
    `cap` in every reachable configuration. A pool that preempts its leases
    at ticks may pass `cap` between ticks, and then nothing is cached.
