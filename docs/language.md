@@ -88,10 +88,10 @@ eitem    := NAME [ '[' N ']' ] cap expr ;    -- a capacity the engine holds (`re
 sstmt    := advance running [only ( expr )] [admission | by ( expr , ... ) | decode first] [each at most ( expr )] ;
           | admit waiting [only ( expr )] [while ( expr )] [each at most ( expr )]
                 [taking POOL ( expr ) [reserve ( expr )] , ... [reuse ( expr )]
-                        [prefix ( expr : expr , ... )] [cache ( expr )] [lease POOL ( expr )]] ;
+                        [prefix ( expr : expr , ... )] [cache ( expr )]] ;
                                              -- what the admission takes of a request, reads of its
-                                             -- cache, what its release leaves cached, and the pool
-                                             -- it keeps past its end (*An engine's request*)
+                                             -- cache, and what its release leaves cached
+                                             -- (*An engine's request*)
           | exclusive prefill [each at most ( expr )] ;
           | if ( expr ) { sstmt* } [else ( { sstmt* } | if … )]
           | set NAME = expr ;

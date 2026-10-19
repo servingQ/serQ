@@ -993,6 +993,15 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
                 && let Some(r) = &mut step.request
                 && r.pools.iter().any(|(q, _, _)| q.base == m)
             {
+                // one source keeps one send of a request, read by whichever
+                // reader: two relations from it name one `ttl`
+                if r.send.as_ref().is_some_and(|sd| sd.ttl != ttl) {
+                    return Err(LinkError::new(format!(
+                        "two KV relations from `{source}` name different `ttl`s: a request of \
+                         `{source}` keeps its blocks for one send, whichever reader reads it; \
+                         write the same `ttl` on both"
+                    )));
+                }
                 r.send = Some(crate::ir::CSend { ttl: ttl.clone() });
             }
         }

@@ -191,3 +191,135 @@ fn a_leg_may_only_run_the_request() {
         );
     }
 }
+
+const PROMPT10: &str =
+    "workload { arrive batch(1); init { set prompt = 10; } send (prompt); session { turn; end; } }";
+
+/// A leg whose send expired (`ttl = 0.5`) before it ended (at 11, a second
+/// after its prefill): its session's load, waiting for a send no leg is
+/// left to register, reads nothing there, as a read in order would, rather
+/// than wait for ever. The copy still takes its wait and its second: the KV
+/// arrives at 13. (PR #719's review: the wake asked for the send only.)
+#[test]
+fn a_load_whose_last_leg_left_no_send_reads_nothing() {
+    let route = "set t0 = now;
+         fork { P.prefill (prompt); run gate (cost(gate, 1)); }
+         D.decode (prompt) from P;
+         observe loaded_at = D.load_done - t0;";
+    let src = push(route, 100, 1.0).replace(
+        "share = share.maxmin);",
+        "share = share.maxmin, ttl = 0.5);\n        stage gate : delay;",
+    );
+    let r = run(&src, PROMPT10);
+    assert_eq!(samples(&r, "loaded_at"), [13.0]);
+}
+
+/// The load ends the send its copy started on, not a later one: leg A's
+/// prefill ends at 10 and the copy (10 tokens over NICs of 1/s, after its
+/// wait of 1) runs to 21, while leg B's prefill, queued behind A's, sends at
+/// 20. The send that ends with the load is A's; B's is left to the
+/// session's end. (PR #719's review: the load used to look up the latest
+/// send again when it ended, which would have been B's.)
+#[test]
+fn a_load_ends_the_send_its_copy_read() {
+    use serq::engine::log::EventKind;
+    use serq::engine::state::{Moved, Transfer};
+    let route = "fork { P.prefill (prompt); }
+         fork { run gate (cost(gate, 0.5)); P.prefill (prompt); }
+         D.decode (prompt) from P;";
+    let src = push(route, 100, 1.0).replace("nic ps(10);", "nic ps(1);")
+        + "\n        stage gate : delay;";
+    let p = common::compile(
+        &common::main_source(&src),
+        PROMPT10,
+        &common::horizon(100.0),
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    let r = serq::run_ir_logged(&p, None, usize::MAX).unwrap();
+    let log = r.log.as_ref().unwrap();
+    let load_done = log
+        .events
+        .iter()
+        .find(|e| {
+            matches!(
+                e.kind,
+                EventKind::Transfer {
+                    kind: Transfer::Load,
+                    moved: Moved::Done,
+                    ..
+                }
+            )
+        })
+        .unwrap()
+        .t;
+    assert_eq!(load_done, 21.0);
+    let sends: Vec<(Option<u32>, Moved, f64)> = log
+        .events
+        .iter()
+        .filter_map(|e| match e.kind {
+            EventKind::Transfer {
+                who,
+                kind: Transfer::Send,
+                moved,
+                ..
+            } => Some((who.leg, moved, e.t)),
+            _ => None,
+        })
+        .collect();
+    assert!(sends.contains(&(Some(0), Moved::Start, 10.0)), "{sends:?}");
+    assert!(
+        sends.contains(&(Some(1), Moved::Registered, 20.0)),
+        "{sends:?}"
+    );
+    assert!(sends.contains(&(Some(0), Moved::Done, 21.0)), "{sends:?}");
+    assert!(!sends.contains(&(Some(1), Moved::Done, 21.0)), "{sends:?}");
+}
+
+/// Two relations from one source name one `ttl`: a request of the source
+/// keeps its blocks for one send, whichever reader reads it.
+#[test]
+fn two_relations_from_one_source_name_one_ttl() {
+    let reader = |name: &str| {
+        format!(
+            "queue {name} : agg, decode {{
+          device gpu {{ kv cap 100; }}
+          engine on gpu {{
+            reqs cap 4;
+            tokens cap inf;
+            connector P {{ load (request.input - request.hit); }}
+            scheduler {{ advance running; admit waiting while (running.preempted == 0) taking kv (request.known), reqs (request.loaded > 0 ? 0 : 1) cache (request.input); }}
+            worker {{ forward (1); }}
+          }}
+          pool reqs on {name} {{ }}
+          pool kv on gpu {{ }}
+          nic ps(10);
+          decode (p) {{ {name} (p, 2); }}
+          decode (p) from P {{ {name} (p, 2); }}
+        }}"
+        )
+    };
+    let src = |t1: &str, t2: &str| {
+        push(
+            "P.prefill (prompt); if (prompt > 5) { D.decode (prompt) from P; } else { E.decode (prompt) from P; }",
+            100,
+            1.0,
+        )
+        .replace(
+            "use \"std/kvt\";",
+            &format!("{}\n        use \"std/kvt\";", reader("E")),
+        )
+        .replace(
+            "kvt.nixl_push (P, D, latency = 1, share = share.maxmin);",
+            &format!(
+                "kvt.nixl_pull (P, D, share = share.maxmin, ttl = {t1}); \
+                 kvt.nixl_pull (P, E, share = share.maxmin, ttl = {t2});"
+            ),
+        )
+    };
+    run(&src("2", "2"), PROMPT10);
+    let e = fails(&src("1", "2"), PROMPT10);
+    assert!(
+        e.contains("two KV relations from `P` name different `ttl`s"),
+        "{e}"
+    );
+}

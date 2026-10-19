@@ -227,6 +227,9 @@ struct Req<'p> {
     /// read it, and since when.
     status: Option<(ReqStatus, RunMode)>,
     since: f64,
+    /// The source's send its load's copy reads (`Lease::id`), chosen when
+    /// the copy starts: the one its load ends.
+    reads: Option<u64>,
 }
 
 /// Where a request stands, read when its session is ready again: admitted
@@ -2037,9 +2040,11 @@ impl<'p> Interp<'p> {
         }
     }
 
-    /// A leg reached the end of its block: what it leased passes to its
-    /// session, and a session waiting at a `join` for its last leg goes on.
-    /// An orphan's leases end with it.
+    /// A leg reached the end of its block: what it leased and the sends it
+    /// registered pass to its session, and a session whose load waits for a
+    /// send goes on once it holds one, or once no leg is left to register
+    /// one (it reads nothing there, as a read whose send expired). An
+    /// orphan's leases end with it.
     fn end_leg(&mut self, sid: usize) {
         self.log_who(sid, |who| EventKind::End { who });
         self.abandon_request(sid);
@@ -2069,9 +2074,10 @@ impl<'p> Interp<'p> {
         self.sessions[sid].frames.clear();
         self.free.push(sid);
         self.sessions[parent].legs -= 1;
-        // a load waiting for the send the leg left goes on
+        // a load waiting for the send the leg left goes on, and one that no
+        // leg is left to send to reads nothing there (`request_next`)
         if let Status::AwaitingSend(pl) = self.sessions[parent].status
-            && self.lease_of(parent, pl).is_some()
+            && (self.lease_of(parent, pl).is_some() || self.sessions[parent].legs == 0)
         {
             self.sessions[parent].status = Status::Ready;
             self.ready.push_back(parent);
@@ -2080,8 +2086,9 @@ impl<'p> Interp<'p> {
 
     /// The sessions and legs that wait for each other and nothing else: a
     /// hold that does not fit a pool every holder of which is one of them
-    /// (a lease's holder is its session), and a `join` whose live legs all
-    /// are. No event will release what they wait for.
+    /// (a lease's or a send's holder is its session), and a load waiting
+    /// for a send whose live legs all are. No event will release what they
+    /// wait for.
     fn waiting_for_each_other(&self) -> Vec<usize> {
         let n = self.sessions.len();
         let live_legs = |s: usize| {
@@ -2432,6 +2439,7 @@ impl<'p> Interp<'p> {
                         call,
                         status: None,
                         since: f64::NAN,
+                        reads: None,
                     });
                     if spec.is_some_and(|r| !r.pools.is_empty()) {
                         self.request_ask(sid, false);
@@ -2473,7 +2481,6 @@ impl<'p> Interp<'p> {
                     // source's send with it)
                     if let Some(r) = &self.sessions[sid].req
                         && matches!(r.phase, Phase::Loading | Phase::Saving)
-                        && self.log.is_some()
                     {
                         self.copy_starts(sid);
                     }
@@ -2905,18 +2912,24 @@ impl<'p> Interp<'p> {
         }
     }
 
-    /// A reader's load has read the source's send in pool `pl`: the latest
-    /// the session holds, its source's call the last before the read (or
-    /// one a tick set aside), which ends.
+    /// A reader's load has read the source's send in pool `pl`: the one its
+    /// copy chose when it started (`Req::reads`), which ends; gone (its
+    /// `ttl`), none. A copy that never started (no copy run) chose none: the
+    /// latest the session holds, or one a tick set aside.
     fn end_send(&mut self, sid: usize, pl: usize) {
-        let latest = self.sessions[sid]
-            .leases
-            .iter()
-            .enumerate()
-            .filter(|(_, l)| l.pool == pl && !l.suspended)
-            .max_by_key(|(_, l)| l.id)
-            .map(|(i, _)| i);
-        if let Some(i) = latest.or_else(|| self.set_aside_of(sid, pl)) {
+        let reads = self.sessions[sid].req.as_mut().and_then(|r| r.reads.take());
+        let i = match reads {
+            Some(id) => self.sessions[sid].leases.iter().position(|l| l.id == id),
+            None => self.sessions[sid]
+                .leases
+                .iter()
+                .enumerate()
+                .filter(|(_, l)| l.pool == pl && !l.suspended)
+                .max_by_key(|(_, l)| l.id)
+                .map(|(i, _)| i)
+                .or_else(|| self.set_aside_of(sid, pl)),
+        };
+        if let Some(i) = i {
             self.end_lease(sid, i);
         }
     }
@@ -3005,14 +3018,17 @@ impl<'p> Interp<'p> {
         else {
             return;
         };
+        // the send it reads: the latest the session holds of that member,
+        // its source's call the last before the copy; the load ends that one
         let pl = self.session_index(src, sid);
-        let send = self.sessions[sid]
+        let read = self.sessions[sid]
             .leases
             .iter()
             .filter(|l| l.pool == pl && !l.suspended)
             .max_by_key(|l| l.id)
-            .and_then(|l| l.send);
-        if let Some(sd) = send {
+            .map(|l| (l.id, l.send));
+        self.sessions[sid].req.as_mut().expect("a request").reads = read.map(|r| r.0);
+        if let Some((_, Some(sd))) = read {
             self.log(EventKind::Transfer {
                 who: sd.who,
                 call: sd.call,
