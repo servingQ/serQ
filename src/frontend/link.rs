@@ -2945,18 +2945,22 @@ impl Linker<'_> {
     }
 
     /// For a pair of files: the workload runs on and holds its own stages
-    /// and pools (and the `tool` it needs none for), the deployment none of
-    /// them (`docs/design/paired-workload.md`). `what` is `stage` or `pool`.
+    /// and pools (and the stage `tool` it needs none for: its `tool Z;`
+    /// runs on whichever file declares it), the deployment none of them
+    /// (`docs/design/paired-workload.md`). `what` is `stage` or `pool`: a
+    /// pool named `tool` is no stage, and the deployment's is its own.
     fn paired_station(&self, name: &str, what: &str) -> LResult<()> {
         let (Some(wl), Some(side)) = (&self.prog.paired, self.reader.get()) else {
             return Ok(());
         };
         let ours = wl.iter().any(|w| w == name);
         match side {
-            crate::ir::Side::Workload if !ours && name != "tool" => Err(LinkError::new(format!(
-                "{what} `{name}` is the deployment file's: the workload runs on and holds its \
-                 own stages and pools, and sends the server what it runs"
-            ))),
+            crate::ir::Side::Workload if !ours && !(what == "stage" && name == "tool") => {
+                Err(LinkError::new(format!(
+                    "{what} `{name}` is the deployment file's: the workload runs on and holds \
+                     its own stages and pools, and sends the server what it runs"
+                )))
+            }
             crate::ir::Side::Server if ours => Err(LinkError::new(format!(
                 "{what} `{name}` is the workload file's: the deployment runs on and holds its \
                  own stages and pools"
