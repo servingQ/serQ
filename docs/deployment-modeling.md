@@ -116,8 +116,12 @@ are taken and given back by the session's own statements instead: a `hold`,
 | Growth | a running request's position passes its allocation | the KV pool grows block by block before the request is served; if it cannot, a victim is preempted | the pool's `block` and `preempt` |
 | Preemption | a growth does not fit | the victim gives its pools back and caches what it computed; it keeps its tokens and waits again | `preempt lifo`, `preempt by (…) requeue head` |
 | Release | a request has generated its output | the request gives its pools back and leaves its prefix cached | `cache (n)` |
-| Connector load | admission of a request whose KV comes from elsewhere | the request is given blocks for the KV it loads and no new work until the KV arrives | `connector C { load (n); }` |
-| Lease | a hold's scope ends while another component still reads its KV | the allocation outlives the hold until a `release` takes it, its time runs out, or the session ends | the hold in the queue entry that calls the engine's stage: `hold … lease kv (inf)` |
+| Connector load | admission of a request whose KV comes from elsewhere | the request is given blocks for the KV it loads and no new work until the KV arrives: a `load` transfer, while the request is `waiting_for_kv` | `connector C { load (n); }` |
+| Connector save | a request has generated its output, its engine's connector saving to an L2 | the request keeps its blocks until a `save` transfer has copied them, then releases | `connector C { save (n); }` |
+| Send | a request of an engine that a KV relation reads from ends | the relation registers a send on the request: its blocks stay, neither evictable nor preempted, until the reader's load has read them, the relation's `ttl` runs out, or the session ends | `kvt.nixl_pull (P, D, …, ttl = t)`; `ttl` is `inf` by default |
+
+A request's blocks go back when it is finished and no transfer of it (a
+save, a send) is registered or in flight.
 
 The amounts are read at the event, from what the scheduler sees then:
 `request.hit` is read when the request is admitted, and `cache` when it
@@ -127,12 +131,43 @@ read are listed in [Moments](ir.md#moments).
 ### Holding KV after the request ends
 
 A prefill instance in a disaggregated deployment must keep a request's KV
-after the request has finished, until the decode instance has read it. The
-program says this with a lease on the hold its prefill entry writes: the
-prefiller's `lease kv (inf)` keeps the blocks past the request, and the
-decoder's connector ends the lease when its load is done
-([Prefill/decode over NIXL](use-cases/pd.md)). The worker plays no part in
-it.
+after the request has finished, until the decode instance has read it. Its
+entry is an engine call, `P (prompt, 1)`, and nothing in it keeps the
+blocks: the KV relation `kvt.nixl_pull (P, D, …)` (or `kvt.nixl_push`)
+registers a send on each of `P`'s requests when it ends. The request is
+finished, its blocks kept, until the decoder's connector has read them,
+which ends the send ([Prefill/decode over NIXL](use-cases/pd.md)). In a
+push the prefill is a leg (`fork`), and the decoder's load waits for the
+leg's send. The worker plays no part in it.
+
+## Request statuses
+
+A request is one call of an engine, `E (input, output)`; a disaggregated
+turn is two, the prefiller's and the decoder's. It is in exactly one of
+five statuses at any time:
+
+| Status | The request |
+|---|---|
+| `waiting` | is in the engine's waiting queue, not scheduled; after a load, with its blocks, waiting for a running slot |
+| `waiting_for_kv` | is admitted to its blocks and waits for its connector's load before it can be scheduled |
+| `running` | is in the engine's batch, in prefill or decode (its mode); a resident stalled for room to grow is one |
+| `preempted` | is in the waiting queue again after a preemption, until it runs |
+| `finished` | has generated its output; it keeps its blocks while a save or a send of it is registered or in flight |
+
+Its KV moves are **transfers** beside the status, each with its own time:
+
+| Transfer | During | What it copies |
+|---|---|---|
+| `load` | `waiting_for_kv` | the KV it reads in at admission: from an L2, or from a source request's send |
+| `save` | `finished` | its KV, to an L2, before its blocks go back |
+| `send` | `finished` | its KV, kept for a reader's load, which is the same copy |
+
+A request's blocks go back when it is `finished` and no transfer of it is
+registered or in flight. A program does not read the status. The report's
+[status table](reference/cli.md#request-statuses) gives the time spent in
+each, and the [run log](reference/log.md) records every status and every
+transfer. A program that calls no engine has no request: its stage and pool
+tables say where its sessions are.
 
 ## The worker only takes time
 
@@ -204,7 +239,7 @@ A program can rely on the following invariants. Each one says what holds it:
 9. **Every unit is accounted for.** A pool's `used` equals what its holds and
    leases have allocated, with a prefix that several holds read counted
    once. Its `cached` equals the cached entries of its trie. A pool has one
-   holder per hold and per lease, a lease set aside by `suspend` excepted. An allocation released twice, or never
+   holder per hold and per lease (a send is one), a lease set aside by `suspend` excepted. An allocation released twice, or never
    released, fails this check even when the pool stays within its cap.
    *Debug check.*
 10. **A reservation is kept.** On a pool with `reserve held`, what is
@@ -213,8 +248,11 @@ A program can rely on the following invariants. Each one says what holds it:
     *Debug check.*
 11. **An allocation has one owner.** `load` and a `growing` run act on the
     enclosing hold of the same pool; `grow`, `shrink` and `release` act on it
-    or on a lease the session took. A hold leases only its own pool. *Validation*
-    ([Validation](ir.md#validation)).
+    or on a lease the session took. A hold leases only its own pool. A
+    request's blocks kept for a send are its own until the reader's load,
+    which reads the send its copy chose, ends it; a source has one `ttl`
+    however many relations read it. *Validation*
+    ([Validation](ir.md#validation)) and the *Linker*.
 
 ### Requests
 
@@ -235,6 +273,11 @@ A program can rely on the following invariants. Each one says what holds it:
     hold's header is read again at every admission attempt, so it may not
     draw. An `only` predicate may not read `now`. A gauge reads no session.
     *Validation* ([Moments](ir.md#moments)).
+16. **A request has one status at a time.** No statement of the program
+    runs inside an engine request: its connector's moves are transfers of
+    a fixed shape, a leg is a request of its own, and nothing joins. The
+    status is read from the engine's own state of the request. *Semantics*;
+    `tests/request_state.rs` checks every example's log.
 
 ## What the model leaves out
 
