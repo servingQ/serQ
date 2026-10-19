@@ -49,12 +49,6 @@ timing. The linker enforces this split; the table in
 [Engines on devices](language.md#engines-on-devices) lists which value each
 clause may read.
 
-vLLM has the same split. `Scheduler.schedule()` returns a `SchedulerOutput`
-(`sched/output.py:232`) that says what each request is scheduled for. The
-model runner applies it and runs the forward. Around the forward it only
-starts a KV connector's loads and waits for its saves
-(`kv_connector_model_runner_mixin.py:84-92`).
-
 ## The scheduler takes and gives back every resource
 
 Every allocation and every release happens at one of the scheduler's events.
@@ -75,53 +69,15 @@ The amounts are read at the event, from what the scheduler sees then:
 releases. For each expression, the moment it is read and the values it can
 read are listed in [Moments](ir.md#moments).
 
-### Every reference engine places them there
-
-The examples model six engines. In each of them, the scheduler side allocates
-and frees, and the model runner only uses the block indices it is given:
-
-| Engine (example) | Allocation | Release | What the worker does |
-|---|---|---|---|
-| vLLM ([`vllm.sq`](use-cases/vllm.md)) | `allocate_slots` for running requests (`scheduler.py:742-813`) and waiting ones (`scheduler.py:1214-1226`) | `_free_request` (`scheduler.py:2628-2657`) | adds the scheduler's new block IDs to its block table and drops finished requests (`gpu_model_runner.py:1203-1217`) |
-| SGLang (`sglang.sq`) | the scheduler's batch preparation: [request slot](https://github.com/sgl-project/sglang/blob/b792228b35b21565067520857319dfc05e4d134e/python/sglang/srt/mem_cache/allocation.py#L323), [KV slots](https://github.com/sgl-project/sglang/blob/b792228b35b21565067520857319dfc05e4d134e/python/sglang/srt/mem_cache/allocation.py#L396) | [`release_kv_cache`](https://github.com/sgl-project/sglang/blob/b792228b35b21565067520857319dfc05e4d134e/python/sglang/srt/managers/scheduler_components/batch_result_processor.py#L1432) when the batch's results are processed | writes KV at the indices in the batch |
-| TGI (`tgi.sq`) | the router's queue, prompt plus `max_new_tokens` at once ([`queue.rs`](https://github.com/huggingface/text-generation-inference/blob/b4adbf2f6e2e721280bd0ea5f91d70f7d033f5ed/backends/v3/src/queue.rs#L321)) | dropping the allocation frees it ([`block_allocator.rs`](https://github.com/huggingface/text-generation-inference/blob/b4adbf2f6e2e721280bd0ea5f91d70f7d033f5ed/backends/v3/src/block_allocator.rs#L19-L22)) | the Python server [receives](https://github.com/huggingface/text-generation-inference/blob/b4adbf2f6e2e721280bd0ea5f91d70f7d033f5ed/server/text_generation_server/models/flash_causal_lm.py#L360-L361) the blocks and slots |
-| TensorRT-LLM (`tensorrt_llm.sq`) | the executor's resource manager after scheduling ([context](https://github.com/NVIDIA/TensorRT-LLM/blob/bf414e37291b9d15a5328af99e349db8dedf7a4d/tensorrt_llm/_torch/pyexecutor/resource_manager.py#L1165), [generation](https://github.com/NVIDIA/TensorRT-LLM/blob/bf414e37291b9d15a5328af99e349db8dedf7a4d/tensorrt_llm/_torch/pyexecutor/resource_manager.py#L1191)) | [`free_resources`](https://github.com/NVIDIA/TensorRT-LLM/blob/bf414e37291b9d15a5328af99e349db8dedf7a4d/tensorrt_llm/_torch/pyexecutor/py_executor.py#L8219) | the model engine reads the block offsets |
-| vllm-ascend ([`ascend.sq`](use-cases/ascend.md)) | vLLM's scheduler | vLLM's scheduler | the NPU model runner [delegates](https://github.com/vllm-project/vllm-ascend/blob/v0.27.1rc1/vllm_ascend/worker/model_runner_v1.py#L853) to vLLM's |
-| vllm-rbln ([`rbln.sq`](use-cases/rbln.md)) | vLLM's scheduler, through its own KV cache manager | vLLM's scheduler | as vLLM's; it also copies KV blocks, but [the scheduler chooses](https://github.com/rebellions-sw/vllm-rbln/blob/v0.11.3a21/vllm_rbln/v1/core/rbln_scheduler.py#L997) which ones |
-
-During warmup and CUDA-graph capture, TGI and TensorRT-LLM let the model
-runner allocate blocks for dummy requests. A serQ program has no warmup, so
-the exception does not apply.
-
 ### Holding KV after the request ends
 
 A prefill instance in a disaggregated deployment must keep a request's KV
-after the request has finished, until the decode instance has read it. In
-every engine above that supports disaggregation, this too is the scheduler's
-decision. The worker only reports that the transfer is done:
-
-- **vLLM.** When a request finishes, the scheduler asks its KV connector
-  whether to free the blocks now (`scheduler.py:2628-2657`). NIXL's
-  scheduler side keeps them for the lease duration
-  (`nixl/pull_scheduler.py:248-269`). When the worker reports
-  `finished_sending`, the scheduler frees them
-  (`_update_from_kv_xfer_finished`, `scheduler.py:3139-3144`).
-- **SGLang.** A finished prefill request goes to an
-  [in-flight queue](https://github.com/sgl-project/sglang/blob/b792228b35b21565067520857319dfc05e4d134e/python/sglang/srt/disaggregation/prefill.py#L1015).
-  The scheduler loop polls the KV sender and releases the request only
-  [on success](https://github.com/sgl-project/sglang/blob/b792228b35b21565067520857319dfc05e4d134e/python/sglang/srt/disaggregation/prefill.py#L1182-L1188).
-- **TensorRT-LLM.** A context-only request whose KV is still being sent
-  [is not terminated](https://github.com/NVIDIA/TensorRT-LLM/blob/bf414e37291b9d15a5328af99e349db8dedf7a4d/tensorrt_llm/_torch/pyexecutor/py_executor.py#L8591).
-  The transfer coordinator
-  [terminates it](https://github.com/NVIDIA/TensorRT-LLM/blob/bf414e37291b9d15a5328af99e349db8dedf7a4d/tensorrt_llm/_torch/disaggregation/orchestration/coordinator.py#L549)
-  when the last transfer ends.
-- **vllm-ascend.** Its Mooncake connector
-  [delays the free](https://github.com/vllm-project/vllm-ascend/blob/v0.27.1rc1/vllm_ascend/distributed/kv_transfer/kv_p2p/mooncake_connector.py#L2036)
-  in the same way as vLLM's NIXL connector.
-
-In serQ the prefiller's `lease kv (inf)` says this, and the decoder's
-connector ends the lease when its load is done
-([Prefill/decode over NIXL](use-cases/pd.md)).
+after the request has finished, until the decode instance has read it. This
+too is the scheduler's decision, written in the program as a lease: the
+prefiller's `lease kv (inf)` keeps the blocks past the request, and the
+decoder's connector ends the lease when its load is done
+([Prefill/decode over NIXL](use-cases/pd.md)). The worker plays no part in
+it.
 
 ## The worker only takes time
 
@@ -134,9 +90,6 @@ Work that is not the forward runs on other stages, beside the iteration:
 - a KV connector's copies run at the bandwidth of its L2 queue;
 - a transfer between instances runs on the NICs;
 - a tool call runs on its own stage.
-
-The table above is why the language has no allocation or release in
-`worker`: none of the reference engines puts them there.
 
 ## Invariants
 
@@ -222,10 +175,10 @@ These assumptions affect how you read a result:
 - **Scheduling is free.** The scheduler's CPU time is not modelled. Its cost
   appears only if the program adds it to `forward`.
 - **Releases take effect at once.** A release frees its blocks for the next
-  iteration. SGLang and TensorRT-LLM with overlap scheduling process a
-  batch's results after launching the next batch, so their frees arrive one
-  iteration later.
+  iteration. An engine that overlaps scheduling with the forward, and
+  processes a batch's results after it launches the next batch, frees them
+  one iteration later.
 - **An empty step costs a forward.** A step that only preempts lasts
-  `forward` at zero tokens. A real engine skips that forward pass.
+  `forward` at zero tokens, where an engine may skip the forward.
 - The prefix cache, leases and the Lean fragment have further limits, listed
   under [Known limitations](language.md#9-known-limitations).
