@@ -51,6 +51,26 @@ fn the_report_has_the_shape_its_version_names() {
     // the client's metrics, each shaped as an observation
     assert_eq!(keys(&j["client"]), vec!["response", "tpot", "ttft"]);
     assert_eq!(keys(&j["client"]["response"]), keys(&j["observes"]["x"]));
+    // every request state (`docs/design/request-state.md`), visited or not,
+    // with its stays and the sessions in it
+    assert_eq!(
+        keys(&j["states"]),
+        vec![
+            "client",
+            "growing",
+            "joining",
+            "loading",
+            "preempted",
+            "running",
+            "saving",
+            "transferring",
+            "waiting",
+        ]
+    );
+    assert_eq!(
+        keys(&j["states"]["waiting"]),
+        vec!["mean", "number", "p50", "p99", "stays"]
+    );
     let shape = (
         keys(&j),
         keys(&j["observes"]["x"]),
@@ -73,6 +93,7 @@ fn the_report_has_the_shape_its_version_names() {
             "seed",
             "serq_version",
             "stages",
+            "states",
             "turns",
             "warmup",
         ],

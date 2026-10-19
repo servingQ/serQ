@@ -149,6 +149,30 @@ pub struct PoolReport {
     pub growing_stalled: bool,
 }
 
+/// A request state (`engine::state`) over the run: the stays in it and
+/// the sessions and legs in it.
+#[derive(Clone, Debug)]
+#[cfg_attr(
+    feature = "python",
+    pyo3::pyclass(get_all, frozen, name = "State", module = "pyserq")
+)]
+pub struct StateReport {
+    /// The state's name (`State::name`).
+    pub name: String,
+    /// The stays in it that ended after warm-up: how many, their mean
+    /// duration, and their median and 99th percentile within 0.5 % (NaN
+    /// without any). A change of an engine resident's mode, prefill to
+    /// decode, is not a new stay.
+    pub stays: u64,
+    pub mean: f64,
+    pub p50: f64,
+    pub p99: f64,
+    /// Time-average sessions and legs in it over `[warmup, end]`: summed
+    /// over the states, the sessions and legs live (a ready one is in none,
+    /// for no time).
+    pub number: f64,
+}
+
 /// A `claim`: what the run found of it on the path it ran.
 #[derive(Clone, Debug)]
 pub struct ClaimReport {
@@ -265,6 +289,9 @@ pub struct Report {
     /// (`docs/design/client-metrics.md`).
     pub client: Vec<ObserveReport>,
     pub gauges: Vec<GaugeReport>,
+    /// Every request state, in `State::ALL`'s order
+    /// (`docs/design/request-state.md`).
+    pub states: Vec<StateReport>,
     /// The program's claims, in order; empty (and absent from the JSON)
     /// when it has none.
     pub claims: Vec<ClaimReport>,
@@ -385,6 +412,25 @@ impl Report {
             let _ = writeln!(
                 s,
                 "\nnote: no turn was answered after warm-up: the client saw none"
+            );
+        }
+        // the states some session or leg was in
+        let visited = |x: &&StateReport| x.stays > 0 || x.number > 0.0;
+        if self.states.iter().any(|x| visited(&x)) {
+            let rows = self.states.iter().filter(visited).map(|x| {
+                vec![
+                    x.name.clone(),
+                    x.stays.to_string(),
+                    format!("{:.4}", x.mean),
+                    format!("{:.4}", x.p50),
+                    format!("{:.4}", x.p99),
+                    format!("{:.3}", x.number),
+                ]
+            });
+            table(
+                &mut s,
+                &["state", "stays", "mean", "p50", "p99", "number"],
+                rows,
             );
         }
         if !self.gauges.is_empty() {
@@ -585,6 +631,23 @@ impl Report {
             }
             s.push('}');
         }
+        s.push_str(",\"states\":{");
+        for (i, x) in self.states.iter().enumerate() {
+            if i > 0 {
+                s.push(',');
+            }
+            let _ = write!(
+                s,
+                "\"{}\":{{\"stays\":{},\"mean\":{},\"p50\":{},\"p99\":{},\"number\":{}}}",
+                x.name,
+                x.stays,
+                f(x.mean),
+                f(x.p50),
+                f(x.p99),
+                f(x.number)
+            );
+        }
+        s.push('}');
         s.push_str(",\"gauges\":{");
         for (i, g) in self.gauges.iter().enumerate() {
             if i > 0 {

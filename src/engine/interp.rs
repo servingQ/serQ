@@ -19,6 +19,7 @@ use crate::engine::cache::{Seg, Trie};
 use crate::engine::dist::Dist;
 use crate::engine::log::{EventKind, Log, Who};
 use crate::engine::report::*;
+use crate::engine::state::State;
 use crate::engine::stats::*;
 
 use crate::frontend::ast::{BinOp, RunMode, UnOp};
@@ -341,6 +342,9 @@ struct Pending<'p> {
     /// The pools a request's admission read after its load and had taken
     /// none of (`Hold::part`).
     part: bool,
+    /// Asked again after a preemption: the preempted hold, or any hold of a
+    /// request preempted since its call (`State::Preempted`).
+    preempted: bool,
 }
 
 /// A session, or a leg of one (`fork`).
@@ -424,6 +428,11 @@ struct Session<'p> {
     forks: u64,
     /// The engine request in progress (`CStmt::Request`).
     req: Option<Req<'p>>,
+    /// Its state (`engine::state`), with an engine resident's mode, as
+    /// `Interp::restate` last read it, and since when: `None` before it
+    /// first waits or runs.
+    state: Option<(State, RunMode)>,
+    state_since: f64,
 }
 
 impl Session<'_> {
@@ -585,6 +594,9 @@ struct Job {
     growing: Option<usize>,
     enqueued: f64,
     started: Option<f64>,
+    /// Its work has begun (`begin_job`): past its run's `latency`, so a
+    /// job of a FIFO stage not `started` waits in the stage's queue.
+    begun: bool,
 }
 
 struct Iter {
@@ -905,6 +917,10 @@ pub struct Interp<'p> {
     events: u64,
     /// The log of the run (`engine::log`), when asked for (`logged`).
     log: Option<Log>,
+    /// Per state (`State::ALL`): the sessions and legs in it, time-averaged,
+    /// and its stays that ended after warm-up.
+    state_avg: Vec<TimeAverage>,
+    stays: Vec<LogHistogram>,
 }
 
 /// Tags of dead cache nodes (units past a `reuse` bound) start here, above
@@ -1076,6 +1092,8 @@ impl<'p> Interp<'p> {
             turns: 0,
             events: 0,
             log: None,
+            state_avg: State::ALL.map(|_| TimeAverage::new(0.0, 0.0)).to_vec(),
+            stays: State::ALL.map(|_| LogHistogram::default()).to_vec(),
         }
     }
 
@@ -1276,6 +1294,9 @@ impl<'p> Interp<'p> {
                 self.warm = true;
                 let now = self.now;
                 self.live_avg.reset(now);
+                for a in &mut self.state_avg {
+                    a.reset(now);
+                }
                 for st in &mut self.stages {
                     st.number_avg.reset(now);
                     st.busy_avg.reset(now);
@@ -1624,6 +1645,8 @@ impl<'p> Interp<'p> {
             legs: 0,
             forks: 0,
             req: None,
+            state: None,
+            state_since: f64::NAN,
         };
         let sid = match self.free.pop() {
             Some(i) => {
@@ -1880,6 +1903,7 @@ impl<'p> Interp<'p> {
             return;
         }
         self.log_who(sid, |who| EventKind::End { who });
+        self.leave_state(sid);
         self.detach(sid);
         while let Some(h) = self.sessions[sid].holds.pop() {
             self.release_hold(sid, &h);
@@ -1942,6 +1966,8 @@ impl<'p> Interp<'p> {
             legs: 0,
             forks: 0,
             req: None,
+            state: None,
+            state_since: f64::NAN,
         };
         let lid = match self.free.pop() {
             Some(i) => {
@@ -1994,6 +2020,7 @@ impl<'p> Interp<'p> {
     /// An orphan's leases end with it.
     fn end_leg(&mut self, sid: usize) {
         self.log_who(sid, |who| EventKind::End { who });
+        self.leave_state(sid);
         self.detach(sid);
         while let Some(h) = self.sessions[sid].holds.pop() {
             self.release_hold(sid, &h);
@@ -2114,6 +2141,98 @@ impl<'p> Interp<'p> {
         }
     }
 
+    /// The state of `sid` (`engine::state`): where its statements stand,
+    /// and how far its engine request has gone. `None` while it is ready,
+    /// executing statements (no time passes then), or has ended.
+    fn state_of(&self, sid: usize) -> Option<(State, RunMode)> {
+        let s = &self.sessions[sid];
+        let plain = |x: State| Some((x, RunMode::Plain));
+        let phase = s.req.as_ref().map(|r| r.phase);
+        match s.status {
+            Status::Ready | Status::Ended => None,
+            // vLLM's request preempted while its KV loaded is `PREEMPTED`
+            // once it is asked again (scheduler.py:3088-3091)
+            Status::Queued(_) if s.pending.as_ref().is_some_and(|p| p.preempted) => {
+                plain(State::Preempted)
+            }
+            // whatever a connector's block does is its load or its save: a
+            // push connector's `join` of the prefill leg is the decoder's
+            // request waiting for its KV
+            _ if phase == Some(Phase::Loading) => plain(State::Loading),
+            _ if phase == Some(Phase::Saving) => plain(State::Saving),
+            Status::Joining => plain(State::Joining),
+            Status::Growing(..) => plain(State::Growing),
+            Status::Queued(_) => plain(State::Waiting),
+            Status::InStage(st, id) => {
+                if self.side_of(sid) == Side::Workload {
+                    return plain(State::Client);
+                }
+                if matches!(self.stages[st].kind, Kind::Shared { .. }) {
+                    return plain(State::Transferring);
+                }
+                let job = self.stages[st].jobs.get(&id)?;
+                if job.begun && job.started.is_none() {
+                    // in a FIFO stage's queue
+                    return plain(State::Waiting);
+                }
+                Some((State::Running, job.mode))
+            }
+        }
+    }
+
+    /// The side of the statement `sid` executed last, a `run` while it is
+    /// at a stage: the workload's (a tool, a think time) or the server's.
+    fn side_of(&self, sid: usize) -> Side {
+        self.sessions[sid]
+            .frames
+            .last()
+            .and_then(|f| {
+                let i = f.pc.checked_sub(1)?;
+                self.p.sides[f.block].get(i).copied()
+            })
+            .unwrap_or(Side::Server)
+    }
+
+    /// Read `sid`'s state again (`state_of`): on a change its stay in the
+    /// state it was in ends, and the log says so. A change of mode alone,
+    /// an engine's request from its prefill to its decode, is not a new
+    /// stay. A session that is ready keeps the state it had: it leaves it
+    /// at the same instant.
+    fn restate(&mut self, sid: usize) {
+        let Some(new) = self.state_of(sid) else {
+            return;
+        };
+        let old = self.sessions[sid].state;
+        if old == Some(new) {
+            return;
+        }
+        if old.map(|o| o.0) != Some(new.0) {
+            self.leave_state(sid);
+            let now = self.now;
+            self.state_avg[new.0.index()].add(now, 1.0);
+            self.sessions[sid].state_since = now;
+        }
+        self.sessions[sid].state = Some(new);
+        self.log_who(sid, |who| EventKind::State {
+            who,
+            state: new.0,
+            mode: new.1,
+        });
+    }
+
+    /// `sid`'s stay in its state ends: it enters another, or ends.
+    fn leave_state(&mut self, sid: usize) {
+        let Some((st, _)) = self.sessions[sid].state.take() else {
+            return;
+        };
+        let now = self.now;
+        self.state_avg[st.index()].add(now, -1.0);
+        if self.warm {
+            let since = self.sessions[sid].state_since;
+            self.stays[st.index()].push(now - since);
+        }
+    }
+
     /// Take the session out of whatever it is waiting for or running at.
     fn detach(&mut self, sid: usize) {
         match self.sessions[sid].status.clone() {
@@ -2210,6 +2329,7 @@ impl<'p> Interp<'p> {
                 CStmt::Join => {
                     if self.sessions[sid].legs > 0 {
                         self.sessions[sid].status = Status::Joining;
+                        self.restate(sid);
                         return;
                     }
                 }
@@ -2309,6 +2429,7 @@ impl<'p> Interp<'p> {
                         queued_at: self.now,
                         request: false,
                         part: false,
+                        preempted: false,
                     };
                     self.enqueue_hold(sid, pending, false);
                     return;
@@ -2462,6 +2583,7 @@ impl<'p> Interp<'p> {
             queued_at: self.now,
             request: true,
             part: false,
+            preempted: self.sessions[sid].req.as_ref().is_some_and(|r| r.preempted),
         };
         self.enqueue_hold(sid, pending, front);
     }
@@ -2556,6 +2678,7 @@ impl<'p> Interp<'p> {
             queued_at: self.now,
             request: false,
             part: true,
+            preempted: self.sessions[sid].req.as_ref().is_some_and(|r| r.preempted),
         };
         self.enqueue_hold(sid, pending, false);
         true
@@ -2902,6 +3025,7 @@ impl<'p> Interp<'p> {
             self.pools[pl].queue.push_back(entry);
         }
         self.log_who(sid, |who| EventKind::Wait { who, pool: pl });
+        self.restate(sid);
         self.schedule_queue_tick(pl);
         true
     }
@@ -3482,6 +3606,7 @@ impl<'p> Interp<'p> {
                         attrs: None,
                         suspended: false,
                     });
+                    self.log_who(sid, |who| EventKind::Lease { who, pool: q, id });
                     self.schedule_tick(q);
                     if t.is_finite() {
                         let serial = self.sessions[sid].serial;
@@ -3499,6 +3624,11 @@ impl<'p> Interp<'p> {
     /// A lease ends: the units go back, `cache` applies.
     fn end_lease(&mut self, sid: usize, i: usize) {
         let l = self.sessions[sid].leases.remove(i);
+        self.log_who(sid, |who| EventKind::Free {
+            who,
+            pool: l.pool,
+            id: l.id,
+        });
         // a lease set aside holds nothing any more
         if l.suspended {
             return;
@@ -3793,6 +3923,7 @@ impl<'p> Interp<'p> {
                         _ => None,
                     };
                     self.sessions[sid].status = Status::Growing(pl, units, resume);
+                    self.restate(sid);
                     self.pools[pl].growers.push_back(sid);
                     return false;
                 }
@@ -3926,7 +4057,10 @@ impl<'p> Interp<'p> {
             match resume {
                 // a growing job: the growth covers the tokens it stalled
                 // on, which move the position when they are computed (#482)
-                Some((st, j)) => self.sessions[sid].status = Status::InStage(st, j),
+                Some((st, j)) => {
+                    self.sessions[sid].status = Status::InStage(st, j);
+                    self.restate(sid);
+                }
                 None => {
                     self.sessions[sid].status = Status::Ready;
                     self.ready.push_back(sid);
@@ -4103,6 +4237,7 @@ impl<'p> Interp<'p> {
             queued_at: self.now,
             request: false,
             part: false,
+            preempted: true,
         };
         // back at the head (vLLM's `prepend_request`), or with `requeue
         // tail` at the back, a newcomer to the queue's keys and `waited`
@@ -4344,13 +4479,17 @@ impl<'p> Interp<'p> {
                 growing,
                 enqueued: now,
                 started: None,
+                begun: false,
             },
         );
         if wait > 0.0 {
             self.at(now + wait, Ev::Start { stage: st, job: id });
-            return;
+        } else {
+            self.begin_job(st, id);
         }
-        self.begin_job(st, id);
+        if let Some(sid) = owner {
+            self.restate(sid);
+        }
     }
 
     /// The work of job `id`, in `st`'s jobs since its run began, starts
@@ -4359,6 +4498,7 @@ impl<'p> Interp<'p> {
     fn begin_job(&mut self, st: usize, id: u64) {
         let now = self.now;
         let stage = &mut self.stages[st];
+        stage.jobs.get_mut(&id).expect("the job").begun = true;
         let work = stage.jobs[&id].work;
         if work <= 0.0 {
             // served now, for nothing: its wait was its run's `latency`
@@ -4371,6 +4511,10 @@ impl<'p> Interp<'p> {
             Kind::Fifo { queue, .. } => {
                 queue.push_back(id);
                 self.fifo_fill(st);
+                // in the queue, or served at once
+                if let Some(sid) = self.stages[st].jobs.get(&id).and_then(|j| j.owner) {
+                    self.restate(sid);
+                }
             }
             Kind::Ps {
                 v,
@@ -4433,6 +4577,7 @@ impl<'p> Interp<'p> {
             for &s in &stages {
                 if let Some(job) = self.stages[s].jobs.get_mut(&id) {
                     job.started = Some(now);
+                    job.begun = true;
                 }
             }
             if f.remaining <= 0.0 {
@@ -4469,6 +4614,7 @@ impl<'p> Interp<'p> {
                 stages: stages.clone(),
                 mode: RunMode::Plain,
             });
+            self.restate(sid);
         }
         self.flows_advance();
         let waiting = wait > 0.0;
@@ -4483,6 +4629,7 @@ impl<'p> Interp<'p> {
                     growing: None,
                     enqueued: now,
                     started: (!waiting).then_some(now),
+                    begun: !waiting,
                 },
             );
         }
@@ -4715,12 +4862,18 @@ impl<'p> Interp<'p> {
             return;
         };
         let mut to_schedule = vec![];
+        let mut served = vec![];
         while active.len() < *servers {
             let Some(id) = queue.pop_front() else { break };
             let j = stage.jobs.get_mut(&id).unwrap();
             j.started = Some(now);
             active.push(id);
             to_schedule.push((now + j.work, id));
+            served.extend(j.owner);
+        }
+        // out of the queue: waiting no more
+        for sid in served {
+            self.restate(sid);
         }
         for (t, id) in to_schedule {
             self.at(
@@ -6085,6 +6238,20 @@ impl<'p> Interp<'p> {
                 }
             })
             .collect();
+        let states = State::ALL
+            .iter()
+            .map(|x| {
+                let (stays, avg) = (&self.stays[x.index()], &self.state_avg[x.index()]);
+                StateReport {
+                    name: x.name().into(),
+                    stays: stays.count(),
+                    mean: stays.mean(),
+                    p50: stays.quantile(0.5),
+                    p99: stays.quantile(0.99),
+                    number: avg.mean(now),
+                }
+            })
+            .collect();
         let claims = (0..p.claims.len()).map(|k| self.claim_report(k)).collect();
         let stages = self
             .stages
@@ -6163,6 +6330,7 @@ impl<'p> Interp<'p> {
             observes,
             client,
             gauges,
+            states,
             claims,
             stages,
             pools,

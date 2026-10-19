@@ -74,7 +74,7 @@ to 0 and `seed` to 1. JSON IR contains all resolved settings already.
 
 ## The JSON report
 
-`observes`, `client` and `gauges` are objects keyed by name; `stages` and `pools` are arrays.
+`observes`, `client`, `states` and `gauges` are objects keyed by name; `stages` and `pools` are arrays.
 
 ```bash
 serq run examples/multi-turn/vllm.sq --workload examples/workloads/chat.sq --horizon 2000 --warmup 200 --seed 1 --json | jq '.client.ttft.mean'
@@ -86,6 +86,7 @@ serq run examples/multi-turn/vllm.sq --workload examples/workloads/chat.sq --hor
 | top level | `serq_version` (the interpreter that ran, `serq --version`), `horizon` (the configured deadline), `end` (when the run ended: `horizon`, or earlier with `--arrivals`), `warmup`, `seed`, `events`, `arrivals` (sessions that arrived, warm-up included), `ended` (sessions that ended after warm-up), `turns` (`turn;` statements run after warm-up: each is one request to the `server`), `mean_live` (time-average sessions alive) |
 | `observes.<name>` | `count`, `mean`, `ci`, `cv2`, `p99` |
 | `client.ttft`, `client.tpot`, `client.response` | the same fields, of what each turn's client saw, in every program ([what the client sees](../language.md#what-the-client-sees)): `ttft` from the turn to its first output token, `tpot` the time per output token after the first, `response` from the turn to its answer. A turn that commits no token has no `ttft`, and one of a single output token no `tpot` |
+| `states.<state>` | every [request state](#request-states), visited or not: `stays` (stays in it that ended after warm-up), `mean`, `p50`, `p99` (their durations; `null` without any), `number` (time-average sessions and legs in it over `[warmup, end]`) |
 | `gauges.<name>` | `mean` (time average over `[warmup, end]`), `ci`, `min`, `max` |
 | `claims[]` | present when the program has a `claim`: `name`, `kind` (`every_iteration`, `some_iteration`, `at_end`), `result` (`holds`, `fails`, `witnessed`, `not_witnessed`, `not_evaluated`, `out_of_scope`), `checked` (iterations read, or 1 for a claim read at the end), `failures` (of those, the ones that read 0), `first` (the first failure, or a `some` claim's first witness; `null` when none), `note` (the sessions live at the end, or the session that failed `given`; `null` otherwise). The whole run, warm-up included |
 | `stages[]` | stage statistics, below |
@@ -96,6 +97,43 @@ Non-finite numbers are written as `null`, and as `NaN` in the text report:
 a mean with no sample, such as the `mean_wait` of a pool no hold waited at
 first, is one. For stages and pools, `name`
 identifies the resource and `index` its array member (`null` for a single resource).
+
+### Request states
+
+A session, or a leg of one (`fork`), is in one state while time passes,
+at about the resolution of vLLM's `RequestStatus`
+([the design](../design/request-state.md)); a program does not read it.
+
+| State | The session or leg | vLLM |
+|---|---|---|
+| `waiting` | waits in a pool's queue for a hold or an engine's admission, or in a FIFO stage's queue for a server | `WAITING` |
+| `preempted` | waits again after a preemption: the preempted hold, or a request preempted since its call | `PREEMPTED` |
+| `loading` | its engine's connector loads its KV: whatever the connector's `load` block does | `WAITING_FOR_REMOTE_KVS` |
+| `running` | has a job at a stage: an engine's resident, in prefill or decode, a server's, a `ps` or `delay` stage's | `RUNNING` |
+| `transferring` | runs over shared stages at once (`also`, `transfer on`) outside a connector: a KV transfer between two NICs | |
+| `saving` | its engine's connector saves its KV before its pools go back | finished, its blocks kept (`delay_free_blocks`) |
+| `growing` | waits for room to `grow` (no victim, or `preempt none`) | |
+| `joining` | waits at a `join` for its legs | |
+| `client` | runs a statement of the workload: the client's tool or think time | |
+
+A stay ends when the state does; an engine's request going from prefill to
+decode stays `running`. A ready session, executing statements, is in no
+state, for no time, so the `number`s add up to `mean_live` plus the legs
+live. The text report prints the states some session or leg was in, after
+the client's table:
+
+```text
+state    stays    mean     p50     p99  number
+-------  -----  ------  ------  ------  ------
+waiting    155  0.0001  0.0000  0.0036   0.000
+loading     41  0.0120  0.0106  0.0347   0.016
+running    113  0.0369  0.0309  0.1037   0.139
+client      56  2.0661  1.6395  7.2678   4.731
+```
+
+(`llmd_nixl_pull.sq` with `chat_reply.sq`, `--horizon 30`.) A hold admitted
+at once still waited, for no time: the `waiting` median of 0. The
+[run log](log.md) has every change of state, as `state` events.
 
 ### Stage statistics
 

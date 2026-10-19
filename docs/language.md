@@ -1568,6 +1568,14 @@ what it needs, or the holders wait on each other (#238).
 A boolean observation that remains zero for at least 40 samples produces
 a report note, not an error.
 
+The report's `states` give, whatever the program observes, the time a
+session or a leg spends in each [request state](reference/cli.md#request-states)
+(`waiting`, `preempted`, `loading`, `running`, `transferring`, `saving`,
+`growing`, `joining`, `client`), vLLM's `RequestStatus` for every program
+([the design](design/request-state.md)). The state is the interpreter's,
+read from where the session's statements stand and how far its engine
+request has gone; no expression reads it.
+
 ### What the client sees
 
 Every turn is one request from a virtual client, and the report gives what

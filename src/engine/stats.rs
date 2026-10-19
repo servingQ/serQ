@@ -284,6 +284,10 @@ impl LogHistogram {
         self.sum += x;
     }
 
+    pub fn count(&self) -> u64 {
+        self.n
+    }
+
     pub fn mean(&self) -> f64 {
         if self.n == 0 {
             f64::NAN
