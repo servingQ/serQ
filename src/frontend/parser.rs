@@ -434,7 +434,7 @@ const MAX_FAMILY: usize = 10_000;
 /// parameter may not be one: a parameter is replaced token by token, and a
 /// keyword in the body is a token of the same spelling. `tests/docs_lexer.rs`
 /// keeps the list whole.
-pub const KEYWORDS: [&str; 122] = [
+pub const KEYWORDS: [&str; 121] = [
     "Cost",
     "Size",
     "admission",
@@ -500,7 +500,6 @@ pub const KEYWORDS: [&str; 122] = [
     "load",
     "loop",
     "lru",
-    "mark",
     "memory",
     "most",
     "nic",
@@ -923,7 +922,7 @@ pub(crate) fn retired(word: &str) -> Option<&'static str> {
         .map(|(_, now)| *now)
 }
 
-const RETIRED: [(&str, &str); 6] = [
+const RETIRED: [(&str, &str); 7] = [
     (
         "enter",
         "`enter` is now `hold`: `hold P (u) … { … } cache (ℓ);`",
@@ -946,6 +945,11 @@ const RETIRED: [(&str, &str); 6] = [
     (
         "branch",
         "`branch (e)` is now `if (e)`, and `branch with (p)` is `if (~bernoulli(p))`",
+    ),
+    (
+        "mark",
+        "`mark NAME;` is gone: write `set NAME = now;` in its place, read by the caller as \
+         `Q.NAME` as before, or read the engine request's records (`D.admitted`, `D.load_done`)",
     ),
 ];
 
@@ -5682,11 +5686,6 @@ impl Parser {
                 }
                 Ok(Stmt::Choose { var, count, key })
             }
-            "mark" => self.err(
-                "`mark NAME;` is gone: the caller writes the moment itself, `set t = now;` \
-                 after the entry's call, or reads its engine request's records \
-                 (`D.admitted`, `D.load_done`; docs/design/request-state.md)",
-            ),
             // `Q.verb (…);`, `Q[i].verb (…) from S[k] to p (m);`: a queue's entry
             _ if matches!(self.peek_at(1), Tok::Dot | Tok::LBracket) => self.call(),
             // `E (a, …);`: engine `E`'s request
@@ -5760,7 +5759,8 @@ impl Parser {
         {
             return self.err(
                 "`at admission (x = e)` is gone: a hold's header is read at admission, so \
-                 write `e` in the header where `x` stood",
+                 write `e` in the header where `x` stood, and `set x = e;` at the top of the \
+                 body if it reads `x`",
             );
         }
         self.holds_open += 1;
@@ -6802,14 +6802,14 @@ mod tests {
             &format!("{ENGINE}\nserver {{ hold kv (cost(kv, h)) at admission (h = 1) {{ }}\n}}"),
             TURN,
             "`at admission (x = e)` is gone: a hold's header is read at admission, so \
-             write `e` in the header where `x` stood",
+             write `e` in the header where `x` stood, and `set x = e;` at the top of the \
+             body if it reads `x`",
         );
     }
 
     #[test]
     fn a_moment_is_the_callers() {
-        // `mark x;` set `Q.x = now` for the caller to read; the caller sets
-        // it after the call, or reads the engine request's records
+        // `mark x;` was `set Q.x = now;`, which an entry writes as `set x = now;`
         const D: &str = "queue D : decode {
           device gpu { compute (t) = t; hbm (k) = k; kv cap 100; }
           engine on gpu { reqs cap 1; tokens cap 10; scheduler { admit waiting; } worker { forward (1); } }
@@ -6820,13 +6820,19 @@ mod tests {
         refused(
             D,
             TURN,
-            "`mark NAME;` is gone: the caller writes the moment itself, `set t = now;` after \
-             the entry's call",
+            "`mark NAME;` is gone: write `set NAME = now;` in its place, read by the caller as \
+             `Q.NAME` as before",
         );
         refused(
             &format!("{ENGINE}\nserver {{ mark first;\n}}"),
             TURN,
             "`mark NAME;` is gone",
+        );
+        // a retired word names nothing, so `mark` never means two things
+        refused(
+            &format!("{ENGINE}\nserver {{ set mark = 1;\n}}"),
+            TURN,
+            "`mark` is a retired word and names nothing",
         );
     }
 

@@ -703,9 +703,9 @@ at the queue's boundary: vLLM's scheduler knows `max_tokens`, not the length,
 so `o` is not a parameter of `decode` and the body alone reads it. What the
 body `set`s is the queue's (`D.known`), read afterwards by the caller as
 `Q.NAME` — the request's attribute, so without a member index; what it
-`observe`s is the program's. A moment the caller needs it writes itself
-(`set t = now;` after the call) or reads from the engine request's records
-(`D.admitted`, `D.load_done`). The gateway is the exception on the session's side: its
+`observe`s is the program's. A moment the caller needs is a local too,
+`set NAME = now;`, read afterwards as `Q.NAME`, or the engine request's
+record (`D.admitted`, `D.load_done`). The gateway is the exception on the session's side: its
 `route` reads the request's attributes as a `server` does and sets the ones
 the session reads back (`prompt`).
 
@@ -1441,10 +1441,7 @@ hold reqs (cost(reqs, 1)),
 A body that needs the admission's value of an expression of attributes
 and constants sets it at its top, `set x = e;`: the body starts at the
 admission's instant. One of live state (`cachedin(kv)`, `now`) has moved
-by then; the body reads `cached`, the units the admission consumed. A
-clause that named a header's values, `at admission (x = e)`, and a queue
-entry's `mark NAME;` were removed when no program used them
-([the record](design/request-state.md#follow-ups)).
+by then; the body reads `cached`, the units the admission consumed.
 
 ### `hidden`
 

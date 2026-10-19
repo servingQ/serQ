@@ -656,7 +656,8 @@ pub enum Stmt {
 /// What `each_part_mut` hands a visitor: each expression a statement holds,
 /// each pool, stage or queue it names, and each argument of a
 /// `Stmt::Unread`. What lies inside one (a reference's index, a nested
-/// expression) is the visitor's to walk.
+/// expression) is the visitor's to walk. Only `without_locations`, a test
+/// helper, walks statements this way.
 #[cfg(test)]
 pub(crate) struct Parts<E, R, A> {
     pub expr: E,
@@ -665,7 +666,7 @@ pub(crate) struct Parts<E, R, A> {
 }
 
 /// Hand every part of `stmts` to `parts`, a nested block's statements
-/// included, so that a walk over statements cannot pass over a place an
+/// included, so that `without_locations` cannot pass over a place an
 /// expression stands: a reference's index is one (`hold g[n]`).
 #[cfg(test)]
 pub(crate) fn each_part_mut<E, R, A>(stmts: &mut [Stmt], parts: &mut Parts<E, R, A>)
