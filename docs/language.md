@@ -454,9 +454,9 @@ workload {
 Each file reads its own names: no constant or definition of the workload
 file is read by the deployment, none of the deployment's by the workload, and
 both may declare `p`, each meaning its own. The workload runs on and holds
-its own stages and pools, the server none of them, but for a declared stage
-`tool`, which the workload's `tool Z;` uses whichever file declares it
-([Which stage](#which-stage)); what the server does
+its own stages and pools, the server none of them. The one exception is a
+declared stage `tool`: the workload's `tool Z;` uses it whichever file
+declares it ([Which stage](#which-stage)). What the server does
 to the session's memory it does on what the workload sends (a session's
 last request sends `final`, and the server `if (final) { drop kv; }`,
 `examples/multi-turn/replica.sq`). The inputs of both are the program's
