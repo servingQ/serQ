@@ -1,0 +1,34 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+# CodeRabbit's review of serQ: in Korean, as issues and PRs are written
+# (CLAUDE.md, Writing). The rules are the repository's own documents, read
+# as they stand, not copied here: CLAUDE.md and .github/copilot-instructions.md
+# (the review checklist), and the writing guides.
+language: ko-KR
+reviews:
+  profile: chill
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: false
+  review_status: true
+  auto_review:
+    enabled: true
+    drafts: false
+  # generated and committed (CLAUDE.md, Checks): reviewed through the change that moves them
+  path_filters:
+    - "!Cargo.lock"
+    - "!docs/assets/*.deployment.svg"
+    - "!tests/golden/**"
+    - "!tools/oracle/*.ir.json"
+    - "!tools/metrics.json"
+    - "!tools/unused.json"
+knowledge_base:
+  code_guidelines:
+    enabled: true
+    filePatterns:
+      - "**/CLAUDE.md"
+      - ".github/copilot-instructions.md"
+      - ".github/contributing.md"
+      - ".github/documentation.md"
+      - "docs/writing-programs.md"
+chat:
+  auto_reply: true
