@@ -581,11 +581,8 @@ struct Job {
     /// Remaining work (fifo, delay, step) or the virtual finish tag (ps).
     work: f64,
     mode: RunMode,
-    /// A `growing` run's pool, and the position its hold reaches when the
-    /// run ends: the position it started at plus its work. The chunk that
-    /// ends the run puts the hold there, not at the sum of the chunks, which
-    /// can fall an ulp short (#479).
-    growing: Option<(usize, f64)>,
+    /// A `growing` run's pool.
+    growing: Option<usize>,
     enqueued: f64,
     started: Option<f64>,
 }
@@ -4338,13 +4335,6 @@ impl<'p> Interp<'p> {
                 mode,
             });
         }
-        // the linker refuses `growing` outside a hold of the pool
-        let growing = growing.zip(owner).map(|(pl, sid)| {
-            let (hi, k) = self.sessions[sid]
-                .innermost(pl)
-                .expect("a growing run is inside a hold of its pool");
-            (pl, self.sessions[sid].holds[hi].pools[k].pos + work)
-        });
         self.stages[st].jobs.insert(
             id,
             Job {
@@ -5059,23 +5049,14 @@ impl<'p> Interp<'p> {
             }
         }
         // Growth can preempt an earlier candidate. Only surviving, selected
-        // jobs advance their holds' computed positions.
-        // The chunk that ends a run puts its hold at the run's end (the run
-        // ends when its work is within `EPS`, `on_iter_end`).
+        // jobs advance their holds' computed positions, by their tokens: a
+        // run's tokens are whole (#661), so its chunks sum to its work.
         assign.retain(|(id, _)| self.stages[st].jobs.contains_key(id));
         for &(id, tokens) in &assign {
             let j = &self.stages[st].jobs[&id];
-            if let (Some((pl, end)), Some(sid)) = (j.growing, j.owner) {
-                let last = j.work - tokens <= EPS;
+            if let (Some(pl), Some(sid)) = (j.growing, j.owner) {
                 let (_, pos) = self.hold_alloc_pos(sid, pl);
-                // the end differs from the sum of the chunks by rounding only
-                debug_assert!(
-                    !last || (pos + tokens - end).abs() <= EPS * end.abs().max(1.0),
-                    "a growing run's chunks sum to {} but it ends at {end}",
-                    pos + tokens
-                );
-                let to = if last { end } else { pos + tokens };
-                self.set_pos(sid, pl, to);
+                self.set_pos(sid, pl, pos + tokens);
             }
         }
         // An iteration that scheduled nothing is no iteration, unless it
@@ -5240,7 +5221,7 @@ impl<'p> Interp<'p> {
     ) -> Give {
         let (mode, remaining, growing, owner) = {
             let j = &self.stages[st].jobs[&id];
-            (j.mode, j.work, j.growing.map(|(pl, _)| pl), j.owner)
+            (j.mode, j.work, j.growing, j.owner)
         };
         let want = match mode {
             RunMode::Decode => 1.0f64.min(remaining),

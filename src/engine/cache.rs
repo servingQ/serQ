@@ -25,8 +25,6 @@
 
 use std::collections::HashMap;
 
-const EPS: f64 = 1e-9;
-
 /// The edge from a node to a child: the next segment's key, or the next
 /// run of the same segment.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -232,27 +230,27 @@ impl Trie {
                 let node = &self.nodes[cur];
                 let end = node.off + node.len;
                 let take = (end.min(n) - node.off).min(limit - w.total);
-                if take <= EPS {
+                if take <= 0.0 {
                     return w;
                 }
                 w.steps.push(Step { node: cur, take });
                 w.total += take;
                 w.off = node.off + take;
-                if take < node.len - EPS {
+                if take < node.len {
                     // stopped inside the node: the limit, or a segment that
                     // ends before this run does (no next segment hangs here)
                     return w;
                 }
-                if end >= n - EPS {
+                if end >= n {
                     at = cur;
                     break;
                 }
-                if w.total >= limit - EPS {
+                if w.total >= limit {
                     return w;
                 }
                 next = self.child(cur, Edge::Cont);
             }
-            if w.total >= limit - EPS {
+            if w.total >= limit {
                 // the segment is complete; the walk stands at its end
                 w.seg = i + 1;
                 w.off = 0.0;
@@ -269,8 +267,8 @@ impl Trie {
     fn next_on(&self, chain: &[Seg], w: &Walk) -> Option<usize> {
         match w.steps.last() {
             None => self.child(0, key(chain.first()?)),
-            Some(s) if s.take < self.nodes[s.node].len - EPS => None,
-            Some(s) if w.seg < chain.len() && w.off > EPS => self.child(s.node, Edge::Cont),
+            Some(s) if s.take < self.nodes[s.node].len => None,
+            Some(s) if w.seg < chain.len() && w.off > 0.0 => self.child(s.node, Edge::Cont),
             Some(s) => self.child(s.node, key(chain.get(w.seg)?)),
         }
     }
@@ -323,7 +321,7 @@ impl Trie {
     pub fn lock(&mut self, chain: &[Seg], limit: f64, viewer: u64) -> (f64, f64, Vec<usize>) {
         let w = self.walk(chain, limit, Some(viewer));
         if let Some(last) = w.steps.last()
-            && last.take < self.nodes[last.node].len - EPS
+            && last.take < self.nodes[last.node].len
             && !self.nodes[last.node].locked()
         {
             self.split(last.node, last.take);
@@ -414,7 +412,7 @@ impl Trie {
         let mut delta = 0.0;
         let gone =
             |n: &Node| n.live && !n.locked() && n.children.is_empty() && n.own == Some(owner);
-        if keep <= EPS {
+        if keep <= 0.0 {
             for &id in path.iter().rev() {
                 let n = &self.nodes[id];
                 if gone(n) && !n.displaced && n.dead.is_none() {
@@ -436,7 +434,7 @@ impl Trie {
         // touch what lies within `keep`
         let mut start = 0.0;
         for s in &w.steps {
-            if start >= keep - EPS {
+            if start >= keep {
                 break;
             }
             let n = &mut self.nodes[s.node];
@@ -450,10 +448,10 @@ impl Trie {
         for s in w.steps.iter().rev() {
             let n = &self.nodes[s.node];
             let from = end - s.take;
-            if end <= keep + EPS || !gone(n) || s.take < n.len - EPS {
+            if end <= keep || !gone(n) || s.take < n.len {
                 break;
             }
-            if from >= keep - EPS {
+            if from >= keep {
                 delta -= n.len;
                 self.remove(s.node);
                 end = from;
@@ -466,11 +464,11 @@ impl Trie {
         }
         // extend past what the chain holds
         let mut have = w.total;
-        if keep > have + EPS && w.seg < chain.len() {
+        if keep > have && w.seg < chain.len() {
             let mut at = w.steps.last().map_or(0, |s| s.node);
             let (mut seg, mut off) = (w.seg, w.off);
             if let Some(s) = w.steps.last()
-                && s.take < self.nodes[s.node].len - EPS
+                && s.take < self.nodes[s.node].len
             {
                 if self.nodes[s.node].locked() {
                     // the segment ends inside a run another hold reads: the
@@ -479,12 +477,12 @@ impl Trie {
                 }
                 self.split(s.node, s.take);
             }
-            while keep > have + EPS && seg < chain.len() {
+            while keep > have && seg < chain.len() {
                 let n = chain[seg].2;
                 let add = (n - off).min(keep - have);
-                if add > EPS {
+                if add > 0.0 {
                     let node = &self.nodes[at];
-                    let same = at != 0 && node.seg == seg && off > EPS;
+                    let same = at != 0 && node.seg == seg && off > 0.0;
                     if same && !node.locked() && node.children.is_empty() && node.dead.is_none() {
                         self.nodes[at].len += add;
                     } else {
@@ -503,7 +501,7 @@ impl Trie {
                     have += add;
                     off += add;
                 }
-                if off >= n - EPS {
+                if off >= n {
                     seg += 1;
                     off = 0.0;
                 }
@@ -515,7 +513,7 @@ impl Trie {
     /// The nodes eviction may take: cached leaves.
     pub fn leaves(&self) -> impl Iterator<Item = usize> + '_ {
         self.nodes.iter().enumerate().filter_map(|(i, n)| {
-            (i != 0 && n.live && !n.locked() && n.children.is_empty() && n.len > EPS).then_some(i)
+            (i != 0 && n.live && !n.locked() && n.children.is_empty() && n.len > 0.0).then_some(i)
         })
     }
 
@@ -526,14 +524,14 @@ impl Trie {
         let n = &mut self.nodes[id];
         let removed = units.min(n.len);
         n.len -= removed;
-        if n.len > EPS {
+        if n.len > 0.0 {
             return (removed, None, false);
         }
         let parent = n.parent;
         self.remove(id);
         let leaf = parent.filter(|&p| {
             let n = &self.nodes[p];
-            p != 0 && !n.locked() && n.children.is_empty() && n.len > EPS
+            p != 0 && !n.locked() && n.children.is_empty() && n.len > 0.0
         });
         (removed, leaf, true)
     }
@@ -651,6 +649,6 @@ impl Trie {
 
     /// Live nodes, for a report of who holds the cache.
     pub fn live(&self) -> impl Iterator<Item = &Node> + '_ {
-        self.nodes.iter().skip(1).filter(|n| n.live && n.len > EPS)
+        self.nodes.iter().skip(1).filter(|n| n.live && n.len > 0.0)
     }
 }
