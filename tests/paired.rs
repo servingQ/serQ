@@ -178,6 +178,26 @@ fn each_file_runs_on_its_own_stages() {
     );
 }
 
+/// The stage `tool` is the one exception: the workload's `tool Z;` runs on
+/// it whichever file declares it. A pool the deployment names `tool` is no
+/// stage, and the workload holds it no more than any other of its pools.
+#[test]
+fn a_deployment_pool_named_tool_is_the_deployment_s() {
+    refused(
+        "fn main() {\n  stage svc : fifo;\n  pool tool { cap 1; }\n  server (work) { run svc (cost(svc, work)); }\n}\n",
+        "workload { arrive poisson(1); turn { set s = 1; } send (work: s);\n  session { hold tool (cost(tool, 1)) { turn; } } }\n",
+        &["w.sq: 2:", "pool `tool` is the deployment file's"],
+    );
+    // the stage `tool` the deployment declares is still the workload's `tool Z;`
+    compile_paired(
+        "fn main() {\n  stage svc : fifo;\n  stage tool : delay;\n  server (work) { run svc (cost(svc, work)); }\n}\n",
+        "workload { arrive poisson(1); turn { set s = 1; } send (work: s);\n  session { turn; tool (1); } }\n",
+        names(),
+        &common::horizon(10.0),
+    )
+    .unwrap();
+}
+
 /// Each file's names are its own: both may declare `p`, each reading its own.
 #[test]
 fn both_files_may_declare_a_name() {
