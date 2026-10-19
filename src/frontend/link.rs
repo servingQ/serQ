@@ -1655,7 +1655,6 @@ fn hidden_in_server(
                 | Stmt::Route(_)
                 | Stmt::Request
                 | Stmt::Call { .. }
-                | Stmt::Mark(_)
                 | Stmt::Unread(_) => {}
             }
         }
@@ -2833,7 +2832,7 @@ impl Linker<'_> {
                             .into(),
                     ));
                 }
-                Stmt::Call { .. } | Stmt::Mark(_) => {
+                Stmt::Call { .. } => {
                     return Err(LinkError::new(
                         "a queue's entry call survived parsing: the parser expands it in place"
                             .into(),

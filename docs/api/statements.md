@@ -105,7 +105,6 @@ of the workload's own unless a stage `tool` is declared.
 hold POOL (units) [reserve (r)] [, POOL (units) [reserve (r)]]*
      [prefix (key: n, …)]
      [reuse (ρ)]
-     [at admission (NAME = expr, …)]
      block
      [cache (ℓ)]
      [lease POOL (t)];
@@ -130,29 +129,17 @@ a prefix several holds read is allocated once.
 | `reserve` | `Cost(POOL)` | `Admit` | `units` | Room required before admitting: `max(units, r)`, rounded up to blocks. It does not change the allocation. See [`reserve held`](pool.md#reserve-held) for outstanding reservations. |
 | `prefix` | `key: n, …` | `Admit` | `(serial: inf)` | The sequence as segments, each a key and a length. Keys and lengths read attributes and numbers only (no state, clock, draw, `cached` or `computed`). A segment of length 0 is left out; only the last may be endless. The hold takes at least one pool with `block` (on one without, its chain is the session's own) and none that spills or is spilled to. |
 | `reuse` | `Cost(all held pools)` | `Admit` | no bound | At most this many units of the cached prefix of the hold's chain are read (rounded down to blocks), and with `prefix` never more than the hold allocates; `cached` is set to what was. What the session's entry held past them stays as a dead entry until evicted. Without `reuse`, the whole cached prefix is read: with `prefix` up to the allocation, without it the session's whole entry. Only with `cache`: a hold without the clause consumes nothing. |
-| `at admission` | `NAME = expr, …` | `Admit` | | Names used in the header and body; see below. |
 | `block` | `block` | `Session` | | The body. |
 | `cache` | `Cost(all held pools)` | `Session` | none | Units kept cached at the end, at most what was computed. Read when the session releases. Its presence is what makes the hold consume the session's prefix at admission; `cache (0)` consumes and keeps nothing, no clause leaves the prefix where it is. |
 | `lease` | `pool`, `expr` | `Session` | none | That pool's allocation outlives the scope: neither evictable nor a preemption victim (unless the pool says [`preempt leases by`](pool.md#preempt)) until `release` of it, `t` clock units, or the session's end; `cache` applies then. |
 
-### Admission bindings
+### The header's moment
 
 The header (`units`, `reserve`, `reuse`) is read at admission, not when the
 session queues, and cannot draw. A header cannot use a value captured from
 live pool or stage state by an earlier `set`: that value may be stale by
-admission. Use `at admission` instead.
-
-Bindings are substituted into `units`, `reserve`, `reuse`, `cache` and
-`lease`. Later bindings may use earlier ones. A binding read by the body
-is also assigned at its start; such a binding may read only attributes and
-constants. A body cannot read a binding of live state (`cachedin(p)`,
-`cached`, `now`); use `cached` in the body to read the prefix actually reused.
-
-Binding names are local to the holds that bind them, and each is the
-binding's own: no declaration anywhere in the program (a `def`, an
-observation, a gauge, a pool, a stage, …, a queue's own pools included)
-may share one, nor may a builtin attribute, a context variable, a `let`
-constant or an attribute the program assigns. Bindings cannot draw.
+admission. Write the expression in the header instead; in the body, read
+`cached` for the prefix actually reused.
 
 If the hold is preempted (`preempt lifo`, or `preempt by`) it re-enters the
 head of the queue (or, under `requeue tail`, the queue as a newcomer)

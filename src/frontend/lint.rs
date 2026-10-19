@@ -116,7 +116,7 @@ fn header_using(p: &Program, block: usize, from: usize, slot: usize) -> Option<S
 /// it runs when the session reaches that statement, which for a session that
 /// then queues is *before* it waits. `examples/multi-turn/vllm.sq` shipped with exactly
 /// this: a prefix-cache lookup bound before the queue, under a comment citing
-/// the admission-time lookup. `at admission (name = e)` is the clause for it.
+/// the admission-time lookup. Writing the expression in the header is the fix.
 fn stale_header_read(p: &Program, block: usize, out: &mut Vec<String>) {
     let Some(stmts) = p.blocks.get(block) else {
         return;
@@ -142,7 +142,7 @@ fn stale_header_read(p: &Program, block: usize, out: &mut Vec<String>) {
                     out.push(format!(
                         "`{name}` reads {} when the session reaches the `set`, and is used \
                          in the header of a hold on `{pool}`, which is read when the session \
-                         is admitted. Write `at admission ({name} = …)` if the admission \
+                         is admitted. Write the expression in the header if the admission \
                          value is what you meant.",
                         what.unwrap_or_else(|| "live state".into())
                     ));

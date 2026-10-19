@@ -151,7 +151,7 @@ fn a_queue_family_sized_by_an_aggregate() {
 
 /// `from P[i]` is the pool `P`'s entry leases; a link's `transfer … from … to
 /// (m)` is `run; load; release`, the time the link's own; an entry's `set` is
-/// the queue's attribute; `mark x` is `set Q.x = now`, read as `Q.x`.
+/// the queue's attribute, read as `Q.x`.
 #[test]
 fn a_transfer_between_queues_is_the_flat_transfer() {
     let queues = "
@@ -170,12 +170,12 @@ fn a_transfer_between_queues_is_the_flat_transfer() {
       queue D[ND] : agg, decode {
         device gpu { kv cap 1000; } pool kv on gpu { block 16; }
         engine on gpu { tokens cap inf; scheduler { advance running; admit waiting while (running.preempted == 0); } worker { forward (1); } }
-        decode (prompt) { hold kv (cost(kv, prompt)) { run D prefill (cost(D, prompt)) growing kv; mark first; } }
+        decode (prompt) { hold kv (cost(kv, prompt)) { run D prefill (cost(D, prompt)) growing kv; set first = now; } }
         decode (prompt) from P {
           set c = 0;
           hold kv (cost(kv, prompt)) {
             nic[self].transfer (prompt - c) from P to kv (prompt - 1);
-            run D prefill (cost(D, 1)) growing kv; mark first;
+            run D prefill (cost(D, 1)) growing kv; set first = now;
             run D decode (cost(D, o - 1)) growing kv;
           }
         }
@@ -368,7 +368,7 @@ fn a_keyword_named_attribute_is_a_read() {
 
 /// An argument that reads a queue's attribute, `E.first`, is checked against
 /// what the body's entry calls write, its own or a definition's it uses:
-/// `go(E.first)` read the `E.first` the body's own `E.decode` marked, 8 where
+/// `go(E.first)` read the `E.first` the body's own `E.decode` set, 8 where
 /// the caller's was 4 (#218).
 #[test]
 fn an_argument_reading_a_queue_attribute_is_checked() {
@@ -378,7 +378,7 @@ fn an_argument_reading_a_queue_attribute_is_checked() {
             queue E : agg {{
               pool kv {{ cap 100; }}
               serve fifo;
-              decode (prompt) {{ hold kv (cost(kv, prompt)) {{ run E (cost(E, prompt)); mark first; }} }}
+              decode (prompt) {{ hold kv (cost(kv, prompt)) {{ run E (cost(E, prompt)); set first = now; }} }}
             }}
             server (prompt) {{ E.decode (prompt); {call} }}"
         )
@@ -471,14 +471,14 @@ fn a_link_has_a_cost() {
     );
 }
 
-/// The `at admission` bindings are the header's: they see the parameters,
-/// not the caller's attributes.
+/// A hold's header in an entry sees the parameters, not the caller's
+/// attributes.
 #[test]
-fn an_admission_binding_sees_the_entry_only() {
+fn an_entry_header_sees_the_entry_only() {
     refused(
         "queue gw : gateway { route { set t0 = now; E.decode (prompt); } }
          queue E : agg { device gpu { kv cap 100; } pool kv on gpu { } engine on gpu { tokens cap inf; scheduler { advance running; admit waiting while (running.preempted == 0); } worker { forward (1); } }
-           decode (prompt) { hold kv (cost(kv, x)) at admission (x = prompt + t0) { run E prefill (cost(E, 1)) growing kv; } } }
+           decode (prompt) { hold kv (cost(kv, prompt + t0)) { run E prefill (cost(E, 1)) growing kv; } } }
          server (prompt) { gw.route(); }
          ",
         "workload { arrive batch(1); init { set prompt = 3; } send (prompt); session { turn; end; } }",
@@ -487,7 +487,7 @@ fn an_admission_binding_sees_the_entry_only() {
 }
 
 /// A local the entry sets above a hold is the header's, as what an engine's
-/// request block set above its `at admission` was (#475): the entry is that
+/// request block set above its header was (#475): the entry is that
 /// request, its `kept` and `known` renamed `E.kept` and `E.known`. The
 /// engine keeps a request's state since #555, so the block no longer links:
 /// `tests/golden/queues/a_header_reads_a_local_set_above_its_hold.ir.json` is
@@ -502,7 +502,8 @@ fn a_header_reads_a_local_set_above_its_hold() {
                engine on gpu {{ tokens cap inf; scheduler {{ advance running; admit waiting while (running.preempted == 0); }} worker {{ forward (1); }} }}
                decode (prompt) {{
                  set kept = prompt;
-                 hold kv (cost(kv, known)) at admission (known = max(kept, computed + 1)) {{
+                 hold kv (cost(kv, max(kept, computed + 1))) {{
+                   set known = max(kept, computed + 1);
                    set kept = known;
                    run E prefill (cost(E, known)) growing kv;
                  }}
@@ -815,7 +816,7 @@ fn an_entry_sees_its_parameters_and_its_queue() {
             "observe x = E.late;",
         ),
         WORKLOAD,
-        "no entry of `E` marks or sets `late`",
+        "no entry of `E` sets `late`",
     );
 }
 
@@ -1504,7 +1505,9 @@ fn the_contract_holds_at_four_more_edges() {
     refused(
         &format!(
             "queue gw : gateway {{ route {{ E[0].decode (prompt); observe r = min(E[missing].done, 0); }} }} {} {server}",
-            engine("hold kv (cost(kv, p)) { run E prefill (cost(E, p)) growing kv; mark done; }")
+            engine(
+                "hold kv (cost(kv, p)) { run E prefill (cost(E, p)) growing kv; set done = now; }"
+            )
         ),
         wl,
         "write `E.done`",
@@ -1859,11 +1862,11 @@ fn an_entry_reaches_only_its_own() {
         wl,
         "reads `P` as a number",
     );
-    // another queue's mark is the gateway's to read
+    // another queue's local is the gateway's to read
     refused(
         &format!(
             "queue gw : gateway {{ route {{ A.prefill (prompt); B.decode (prompt); }} }}
-             queue A : prefill {{ serve fifo; prefill (p) {{ run (cost(A, p)); mark secret; }} }}
+             queue A : prefill {{ serve fifo; prefill (p) {{ run (cost(A, p)); set secret = now; }} }}
              queue B : agg {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; scheduler {{ advance running; admit waiting while (running.preempted == 0); }} worker {{ forward (1); }} }}
                decode (p) {{ observe leaked = A.secret; hold kv (cost(kv, p)) {{ run B prefill (cost(B, p)) growing kv; }} }} }}
              {server}"
@@ -1882,12 +1885,12 @@ fn an_entry_reaches_only_its_own() {
         wl,
         "holds `shared`, which is not a pool of `P`",
     );
-    // a mark is the request's: an index would say a member it does not read
+    // a local is the request's: an index would say a member it does not read
     refused(
         &format!(
             "queue gw : gateway {{ route {{ set t0 = now; D[0].decode (prompt); observe t = D[missing].first_token - t0; }} }}
              queue D[2] : agg {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; scheduler {{ advance running; admit waiting while (running.preempted == 0); }} worker {{ forward (1); }} }}
-               decode (p) {{ hold kv (cost(kv, p)) {{ run D prefill (cost(D, p)) growing kv; mark first_token; }} }} }}
+               decode (p) {{ hold kv (cost(kv, p)) {{ run D prefill (cost(D, p)) growing kv; set first_token = now; }} }} }}
              {server}"
         ),
         wl,

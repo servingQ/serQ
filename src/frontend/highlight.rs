@@ -93,7 +93,7 @@ pub const STRUCTURE: [&str; 18] = [
 ];
 
 /// Statements, in the session and server blocks.
-pub const STATEMENTS: [&str; 42] = [
+pub const STATEMENTS: [&str; 41] = [
     "Size",
     "Cost",
     "turn",
@@ -102,7 +102,6 @@ pub const STATEMENTS: [&str; 42] = [
     "observe",
     "hold",
     "admit",
-    "mark",
     "self",
     "grow",
     "shrink",

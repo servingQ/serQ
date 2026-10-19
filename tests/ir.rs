@@ -727,47 +727,6 @@ fn a_draw_is_labelled_w_p() {
 /// A workload that sends nothing, one turn a session.
 const POISSON: &str = "workload { arrive poisson(1); session { turn; end; } }";
 
-/// The bindings are substituted, so a name used twice would draw twice. That
-/// is not a binding anyone means to write, and the parser says so.
-#[test]
-fn at_admission_rejects_a_draw() {
-    let src = "pool kv { cap 100; } stage s : fifo;
-        server { hold kv (cost(kv, x)) at admission (x = ~exp(3)) { run s (cost(s, 1)); }
-        }
-        ";
-    let ov = common::horizon(10.0);
-    let e = common::compile(&common::main_source(src), POISSON, &ov).expect_err("rejected");
-    assert!(e.contains("draws a sample"), "{e}");
-}
-
-/// A later binding sees the earlier ones, so a header can be written in steps.
-#[test]
-fn at_admission_bindings_are_sequential() {
-    let head = "pool kv { cap 1000; } stage s : fifo;
-
-        ";
-    let head_workload =
-        "workload { arrive poisson(1); init { set n = 10; } send (n); session { turn; end; } }";
-    let steps = format!(
-        "{head}
-        server (n) {{ hold kv (cost(kv, need)) at admission (half = n / 2, need = half + 1)
-          {{ run s (cost(s, 1)); }}
-        }}"
-    );
-    let flat = format!(
-        "{head}\nserver (n) {{ hold kv (cost(kv, n / 2 + 1)) {{ run s (cost(s, 1)); }}\n}}"
-    );
-    let ov = common::horizon(10.0);
-    assert_eq!(
-        common::compile(&common::main_source(&steps), head_workload, &ov)
-            .unwrap()
-            .to_json(),
-        common::compile(&common::main_source(&flat), head_workload, &ov)
-            .unwrap()
-            .to_json()
-    );
-}
-
 /// `fits` was this clause's name. A program that still says it gets told what
 /// happened rather than a parse error about a brace.
 #[test]
@@ -791,7 +750,7 @@ fn admit_as_a_statement_says_what_to_write() {
         ";
     let ov = common::horizon(10.0);
     let e = common::compile(&common::main_source(src), POISSON, &ov).expect_err("rejected");
-    assert!(e.contains("is now `hold … at admission"), "{e}");
+    assert!(e.contains("is now `hold … { … } cache (ℓ)`"), "{e}");
 }
 
 /// `workload { session { … turn; … } }` with `server { … }` is the

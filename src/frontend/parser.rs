@@ -188,15 +188,6 @@ struct Parser {
     paired: Option<usize>,
     /// Check the syntax alone: half of a pair (`parse_half`).
     syntax_only: bool,
-    /// Header bindings the body of their hold reads, with the position of
-    /// the name: `set` at the top of the body, checked once the program's
-    /// attributes are known (`check_body_bindings`).
-    body_binds: Vec<(usize, String, Expr)>,
-    /// Every name a hold's header binds, with its position: a declaration
-    /// may not share it (`check_declared_names`).
-    header_binds: Vec<(usize, String)>,
-    /// The token position of each name `bindings` read, in order.
-    bind_at: Vec<usize>,
     /// The `def`s so far, in order: a use expands to its body in place.
     defs: Vec<Def>,
     /// The token ranges uses were expanded into, innermost last, to say
@@ -230,7 +221,7 @@ struct Parser {
     implicit_tool: Option<usize>,
     /// Parsing the `serve` of a link queue, which may take a `latency`.
     latency_ok: bool,
-    /// `Q.x` read as an expression, with the position: a mark or a pool of `Q`.
+    /// `Q.x` read as an expression, with the position: what an entry of `Q` sets or a pool of `Q`.
     dotted_reads: Vec<(usize, String, Option<String>)>,
     /// `Q[i].x` references, checked once the queues are known: `x` must be
     /// a pool of `Q`.
@@ -420,7 +411,7 @@ struct Def {
     /// holds. An argument that reads one would read the body's value.
     assigns: Vec<String>,
     /// The entry calls the body makes, itself or through a definition it
-    /// uses, as `(queue, verb)`: each writes its queue's marks and locals,
+    /// uses, as `(queue, verb)`: each writes its queue's locals,
     /// read at a use, where the queues are declared.
     entry_calls: Vec<(String, String)>,
     /// The names the body reads other than its parameters, and the
@@ -443,7 +434,7 @@ const MAX_FAMILY: usize = 10_000;
 /// parameter may not be one: a parameter is replaced token by token, and a
 /// keyword in the body is a token of the same spelling. `tests/docs_lexer.rs`
 /// keeps the list whole.
-pub const KEYWORDS: [&str; 122] = [
+pub const KEYWORDS: [&str; 121] = [
     "Cost",
     "Size",
     "admission",
@@ -509,7 +500,6 @@ pub const KEYWORDS: [&str; 122] = [
     "load",
     "loop",
     "lru",
-    "mark",
     "memory",
     "most",
     "nic",
@@ -932,18 +922,22 @@ pub(crate) fn retired(word: &str) -> Option<&'static str> {
         .map(|(_, now)| *now)
 }
 
-const RETIRED: [(&str, &str); 6] = [
+const RETIRED: [(&str, &str); 7] = [
     (
         "enter",
-        "`enter` is now `hold`: `hold P (u) … at admission (x = e) { … } cache (ℓ);`",
+        "`enter` is now `hold`: `hold P (u) … { … } cache (ℓ);`",
     ),
     (
         "admit",
-        "`admit if … fit where x = e { … } keep (ℓ)` is now `hold … at admission (x = e) \
-         { … } cache (ℓ)`",
+        "`admit if … fit where x = e { … } keep (ℓ)` is now `hold … { … } cache (ℓ)`, \
+         `e` written in the header where `x` stood",
     ),
     ("keep", "`keep` is now `cache`"),
-    ("where", "`where x = e` is now `at admission (x = e)`"),
+    (
+        "where",
+        "`where x = e` is gone: a hold's header is read at admission, so write `e` in it \
+         where `x` stood",
+    ),
     (
         "fit",
         "`fit` is gone: the pools of a `hold` are the condition",
@@ -951,6 +945,11 @@ const RETIRED: [(&str, &str); 6] = [
     (
         "branch",
         "`branch (e)` is now `if (e)`, and `branch with (p)` is `if (~bernoulli(p))`",
+    ),
+    (
+        "mark",
+        "`mark NAME;` is gone: write `set NAME = now;` in its place, read by the caller as \
+         `Q.NAME` as before, or read the engine request's records (`D.admitted`, `D.load_done`)",
     ),
 ];
 
@@ -1109,17 +1108,14 @@ fn reads_context<'a>(v: &str, program: impl IntoIterator<Item = &'a str>) -> boo
     is_context_var(v) && !program.into_iter().any(|a| a == v)
 }
 
-/// Does this expression read the name `n` (an attribute, a constant, or a
-/// binding)?
+/// Does this expression read the name `n` (an attribute or a constant)?
 fn expr_reads(e: &Expr, n: &str) -> bool {
     match e {
         Expr::Located(_, inner) => expr_reads(inner, n),
         Expr::Var(v) => v == n,
         Expr::Num(_) => false,
         Expr::Sample(_, args) => args.iter().any(|a| expr_reads(a, n)),
-        // a bare name in any position, not only where `takes_number`: a
-        // binding named as a pool (`queued(kw)`) must reach the check that
-        // the body would not say which it means
+        // a bare name in any position, not only where `takes_number`
         Expr::Call(_, args) => args.iter().any(|a| match a {
             Arg::Expr(x) => expr_reads(x, n),
             Arg::Ref(r) => ref_reads(r, n) || (r.index.is_none() && r.name == n),
@@ -1135,241 +1131,6 @@ fn expr_reads(e: &Expr, n: &str) -> bool {
 
 fn ref_reads(r: &Ref, n: &str) -> bool {
     r.index.as_ref().is_some_and(|i| expr_reads(i, n))
-}
-
-/// Does this statement read the name `n` anywhere, its blocks included?
-fn stmt_reads(s: &Stmt, n: &str) -> bool {
-    let block = |b: &[Stmt]| b.iter().any(|s| stmt_reads(s, n));
-    match s {
-        Stmt::Declare(..)
-        | Stmt::Side(_)
-        | Stmt::Route(_)
-        | Stmt::Turn
-        | Stmt::Request
-        | Stmt::End
-        | Stmt::Unread(_) => false,
-        Stmt::Set(_, e) | Stmt::Observe(_, e) => expr_reads(e, n),
-        Stmt::Hold { body, .. } => {
-            // a nested hold that binds `n` itself gives its body its own `n`
-            header_reads(s, n) || (!binds_in_body(body, n) && block(body))
-        }
-        Stmt::Grow(r, e) | Stmt::Shrink(r, e) | Stmt::Load(r, e) => {
-            ref_reads(r, n) || expr_reads(e, n)
-        }
-        Stmt::EngineRequest {
-            stage,
-            input,
-            output,
-        } => ref_reads(stage, n) || expr_reads(input, n) || expr_reads(output, n),
-        Stmt::Drop(r) | Stmt::Release(r) => ref_reads(r, n),
-        Stmt::Run {
-            stage,
-            work,
-            growing,
-            also,
-            latency,
-            ..
-        } => {
-            ref_reads(stage, n)
-                || also.iter().any(|r| ref_reads(r, n))
-                || expr_reads(work, n)
-                || latency.as_ref().is_some_and(|l| expr_reads(l, n))
-                || growing.as_ref().is_some_and(|g| ref_reads(g, n))
-        }
-        Stmt::Branch(c, a, b) => expr_reads(c, n) || block(a) || block(b),
-        Stmt::While(e, b) => expr_reads(e, n) || block(b),
-        Stmt::Loop(b) | Stmt::Fork(b) => block(b),
-        Stmt::Choose { count, key, .. } => {
-            expr_reads(count, n) || key.iter().any(|k| expr_reads(k, n))
-        }
-        Stmt::Call {
-            queue,
-            args,
-            from,
-            to,
-            ..
-        } => {
-            ref_reads(queue, n)
-                || args.iter().any(|a| expr_reads(a, n))
-                || from.as_ref().is_some_and(|r| ref_reads(r, n))
-                || to
-                    .as_ref()
-                    .is_some_and(|(r, e)| ref_reads(r, n) || expr_reads(e, n))
-        }
-        Stmt::Mark(_) => false,
-    }
-}
-
-/// Does the header of this hold (its units, `reserve`, `prefix`, `reuse`,
-/// `cache`, `lease`) read `n`?
-fn header_reads(s: &Stmt, n: &str) -> bool {
-    let Stmt::Hold {
-        pools,
-        reuse,
-        cache,
-        prefix,
-        lease,
-        ..
-    } = s
-    else {
-        return false;
-    };
-    pools.iter().any(|(r, u, f)| {
-        ref_reads(r, n) || expr_reads(u, n) || f.as_ref().is_some_and(|f| expr_reads(f, n))
-    }) || prefix
-        .iter()
-        .flatten()
-        .any(|(k, l)| expr_reads(k, n) || expr_reads(l, n))
-        || reuse.as_ref().is_some_and(|e| expr_reads(e, n))
-        || cache.as_ref().is_some_and(|e| expr_reads(e, n))
-        || lease
-            .as_ref()
-            .is_some_and(|(r, t)| ref_reads(r, n) || expr_reads(t, n))
-}
-
-/// `Expr::bind_unread` in every part of `stmts` (`each_part_mut`): its
-/// expressions, the index of each reference, and a `Stmt::Unread`'s
-/// arguments, which are unread whole.
-fn bind_unread(stmts: &mut [Stmt], binds: &[(String, Expr)]) {
-    each_part_mut(
-        stmts,
-        &mut Parts {
-            expr: |e: &mut Expr| e.bind_unread(binds),
-            reference: |r: &mut Ref| r.index.iter_mut().for_each(|i| i.bind_unread(binds)),
-            unread: |a: &mut Arg| a.substitute(binds),
-        },
-    );
-}
-
-/// Does this hold body begin with the `set` of a binding `n`? The parser
-/// puts a binding the body reads there, and nothing else sets its name.
-fn binds_in_body(body: &[Stmt], n: &str) -> bool {
-    body.iter()
-        .take_while(|s| matches!(s, Stmt::Set(..)))
-        .any(|s| matches!(s, Stmt::Set(v, _) if v == n))
-}
-
-/// The first of `bound` that `stmts` read outside the body of a hold that
-/// binds it; `scope` are the ones bound around `stmts`.
-fn stray_read(stmts: &[Stmt], bound: &[String], scope: &[String]) -> Option<String> {
-    let outside = |s: &Stmt, reads: &dyn Fn(&Stmt, &str) -> bool| {
-        bound
-            .iter()
-            .find(|n| !scope.contains(n) && reads(s, n))
-            .cloned()
-    };
-    for s in stmts {
-        let found = match s {
-            Stmt::Hold { body, .. } => outside(s, &header_reads).or_else(|| {
-                let mut inner = scope.to_vec();
-                inner.extend(bound.iter().filter(|n| binds_in_body(body, n)).cloned());
-                stray_read(body, bound, &inner)
-            }),
-            Stmt::Branch(c, a, b) => outside(s, &|_, n| expr_reads(c, n))
-                .or_else(|| stray_read(a, bound, scope))
-                .or_else(|| stray_read(b, bound, scope)),
-            Stmt::While(e, b) => {
-                outside(s, &|_, n| expr_reads(e, n)).or_else(|| stray_read(b, bound, scope))
-            }
-            Stmt::Loop(b) | Stmt::Fork(b) => stray_read(b, bound, scope),
-            // the binding's own `set`, at the top of its hold's body
-            Stmt::Set(v, _) if bound.contains(v) && scope.contains(v) => None,
-            _ => outside(s, &stmt_reads),
-        };
-        if found.is_some() {
-            return found;
-        }
-    }
-    None
-}
-
-/// Every expression of the declarations: pools, stages, the arrivals and
-/// the run options, which a hold's binding is never in scope of.
-fn decl_exprs(prog: &Program) -> Vec<&Expr> {
-    let mut out: Vec<&Expr> = vec![];
-    for p in &prog.pools {
-        out.push(&p.cap);
-        out.extend(&p.block);
-        if let EvictOrder::By(keys) = &p.evict {
-            out.extend(keys);
-        }
-        if let QueueOrder::By(keys) = &p.queue {
-            out.extend(keys);
-        }
-        if let Some(sp) = &p.spill {
-            out.extend([&sp.work, &sp.when]);
-            out.extend(
-                [&sp.to, &sp.via]
-                    .into_iter()
-                    .filter_map(|r| r.index.as_deref()),
-            );
-        }
-        out.extend(p.admit_via.iter().filter_map(|r| r.index.as_deref()));
-    }
-    for st in &prog.stages {
-        match &st.kind {
-            StageKind::Fifo(e) | StageKind::Ps(e) => out.push(e),
-            StageKind::Delay => {}
-            StageKind::Step(sp) => {
-                out.extend([&sp.budget, &sp.cost, &sp.chunk]);
-                out.extend(sp.memory.iter().filter_map(|r| r.index.as_deref()));
-                match &sp.schedule {
-                    Schedule::Procedure(only) => out.extend(only),
-                    // a body's guards read as the iteration is planned, and
-                    // the moments check what they read
-                    Schedule::Body(_) => {}
-                }
-                if let Serve::By(keys) = &sp.serve {
-                    out.extend(keys);
-                }
-            }
-        }
-    }
-    if let Some(w) = &prog.workload {
-        match &w.arrive {
-            Arrival::Poisson(e) | Arrival::Renewal(e) | Arrival::Closed(e) | Arrival::Batch(e) => {
-                out.push(e)
-            }
-            Arrival::None => {}
-        }
-    }
-    out
-}
-
-/// The first thing `e` reads whose value at a hold's admission is not its
-/// value in the hold's body: an observable of pool or stage state, a
-/// context variable, or `cached`, which the admission sets. `attrs` are
-/// the program's attributes and `lets` its constants, which shadow a
-/// context variable of the same name as the linker resolves them.
-fn live_read(e: &Expr, attrs: &[String], lets: &[String]) -> Option<String> {
-    let var = |v: &str| {
-        let program = attrs.iter().chain(lets).map(String::as_str);
-        (v == "cached" || reads_context(v, program)).then(|| v.to_string())
-    };
-    match e {
-        Expr::Located(_, inner) => live_read(inner, attrs, lets),
-        Expr::Num(_) => None,
-        Expr::Var(v) => var(v),
-        Expr::Sample(_, args) => args.iter().find_map(|a| live_read(a, attrs, lets)),
-        Expr::Call(f, args) => {
-            if !is_pure(f) {
-                return Some(format!("{f}(…)"));
-            }
-            args.iter().enumerate().find_map(|(k, a)| match a {
-                Arg::Expr(x) => live_read(x, attrs, lets),
-                Arg::Ref(r) if r.index.is_none() && takes_number(f, k, args.len()) => var(&r.name),
-                Arg::Ref(_) => None,
-            })
-        }
-        // an unread argument is never evaluated
-        Expr::Unread(_, e) => live_read(e, attrs, lets),
-        Expr::Unary(_, a) => live_read(a, attrs, lets),
-        Expr::Binary(_, a, b) => live_read(a, attrs, lets).or_else(|| live_read(b, attrs, lets)),
-        Expr::Cond(c, a, b) => live_read(c, attrs, lets)
-            .or_else(|| live_read(a, attrs, lets))
-            .or_else(|| live_read(b, attrs, lets)),
-        Expr::Over(_, _, n, e) => live_read(n, attrs, lets).or_else(|| live_read(e, attrs, lets)),
-    }
 }
 
 /// Replace every internal request marker, at any depth, by the server's
@@ -1485,14 +1246,13 @@ fn in_context(n: &str) -> bool {
     n != "now" && is_context_var(n) || SCHEDULER_ATTRS.contains(&n)
 }
 
-/// An entry's body: what it `set`s or `choose`s, what it `mark`s, and the
+/// An entry's body: what it `set`s or `choose`s, and the
 /// pools its holds lease, and its engine's requests (`request_kv`, the
 /// pool its `taking` leases).
 fn collect_entry(
     stmts: &[Stmt],
     request_kv: Option<&str>,
     locals: &mut Vec<String>,
-    marks: &mut Vec<String>,
     leased: &mut Vec<String>,
 ) {
     for s in stmts {
@@ -1509,25 +1269,20 @@ fn collect_entry(
                     locals.push(n.clone());
                 }
             }
-            Stmt::Mark(n) => {
-                if !marks.contains(n) {
-                    marks.push(n.clone());
-                }
-            }
             Stmt::Hold { body, lease, .. } => {
                 if let Some((r, _)) = lease
                     && !leased.contains(&r.name)
                 {
                     leased.push(r.name.clone());
                 }
-                collect_entry(body, request_kv, locals, marks, leased);
+                collect_entry(body, request_kv, locals, leased);
             }
             Stmt::Loop(body) | Stmt::While(_, body) | Stmt::Fork(body) => {
-                collect_entry(body, request_kv, locals, marks, leased)
+                collect_entry(body, request_kv, locals, leased)
             }
             Stmt::Branch(_, a, b) => {
-                collect_entry(a, request_kv, locals, marks, leased);
-                collect_entry(b, request_kv, locals, marks, leased);
+                collect_entry(a, request_kv, locals, leased);
+                collect_entry(b, request_kv, locals, leased);
             }
             _ => {}
         }
@@ -1553,16 +1308,13 @@ fn pass_help(q: &QueueDecl, e: &queue::Entry, n: &str, header: bool) -> String {
     match (fixed, header) {
         (false, true) => format!("Pass `{n}` as a parameter"),
         (false, false) => {
-            format!("pass `{n}` as a parameter or `mark` a moment for the caller to read")
+            format!("pass `{n}` as a parameter")
         }
         (true, true) => format!(
             "`{}`'s parameters are its role's: {hide} and set a local from it above the hold",
             e.verb
         ),
-        (true, false) => format!(
-            "`{}`'s parameters are its role's: {hide} or `mark` a moment for the caller to read",
-            e.verb
-        ),
+        (true, false) => format!("`{}`'s parameters are its role's: {hide}", e.verb),
     }
 }
 
@@ -1596,8 +1348,7 @@ fn split_reads<'a>(
             | Stmt::Route(_)
             | Stmt::Turn
             | Stmt::End
-            | Stmt::Request
-            | Stmt::Mark(_) => {}
+            | Stmt::Request => {}
             Stmt::Set(n, e) => {
                 bodies.push(e);
                 above.push(n.clone());
@@ -1793,9 +1544,6 @@ impl Parser {
             hidden_at: None,
             paired: None,
             syntax_only: false,
-            body_binds: vec![],
-            header_binds: vec![],
-            bind_at: vec![],
             defs: vec![],
             expanded: vec![],
             deferred: vec![],
@@ -2370,7 +2118,7 @@ impl Parser {
         }
         // a request runs the server or a named gateway's `route`, whose
         // admissions set the `SCHEDULER_ATTRS`, and the entries it calls
-        // set and mark (`D.first_token`)
+        // set (`D.first_token`)
         let mut shared: Vec<String> = SCHEDULER_ATTRS.map(String::from).to_vec();
         let mut served = Served::default();
         if let Some((_, server)) = &self.server {
@@ -2382,15 +2130,12 @@ impl Parser {
                     shared.extend(e.locals.iter().map(|l| format!("{}.{l}", q.name)));
                 }
             }
-            shared.extend(q.marks.iter().map(|m| format!("{}.{m}", q.name)));
         }
         served.shared = shared;
         self.check_engine_runs(&prog)?;
         self.relations(&mut prog)?;
         self.assemble(&mut prog, &mut served)?;
         self.link_engines(&mut prog)?;
-        self.check_binding_names(&prog)?;
-        self.check_body_bindings(&prog)?;
         self.check_declared_names(&prog)?;
         self.check_deferred(&prog, &served)?;
         prog.definitions = std::mem::take(&mut self.definitions);
@@ -2683,8 +2428,7 @@ impl Parser {
                                 .signature
                                 .as_ref()
                                 .is_some_and(|s| s.params.iter().any(|p| p.name == *n))
-                            || BUILTIN_ATTRS.contains(&n.as_str())
-                            || self.body_binds.iter().any(|(_, b, _)| b == n);
+                            || BUILTIN_ATTRS.contains(&n.as_str());
                         // the body sees attributes: a device is one only
                         // when nothing sets the name
                         if !set && self.names_device(q, n) {
@@ -2748,8 +2492,7 @@ impl Parser {
                         && self.engines.iter().any(|e| e.name == qn && e.connector))
                     || self.queues.iter().any(|q| {
                         q.name == qn
-                            && (q.marks.iter().any(|m| m == field)
-                                || q.pools.iter().any(|p| p == field)
+                            && (q.pools.iter().any(|p| p == field)
                                 || q.entries
                                     .iter()
                                     .any(|e| e.locals.iter().any(|l| l == field)))
@@ -2780,7 +2523,7 @@ impl Parser {
                 if !ok {
                     return self.err_at(
                         at,
-                        format!("`{name}`: no entry of `{qn}` marks or sets `{field}`, and `{qn}` has no pool `{field}`"),
+                        format!("`{name}`: no entry of `{qn}` sets `{field}`, and `{qn}` has no pool `{field}`"),
                     );
                 }
             }
@@ -3018,106 +2761,6 @@ impl Parser {
             client,
             workload,
         });
-        Ok(())
-    }
-
-    /// A header's binding names a value of its hold alone: an attribute or
-    /// a constant of the program with its name would have one word mean two
-    /// things, in the header (`at admission (k = 1)` beside `let k = 3;`)
-    /// and in the body, where a binding it reads is set at the top. A name
-    /// the language supplies is refused where the binding is parsed, and a
-    /// declaration's by `check_declared_names`.
-    fn check_binding_names(&self, prog: &Program) -> PResult<()> {
-        let lets: Vec<&String> = prog.lets.iter().map(|(n, _)| n).collect();
-        // the bindings' own `set`s are not recorded as definitions
-        let set = |name: &String| {
-            self.definitions
-                .iter()
-                .any(|(n, _)| n == name && !lets.contains(&n))
-        };
-        for (at, name) in &self.header_binds {
-            let what = if BUILTIN_ATTRS.contains(&name.as_str()) {
-                "an attribute the scheduler sets"
-            } else if lets.contains(&name) {
-                "a `let` constant"
-            } else if set(name) {
-                "an attribute the program sets"
-            } else {
-                continue;
-            };
-            return self.err_at(
-                *at,
-                format!(
-                    "`{name}` is {what}; a binding named `{name}` would make the one word \
-                     mean two things\nhelp: rename the binding"
-                ),
-            );
-        }
-        Ok(())
-    }
-
-    /// A binding its hold's body reads was set at the top of the body. That
-    /// is its admission value only if it reads attributes and constants.
-    fn check_body_bindings(&self, prog: &Program) -> PResult<()> {
-        if self.body_binds.is_empty() {
-            return Ok(());
-        }
-        let lets: Vec<String> = prog.lets.iter().map(|(n, _)| n.clone()).collect();
-        // what the program's own `set` and `choose` assign (the bindings'
-        // `set`s are not recorded as definitions)
-        let assigned: Vec<String> = self
-            .definitions
-            .iter()
-            .map(|(n, _)| n.clone())
-            .filter(|n| !lets.contains(n))
-            .collect();
-        for (at, name, e) in &self.body_binds {
-            if expr_reads(e, name) {
-                return self.err_at(*at, format!("the binding `{name}` reads itself"));
-            }
-            if let Some(what) = live_read(e, &assigned, &lets) {
-                let help = if what == "cached" || what.starts_with("cachedin") {
-                    "in the body read `cached`, the units the admission consumed"
-                } else {
-                    "name what the body needs with a `set` in the body"
-                };
-                return self.err_at(
-                    *at,
-                    format!(
-                        "the body reads `{name}`, and `{name}` reads `{what}`: the body \
-                         sees a binding that reads only attributes and constants\n\
-                         help: {help}"
-                    ),
-                );
-            }
-        }
-        // the binding is the body's: a read anywhere else would get the value
-        // the last such hold left
-        let mut bound: Vec<String> = self.body_binds.iter().map(|(_, n, _)| n.clone()).collect();
-        bound.sort();
-        bound.dedup();
-        let mut stray = stray_read(&prog.session, &bound, &[]);
-        if let Some(w) = &prog.workload {
-            stray = stray
-                .or_else(|| stray_read(&w.init, &bound, &[]))
-                .or_else(|| stray_read(&w.turn, &bound, &[]));
-        }
-        stray = stray.or_else(|| {
-            decl_exprs(prog)
-                .into_iter()
-                .find_map(|e| bound.iter().find(|n| expr_reads(e, n)).cloned())
-        });
-        if let Some(name) = stray {
-            let (at, _, _) = self.body_binds.iter().find(|(_, n, _)| *n == name).unwrap();
-            return self.err_at(
-                *at,
-                format!(
-                    "`{name}` is read outside the body of the hold that binds it\n\
-                     help: a header's binding is the header's and its body's; \
-                     name a value the rest of the program reads with `set`"
-                ),
-            );
-        }
         Ok(())
     }
 
@@ -3529,10 +3172,8 @@ impl Parser {
     }
 
     /// A declaration may not share its name with an attribute, built in or
-    /// set (#470), or with a hold header's binding (#484): `stage think`
-    /// beside the attribute `think`, `set svc` beside `stage svc`, or
-    /// `observe hit` beside a header's token count `hit`, would have one
-    /// word mean two things, and a bare `E` passed where a stage or a number
+    /// set (#470): `stage think` beside the attribute `think`, or `set svc`
+    /// beside `stage svc`, would have one word mean two things, and a bare `E` passed where a stage or a number
     /// goes reads one or the other by its place alone (#467). Writing a
     /// built-in attribute stays a `set`. Another declaration's name is
     /// refused where it is declared (`declare_in`, #486). A `let`'s against
@@ -3545,15 +3186,6 @@ impl Parser {
                 .find(|(n, _)| n == name && !prog.lets.iter().any(|(l, _)| l == n))
                 .map(|(_, span)| format!("{}:{}", span.line, span.col))
         };
-        let bound_at = |name: &str| {
-            self.header_binds
-                .iter()
-                .find(|(_, n)| n == name)
-                .map(|(at, _)| {
-                    let t = &self.toks[*at];
-                    format!("{}:{}", t.line, t.col)
-                })
-        };
         for d in self.declared.iter().filter(|d| d.kind != Kind::Constant) {
             let (other, help) = if BUILTIN_ATTRS.contains(&d.name.as_str()) {
                 (
@@ -3565,11 +3197,6 @@ impl Parser {
                 (
                     format!("an attribute the program sets at {place}"),
                     "rename the declaration or the attribute",
-                )
-            } else if let Some(place) = bound_at(&d.name) {
-                (
-                    format!("a hold's binding at {place}"),
-                    "rename the declaration or the binding",
                 )
             } else {
                 continue;
@@ -3776,8 +3403,7 @@ impl Parser {
     }
 
     /// The attributes a definition's entry calls write, with the call:
-    /// `Q.verb (…)` writes `Q`'s marks and its entries' locals, `Q.first`
-    /// and `Q.x`.
+    /// `Q.verb (…)` writes its entries' locals, `Q.x`.
     fn entry_marks(&self, d: &Def) -> Vec<(String, String, String)> {
         let mut out = vec![];
         for (q, v) in &d.entry_calls {
@@ -3787,8 +3413,7 @@ impl Parser {
             if !queue.entries.iter().any(|e| e.verb == *v) {
                 continue;
             }
-            let locals = queue.entries.iter().flat_map(|e| &e.locals);
-            for m in queue.marks.iter().chain(locals) {
+            for m in queue.entries.iter().flat_map(|e| &e.locals) {
                 out.push((format!("{q}.{m}"), q.clone(), v.clone()));
             }
         }
@@ -4599,7 +4224,6 @@ impl Parser {
             has_stage: false,
             entries: vec![],
             leased: None,
-            marks: vec![],
             latency: None,
             nic: false,
             takes: None,
@@ -5032,10 +4656,8 @@ impl Parser {
         self.in_queue = None;
         self.side = outer_side;
         let body = body?;
-        // what the body sets is the entry's; what it marks the caller reads;
-        // what it leases a `from` takes
+        // what the body sets is the entry's; what it leases a `from` takes
         let mut locals = vec![];
-        let mut marks = vec![];
         let mut leased = vec![];
         // the queue's engine, declared above its entries, and what its
         // requests lease
@@ -5044,13 +4666,7 @@ impl Parser {
             .iter()
             .find(|e| e.name == qname)
             .and_then(|e| e.kv.clone());
-        collect_entry(
-            &body,
-            request_kv.as_deref(),
-            &mut locals,
-            &mut marks,
-            &mut leased,
-        );
+        collect_entry(&body, request_kv.as_deref(), &mut locals, &mut leased);
         if let Some(p) = locals.iter().find(|l| params.contains(l)) {
             return self.err_at(at, format!("`{qname}.{verb}` sets its parameter `{p}`"));
         }
@@ -5252,13 +4868,7 @@ impl Parser {
         if let Some(l) = leased.first() {
             q.leased = Some(l.clone());
         }
-        for m in marks {
-            if !q.marks.contains(&m) {
-                q.marks.push(m);
-            }
-        }
         let leases = always_leaves_kv(&body, request_kv.is_some());
-        let q = &mut self.queues[qi];
         q.entries.push(queue::Entry {
             verb,
             params,
@@ -5670,7 +5280,7 @@ impl Parser {
             let full = format!("{name}.{}", self.ident()?);
             if index.is_some() {
                 // `D[j].kv` is a member's pool; `D[j].first_token` would be a
-                // member's mark, and a mark is the request's
+                // member's local, and a local is the request's
                 self.indexed_dotted.push((self.pos - 1, full.clone()));
             }
             full
@@ -6076,17 +5686,6 @@ impl Parser {
                 }
                 Ok(Stmt::Choose { var, count, key })
             }
-            "mark" => {
-                if self.in_queue.is_none() {
-                    return self.err(
-                        "`mark` is a queue entry's statement: it names a moment the caller reads",
-                    );
-                }
-                self.advance();
-                let name = self.ident()?;
-                self.expect(&Tok::Semi)?;
-                Ok(Stmt::Mark(name))
-            }
             // `Q.verb (…);`, `Q[i].verb (…) from S[k] to p (m);`: a queue's entry
             _ if matches!(self.peek_at(1), Tok::Dot | Tok::LBracket) => self.call(),
             // `E (a, …);`: engine `E`'s request
@@ -6127,7 +5726,7 @@ impl Parser {
             }
         }
         // `prefix (k₁: n₁, …)`: the sequence as keyed segments
-        let mut prefix = if self.eat_kw("prefix") {
+        let prefix = if self.eat_kw("prefix") {
             self.expect(&Tok::LParen)?;
             let mut segs = vec![];
             loop {
@@ -6145,82 +5744,44 @@ impl Parser {
         } else {
             None
         };
-        let mut reuse = if self.eat_kw("reuse") {
+        let reuse = if self.eat_kw("reuse") {
             Some(self.paren_expr()?)
         } else {
             None
         };
-        // `at admission (hit = e, ...)` names values the header is written in
-        // terms of. Everything in a hold's header is evaluated when the
-        // session is admitted; a `set` above the hold is not, and looks the
-        // same. The bindings are substituted into the header's expressions
-        // here, so the interpreter never sees them.
-        self.bind_at.clear();
         if let Tok::Ident(w) = self.peek()
             && let Some(now) = retired(w)
         {
             return self.err(now);
         }
-        let binds = self.at_admission()?;
-        if !binds.is_empty() {
-            for (_, e, reserve) in &mut pools {
-                e.substitute(&binds);
-                if let Some(f) = reserve {
-                    f.substitute(&binds);
-                }
-            }
-            if let Some(r) = &mut reuse {
-                r.substitute(&binds);
-            }
-            for (k, n) in prefix.iter_mut().flatten() {
-                k.substitute(&binds);
-                n.substitute(&binds);
-            }
+        if let Tok::Ident(w) = self.peek()
+            && w == "at"
+        {
+            return self.err(
+                "`at admission (x = e)` is gone: a hold's header is read at admission, so \
+                 write `e` in the header where `x` stood, and `set x = e;` at the top of the \
+                 body if it reads `x`",
+            );
         }
-        let bind_at = std::mem::take(&mut self.bind_at);
         self.holds_open += 1;
         let body = self.block();
         self.holds_open -= 1;
-        let mut body = body?;
-        // an unread argument reads nothing, and sees the binding as written
-        bind_unread(&mut body, &binds);
-        // A binding the body reads is set at the top of the body, to the
-        // value it had at the admission: the body runs at the admission's
-        // instant, so an expression of attributes and constants reads the
-        // same there. One that reads live state does not, and is refused
-        // once the program's attributes are known.
-        let mut sets = vec![];
-        for ((name, e), &at) in binds.iter().zip(&bind_at) {
-            self.header_binds.push((at, name.clone()));
-            if body.iter().any(|s| stmt_reads(s, name)) {
-                sets.push(Stmt::Set(name.clone(), e.clone()));
-                self.body_binds.push((at, name.clone(), e.clone()));
-            }
-        }
-        if !sets.is_empty() {
-            sets.append(&mut body);
-            body = sets;
-        }
+        let body = body?;
         if let Tok::Ident(w) = self.peek()
             && w == "keep"
         {
             return self.err(retired("keep").unwrap());
         }
-        let mut cache = if self.eat_kw("cache") {
+        let cache = if self.eat_kw("cache") {
             Some(self.paren_expr()?)
         } else {
             None
         };
-        if let Some(c) = &mut cache {
-            c.substitute(&binds);
-        }
         // `lease P (t)`: the allocation on `P` outlives the scope, for the
         // session's transfer to take, for at most `t` seconds
         let lease = if self.eat_kw("lease") {
             let r = self.own_pool("lease")?;
-            let mut t = self.paren_expr()?;
-            t.substitute(&binds);
-            Some((r, t))
+            Some((r, self.paren_expr()?))
         } else {
             None
         };
@@ -6235,69 +5796,6 @@ impl Parser {
             prefix,
             lease,
         })
-    }
-
-    /// `at admission (hit = e, need = f)`: names for a hold's header.
-    ///
-    /// A later binding sees the earlier ones, so a header can be written in
-    /// steps. Samples are rejected: the bindings are substituted, and a name
-    /// used twice would draw twice.
-    fn at_admission(&mut self) -> PResult<Vec<(String, Expr)>> {
-        if !self.eat_kw("at") {
-            return Ok(vec![]);
-        }
-        if !self.eat_kw("admission") {
-            return self.err("expected `admission` after `at`");
-        }
-        self.expect(&Tok::LParen)?;
-        let binds = self.bindings("at admission")?;
-        self.expect(&Tok::RParen)?;
-        Ok(binds)
-    }
-
-    /// `name = e, name = f, …`: the bindings of an `at admission (…)`, after
-    /// its keyword. `clause` names it in errors.
-    fn bindings(&mut self, clause: &str) -> PResult<Vec<(String, Expr)>> {
-        let mut binds: Vec<(String, Expr)> = vec![];
-        loop {
-            let at = self.pos;
-            self.bind_at.push(at);
-            let name = self.name()?;
-            self.own_name(at, &name, "a binding")?;
-            if binds.iter().any(|(n, _)| *n == name) {
-                return self.err(format!("`{name}` is bound twice in one `{clause}`"));
-            }
-            self.expect(&Tok::Assign)?;
-            let mut e = self.expr()?;
-            if e.draws() {
-                return self.err(format!(
-                    "`{name}` draws a sample: a `{clause}` binding is substituted, \
-                     so a name used twice would draw twice"
-                ));
-            }
-            e.substitute(&binds);
-            binds.push((name, e));
-            if *self.peek() == Tok::Comma {
-                self.advance();
-            } else {
-                break;
-            }
-        }
-        // the earlier bindings are substituted, so a name of the clause still
-        // read is a later one's, which the binding cannot see
-        let at = self.bind_at.len() - binds.len();
-        for (i, (name, e)) in binds.iter().enumerate() {
-            if let Some((later, _)) = binds[i + 1..].iter().find(|(n, _)| expr_reads(e, n)) {
-                return self.err_at(
-                    self.bind_at[at + i],
-                    format!(
-                        "`{name}` reads `{later}`, which is bound after it: a binding \
-                         sees the ones before it"
-                    ),
-                );
-            }
-        }
-        Ok(binds)
     }
 
     /// `kvt.nixl_pull (P, D, latency = x);`: the KV the entries of `D`
@@ -7003,7 +6501,7 @@ impl Parser {
                 } else if *self.peek() == Tok::Dot
                     || (*self.peek() == Tok::LBracket && self.in_expr_index_dot())
                 {
-                    // `Q.x`: a moment an entry of `Q` marked, or what it set;
+                    // `Q.x`: what an entry of `Q` set;
                     // the attribute is the request's, so no member index
                     let at = self.pos - 1;
                     if *self.peek() == Tok::LBracket {
@@ -7297,170 +6795,45 @@ mod tests {
     }
 
     #[test]
-    fn a_binding_the_body_reads_is_set_at_the_top_of_the_body() {
-        // the body sees `known` at its admission value, which for attributes
-        // and constants is the value it has at the top of the body
-        const WL: &str = "workload { session { turn;
-            end;
-
-        } }";
-        same(
-            (
-                &format!(
-                    "{ENGINE} server {{
-          hold kv (cost(kv, known)) at admission (known = computed < p ? p : computed + 1) {{
-            run tool (cost(tool, known - cached));
-          }}
-        }}"
-                ),
-                WL,
-            ),
-            (
-                &format!(
-                    "{ENGINE} server {{
-          hold kv (cost(kv, computed < p ? p : computed + 1)) {{
-            set known = computed < p ? p : computed + 1;
-            run tool (cost(tool, known - cached));
-          }}
-        }}"
-                ),
-                WL,
-            ),
-        );
-        // a binding the body does not read stays in the header
-        same(
-            (
-                &format!(
-                    "{ENGINE}\nserver {{ hold kv (cost(kv, h)) at admission (h = 1) {{ }}\n}}"
-                ),
-                TURN,
-            ),
-            (
-                &format!("{ENGINE}\nserver {{ hold kv (cost(kv, 1)) {{ }}\n}}"),
-                TURN,
-            ),
+    fn a_header_is_written_where_it_is_read() {
+        // `at admission (x = e)` named a value of the header; the header is
+        // read at admission, so the expression is written in it
+        refused(
+            &format!("{ENGINE}\nserver {{ hold kv (cost(kv, h)) at admission (h = 1) {{ }}\n}}"),
+            TURN,
+            "`at admission (x = e)` is gone: a hold's header is read at admission, so \
+             write `e` in the header where `x` stood, and `set x = e;` at the top of the \
+             body if it reads `x`",
         );
     }
 
     #[test]
-    fn the_body_does_not_see_a_binding_of_live_state() {
-        // at the top of the body the admission has consumed the prefix, so
-        // `cachedin(kv)` there is not what the header read
-        for (binding, help) in [
-            ("hit = min(cachedin(kv), p)", "read `cached`"),
-            ("hit = cached", "read `cached`"),
-            ("hit = now", "with a `set` in the body"),
-        ] {
-            let e = pair(
-                &format!("{ENGINE}\nserver {{ hold kv (cost(kv, hit)) at admission ({binding}) {{ observe h = hit; }}\n}}"),
-                TURN,
-            )
-            .unwrap_err();
-            assert!(
-                e.msg.contains("the body reads `hit`, and `hit` reads"),
-                "{binding}: {}",
-                e.msg
-            );
-            assert!(e.msg.contains(help), "{}", e.msg);
+    fn a_moment_is_the_callers() {
+        // `mark x;` was `set Q.x = now;`, which an entry writes as `set x = now;`
+        const D: &str = "queue D : decode {
+          device gpu { compute (t) = t; hbm (k) = k; kv cap 100; }
+          engine on gpu { reqs cap 1; tokens cap 10; scheduler { admit waiting; } worker { forward (1); } }
+          pool kv on D.gpu { block 1; }
+          decode (p) { mark first; D (p, 1); }
         }
-        // `n` is a context variable unless the program assigns it
-        let src = format!(
-            "{ENGINE}\nserver {{ set n = 3; hold kv (cost(kv, m)) at admission (m = n + 1) {{ observe x = m; }}\n}}"
+        server { D.decode (1); }";
+        refused(
+            D,
+            TURN,
+            "`mark NAME;` is gone: write `set NAME = now;` in its place, read by the caller as \
+             `Q.NAME` as before",
         );
-        pair(&src, TURN).unwrap();
-    }
-
-    #[test]
-    fn a_binding_the_body_reads_has_a_name_of_its_own() {
-        // its `set` makes the name an attribute: one the scheduler, a `let`,
-        // the context or the program already has would be two things, and a
-        // declaration may share no binding's name, read or not (#484)
-        for (pre, binding, what) in [
-            ("", "cached = 3", "an attribute the scheduler sets"),
-            ("", "computed = 50", "an attribute the scheduler sets"),
-            ("", "size = 5", "a name the language supplies"),
-            ("", "now = 1", "a name the language supplies"),
-            ("", "inf = 3", "a name the language supplies"),
-            ("", "kv = 3", "a pool named `kv`"),
-            ("", "llm = 3", "an engine named `llm`"),
-            ("let bs = 4;", "bs = 2", "a `let` constant"),
-            ("", "k = 7", "an attribute the program sets"),
-        ] {
-            let assign = if what.ends_with("program sets") {
-                "set k = 5;"
-            } else {
-                ""
-            };
-            let name = binding.split(' ').next().unwrap();
-            let e = pair(
-                &format!("{pre} {ENGINE}\nserver {{ {assign} hold kv (cost(kv, 1)) at admission ({binding}) {{ observe a = {name}; }}\n}}"),
-                TURN,
-            )
-            .unwrap_err();
-            assert!(e.msg.contains(what), "{binding}: {}", e.msg);
-        }
-        let e = pair(
-            &format!("{ENGINE}\nserver {{ hold kv (cost(kv, 1)) at admission (k = k + 1) {{ observe a = k; }}\n}}"),
+        refused(
+            &format!("{ENGINE}\nserver {{ mark first;\n}}"),
             TURN,
-        )
-        .unwrap_err();
-        assert!(e.msg.contains("reads itself"), "{}", e.msg);
-        let e = pair(
-            &format!("{ENGINE}\nserver {{ hold kv (cost(kv, 1)) at admission (j = k, k = 5) {{ observe a = j; }}\n}}"),
+            "`mark NAME;` is gone",
+        );
+        // a retired word names nothing, so `mark` never means two things
+        refused(
+            &format!("{ENGINE}\nserver {{ set mark = 1;\n}}"),
             TURN,
-        )
-        .unwrap_err();
-        assert!(e.msg.contains("bound after it"), "{}", e.msg);
-        // an attribute the body sets itself is not the binding
-        let e = pair(
-            &format!("{ENGINE}\nserver {{ hold kv (cost(kv, hit)) at admission (hit = min(cachedin(kv), 1)) {{ set hit = cached; observe h = hit; }}\n}}"),
-            TURN,
-        )
-        .unwrap_err();
-        assert!(e.msg.contains("an attribute the program sets"), "{}", e.msg);
-    }
-
-    #[test]
-    fn a_binding_is_read_only_in_its_hold() {
-        for after in [
-            "observe b = k;",
-            "hold kv (cost(kv, k)) { }",
-            "if (k > 1) { } else { }",
-        ] {
-            let e = pair(
-                &format!("{ENGINE}\nserver {{ hold kv (cost(kv, 1)) at admission (k = 2) {{ observe a = k; }} {after}\n}}"),
-                TURN,
-            )
-            .unwrap_err();
-            assert!(e.msg.contains("outside the body"), "{after}: {}", e.msg);
-        }
-        let e = pair(
-            "pool kv { cap 100; queue by (k); }
-        server { hold kv (cost(kv, 1)) at admission (k = 2) { observe a = k; }
-        }",
-            "workload { session { turn;
-        } }",
-        )
-        .unwrap_err();
-        assert!(e.msg.contains("outside the body"), "{}", e.msg);
-        // two holds may bind one name, and a nested hold may bind it again
-        // over a live outer binding its body does not read
-        pair(
-            &format!(
-                "{ENGINE}
-        server {{
-          hold kv (cost(kv, 1)) at admission (k = 2) {{ observe a = k; }}
-          hold kv (cost(kv, 1)) at admission (k = 3) {{ observe b = k; }}
-          hold kv (cost(kv, h)) at admission (h = cachedin(kv)) {{
-            hold kv (cost(kv, 1)) at admission (h = 1) {{ observe c = h; }}
-          }}
-        }}"
-            ),
-            "workload { session { turn;
-
-        } }",
-        )
-        .unwrap();
+            "`mark` is a retired word and names nothing",
+        );
     }
 
     #[test]
@@ -7635,12 +7008,6 @@ mod tests {
         )
         .unwrap();
         assert!(err("def f(p) { set p = 1; }\nserver { f(2);\n}").contains("is a parameter"));
-        assert!(
-            err(
-                "def f(h) { hold kv (cost(kv, h)) at admission (h = 3) { observe a = h; } }\nserver { f(2);\n}"
-            )
-            .contains("is a parameter")
-        );
         // a parameter may not be an aggregate's index, and a count may be one
         assert!(
             err("def tally(k) { sum k in 2 (k) }\nserver { set x = tally(7);\n}")
@@ -8036,7 +7403,7 @@ mod tests {
             ("\nserver { enter kv (1) { }\n}", "`enter` is now `hold`"),
             (
                 "server { admit if kv (1) fit { } }",
-                "is now `hold … at admission",
+                "is now `hold … { … } cache (ℓ)`, `e` written in the header",
             ),
             (
                 "\nserver { hold kv (cost(kv, 1)) { } keep (1);\n}",
@@ -8044,7 +7411,7 @@ mod tests {
             ),
             (
                 "\nserver { hold kv (cost(kv, 1)) where x = 1 { }\n}",
-                "`where x = e` is now `at admission (x = e)`",
+                "`where x = e` is gone: a hold's header is read at admission",
             ),
             (
                 "\nserver { hold kv (cost(kv, 1)) fit { }\n}",
@@ -8065,7 +7432,6 @@ mod tests {
         for src in [
             "def f(where) { where }\nserver {\n}",
             "\nserver { set fit = 1;\n}",
-            "\nserver { hold kv (cost(kv, 1)) at admission (enter = 1) { observe e = enter; }\n}",
         ] {
             refused(
                 &format!("pool kv {{ cap 1; }} {src}"),
@@ -8073,9 +7439,9 @@ mod tests {
                 "is a retired word",
             );
         }
-        // `hold` is written on either side, with its bindings
+        // `hold` is written on either side
         pair(
-            "pool kv { cap 1; } server { hold kv (cost(kv, x)) at admission (x = 1) { } cache (cost(kv, 1)); }",
+            "pool kv { cap 1; } server { hold kv (cost(kv, 1)) { } cache (cost(kv, 1)); }",
             WL,
         )
         .unwrap();

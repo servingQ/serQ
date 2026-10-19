@@ -108,7 +108,7 @@ stmt     := turn ;                           -- draw attributes, submit, wait fo
           | observe NAME = expr ;
           | hold POOL ( expr ) [reserve ( expr )] [, POOL ( expr ) [reserve ( expr )]]*
                  [prefix ( expr : expr , ... )]   -- the sequence as keyed segments
-                 [reuse ( expr )] [at admission ( NAME = expr , ... )]
+                 [reuse ( expr )]
                  block [ cache ( expr ) ] [ lease POOL ( expr ) ] [ ; ]
                                              -- lease: that pool's allocation outlives the scope,
                                              -- until a release/transfer takes it, expr seconds, or the end
@@ -131,7 +131,6 @@ stmt     := turn ;                           -- draw attributes, submit, wait fo
           | end ;
           | QUEUE [ '[' expr ']' ] . VERB ( expr, ... ) [ from QUEUE [ '[' expr ']' ] ] [ to POOL ( expr ) ] ;
                                              -- a queue's entry, in its place (*Queues*)
-          | mark NAME ;                        -- in an entry: the moment, read by the caller as QUEUE.NAME
           | ENGINE ( expr , expr ) ;         -- in a server: a request to the engine, its input and output tokens
           | serving                          -- the serving vocabulary, sugar for run
 serving  := transfer [ '[' expr ']' | on STAGE [, STAGE]* ] expr from POOL to POOL ( expr ) ;
@@ -485,7 +484,7 @@ ownership. The parser and IR validator enforce these boundaries:
 | Turn lifecycle | `turn;`, optional early `end;` | `turn;` refused; completion is the end of its block; `end;` refuses the request and ends the session, outside a `hold` or a `fork` |
 | Repetition | `while (condition) { … }`, `loop { … }` | The same, without session lifecycle statements |
 | Queue entry calls | Refused | `gw.route();`, `D[j].decode (prompt);`, … |
-| Admission | `hold … at admission (…) { … } cache (…)` | The same |
+| Admission | `hold … { … } cache (…)` | The same |
 
 There is one `server` per workload. An explicit session must contain a
 turn, and `session` belongs inside `workload`. Gateway selection and
@@ -562,7 +561,7 @@ queue and its entry, then expands the route at the call site. Declarations
 may follow the server and several gateways may coexist. Declaring a gateway
 does not execute it or register a default server.
 
-`queue`, `pool`, `serve`, `nic`, `turn` and `mark` are language
+`queue`, `pool`, `serve`, `nic` and `turn` are language
 syntax. The role names and their entry signatures in the table are
 predefined vocabulary; `gw`, `P` and `D` are names declared by this
 program. User-defined roles are not supported.
@@ -683,11 +682,10 @@ read at the run's start, in seconds; the stage report counts it as the
 run's `wait`, and the job as present. A transfer over a link with a
 `latency` may not name one too. A link with a `transfer (n)` entry is called
 instead, `nic[self].transfer (n) from P to kv (m);`, and runs its body on
-its own stage. Arguments are substituted like an `at admission` binding, so
-none may draw.
+its own stage. Arguments are substituted, so none may draw.
 
 An entry sees its own. Its header — the units, `reserve`, `reuse`, the
-`at admission` bindings, the `prefix` — reads the parameters, the queue's
+`prefix` — reads the parameters, the queue's
 pools and stage, the constants, `cached` and `computed`, and what the
 entry sets above the
 hold, as a server's header reads an attribute set before it (`set kept =
@@ -705,16 +703,16 @@ statements hold, grow, shrink, load and release only the queue's own pools and t
 pool its `from` names. That is the `hidden` rule
 at the queue's boundary: vLLM's scheduler knows `max_tokens`, not the length,
 so `o` is not a parameter of `decode` and the body alone reads it. What the
-body `set`s is the queue's (`D.known`); what it `observe`s is the program's;
-a moment the caller needs is `mark NAME;`, read afterwards as `Q.NAME` —
-the request's attribute, so without a member index (no program here uses
-`mark` since the prefillers became engine calls, whose records say when).
- The gateway is the exception on the session's side: its
+body `set`s is the queue's (`D.known`), read afterwards by the caller as
+`Q.NAME` — the request's attribute, so without a member index; what it
+`observe`s is the program's. A moment the caller needs is a local too,
+`set NAME = now;`, read afterwards as `Q.NAME`, or the engine request's
+record (`D.admitted`, `D.load_done`). The gateway is the exception on the session's side: its
 `route` reads the request's attributes as a `server` does and sets the ones
 the session reads back (`prompt`).
 
 Queues compile to named pools and stages; entry calls expand to their
-bodies, and `mark` becomes `set`. They add no IR constructs.
+bodies. They add no IR constructs.
 
 ## Semantics {#3-semantics}
 
@@ -1426,39 +1424,26 @@ holds blocks and no running slot while it reads:
 `E.loaded` for each admission and sets `E.loaded`, `E.saved` and
 `E.load_done` (when its latest load ended) for the caller.
 
-### `at admission`
+### A hold's header is read at admission
 
 Everything in a hold's header — the units, `reserve`,
 `reuse` — is evaluated when the session is admitted, and a `set` above the
 hold is not (`cache` is read when the session releases, `Serq/Exec.lean`'s
-`release` and the interpreter agree). `at admission (x = e)` gives the
-header a place to name what it is written in terms of, as the P/D
-prefillers' holds did before their engines took their requests
+`release` and the interpreter agree). An expression the header needs at
+admission is written in the header, as the P/D prefillers' holds were
+before their engines took their requests
 ([the design](design/prefiller-engine-request.md)):
 
 ```
-hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, reused + budget_left(P)))) reserve (cost(kv, prompt))
-     at admission (reused = min(cachedin(kv), floor(prompt - 1, bs))) { … }
+hold reqs (cost(reqs, 1)),
+     kv (cost(kv, min(prompt, min(cachedin(kv), floor(prompt - 1, bs)) + budget_left(P))))
+     reserve (cost(kv, prompt)) { … }
 ```
 
-The bindings are substituted into the header's expressions by the parser, so
-the interpreter and the Lean model know nothing of them, and a program that
-uses the clause has the IR of the one that inlines by hand. A
-later binding sees the earlier ones. A binding may not draw (`~`): it is
-substituted, so a name used twice would draw twice.
-
-The body sees a binding too. One the body reads is set at its top, `set
-x = e;`, which is its admission value because the body starts at the
-admission's instant and `e` reads only attributes and constants; that `set`
-is in the AST and the IR like any other. A binding that reads live state —
-an observable such as `cachedin(kv)`, a context variable, or `cached`, which
-the admission itself sets — has another value there, so the body reading it
-is a parse error; the body reads `cached`, the units the admission consumed.
-A binding's name is its own: no declaration anywhere in the program (a
-`def`, an observation, a gauge, a pool, a stage, …) may share it, nor a
-builtin attribute, a context variable, a `let` or an attribute the program
-sets, and it is not read outside the holds that bind it. A binding reads only the ones
-before it in its clause.
+A body that needs the admission's value of an expression of attributes
+and constants sets it at its top, `set x = e;`: the body starts at the
+admission's instant. One of live state (`cachedin(kv)`, `now`) has moved
+by then; the body reads `cached`, the units the admission consumed.
 
 ### `hidden`
 
@@ -1590,7 +1575,7 @@ Linking rejects three programs that are well formed and almost
 certainly not what their author meant: a `set` that reads live pool or
 stage state (`cachedin`, `budget_left`, `used`, …) and is then used in a
 hold's header, where the value is the one from before the session queued
-(`at admission` is the clause for it); a hold without `cache` that reads
+(write the expression in the header instead); a hold without `cache` that reads
 `cached` or writes `reuse`; and a constant `if` guard other than 0 or 1
 (Branching, above). These are errors, not warnings.
 

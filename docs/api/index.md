@@ -62,7 +62,7 @@ constructs that say it and a program that uses them.
 | arrivals, turns and think time | [`arrive`](workload.md#arrive), [`turn`](workload.md#turn), [`session`](program.md#session); think time as [`tool`](serving.md#tool), on the workload's own [`delay`](stage.md#delay) | [the workloads use case](../use-cases/workloads.md) |
 | replaying a production trace | [`trace`](workload.md#trace) | `examples/replay/vllm_replay.sq` ([measured replay](../use-cases/vllm.md#measured-replay)) |
 | memory a request holds while it runs | [`pool`](pool.md), [`hold`](statements.md#hold) | [tutorial 2](../tutorial/02-memory.md) |
-| what the scheduler reads at admission | [`at admission`](statements.md#hold), [moments](context.md) | `examples/multi-turn/vllm.sq` (`request.known`, `request.hit`) |
+| what the scheduler reads at admission | [`hold`](statements.md#hold)'s header, [moments](context.md) | `examples/multi-turn/vllm.sq` (`request.known`, `request.hit`) |
 | a prefix cache across turns | [`cache`](statements.md#hold), [`evict`](pool.md#evict), `cached` ([attributes](attributes.md)), [`drop`](statements.md#drop); [`cachedin`](functions.md#pool) for the lookup at admission | [tutorial 4](../tutorial/04-prefix-cache.md); `examples/multi-turn/vllm.sq` for `reuse` |
 | an offload tier for evicted prefixes | [`spill`](pool.md#spill) | `tests/pool_semantics.rs` |
 | continuous batching and chunked prefill | [`engine`](engine.md) (`tokens cap`, `each at most`, `worker`), an engine's [`request`](../language.md#an-engines-request) (`prefill (e)`, `decode (e)`, `growing`, `taking`) | [the vLLM use case](../use-cases/vllm.md); [tutorial 5](../tutorial/05-the-engine.md) |

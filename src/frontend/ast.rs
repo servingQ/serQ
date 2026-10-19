@@ -214,10 +214,10 @@ impl Expr {
         }
     }
 
-    /// Replace every `Var(name)` of `binds` by its expression: a header
-    /// binding (`at admission (…)`), or an aggregate's index (`max j in n`)
-    /// by its number. A bare argument naming one is the binding, not a
-    /// reference; an inner aggregate's index is its own.
+    /// Replace every `Var(name)` of `binds` by its expression: an
+    /// aggregate's index (`max j in n`) by its number, say. A bare argument
+    /// naming one is the binding, not a reference; an inner aggregate's
+    /// index is its own.
     pub fn substitute(&mut self, binds: &[(String, Expr)]) {
         match self {
             Expr::Located(_, inner) => inner.substitute(binds),
@@ -253,17 +253,6 @@ impl Expr {
                 body.substitute(&inner);
             }
         }
-    }
-
-    /// `substitute` into the arguments of each `Unread` in it, and nowhere
-    /// else: a hold's body reads a binding as the attribute set at its top,
-    /// where an unread argument, which reads nothing, sees the binding.
-    pub fn bind_unread(&mut self, binds: &[(String, Expr)]) {
-        self.for_each_mut(&mut |x| {
-            if let Expr::Unread(args, _) = x {
-                args.iter_mut().for_each(|a| a.substitute(binds));
-            }
-        });
     }
 
     /// Whether the expression draws (`~`) anywhere.
@@ -658,9 +647,6 @@ pub enum Stmt {
         input: Expr,
         output: Expr,
     },
-    /// `mark x;` inside a queue's entry: the moment, as the attribute `Q.x`
-    /// the caller reads. Parse-time only, as `Call`.
-    Mark(String),
     /// The arguments a statement definition's use passes to parameters
     /// its body never reads (`Expr::Unread`). The linker resolves them and
     /// lowers the statement to nothing.
@@ -670,7 +656,9 @@ pub enum Stmt {
 /// What `each_part_mut` hands a visitor: each expression a statement holds,
 /// each pool, stage or queue it names, and each argument of a
 /// `Stmt::Unread`. What lies inside one (a reference's index, a nested
-/// expression) is the visitor's to walk.
+/// expression) is the visitor's to walk. Only `without_locations`, a test
+/// helper, walks statements this way.
+#[cfg(test)]
 pub(crate) struct Parts<E, R, A> {
     pub expr: E,
     pub reference: R,
@@ -678,8 +666,9 @@ pub(crate) struct Parts<E, R, A> {
 }
 
 /// Hand every part of `stmts` to `parts`, a nested block's statements
-/// included, so that a walk over statements cannot pass over a place an
+/// included, so that `without_locations` cannot pass over a place an
 /// expression stands: a reference's index is one (`hold g[n]`).
+#[cfg(test)]
 pub(crate) fn each_part_mut<E, R, A>(stmts: &mut [Stmt], parts: &mut Parts<E, R, A>)
 where
     E: FnMut(&mut Expr),
@@ -693,8 +682,7 @@ where
             | Stmt::Declare(..)
             | Stmt::Turn
             | Stmt::Request
-            | Stmt::End
-            | Stmt::Mark(_) => {}
+            | Stmt::End => {}
             Stmt::Set(_, e) | Stmt::Observe(_, e) => (parts.expr)(e),
             Stmt::Unread(args) => args.iter_mut().for_each(&mut parts.unread),
             Stmt::Hold {
