@@ -430,3 +430,31 @@ fn a_leg_reads_the_session_s_cached_prefix() {
     );
     assert_eq!(samples(&r, "P.reused"), [0.0, 16.0], "{}", r.text());
 }
+
+/// A leg that calls its source once on each way of an `if` calls it once:
+/// its send is read once (CodeRabbit on #719: both ways were counted, and
+/// one read left one pending). A leg that calls it on one way only is
+/// refused, as before.
+#[test]
+fn a_leg_calling_its_source_on_each_way_of_an_if_is_one_send() {
+    let workload = "workload { arrive batch(1); init { set prompt = 10; } send (prompt); session { turn; end; } }";
+    let r = run(
+        &push(
+            "fork { if (prompt > 5) { P.prefill (prompt); } else { P.prefill (prompt); } } \
+             D.decode (prompt) from P;",
+            100,
+            1.0,
+        ),
+        workload,
+    );
+    assert_eq!(r.ended, 1);
+    refused(
+        &push(
+            "fork { if (prompt > 5) { P.prefill (prompt); } } D.decode (prompt) from P;",
+            100,
+            1.0,
+        ),
+        workload,
+        "calls no engine whose requests are sent",
+    );
+}

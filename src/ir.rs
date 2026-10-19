@@ -3960,9 +3960,11 @@ impl Validator<'_> {
                     }
                 }
                 CStmt::Hold { body, .. } => out.extend(self.leg_sources(*body)),
+                // one way or the other: a way's calls, not both ways'
+                // (`calls_a_source` and `source_calls` hold each way to one)
                 CStmt::Branch(_, x, y) => {
-                    out.extend(self.leg_sources(*x));
-                    out.extend(self.leg_sources(*y));
+                    let (a, b) = (self.leg_sources(*x), self.leg_sources(*y));
+                    out.extend(if a.len() >= b.len() { a } else { b });
                 }
                 _ => {}
             }
