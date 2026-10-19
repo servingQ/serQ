@@ -458,3 +458,50 @@ fn a_leg_calling_its_source_on_each_way_of_an_if_is_one_send() {
         "calls no engine whose requests are sent",
     );
 }
+
+/// A leg calls the same source on every way: one whose `if` calls `P` on
+/// one way and `Q` on the other leaves a send the session reads from one
+/// of them only, which the check could not tell apart (CodeRabbit on
+/// #719). It does not link; the same source on both ways does (above).
+#[test]
+fn a_leg_calls_one_source_on_every_way() {
+    let base = push("LEG D.decode (prompt) from P;", 100, 1.0);
+    let p_start = base.find("queue P : prefill").unwrap();
+    let p_end = base.find("queue D : agg").unwrap();
+    let q = base[p_start..p_end]
+        .replace("queue P : prefill", "queue Q : prefill")
+        .replace("pool reqs on P", "pool reqs on Q")
+        .replace("P (p, 1)", "Q (p, 1)");
+    let d_start = p_end;
+    let d_end = base.find("use \"std/kvt\";").unwrap();
+    let e = base[d_start..d_end]
+        .replace("queue D : agg", "queue E : agg")
+        .replace("connector P", "connector Q")
+        .replace("pool reqs on D", "pool reqs on E")
+        .replace("from P", "from Q")
+        .replace("D (p, 2)", "E (p, 2)");
+    let src = |leg: &str| {
+        base.replace("LEG", leg)
+            .replace("use \"std/kvt\";", &format!("{q}{e}use \"std/kvt\";"))
+            .replace(
+                "share = share.maxmin);",
+                "share = share.maxmin); kvt.nixl_push (Q, E, latency = 1, share = share.maxmin);",
+            )
+    };
+    let workload = "workload { arrive batch(1); init { set prompt = 10; } send (prompt); session { turn; end; } }";
+    refused(
+        &src(
+            "fork { if (prompt > 5) { P.prefill (prompt); } else { Q.prefill (prompt); } } if (prompt > 100) { E.decode (prompt) from Q; }",
+        ),
+        workload,
+        "calls the same one on every way",
+    );
+    // one source on both ways links and runs
+    let r = run(
+        &src(
+            "fork { if (prompt > 5) { P.prefill (prompt); } else { P.prefill (prompt); } } if (prompt > 100) { Q.prefill (prompt); E.decode (prompt) from Q; }",
+        ),
+        workload,
+    );
+    assert_eq!(r.ended, 1);
+}

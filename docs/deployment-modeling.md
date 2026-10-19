@@ -6,7 +6,7 @@ place each part of a real system. This page starts from the outside: a
 serving system is a client and a server; the deployment is the server, and
 the client's behaviour, the workload, is a file apart. Then it goes inside
 the server's engines: each has a scheduler that decides what each iteration
-computes and owns the engine's resources, and a worker that turns the
+computes and owns the pools the engine admits, and a worker that turns the
 scheduled batch into time. It explains how the two divide the work, where
 resources are taken and given back, the one status each engine request is
 in, and which invariants every program keeps.

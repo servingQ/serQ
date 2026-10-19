@@ -3840,6 +3840,14 @@ impl Validator<'_> {
                             .into(),
                     );
                 }
+                if !self.one_source(*b) {
+                    return Err(
+                        "a `fork`'s leg calls one KV relation's source on one way of an `if` \
+                         and another on the other: the session reads the leg's send from one \
+                         source, so the leg calls the same one on every way"
+                            .into(),
+                    );
+                }
                 if self.source_calls(*b) > 1 {
                     return Err(
                         "a `fork`'s leg calls an engine whose requests are sent more than \
@@ -3946,6 +3954,21 @@ impl Validator<'_> {
         Ok(pending)
     }
 
+    /// Whether every `if` in a leg's block calls the same sources on both
+    /// ways: then any way's calls are the leg's (`leg_sources`).
+    fn one_source(&self, b: BlockId) -> bool {
+        self.p.blocks[b].iter().all(|s| match s {
+            CStmt::Hold { body, .. } => self.one_source(*body),
+            CStmt::Branch(_, x, y) => {
+                let (mut a, mut c) = (self.leg_sources(*x), self.leg_sources(*y));
+                a.sort_unstable();
+                c.sort_unstable();
+                a == c && self.one_source(*x) && self.one_source(*y)
+            }
+            _ => true,
+        })
+    }
+
     /// The memories (first pool) of the sources a leg's block calls.
     fn leg_sources(&self, b: BlockId) -> Vec<usize> {
         let mut out = vec![];
@@ -3961,7 +3984,8 @@ impl Validator<'_> {
                 }
                 CStmt::Hold { body, .. } => out.extend(self.leg_sources(*body)),
                 // one way or the other: a way's calls, not both ways'
-                // (`calls_a_source` and `source_calls` hold each way to one)
+                // (`calls_a_source`, `source_calls` and `one_source` hold
+                // every way to the same one)
                 CStmt::Branch(_, x, y) => {
                     let (a, b) = (self.leg_sources(*x), self.leg_sources(*y));
                     out.extend(if a.len() >= b.len() { a } else { b });
