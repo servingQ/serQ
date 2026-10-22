@@ -146,7 +146,7 @@ fn a_connector_whose_engine_does_not_take_its_memory_names_the_taking() {
         "{e}"
     );
     assert!(
-        e.contains(" 102:9: error[E-connector-untaken]"),
+        e.contains(" 104:9: error[E-connector-untaken]"),
         "at `D`: {e}"
     );
     assert!(!e.contains("link error"), "{e}");

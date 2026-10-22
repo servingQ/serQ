@@ -332,7 +332,8 @@ waits for (vLLM's `WAITING_FOR_REMOTE_KVS`, `scheduler.py:1264-1267`), so
 `reqs (request.loaded > 0 ? 0 : 1) reserve (1)` holds no running slot
 while the request loads. The engine records `ENGINE.loaded` and sets
 `ENGINE.loaded`, `ENGINE.saved` and `ENGINE.load_done` (when its latest
-load ended). `examples/multi-turn/vllm_lmcache.sq`:
+load ended; an admission that loads nothing, a preempted request's under
+`request.preempted ? 0 : …`, leaves it). `examples/multi-turn/vllm_lmcache.sq`:
 
 ```serq
 connector lmc {

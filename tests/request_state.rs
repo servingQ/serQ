@@ -162,8 +162,20 @@ fn a_read_is_waiting_for_kv_and_the_prefiller_s_send_keeps_it_finished() {
     assert_eq!((send[1].2, send[2].2), (load[1].2, load[2].2));
     assert!(send[0].2 <= load[0].2);
     // the prefiller's request is finished while its send holds its blocks:
-    // the program's own `lease` observation (taken after the decoder's call
-    // returns) is that time, sample for sample
+    // the program's own `send_held` observation (taken after the decoder's
+    // call returns) is that time, sample for sample
+    let held = sends_held(log);
+    let lease = r.observe("send_held").unwrap();
+    assert!(lease.count > 0);
+    assert_eq!(status(&r, Status::Finished).stays as usize, held.len());
+    for x in &lease.samples {
+        assert!(held.iter().any(|h| (h - x).abs() < 1e-12), "{x} {held:?}");
+    }
+}
+
+/// How long each send held its source's blocks, registered to done, from
+/// the run log.
+fn sends_held(log: &Log) -> Vec<f64> {
     let mut held: Vec<f64> = vec![];
     let mut since = std::collections::HashMap::new();
     for e in &log.events {
@@ -184,12 +196,48 @@ fn a_read_is_waiting_for_kv_and_the_prefiller_s_send_keeps_it_finished() {
             }
         }
     }
-    let lease = r.observe("send_held").unwrap();
-    assert!(lease.count > 0);
-    assert_eq!(status(&r, Status::Finished).stays as usize, held.len());
-    for x in &lease.samples {
-        assert!(held.iter().any(|h| (h - x).abs() < 1e-12), "{x} {held:?}");
+    held
+}
+
+/// `pd_batching.sq` with decoders short of memory, as the companion's port
+/// to v0.1.7-alpha.2 found it: a decoder preempted after its read is
+/// admitted again and its connector loads nothing (`request.preempted ? 0
+/// : …`). That is no load, of a send or of anything: `D.load_done` stays
+/// its read's end, so the program's `send_held` is how long the
+/// prefiller's send held its blocks, sample for sample. It had been read
+/// as a read of a send gone, and its load had ended at the readmission.
+#[test]
+fn a_decoder_preempted_after_its_read_keeps_its_read_s_end() {
+    let mut ov = common::horizon(10.0);
+    for (name, value) in [("blocksD", "300"), ("Bw", "2e4"), ("x0", "0.01")] {
+        ov.set(name, value).unwrap();
     }
+    let (p, base) = load(&serq::program_path("pd_batching"), ov);
+    let r = run_ir_logged(&p, Some(&base), usize::MAX).unwrap();
+    let preempted: u64 = r
+        .pools
+        .iter()
+        .filter(|q| q.name == "D.kv")
+        .map(|q| q.preemptions)
+        .sum();
+    assert!(preempted > 0, "no decoder was preempted");
+    // a decoder admitted again after its read loaded nothing
+    let loaded = &r.observe("D.loaded").unwrap().samples;
+    assert!(loaded.contains(&0.0), "no decoder read nothing");
+    let held = sends_held(r.log.as_ref().unwrap());
+    let send_held = &r.observe("send_held").unwrap().samples;
+    assert_eq!(send_held.len(), held.len());
+    for x in send_held {
+        assert!(held.iter().any(|h| (h - x).abs() < 1e-9), "{x}");
+    }
+    // the program observes the read only where its latest admission read
+    assert!(
+        r.observe("transfer")
+            .unwrap()
+            .samples
+            .iter()
+            .all(|&t| t >= 0.0)
+    );
 }
 
 /// `vllm_nixl_push.sq`: the prefill is a leg's request, the decoder's is the

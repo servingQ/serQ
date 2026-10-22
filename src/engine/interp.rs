@@ -2585,20 +2585,25 @@ impl<'p> Interp<'p> {
             .and_then(|c| c.load.as_ref())
             .filter(|_| remote)
         {
-            // a read of a send gone (its `ttl`) with no leg left to leave
-            // another reads nothing: the request computes the tokens
-            Some(t)
-                if t.source.as_ref().is_some_and(|src| {
-                    let pl = self.session_index(src, sid);
-                    self.send_of(sid, pl).is_none() && self.sessions[sid].legs == 0
-                }) =>
-            {
-                unread = true;
-                0.0
-            }
             Some(t) => {
                 let what = format!("connector of {} load", self.p.stages[st].name);
-                self.amount(&t.amount, sid, &what)
+                let n = self.amount(&t.amount, sid, &what);
+                // a read of a send gone (its `ttl`) with no leg left to leave
+                // another reads nothing: the request computes the tokens. A
+                // load of nothing (`request.preempted ? 0 : …`) is no read,
+                // of a send or of anything, and its latest load stands
+                // (`E.load_done`)
+                if n > 0.0
+                    && t.source.as_ref().is_some_and(|src| {
+                        let pl = self.session_index(src, sid);
+                        self.send_of(sid, pl).is_none() && self.sessions[sid].legs == 0
+                    })
+                {
+                    unread = true;
+                    0.0
+                } else {
+                    n
+                }
             }
             None => 0.0,
         };
