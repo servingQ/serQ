@@ -44,6 +44,11 @@ mcp_servers = []
 [solution.env]
 '''
 
+# INSTRUCTION, the task README below and README_data.md are the text of the
+# tasks published on 2026-10-13. They name the workload by its path then,
+# examples/single-turn/vllm_single_turn.sq (now examples/workloads/single_turn.sq
+# run against examples/multi-turn/vllm.sq, with the same distributions), and
+# stay as published so that this file says what the published tasks say.
 INSTRUCTION = '''# A100 single-turn serving traces: vLLM v0.31.0, {short}
 
 `/app/data` holds the records of `vllm bench serve` replaying the workload of

@@ -2,8 +2,10 @@
 
 The scripts that collected the single-turn serving records on one
 A100-SXM4-40GB (Lambda `gpu_1x_a100_sxm4`, 2026-10-13): vLLM v0.31.0, the
-release, serving Llama-3.1-8B-Instruct and Qwen3-8B, replaying the workload of
-`examples/single-turn/vllm_single_turn.sq` with `vllm bench serve`. The records
+release, serving Llama-3.1-8B-Instruct and Qwen3-8B, replaying with
+`vllm bench serve` the workload `examples/workloads/single_turn.sq` run against
+`examples/multi-turn/vllm.sq` (`examples/single-turn/vllm_single_turn.sq` at
+collection time; the distributions are unchanged). The records
 are not in this repository; they are in Harbor Hub `servingq/serq-serving-traces`
 (private), one task per model:
 `servingq/a100-vllm031-single-turn-{llama31-8b,qwen3-8b}-2026-10`, with a

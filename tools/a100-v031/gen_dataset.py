@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""The workload of examples/single-turn/vllm_single_turn.sq as a vllm bench
-custom dataset: prompt n ~ ceil(uniform(1000, 3000)) tokens, output
-o = floor(exp(mean 200)) + 1 tokens. The (n, o) draws depend only on the seed,
-so both models get the same lengths.
+"""The workload examples/workloads/single_turn.sq run against
+examples/multi-turn/vllm.sq (examples/single-turn/vllm_single_turn.sq at
+collection time) as a vllm bench custom dataset: prompt
+n ~ ceil(uniform(1000, 3000)) tokens, output o = floor(exp(mean 200)) + 1
+tokens. The (n, o) draws depend only on the seed, so both models get the same
+lengths.
 
 The prompt is random words of the model's own vocabulary, each a token that
 decodes to " <letters>" and re-encodes to itself, so a sequence of them

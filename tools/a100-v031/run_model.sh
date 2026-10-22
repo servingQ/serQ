@@ -1,6 +1,8 @@
 #!/bin/bash
 # One model on one GPU: saturation probe, Poisson sweep (3 repetitions), one
-# point with async scheduling on. Workload: examples/single-turn/vllm_single_turn.sq.
+# point with async scheduling on. Workload: examples/workloads/single_turn.sq run
+# against examples/multi-turn/vllm.sq (examples/single-turn/vllm_single_turn.sq
+# at collection time).
 # usage: run_model.sh MODEL TAG      (from ~/g, venv active)
 set -uo pipefail
 M=$1; TAG=$2
