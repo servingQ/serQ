@@ -34,8 +34,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(__file__))
 from gen_lean_oracle import (  # noqa: E402
-    Expr, Fragment, Lean, affine, chunk_rule, erase_costs, fold, nat, one_ref, COST_VARS, is_delay,
-    is_lifo, only_body,
+    Expr, Fragment, Lean, affine, chunk_rule, erase_costs, fold, nat, one_ref, COST_VARS,
+    fragment_step, is_lifo, only_body,
 )
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
@@ -201,14 +201,7 @@ class Program:
 
     def deployment(self):
         ir = self.ir
-        st = ir["stages"]
-        if not st or "Step" not in st[0]["kind"] or any(not is_delay(s["kind"]) for s in st[1:]):
-            raise Fragment("stages must be one step engine (stage 0) and delays")
-        step = st[0]["kind"]["Step"]
-        if step.get("granule") is not None:
-            raise Fragment("granule: the fragment gives a prefill any amount")
-        if step["serve"] not in ({"By": []}, "DecodeFirst"):
-            raise Fragment(f"serve {step['serve']}: the fragment serves residents in admission order")
+        step = fragment_step(ir)
         only_expr = only_body(step.get("iteration"))
         cost = cost_fn(step["cost"])
         only = "none"

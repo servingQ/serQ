@@ -251,14 +251,21 @@ more.
 statement, which is exactly `_preempt_request`". That is right during
 prefill and wrong during decode. The Lean model has the same rule.
 
-**No oracle has exercised this path.** The preemption counts of
-`tools/oracle/*.out.json`: `chunked` 0, `hol` 0, `longchunk` 0, `mixed` 0,
-`seqcap` 0, `preempt` 1. That one is a self-preemption during prefill on
-10 usable blocks, before a token was produced. `examples/replay/vllm_replay.sq`
-run at spacings of 3.5 s and 2.5 s reports `preempt 0` in the `kv` row of
-both, with KV use of 793 and 1 865 of 128 160 tokens. The collapse at 2.5 s
-is the `reqs` queue waiting 35.8 s, not memory pressure. The 3 321-request
-agreement never tested preemption recovery.
+**No oracle had exercised this path** when this was written. The
+preemption counts of `tools/oracle/*.out.json`: `chunked` 0, `hol` 0,
+`longchunk` 0, `mixed` 0, `seqcap` 0, `preempt` 1. That one is a
+self-preemption during prefill on 10 usable blocks, before a token was
+produced. `examples/replay/vllm_replay.sq` run at spacings of 3.5 s and
+2.5 s reports `preempt 0` in the `kv` row of both, with KV use of 793 and
+1 865 of 128 160 tokens. The collapse at 2.5 s is the `reqs` queue waiting
+35.8 s, not memory pressure. The 3 321-request agreement never tested
+preemption recovery. The `alone` scenario (#323) later did. Its record
+(`tools/oracle/alone.out.json`) has 2 preemptions, and request 0 (prompt
+60, `out` 12) has its first token at step 5 and finishes at step 23, seven
+steps after an uninterrupted decode would (16). The record names neither
+the victim nor the phase; the interpreter, which gives every request the
+same first and last step, preempts request 0 at step 9, while it decodes
+(`serq run tools/oracle/alone.ir.json --log`).
 
 **Before** (`src/interp.rs:1463-1477`, `scheduler.py:1560-1561`)
 
@@ -325,9 +332,12 @@ pub struct Scope { pub parent: Option<ScopeId>, pub hold: Option<HoldSpec>, pub 
 
 **Outcome.** The first item landed by the exception path this section
 called second-best: a preempted hold is re-executed with `computed`, the
-position it had reached, and the vLLM programs resume from it (#49). No
-oracle scenario preempts during decode yet, and the Lean fragment does not
-set `computed` (#63). The automaton itself, `states` and `scopes`, is open.
+position it had reached, and the vLLM programs resume from it (#49). The
+Lean model sets `computed` on a preemption too (#250), and in the oracle
+scenario `alone` the interpreter preempts a request while it decodes
+(#323); the interpreter, the Lean model (`vllm_alone`) and vLLM's recorded
+run agree on that scenario's outcome (#63). The automaton itself, `states`
+and `scopes`, is open.
 
 ## 6. Step coalescing
 

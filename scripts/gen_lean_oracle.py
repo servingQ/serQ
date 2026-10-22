@@ -84,6 +84,24 @@ def is_lifo(preempt):
 NOT_PREEMPTED = {"Unary": ["Not", {"Ctx": "Preempted"}]}
 
 
+def fragment_step(ir):
+    """The step engine of a program in the fragment, which both generators
+    read (this one and gen_lean_claims.py): stage 0 is the step engine and
+    every other stage a delay; a prefill gets any amount (no `granule`); the
+    residents are served in admission order, `serve` `By([])` (`decode
+    first` and `by (…)` lower to `By` with keys, `exclusive prefill` to
+    `ExclusivePrefill`: `src/frontend/link.rs`, `serve`)."""
+    st = ir["stages"]
+    if not st or "Step" not in st[0]["kind"] or any(not is_delay(s["kind"]) for s in st[1:]):
+        raise Fragment("stages must be one step engine (stage 0) and delays")
+    step = st[0]["kind"]["Step"]
+    if step.get("granule") is not None:
+        raise Fragment("granule: the fragment gives a prefill any amount")
+    if step["serve"] != {"By": []}:
+        raise Fragment(f"serve {step['serve']}: the fragment serves residents in admission order (`By([])`)")
+    return step
+
+
 def only_body(body):
     """The `p` of a step stage's body, when the body is the stage's `serve
     only (p)` (`[Serve {only: p}, Admit {only: p, gate: !preempted}]`, which
@@ -737,15 +755,8 @@ class Lean:
 
     def deployment(self):
         ir = self.ir
-        st = ir["stages"]
-        if not st or "Step" not in st[0]["kind"] or any(not is_delay(s["kind"]) for s in st[1:]):
-            raise Fragment("stages must be one step engine (stage 0) and delays")
-        step = st[0]["kind"]["Step"]
+        step = fragment_step(ir)
         cost = cost_fn(step["cost"])
-        if step.get("granule") is not None:
-            raise Fragment("granule: the fragment gives a prefill any amount")
-        if step["serve"] != {"By": []}:
-            raise Fragment(f"serve {step['serve']}: the fragment serves residents in admission order (`By([])`)")
         if step.get("iteration") is not None:
             raise Fragment("iteration: the oracle fragment runs vLLM's procedure, not a body "
                            "(a stage's `serve only` is one)")
