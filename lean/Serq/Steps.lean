@@ -8,8 +8,9 @@ the program, in five sections:
 * `setS` and `setPool`: what writing one session or one pool leaves alone;
 * commands: how `exec` runs `set`, `observe`, `run` and `stop`, and what a
   step of one ready request keeps (`Keeps`);
-* `readyAll`: the events that ready a request, a delay's end (`handle_arr`)
-  and an iteration's end (`readyAll`);
+* `readyAll`: the events that ready a request, a delay's end
+  (`handle_delay_end`) and an iteration's end (`readyAll`), and which event
+  comes next (`nextEvent_of_delays`, `not_pending`);
 * batch shares: the tokens a batch gives a request (`shareOf`);
 * lists and finsets: facts about `List` and `Finset` the proofs use.
 -/
@@ -170,7 +171,7 @@ theorem Keeps.refl (m : Machine) : Keeps m m := ⟨rfl, rfl, rfl, rfl, rfl⟩
 /-! ### `readyAll`, and the events that ready a request -/
 
 /-- A delay's end wakes its request: it is ready and joins the ready list. -/
-theorem handle_arr {m : Machine} {u qu i : ℕ} {rest : List (ℕ × ℕ × ℕ)} (hdl : m.delays = (u, qu, i) :: rest)
+theorem handle_delay_end {m : Machine} {u qu i : ℕ} {rest : List (ℕ × ℕ × ℕ)} (hdl : m.delays = (u, qu, i) :: rest)
     (hne : m.iterEnd ≠ some (u, qu)) (hst : (getS m i).status = .delay u qu) :
     handle m u qu = { setS { m with now := u, delays := rest } i { getS m i with status := .ready } with
       ready := m.ready ++ [i] } := by

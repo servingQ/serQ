@@ -1151,7 +1151,7 @@ theorem arr_pre {w : Workload} (hF : Fam w) {g : Ghost} {m : Machine} (hB : Bnd 
     intro t ht
     unfold Fr
     exact card_update hin _ _ (by simp [hgc, fresh]) (by simp [hfi, hu ▸ ht]) fun j hj => by simp [hgc, hj]
-  rw [handle_arr hdl hne hst, hB.rdy]
+  rw [handle_delay_end hdl hne hst, hB.rdy]
   suffices H : ∀ M : Machine, M.wl = m.wl → M.sess.size = m.sess.size →
       (∀ j, getS M j = if j = i then { getS m i with status := .ready } else getS m j) →
       M.jobs = m.jobs → M.ready = [i] → M.delays = rest → M.nextDelay = m.nextDelay → M.now = u →

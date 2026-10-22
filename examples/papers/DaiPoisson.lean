@@ -203,11 +203,13 @@ expectations after any number of slots converge. -/
 
 /-- The engine holds no job: `DaiProgram.Idle` on this chain's states, whose
 slots bring any number of requests (`DaiStable.State K` brings at most `K`),
-so it is restated here, as is `reach_inv`. -/
+so it is restated here, as is `DaiSim.reach_inv`. -/
 def Idle (x : State) : Prop := DaiSim.σ x.1 = []
 
 instance : DecidablePred Idle := fun x => by unfold Idle; infer_instance
 
+/-- `DaiSim.reach_inv` on this chain's `Reach`, whose slots bring any number
+of requests. -/
 theorem reach_inv {m : Machine} (h : Reach m) : DaiSim.Inv m := by
   induction h with
   | empty => exact DaiSim.empty_inv
@@ -220,8 +222,7 @@ theorem σ_slot (x : State) (k : ℕ) :
 
 theorem V_idle {x : State} (hx : Idle x) : V x = 0 := by
   unfold V
-  rw [DaiProgram.backlog_σ, show DaiSim.σ x.1 = [] from hx]
-  simp [DaiChain.backlog]
+  exact_mod_cast DaiProgram.idle_backlog hx
 
 /-- An engine with a job is busy. -/
 theorem busy_of_not_idle {x : State} (hx : ¬ Idle x) : x.1.iterEnd.isSome = true := by
@@ -331,10 +332,7 @@ theorem backlog_le_of_G {x : State} (hx : G x) : backlog x.1 ≤ 128 * 1280 := b
   rcases hx with h | h
   · obtain ⟨L, g, hB⟩ := reach_sb x.2
     exact (DaiStable.backlog_lt_of_sb hB h).le
-  · have := V_idle h
-    unfold V at this
-    have : backlog x.1 = 0 := by exact_mod_cast this
-    omega
+  · rw [DaiProgram.idle_backlog h]; omega
 
 /-- The truncated hitting times of the empty engine, bounded. -/
 theorem hit_le (lam : ℝ) (hlam : 0 ≤ lam) (hA : 1280 * (lam * 4675) < 128) :

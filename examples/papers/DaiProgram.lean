@@ -33,9 +33,14 @@ instance {K : ℕ} : DecidablePred (Idle (K := K)) := fun x => by unfold Idle; i
 theorem backlog_σ (m : Exec.Machine) : backlog m = DaiChain.backlog (DaiSim.σ m) := by
   simp [backlog, Slot.backlog, DaiChain.backlog, DaiSim.σ, Function.comp_def]
 
+/-- An empty engine has no backlog, on this chain and on `DaiPoisson`'s. -/
+theorem idle_backlog {m : Exec.Machine} (h : DaiSim.σ m = []) : backlog m = 0 := by
+  rw [backlog_σ, h]
+  simp [DaiChain.backlog]
+
 /-- A machine with the slot invariant holds a job list the list chain can
-hold: every reached machine does (`DaiSim.reach_inv`), on this chain and on
-`DaiPoisson`'s. -/
+hold: every reached machine does (`DaiSim.reach_inv`; `DaiPoisson.reach_inv`
+on `DaiPoisson`'s chain). -/
 theorem good_σ {m : Exec.Machine} (h : DaiSim.Inv m) : DaiRecurrent.Good (DaiSim.σ m) := by
   obtain ⟨L, g, hB, -, -⟩ := h
   intro a ha
@@ -148,7 +153,7 @@ include A in
 theorem backlog_le_of_G {x : State K} (hx : G x) : backlog x.1 ≤ 128 * 1280 := by
   rcases hx with h | h
   · exact (backlog_lt_of_F x h).le
-  · rw [backlog_σ, show DaiSim.σ x.1 = [] from h]; simp [DaiChain.backlog]
+  · rw [idle_backlog h]; omega
 
 /-- The truncated hitting times of `Idle`, bounded. -/
 theorem hit_bound (hA : 1280 * A.mean < 128) : ∀ n x,
@@ -179,8 +184,8 @@ theorem return_idle {K : ℕ} (A : Arrivals K) (hA : 1280 * A.mean < 128) :
     (d := 1280 * K) ?_ n⟩
   have h3 := applyN_le A 1 x
   simp only [Kernel.applyN] at h3
-  rw [backlog_σ, show DaiSim.σ x.1 = [] from hx] at h3
-  simpa [DaiChain.backlog] using h3
+  rw [idle_backlog hx] at h3
+  simpa using h3
 
 end DaiProgram
 end Papers
