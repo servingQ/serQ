@@ -479,21 +479,30 @@ fn the_server_runs_an_engine_only_through_its_request() {
 fn the_server_runs_an_engine_in_no_block_either() {
     let call = "  llm (n, o);\n";
     let decode = "run llm decode (cost(llm, 1));";
+    // the hold's pool, which no engine admits
     let gate = (
         "pool reqs on llm { queue fifo; }",
         "pool reqs on llm { queue fifo; }\npool gate { cap 1; }",
     );
-    for inner in [
-        format!("fork {{ {decode} }}"),
-        format!("set k = 0; while (k < 1) {{ set k = k + 1; {decode} }}"),
-        format!("loop {{ {decode} end; }}"),
-        format!("if (n > 100) {{ set z = 1; }} else {{ {decode} }}"),
-        format!("hold gate (cost(gate, 1)) {{ {decode} }}"),
+    for (inner, pool) in [
+        (format!("fork {{ {decode} }}"), None),
+        (
+            format!("set k = 0; while (k < 1) {{ set k = k + 1; {decode} }}"),
+            None,
+        ),
+        (format!("loop {{ {decode} end; }}"), None),
+        (
+            format!("if (n > 100) {{ set z = 1; }} else {{ {decode} }}"),
+            None,
+        ),
+        (
+            format!("hold gate (cost(gate, 1)) {{ {decode} }}"),
+            Some(gate),
+        ),
     ] {
-        let src = replaced(
-            &program(),
-            &[gate, (call, &format!("  llm (n, o);\n  {inner}\n"))],
-        );
+        let line = format!("  llm (n, o);\n  {inner}\n");
+        let pairs: Vec<_> = pool.into_iter().chain([(call, line.as_str())]).collect();
+        let src = replaced(&program(), &pairs);
         refused(
             &src,
             "the server runs engine `llm`'s decode (`run llm decode (…)`): an engine runs only in \

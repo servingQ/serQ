@@ -744,10 +744,10 @@ where
             Stmt::Hold {
                 pools,
                 reuse,
+                body: _,
                 cache,
                 prefix,
                 lease,
-                ..
             } => {
                 for (r, e, reserve) in pools {
                     (parts.reference)(r);

@@ -793,9 +793,8 @@ fn sets_always(stmts: &[Stmt], name: &str) -> bool {
     })
 }
 
-/// What `f` finds in the first statement of `stmts` it finds something
-/// in, a statement in a block of one (`Stmt::blocks`) as well: a statement
-/// before the blocks it holds, the blocks in source order.
+/// What `f` finds first in `stmts`, at any depth: a statement before the
+/// blocks it holds (`Stmt::blocks`), the blocks in source order.
 fn find_stmt<'a, T>(stmts: &'a [Stmt], f: &impl Fn(&'a Stmt) -> Option<T>) -> Option<T> {
     stmts
         .iter()
