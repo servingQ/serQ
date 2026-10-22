@@ -251,14 +251,20 @@ more.
 statement, which is exactly `_preempt_request`". That is right during
 prefill and wrong during decode. The Lean model has the same rule.
 
-**No oracle has exercised this path.** The preemption counts of
-`tools/oracle/*.out.json`: `chunked` 0, `hol` 0, `longchunk` 0, `mixed` 0,
-`seqcap` 0, `preempt` 1. That one is a self-preemption during prefill on
-10 usable blocks, before a token was produced. `examples/replay/vllm_replay.sq`
-run at spacings of 3.5 s and 2.5 s reports `preempt 0` in the `kv` row of
-both, with KV use of 793 and 1 865 of 128 160 tokens. The collapse at 2.5 s
-is the `reqs` queue waiting 35.8 s, not memory pressure. The 3 321-request
-agreement never tested preemption recovery.
+**No oracle had exercised this path** when this was written. The
+preemption counts of `tools/oracle/*.out.json`: `chunked` 0, `hol` 0,
+`longchunk` 0, `mixed` 0, `seqcap` 0, `preempt` 1. That one is a
+self-preemption during prefill on 10 usable blocks, before a token was
+produced. `examples/replay/vllm_replay.sq` run at spacings of 3.5 s and
+2.5 s reports `preempt 0` in the `kv` row of both, with KV use of 793 and
+1 865 of 128 160 tokens. The collapse at 2.5 s is the `reqs` queue waiting
+35.8 s, not memory pressure. The 3 321-request agreement never tested
+preemption recovery. The `alone` scenario (#323) later did: its request 0
+(prompt 60, `out` 12) has its first token at step 5 and finishes at step
+23, seven steps after an uninterrupted decode would (16), with
+`preemptions` 2 (`tools/oracle/alone.out.json`). A running decode is
+scheduled every step unless preempted, so vLLM preempted it after its
+first token; the interpreter's log preempts it at step 9.
 
 **Before** (`src/interp.rs:1463-1477`, `scheduler.py:1560-1561`)
 
