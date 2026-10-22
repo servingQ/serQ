@@ -140,6 +140,27 @@ fn stations_take_their_stage_kind() {
     assert_eq!(net.nodes[i].kind, StationKind::Delay);
 }
 
+/// A delay's outline is read from its duration in the IR, by the draw's
+/// distribution (`DistKind`), not from the text the duration is written
+/// as: a constant is a spike, and a scaled draw is no distribution of the
+/// table, whichever side the scale is on.
+#[test]
+fn a_delays_outline_is_its_durations_distribution() {
+    use serq::view::figure::Outline;
+    for (duration, outline) in [
+        ("~exp(3)", Some(Outline::Decaying)),
+        ("~h2(1, 2)", Some(Outline::TwoPhase)),
+        ("~det(2)", Some(Outline::Spike)),
+        ("2", Some(Outline::Spike)),
+        ("~exp(3) * 2", None),
+        ("2 * ~exp(3)", None),
+    ] {
+        let (p, net) = shape(&format!("run A (cost(A, {duration})); end;"));
+        let i = net.node_of(stage(&p, "A")).expect("A is on the session");
+        assert_eq!(net.nodes[i].outline, outline, "{duration}");
+    }
+}
+
 // --- the projection ---------------------------------------------------------
 
 /// Two runs at the same stage in a row are two visits, not a flow between
@@ -222,6 +243,7 @@ fn a_station_with_no_arrow_out_is_named() {
         rect: serq::view::figure::Rect::new(40.0, 10.0, 20.0, 20.0),
         kind: StationKind::Ps,
         text: "PS".into(),
+        outline: None,
         stage: Some("E.nic".into()),
         node: "E.nic".into(),
     });
@@ -1454,6 +1476,7 @@ fn the_client_sends_and_the_server_replies() {
                     stage,
                     node,
                     text,
+                    ..
                 } => {
                     // addressed as `#client`, read as `client`
                     assert!(stage.is_none() && node == "#client", "{name}: {i:?}");

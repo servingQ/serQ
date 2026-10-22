@@ -3,8 +3,8 @@
 //! The view (`deployment`, the queueing network) produces a `Figure`; both
 //! writers (`svg`, `tikz`) consume one.
 //! Nothing in here knows about serQ, and nothing in a writer decides a
-//! coordinate: a figure is the test surface, which is why the tests assert on
-//! rectangles rather than on bytes.
+//! coordinate: a figure is the test surface,
+//! which is why the tests assert on rectangles rather than on bytes.
 //!
 //! Coordinates are points, x to the right and y **downwards**, origin at the
 //! figure's top left. The TikZ writer flips y on the way out.
@@ -227,6 +227,9 @@ pub enum Item {
         /// SVG writer puts it on the glyph as `data-stage`, so that the
         /// figure is addressable as well as a picture.
         stage: Option<String>,
+        /// For a delay: the outline of its duration's density, which the
+        /// view reads from the duration (`None`: infinitely many servers).
+        outline: Option<Outline>,
         /// What the arrows call it (`EdgeRole`): the stage's name, `#k`
         /// for a decision or a tick, `gw.route` for a gateway, `CLIENT` for the
         /// client (`data-node`).
@@ -264,17 +267,23 @@ pub enum Item {
     },
 }
 
-/// The outline of a delay station's duration density, as a polyline over
-/// the upper part of the station: decaying for `~exp` and `~h2`, a hump for
-/// `~erlang`, flat for `~uniform`, a spike for `~det` or a constant. Its
-/// shape, not its scale: the duration itself (`~exp(3)`) is written under
-/// it. `None` for a duration that is neither.
-pub fn density(duration: &str, rect: Rect) -> Option<Vec<Point>> {
-    let family = match duration.strip_prefix('~') {
-        Some(d) => d.split('(').next().unwrap_or(""),
-        None if duration.parse::<f64>().is_ok() => "det",
-        None => "",
-    };
+/// The shape of a delay's duration density: its shape, not its scale.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Outline {
+    /// `~exp`
+    Decaying,
+    /// `~h2`
+    TwoPhase,
+    /// `~erlang`
+    Hump,
+    /// `~uniform`
+    Flat,
+    /// `~det` or a constant
+    Spike,
+}
+
+/// An outline as a polyline over the upper part of the station.
+pub fn density(outline: Outline, rect: Rect) -> Vec<Point> {
     let (x0, x1) = (rect.x + 16.0, rect.right() - 16.0);
     let (top, base) = (rect.y + rect.h * 0.16, rect.y + rect.h * 0.6);
     let at = |t: f64, f: f64| Point {
@@ -287,15 +296,15 @@ pub fn density(duration: &str, rect: Rect) -> Option<Vec<Point>> {
             .map(|t| at(t, f(t)))
             .collect()
     };
-    Some(match family {
-        "exp" => curve(&|t| (-3.5 * t).exp()),
-        "h2" => curve(&|t| 0.75 * (-9.0 * t).exp() + 0.25 * (-1.8 * t).exp()),
+    match outline {
+        Outline::Decaying => curve(&|t| (-3.5 * t).exp()),
+        Outline::TwoPhase => curve(&|t| 0.75 * (-9.0 * t).exp() + 0.25 * (-1.8 * t).exp()),
         // k = 3: t² e^(-t), its peak at 2, scaled to one
-        "erlang" => curve(&|t| {
+        Outline::Hump => curve(&|t| {
             let u = 7.0 * t;
             u * u * (-u).exp() / (4.0 * (-2.0f64).exp())
         }),
-        "uniform" => vec![
+        Outline::Flat => vec![
             at(0.0, 0.0),
             at(0.2, 0.0),
             at(0.2, 0.7),
@@ -303,15 +312,14 @@ pub fn density(duration: &str, rect: Rect) -> Option<Vec<Point>> {
             at(0.8, 0.0),
             at(1.0, 0.0),
         ],
-        "det" => vec![
+        Outline::Spike => vec![
             at(0.0, 0.0),
             at(0.5, 0.0),
             at(0.5, 1.0),
             at(0.5, 0.0),
             at(1.0, 0.0),
         ],
-        _ => return None,
-    })
+    }
 }
 
 /// A gateway's glyph in its rectangle: a hexagon, flat on top and bottom

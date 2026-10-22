@@ -250,6 +250,7 @@ pub fn render(f: &Figure) -> String {
                 rect,
                 kind,
                 text,
+                outline,
                 stage,
                 node,
             } => {
@@ -303,7 +304,7 @@ pub fn render(f: &Figure) -> String {
                             n(rect.w),
                             n(rect.h)
                         );
-                        if let Some(pts) = crate::view::figure::density(text, *rect) {
+                        if let Some(pts) = outline.map(|o| crate::view::figure::density(o, *rect)) {
                             let d: Vec<String> = pts
                                 .iter()
                                 .map(|q| format!("{} {}", n(q.x), n(q.y)))
