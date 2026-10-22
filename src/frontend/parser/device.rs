@@ -184,6 +184,21 @@ pub(crate) fn tokens_cap_name(v: crate::ir::CtxVar) -> &'static str {
     engine_name(v.name(), "tokens cap").unwrap_or(v.name())
 }
 
+/// Why `engine.field` does not link when `field` is one of `ENGINE_VALUES`:
+/// the engine reads its values in its own clauses, without its name, so
+/// `running.count` there is that engine's, and no other block reads them.
+/// `None` for any other field.
+pub(super) fn outside_engine(engine: &str, field: &str) -> Option<String> {
+    let (_, _, clauses) = ENGINE_VALUES.iter().find(|(v, ..)| *v == field)?;
+    Some(format!(
+        "`{engine}.{field}`: an engine's values are read in the engine, without its name: \
+         `{field}` in engine `{engine}`'s `{}` is `{engine}`'s, and no other block reads it\n\
+         help: outside the engine, a stage function reads its stage, as `{}({engine})`",
+        clauses.join("`, `"),
+        Fun::Work.name()
+    ))
+}
+
 /// Why `value` of `ENGINE_VALUES` is not read in `clause`.
 fn not_read_in(value: &str, clause: &str) -> String {
     let (list, field) = value.split_once('.').expect("a list's value");

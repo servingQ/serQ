@@ -1263,7 +1263,10 @@ read 0 as no cap, so the program would mean one thing and run another;
 `k` keeps a computed cap above 0 whatever `e` reads. An engine
 names each value one way in all its clauses, and none by the kernel's
 bare name: `running.…` is the residents as they stand, `waiting.…` the
-queues, `batch.…` the iteration's batch.
+queues, `batch.…` the iteration's batch. Each is the engine's own, read
+without its name: `running.count` in engine `e` counts `e`'s residents,
+`e.running.count` links nowhere, and outside the engine a stage function
+reads its stage (`work(e)`).
 
 | Value | `tokens cap` | `scheduler` | `worker` |
 |---|---|---|---|

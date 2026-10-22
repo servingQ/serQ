@@ -804,6 +804,46 @@ fn an_engine_reads_its_lists_in_every_clause() {
     );
 }
 
+/// An engine reads its values without its name, and they are its own:
+/// `vllm.running.count` is refused, outside the engine or in it, with where
+/// the engine reads the value, not as a pool `vllm` does not have.
+#[test]
+fn an_engines_values_are_not_read_by_its_name() {
+    let ok = "advance running; admit waiting while (running.preempted == 0);";
+    for (from, to, why) in [
+        // as found: the server read it, and was told `vllm` has no such pool
+        (
+            "server (prompt) {",
+            "server (prompt) { observe probe = vllm.running.count;",
+            "`running.count` in engine `vllm`'s `tokens cap`, `each at most`, `only`, `by`, \
+             `scheduler` is `vllm`'s, and no other block reads it",
+        ),
+        (
+            "server (prompt) {",
+            "server (prompt) { observe probe = vllm.request.input;",
+            "`request.input` in engine `vllm`'s `taking`, `cache` is `vllm`'s",
+        ),
+        (
+            "tokens cap 8;",
+            "tokens cap 8 - vllm.running.count;",
+            "an engine's values are read in the engine, without its name",
+        ),
+        (
+            "server (prompt) {",
+            "server (prompt) { observe probe = vllm.batch.tokens;",
+            "help: outside the engine, a stage function reads its stage, as `work(vllm)`",
+        ),
+        // no engine has `running.foo`: what an entry sets or a pool
+        (
+            "server (prompt) {",
+            "server (prompt) { observe probe = vllm.running.foo;",
+            "no entry of `vllm` sets `running.foo`, and `vllm` has no pool `running.foo`",
+        ),
+    ] {
+        refused(&replaced(&engine(ok), &[(from, to)]), why);
+    }
+}
+
 /// A predicate `advance running` and `admit waiting` share is named with a
 /// `def`, read where each `only` stands, and the schedule is still vLLM's
 /// procedure under it: the body the kernel's `serve only (p)` is (#412).
