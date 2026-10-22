@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
 
 use crate::frontend::ast::*;
-use crate::ir::{ArgKind, CIter, MAX_SESSIONS};
+use crate::ir::{ArgKind, CIter, MAX_SESSIONS, Moment};
 
 #[derive(Debug, Clone)]
 pub struct LinkError {
@@ -882,34 +882,13 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
         }
     }
     if let Some(w) = prog.workload.as_ref() {
-        // what each engine's admission reads of a request: `taking`, `reuse`
-        // and `prefix`, read when its scheduler admits it
-        let admissions: BTreeMap<String, Vec<Expr>> = prog
-            .stages
-            .iter()
-            .filter_map(|s| match &s.kind {
-                StageKind::Step(sp) => {
-                    let r = sp.request.as_ref()?;
-                    let read = r
-                        .pools
-                        .iter()
-                        .flat_map(|(_, u, f)| std::iter::once(u).chain(f))
-                        .chain(&r.reuse)
-                        .chain(r.prefix.iter().flatten().flat_map(|(k, n)| [k, n]))
-                        .cloned()
-                        .collect();
-                    Some((s.name.clone(), read))
-                }
-                _ => None,
-            })
-            .collect();
         hidden_in_server(
             &w.init,
             &w.turn,
             &prog.session,
             &prog.server,
             &w.hidden,
-            &admissions,
+            &scheduler_reads(prog),
         )?;
     }
     let mut gauges = vec![];
@@ -1339,6 +1318,171 @@ fn iteration(lk: &Linker, stage: usize, body: &[IterStmt]) -> LResult<Vec<CIter>
         .collect()
 }
 
+/// An expression a pool or an engine reads of one session, at its moment:
+/// a key, an `only`, a spill clause.
+struct Key<'a> {
+    /// "pool `P`" or "engine `E`", as `Program::validate` names it.
+    owner: String,
+    /// The declaration, where the key has no location of its own.
+    at: Option<Span>,
+    moment: Moment,
+    expr: &'a Expr,
+}
+
+/// What an engine reads of a request while it is the engine's.
+struct EngineReads<'a> {
+    /// `taking`, `reuse`, `prefix` and the connector's `load`, read when the
+    /// scheduler admits the request (`Moment::Request`).
+    admission: Vec<&'a Expr>,
+    /// `advance running by (…)` keys and every `only`, read for each
+    /// running request (`Moment::Serve`).
+    serve: Vec<Key<'a>>,
+    /// The pools the request waits in or holds: those it takes, the
+    /// engine's memory and the queues the engine admits.
+    pools: BTreeSet<String>,
+}
+
+/// What the scheduler reads of a session outside the server's statements,
+/// by where the session is when it is read (`hidden_in_server`).
+struct SchedulerReads<'a> {
+    /// A pool's `queue by` keys: read while the session waits in its queue.
+    select: BTreeMap<String, Vec<Key<'a>>>,
+    /// A pool's `preempt by` keys: read while the session holds the pool.
+    victim: BTreeMap<String, Vec<Key<'a>>>,
+    /// The pools that preempt a holder: its hold goes back to the queue,
+    /// whose keys read the session as it was when preempted.
+    requeue: BTreeSet<String>,
+    /// Eviction keys and spill clauses, which read the session that wrote
+    /// a cache entry, and `preempt leases by` and `suspend by` keys, which
+    /// read the session a lease is of: wherever the session is.
+    anywhere: Vec<Key<'a>>,
+    engines: BTreeMap<String, EngineReads<'a>>,
+}
+
+/// The deployment's pools and engines, as `hidden_in_server` reads them. A
+/// paired workload's own pools and stages are the client's, which knows
+/// what it hides.
+fn scheduler_reads(prog: &Program) -> SchedulerReads<'_> {
+    let client = |name: &str| {
+        prog.paired
+            .as_ref()
+            .is_some_and(|p| p.iter().any(|n| n == name))
+    };
+    let mut reads = SchedulerReads {
+        select: BTreeMap::new(),
+        victim: BTreeMap::new(),
+        requeue: BTreeSet::new(),
+        anywhere: vec![],
+        engines: BTreeMap::new(),
+    };
+    for p in prog.pools.iter().filter(|p| !client(&p.name)) {
+        let key = |moment, expr| Key {
+            owner: format!("pool `{}`", p.name),
+            at: p.span,
+            moment,
+            expr,
+        };
+        if let QueueOrder::By(keys) = &p.queue {
+            let select = keys.iter().map(|e| key(Moment::Select, e)).collect();
+            reads.select.insert(p.name.clone(), select);
+        }
+        match &p.preempt {
+            PreemptOrder::None => {}
+            PreemptOrder::By { keys, .. } => {
+                let victim = keys.iter().map(|e| key(Moment::Victim, e)).collect();
+                reads.victim.insert(p.name.clone(), victim);
+                reads.requeue.insert(p.name.clone());
+            }
+            PreemptOrder::Leases { keys, suspend, .. } => reads.anywhere.extend(
+                keys.iter()
+                    .chain(suspend.iter().flatten())
+                    .map(|e| key(Moment::Victim, e)),
+            ),
+        }
+        if let EvictOrder::By(keys) = &p.evict {
+            reads
+                .anywhere
+                .extend(keys.iter().map(|e| key(Moment::Evict, e)));
+        }
+        if let Some(s) = &p.spill {
+            reads
+                .anywhere
+                .extend([&s.work, &s.when].map(|e| key(Moment::Evict, e)));
+        }
+    }
+    for s in prog.stages.iter().filter(|s| !client(&s.name)) {
+        let StageKind::Step(sp) = &s.kind else {
+            continue;
+        };
+        let key = |expr| Key {
+            owner: format!("engine `{}`", s.name),
+            at: s.span,
+            moment: Moment::Serve,
+            expr,
+        };
+        let mut serve: Vec<Key> = vec![];
+        if let Serve::By(keys) = &sp.serve {
+            serve.extend(keys.iter().map(key));
+        }
+        fn body<'a>(stmts: &'a [IterStmt], out: &mut Vec<&'a Expr>) {
+            for st in stmts {
+                match st {
+                    IterStmt::Serve { only, order } => {
+                        out.extend(only);
+                        if let Some(Serve::By(keys)) = order {
+                            out.extend(keys);
+                        }
+                    }
+                    IterStmt::Admit { only, .. } => out.extend(only),
+                    IterStmt::Branch(_, a, b) => {
+                        body(a, out);
+                        body(b, out);
+                    }
+                    IterStmt::Set(..) => {}
+                }
+            }
+        }
+        let mut read = vec![];
+        match &sp.schedule {
+            Schedule::Procedure(only) => read.extend(only),
+            Schedule::Body(stmts) => body(stmts, &mut read),
+        }
+        serve.extend(read.into_iter().map(key));
+        let r = sp.request.as_ref();
+        let admission = r
+            .into_iter()
+            .flat_map(|r| {
+                r.pools
+                    .iter()
+                    .flat_map(|(_, u, f)| std::iter::once(u).chain(f))
+                    .chain(&r.reuse)
+                    .chain(r.prefix.iter().flatten().flat_map(|(k, n)| [k, n]))
+            })
+            .chain(sp.connector.iter().flat_map(|c| &c.load))
+            .collect();
+        let pools = r
+            .into_iter()
+            .flat_map(|r| r.pools.iter().map(|(q, _, _)| q.name.clone()))
+            .chain(sp.memory.iter().map(|m| m.name.clone()))
+            .chain(
+                prog.pools
+                    .iter()
+                    .filter(|p| p.admit_via.as_ref().is_some_and(|v| v.name == s.name))
+                    .map(|p| p.name.clone()),
+            )
+            .collect();
+        reads.engines.insert(
+            s.name.clone(),
+            EngineReads {
+                admission,
+                serve,
+                pools,
+            },
+        );
+    }
+    reads
+}
+
 /// A hidden attribute is the target's until a run reveals it: the server
 /// may run work by it (the model ends a decode, not the scheduler), cache by
 /// it at release, and observe it, but a decision on it before it is
@@ -1358,13 +1502,29 @@ fn iteration(lk: &Linker, stage: usize, body: &[IterStmt]) -> LResult<Vec<CIter>
 /// (`set K = K + n + o;`) until a hidden attribute is set again. Paths join
 /// conservatively: after a branch an attribute is revealed only if both
 /// arms reveal it, and a loop's body may not run.
+///
+/// The pools' and engines' keys are the scheduler too, and `Program::validate`
+/// refuses the hidden attribute itself in them; what was set from it is
+/// checked here (#554), each key where the scheduler reads the session, on
+/// the attributes as they stand there: a pool's `queue by` keys at a `hold`
+/// on it, and at a request to an engine that takes it or admits from it;
+/// its `preempt by` keys wherever the session waits holding it, and its
+/// `queue by` keys there too, since a victim's hold goes back to the queue;
+/// an engine's `advance running by` keys and its `only`s during a request
+/// to it, before the request's end reveals its output. An eviction key or a
+/// spill clause reads the session that wrote the entry, and a lease's keys
+/// the session the lease is of, wherever it is: they are checked wherever
+/// the session waits (a run, a queue, a request, a `grow` or `load`), at a
+/// release (a hold's end, `release P;`), whose entry keeps the attributes
+/// as they are then, at the server's end, and wherever the workload waits
+/// (a `tool` run, a hold).
 fn hidden_in_server(
     init: &[Stmt],
     turn: &[Stmt],
     session: &[Stmt],
     server: &[Stmt],
     hidden: &[String],
-    admissions: &BTreeMap<String, Vec<Expr>>,
+    reads: &SchedulerReads,
 ) -> LResult<()> {
     #[derive(Clone, Default, PartialEq)]
     struct Origins {
@@ -1473,8 +1633,8 @@ fn hidden_in_server(
             }
         }
     }
-    fn refuse(e: &Expr, what: &str, name: &str, from: &Origins, t: &Taint) -> LinkError {
-        let why = if !from.derived {
+    fn why(name: &str, from: &Origins, t: &Taint) -> String {
+        if !from.derived {
             format!("`{name}` is hidden from the scheduler")
         } else {
             let hidden: Vec<_> = from.possible.difference(&t.revealed).cloned().collect();
@@ -1483,7 +1643,10 @@ fn hidden_in_server(
                 hidden.join("`, `"),
                 from.site
             )
-        };
+        }
+    }
+    fn refuse(e: &Expr, what: &str, name: &str, from: &Origins, t: &Taint) -> LinkError {
+        let why = why(name, from, t);
         let span = match e {
             Expr::Located(span, _) => Some(*span),
             _ => None,
@@ -1496,13 +1659,90 @@ fn hidden_in_server(
         ))
         .at(span)
     }
+    /// Where a key reads `name`: the name as written, else the key, else
+    /// its declaration.
+    fn located(k: &Key, name: &str) -> Option<Span> {
+        let found = Cell::new(None);
+        k.expr.any(&|x| {
+            let at = match x {
+                Expr::Located(s, e) if matches!(&**e, Expr::Var(n) if n == name) => Some(*s),
+                Expr::Call(_, args) => args.iter().find_map(|a| match a {
+                    Arg::Ref(r) if r.index.is_none() && r.name == name => r.span,
+                    _ => None,
+                }),
+                _ => None,
+            };
+            found.set(at);
+            at.is_some()
+        });
+        found
+            .get()
+            .or(match k.expr {
+                Expr::Located(s, _) => Some(*s),
+                _ => None,
+            })
+            .or(k.at)
+    }
+    /// A key that reads what was set from a hidden attribute not yet
+    /// revealed, refused with `Program::validate`'s words for the attribute
+    /// itself, which it refuses at every moment and is left to it.
+    fn keys(ks: &[Key], t: &Taint) -> LResult<()> {
+        for k in ks {
+            for n in names(k.expr) {
+                let Some(from) = t.attrs.get(&n) else {
+                    continue;
+                };
+                if !from.derived || from.possible.is_subset(&t.revealed) {
+                    continue;
+                }
+                let hidden = from
+                    .possible
+                    .difference(&t.revealed)
+                    .next()
+                    .map_or("", String::as_str);
+                return Err(LinkError::new(format!(
+                    "{}: {}, but is read in {}\nhelp: a run whose work reads `{hidden}` reveals \
+                     it when the run ends (the end of a decode is the EOS the scheduler sees), \
+                     and from there a key may read what was set from it; before, the key is the \
+                     scheduler reading what it cannot see",
+                    k.owner,
+                    why(&n, from, t),
+                    k.moment
+                ))
+                .at(located(k, &n)));
+            }
+        }
+        Ok(())
+    }
+    /// Where the session waits inside the holds `held` (each hold's pools,
+    /// outermost first): what reads it wherever it is, the preempt keys of
+    /// the pools it holds, and, where one of a hold's pools preempts, the
+    /// queue keys the hold is selected by again (`Interp::preempt` puts it
+    /// back in its queue with the attributes it has then).
+    fn waits(t: &Taint, reads: &SchedulerReads, held: &[Vec<String>]) -> LResult<()> {
+        keys(&reads.anywhere, t)?;
+        for hold in held {
+            for p in hold {
+                if let Some(ks) = reads.victim.get(p) {
+                    keys(ks, t)?;
+                }
+            }
+            if hold.iter().any(|p| reads.requeue.contains(p)) {
+                for ks in hold.iter().filter_map(|p| reads.select.get(p)) {
+                    keys(ks, t)?;
+                }
+            }
+        }
+        Ok(())
+    }
     fn index(r: &Ref) -> Option<&Expr> {
         r.index.as_deref()
     }
     fn walk(
         stmts: &[Stmt],
         t: &mut Taint,
-        admissions: &BTreeMap<String, Vec<Expr>>,
+        reads: &SchedulerReads,
+        held: &mut Vec<Vec<String>>,
     ) -> LResult<()> {
         let check = |e: &Expr, what: &str, t: &Taint| {
             for n in names(e) {
@@ -1524,7 +1764,10 @@ fn hidden_in_server(
                         t.attrs.insert(n.clone(), from);
                     }
                 }
-                Stmt::Observe(..) | Stmt::Drop(_) | Stmt::Release(_) | Stmt::End | Stmt::Turn => {}
+                Stmt::Observe(..) | Stmt::Drop(_) | Stmt::End | Stmt::Turn => {}
+                // the release caches what it keeps as an entry of the
+                // session's attributes as they are now
+                Stmt::Release(_) => keys(&reads.anywhere, t)?,
                 Stmt::Run {
                     stage,
                     work,
@@ -1538,6 +1781,8 @@ fn hidden_in_server(
                             check(i, "choice of a stage or pool", t)?;
                         }
                     }
+                    // the session waits while it runs
+                    waits(t, reads, held)?;
                     // the run's end reveals the hidden attributes its work
                     // and its wait read
                     t.revealed.extend(origins(work, t, "the server").certain);
@@ -1577,13 +1822,29 @@ fn hidden_in_server(
                     if let Some((_, e)) = lease {
                         check(e, "lease", t)?;
                     }
-                    walk(body, t, admissions)?;
+                    // the session waits in each pool's queue, its keys read
+                    // on the attributes as they are before the hold
+                    for (r, _, _) in pools {
+                        if let Some(ks) = reads.select.get(&r.name) {
+                            keys(ks, t)?;
+                        }
+                    }
+                    waits(t, reads, held)?;
+                    held.push(pools.iter().map(|(r, _, _)| r.name.clone()).collect());
+                    walk(body, t, reads, held)?;
+                    held.pop();
+                    // its end releases the pools, as `release P;` does
+                    keys(&reads.anywhere, t)?;
                 }
                 Stmt::Grow(r, e) | Stmt::Shrink(r, e) | Stmt::Load(r, e) => {
                     if let Some(i) = index(r) {
                         check(i, "choice of a pool", t)?;
                     }
                     check(e, "allocation", t)?;
+                    // a growth may wait for room, and a load for its copy
+                    if !matches!(s, Stmt::Shrink(..)) {
+                        waits(t, reads, held)?;
+                    }
                 }
                 // the engine admits a request by its input, as it admits a
                 // hold by its header; the output is what the request runs,
@@ -1603,7 +1864,8 @@ fn hidden_in_server(
                     // hidden attribute itself `Program::validate` refuses
                     let mut derived = t.clone();
                     derived.attrs.retain(|_, from| from.derived);
-                    let read = admissions.get(&stage.name).map_or(&[][..], Vec::as_slice);
+                    let engine = reads.engines.get(&stage.name);
+                    let read = engine.map_or(&[][..], |e| e.admission.as_slice());
                     for e in read {
                         check(e, "admission", &derived)?;
                     }
@@ -1614,13 +1876,27 @@ fn hidden_in_server(
                     if reads_output {
                         check(output, "admission", t)?;
                     }
+                    // until its end the request waits in the engine's queue
+                    // and runs in its iterations, holding its pools
+                    if let Some(engine) = engine {
+                        keys(&engine.serve, t)?;
+                        for p in &engine.pools {
+                            for ks in [reads.select.get(p), reads.victim.get(p)]
+                                .into_iter()
+                                .flatten()
+                            {
+                                keys(ks, t)?;
+                            }
+                        }
+                    }
+                    waits(t, reads, held)?;
                     t.revealed.extend(origins(output, t, "the server").certain);
                 }
                 Stmt::Branch(c, a, b) => {
                     check(c, "`if`", t)?;
                     let mut other = t.clone();
-                    walk(a, t, admissions)?;
-                    walk(b, &mut other, admissions)?;
+                    walk(a, t, reads, held)?;
+                    walk(b, &mut other, reads, held)?;
                     join(t, &other);
                 }
                 // The loop header can receive hidden values after arbitrarily
@@ -1632,7 +1908,7 @@ fn hidden_in_server(
                     }
                     let before = t.clone();
                     let mut after = before.clone();
-                    walk(body, &mut after, admissions)?;
+                    walk(body, &mut after, reads, held)?;
                     join(t, &after);
                     if *t == before {
                         break;
@@ -1645,10 +1921,11 @@ fn hidden_in_server(
                     }
                 }
                 // a leg runs on a copy of the attributes: what it sets or
-                // reveals stays in it
+                // reveals stays in it, and it holds none of its parent's
+                // pools (`Interp::fork`)
                 Stmt::Fork(body) => {
                     let mut leg = t.clone();
-                    walk(body, &mut leg, admissions)?;
+                    walk(body, &mut leg, reads, &mut vec![])?;
                 }
                 Stmt::Declare(..)
                 | Stmt::Side(_)
@@ -1668,22 +1945,27 @@ fn hidden_in_server(
         }
     }
     /// What the workload holds from an unrevealed hidden value along the
-    /// session, collected into `at` at each request. The server between
-    /// its `Side` markers is the request, walked by `walk`.
+    /// session, collected into `at` at each request and into `waiting`
+    /// wherever it waits. The server between its `Side` markers is the
+    /// request, walked by `walk`.
     struct Workload<'a> {
         turn: &'a [Stmt],
         hidden: &'a [String],
         at: Option<Taint>,
+        waiting: Option<Taint>,
+    }
+    fn gather(into: &mut Option<Taint>, t: &Taint) {
+        match into {
+            Some(at) => join(at, t),
+            None => *into = Some(t.clone()),
+        }
     }
     fn workload(stmts: &[Stmt], site: &'static str, t: &mut Taint, w: &mut Workload) {
         let mut in_server = false;
         for s in stmts {
             match s {
                 Stmt::Side(crate::ir::Side::Server) => {
-                    match &mut w.at {
-                        Some(at) => join(at, t),
-                        None => w.at = Some(t.clone()),
-                    }
+                    gather(&mut w.at, t);
                     in_server = true;
                 }
                 // the request has ended: the workload sees the turn's outputs
@@ -1722,7 +2004,13 @@ fn hidden_in_server(
                         break;
                     }
                 },
-                Stmt::Hold { body, .. } => workload(body, site, t, w),
+                // the session waits in the client's stage or pool, where
+                // the deployment's eviction and lease keys still read it
+                Stmt::Run { .. } | Stmt::Grow(..) | Stmt::Load(..) => gather(&mut w.waiting, t),
+                Stmt::Hold { body, .. } => {
+                    gather(&mut w.waiting, t);
+                    workload(body, site, t, w)
+                }
                 Stmt::Fork(body) => workload(body, site, &mut t.clone(), w),
                 _ => {}
             }
@@ -1739,15 +2027,22 @@ fn hidden_in_server(
         turn,
         hidden,
         at: None,
+        waiting: None,
     };
     workload(init, "the workload's init", &mut t, &mut w);
     workload(session, "the workload's session", &mut t, &mut w);
+    if let Some(waiting) = &w.waiting {
+        keys(&reads.anywhere, waiting)?;
+    }
     // the server never sees a hidden attribute, whatever the workload saw
     let mut tainted = w.at.unwrap_or_default();
     for h in hidden {
         tainted.attrs.insert(h.clone(), unrevealed(h));
     }
-    walk(server, &mut tainted, admissions)
+    walk(server, &mut tainted, reads, &mut vec![])?;
+    // after the request the session is the workload's, with what the
+    // server set
+    keys(&reads.anywhere, &tainted)
 }
 
 /// Engine member `i` of `n`'s request: every pool or stage family of `n`

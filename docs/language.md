@@ -1004,8 +1004,9 @@ by keys re-read before every admission attempt (after each admission under
 an engine, where `budget_left` is that attempt's budget); `waited` is
 the seconds since the hold joined the queue, reset on re-entry. The chosen
 head that does not fit blocks the rest, a preempted hold re-enters ahead of
-the keys, a key may not draw or read a `hidden` attribute, and selection
-sets no timer. See [Pool](api/pool.md).
+the keys, a key may not draw or read a `hidden` attribute (nor, before a
+run reveals it, one set from it), and selection sets no timer. See
+[Pool](api/pool.md).
 
 `queue … every (dt)` admits only at the pool's ticks, every multiple of
 `dt` seconds (a constant, and positive). At a tick the holds that waited
@@ -1457,7 +1458,10 @@ In a `server`, hidden attributes may control run work, cache release and
 observations. Decisions and allocations may read them only after a run
 whose work reads them has ended. This also applies to attributes derived
 from hidden ones; both branch arms must reveal an attribute before it is
-known after the branch. See [the full rule](api/workload.md#hidden).
+known after the branch. A pool's or an engine's key never reads a hidden
+attribute, and reads one derived from it only where the scheduler reads
+the session after the run (`set y = o;` then `queue by (y)` does not
+link). See [the full rule](api/workload.md#hidden).
 
 A `hidden` parameter, `server (input, hidden output)`, prevents scheduler
 expressions, such as a hold's header, queue keys or a budget, from reading

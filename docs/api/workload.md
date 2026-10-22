@@ -176,6 +176,23 @@ or in the session before its `turn`. A request's end reveals the turn's
 outputs to the workload: the session's statements after it read the turn
 that has ended (`set K = K + n + o;`), until it sets a hidden attribute again.
 
+The pools' and the engines' keys are the scheduler too. They never read
+the attribute itself, and they read an attribute set from it only once a
+run has revealed it, as the scheduler reads the session: a pool's
+`queue by` keys at a `hold` on it and during a request to an engine that
+takes it or admits from it; its `preempt by` keys wherever the session
+waits holding it, and its `queue by` keys there too, since a victim goes
+back to the queue; an engine's `advance running by` keys and its `only`s
+during a request to it. An eviction key or a `spill` clause reads the
+session that wrote the entry, and a `preempt leases by` or `suspend by`
+key the session the lease is of, wherever that session is: in a run, a
+queue or a request, at a release, after the request, and in the
+workload's `tool` calls. `set y = o;` then `queue by (y)` is a link error
+as `queue by (o)` is; `run A (cost(A, o)); set y = o;` before the `hold`
+is not. An engine's admission reads a request's `taking`, `reuse`,
+`prefix` and its connector's `load`; its `cache` and the connector's
+`save` are read at release.
+
 Paths join conservatively: after a branch, the attribute counts as revealed
 only if both arms reveal it, and a loop's body may not run at all. Loop-carried
 assignments are checked until no new hidden dependencies reach the next pass.
