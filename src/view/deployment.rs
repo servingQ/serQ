@@ -844,14 +844,17 @@ impl Walker<'_> {
                     let n = &mut self.net.nodes[node];
                     if n.modes.is_empty() {
                         n.work = self.p.show_expr(work.cost_value());
-                        // a delay is its duration: written inside it, under
-                        // the shape of its density, when it is a
-                        // distribution or a constant and fits
-                        let fits = TextSize::Normal.width_of(&n.work) <= STATION_W - 12.0;
+                        // a delay is its duration: the shape of its density
+                        // when it is a distribution or a constant, and the
+                        // duration written under it when it fits. The shape
+                        // does not wait on the text: no two-parameter draw
+                        // is written in 12 characters (`~erlang(1, 2)`)
                         let outline = outline_of(work.cost_value());
-                        if n.kind == StationKind::Delay && fits && outline.is_some() {
-                            n.inner = n.work.clone();
+                        if n.kind == StationKind::Delay && outline.is_some() {
                             n.outline = outline;
+                            if TextSize::Normal.width_of(&n.work) <= STATION_W - 12.0 {
+                                n.inner = n.work.clone();
+                            }
                         }
                     }
                     if !n.modes.contains(&mode) {

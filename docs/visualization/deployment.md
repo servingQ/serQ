@@ -130,7 +130,7 @@ every figure of the program: a gateway queue with an engine has a stage
 |---|---|
 | `Fifo(c)` | circle, `FIFO`, the server count when `c ≠ 1` |
 | `Ps(φ)` | circle, `PS`, with `φ` beneath |
-| `Delay` | rounded box with a duration-density glyph: decaying for `~exp` and `~h2`, a hump for `~erlang`, flat for `~uniform`, a spike for a deterministic duration. Other or long expressions use a row of small circles for infinite servers |
+| `Delay` | rounded box with a duration-density glyph: decaying for `~exp` and `~h2`, a hump for `~erlang`, flat for `~uniform`, a spike for a deterministic duration. Other expressions use a row of small circles for infinite servers; a long duration's outline is drawn without its text |
 | `Step { … }` | rounded box with a token-budget bar: an iterating engine, not a queueing station. It is labelled `engine` and `tokens cap B` in the engine form's words, the residents' totals as `running.count`, `running.decoding` and `running.kv_decode`; the IR keeps no form, so a step stage read from IR is drawn the same |
 | a pool | a drum, its capacity and options written beside it (`cap 8192 · block 16`) |
 | a pool held at one station alone | a row in the station's unfilled frame, under its glyph: drum, name, options |

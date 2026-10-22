@@ -150,6 +150,8 @@ fn a_delays_outline_is_its_durations_distribution() {
     for (duration, outline) in [
         ("~exp(3)", Some(Outline::Decaying)),
         ("~h2(1, 2)", Some(Outline::TwoPhase)),
+        ("~erlang(3, 2)", Some(Outline::Hump)),
+        ("~uniform(1, 2)", Some(Outline::Flat)),
         ("~det(2)", Some(Outline::Spike)),
         ("2", Some(Outline::Spike)),
         ("~exp(3) * 2", None),
@@ -158,6 +160,53 @@ fn a_delays_outline_is_its_durations_distribution() {
         let (p, net) = shape(&format!("run A (cost(A, {duration})); end;"));
         let i = net.node_of(stage(&p, "A")).expect("A is on the session");
         assert_eq!(net.nodes[i].outline, outline, "{duration}");
+    }
+}
+
+/// A delay's outline does not wait on its text (#732). A station holds 12
+/// characters, and no draw of two parameters is that short
+/// (`~erlang(1, 2)` is 13), so while the outline was drawn only when the
+/// text fitted, no `~erlang` or `~uniform` delay was ever drawn by its
+/// density: each was a row of circles, as an expression that is no
+/// distribution is. The outline is drawn and the text that does not fit is
+/// left out.
+#[test]
+fn a_long_durations_outline_is_drawn_without_its_text() {
+    use serq::view::figure::Outline;
+    let inner = |duration: &str| {
+        let (p, net) = shape(&format!("run A (cost(A, {duration})); end;"));
+        let i = net.node_of(stage(&p, "A")).expect("A is on the session");
+        (net.nodes[i].outline, net.nodes[i].inner.clone())
+    };
+    assert_eq!(inner("~erlang(3, 2)"), (Some(Outline::Hump), String::new()));
+    assert_eq!(
+        inner("~uniform(1, 2)"),
+        (Some(Outline::Flat), String::new())
+    );
+    // a duration that fits is written under its outline
+    assert_eq!(
+        inner("~exp(3)"),
+        (Some(Outline::Decaying), "~exp(3)".to_string())
+    );
+}
+
+/// Every distribution of the table (`DistKind`) that is a duration is drawn
+/// by its density at its shortest draw, so that one added to the table, or
+/// a parameter added to one, is drawn or fails here. `~bernoulli` draws 0 or
+/// 1, not a duration.
+#[test]
+fn every_duration_distribution_has_an_outline() {
+    use serq::ir::DistKind;
+    for name in DistKind::names() {
+        let d = DistKind::from_name(name).unwrap();
+        if d == DistKind::Bernoulli {
+            continue;
+        }
+        let args: Vec<String> = (1..=d.arity()).map(|k| k.to_string()).collect();
+        let duration = format!("~{name}({})", args.join(", "));
+        let (p, net) = shape(&format!("run A (cost(A, {duration})); end;"));
+        let i = net.node_of(stage(&p, "A")).expect("A is on the session");
+        assert!(net.nodes[i].outline.is_some(), "{duration}");
     }
 }
 
