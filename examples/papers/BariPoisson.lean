@@ -377,10 +377,7 @@ theorem return_idle (hA : lam * 4640 * X.work < 128) :
     (a := 1 / ε X lam) (by positivity) (fun j y => by rw [one_div, ← div_eq_inv_mul]; exact hc j y)
     (d := (lam * 4640 + 1) * X.work) (by
       have h3 := apply_V_le X hlam x
-      have h0 : V x = 0 := by
-        unfold V
-        rw [BariProgram.backlog_eq, show BariSim.σ x.1 = [] from hx]
-        simp [BariChain.backlog]
+      have h0 : V x = 0 := by unfold V; exact_mod_cast BariProgram.idle_backlog hx
       linarith) j⟩
 
 end BariPoisson

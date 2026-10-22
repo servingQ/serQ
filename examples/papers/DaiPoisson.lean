@@ -201,7 +201,9 @@ arrival-free slots away (`drain`). A slot adds `1280 · E[k] ≤ 1280 (λ
 t_{b_max} + 1)` tokens in expectation (`apply_V_le`), so the backlog's
 expectations after any number of slots converge. -/
 
-/-- The engine holds no job. -/
+/-- The engine holds no job: `DaiProgram.Idle` on this chain's states, whose
+slots bring any number of requests (`DaiStable.State K` brings at most `K`),
+so it is restated here, as is `reach_inv`. -/
 def Idle (x : State) : Prop := DaiSim.σ x.1 = []
 
 instance : DecidablePred Idle := fun x => by unfold Idle; infer_instance
@@ -215,13 +217,6 @@ theorem reach_inv {m : Machine} (h : Reach m) : DaiSim.Inv m := by
 theorem σ_slot (x : State) (k : ℕ) :
     DaiSim.σ (slot k x.1) = DaiChain.absSlot k (DaiSim.σ x.1) :=
   (DaiSim.slot_inv (reach_inv x.2) k).2
-
-theorem good_σ {m : Machine} (h : Reach m) : DaiRecurrent.Good (DaiSim.σ m) := by
-  induction h with
-  | empty => rw [DaiSim.σ_empty]; intro j hj; simp at hj
-  | @slot m k hm ih =>
-    rw [σ_slot ⟨m, hm⟩ k]
-    exact DaiRecurrent.good_absSlot k ih
 
 theorem V_idle {x : State} (hx : Idle x) : V x = 0 := by
   unfold V
@@ -264,7 +259,7 @@ theorem drain (lam : ℝ) (hlam : 0 ≤ lam) : ∀ (n : ℕ) (x : State), backlo
   | 0, x, hb => by
     have hx : Idle x := by
       by_contra h
-      have := DaiRecurrent.backlog_pos (good_σ x.2) h
+      have := DaiRecurrent.backlog_pos (DaiProgram.good_σ (reach_inv x.2)) h
       rw [DaiProgram.backlog_σ] at hb; omega
     rw [reach_of_mem _ Idle hx]; simp
   | n + 1, x, hb => by
@@ -274,7 +269,7 @@ theorem drain (lam : ℝ) (hlam : 0 ≤ lam) : ∀ (n : ℕ) (x : State), backlo
     · have hb' : backlog (slot 0 x.1) ≤ n := by
         rw [DaiProgram.backlog_σ, σ_slot x 0]
         have h1 := DaiRecurrent.backlog_absSlot 0 hx
-        have h2 := DaiRecurrent.one_le_shares (good_σ x.2) hx
+        have h2 := DaiRecurrent.one_le_shares (DaiProgram.good_σ (reach_inv x.2)) hx
         rw [DaiProgram.backlog_σ] at hb
         omega
       have ih := drain lam hlam n ⟨slot 0 x.1, .slot 0 x.2⟩ hb'

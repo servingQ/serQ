@@ -335,7 +335,7 @@ theorem exec_r1 {w : Workload} {g : Ghost} {m : Machine} (hI : DInv w g m) {i : 
     with hs1
   set m1 := setS m0 i s1 with hm1
   have hg1 : getS m1 i = s1 := Exec.getS_setS_self m0 s1 (by simpa using hisz)
-  obtain ⟨a, b, hab, he⟩ := exec_runEngine' Dd 9998 m1 i .prefill (fun _ => 290) P3
+  obtain ⟨a, b, hab, he⟩ := exec_runEngine_split Dd 9998 m1 i .prefill (fun _ => 290) P3
     (by rw [hg1]; exact hst) (by rw [hg1]; rfl) (by simp [evalE])
   rw [he]
   have hev : evalE m1 i (fun _ => 290) = 290 := rfl
@@ -369,7 +369,7 @@ theorem exec_r3 {w : Workload} {g : Ghost} {m : Machine} (hI : DInv w g m) {i : 
   obtain ⟨hp, hst⟩ := hsh
   set m0 : Machine := { m with ready := rest } with hm0
   have hg0 : ∀ j, getS m0 j = getS m j := fun _ => rfl
-  obtain ⟨a, b, hab, he⟩ := exec_runEngine' Dd 9999 m0 i .decode (fun _ => 990) P4
+  obtain ⟨a, b, hab, he⟩ := exec_runEngine_split Dd 9999 m0 i .decode (fun _ => 990) P4
     (by rw [hg0]; exact hst) (by rw [hg0, hp]; rfl) (by simp [evalE])
   rw [show (10000 : ℕ) = 9999 + 1 from rfl, he]
   have hev : evalE m0 i (fun _ => 990) = 990 := rfl
@@ -1107,16 +1107,6 @@ theorem after_bnd {w : Workload} (hF : Fam w) {g : Ghost} {m : Machine} (h : Pre
     simpa using this
 
 /-! ### An arrival -/
-
-theorem handle_arr {m : Machine} {u qu i : ℕ} {rest : List (ℕ × ℕ × ℕ)} (hdl : m.delays = (u, qu, i) :: rest)
-    (hne : m.iterEnd ≠ some (u, qu)) (hst : (getS m i).status = .delay u qu) :
-    handle m u qu = { setS { m with now := u, delays := rest } i { getS m i with status := .ready } with
-      ready := m.ready ++ [i] } := by
-  unfold handle
-  simp only [hne, if_false, hdl]
-  split_ifs with h
-  · rfl
-  · exact absurd hst h
 
 /-- **An arrival.** The request becomes ready; its tokens join the backlog
 and leave the arrivals still due, so the potential of a running iteration

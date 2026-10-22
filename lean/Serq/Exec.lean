@@ -244,6 +244,13 @@ theorem get_upd (a : Attrs) (k v j : ℕ) :
           rw [List.getElem?_eq_none (by simp; omega)]
           simp
 
+/-- `upd` leaves the other slots. -/
+theorem get_upd_ne (a : Attrs) {k j : ℕ} (v : ℕ) (hk : j ≠ k) : (a.upd k v).get j = a.get j := by
+  rw [get_upd]; simp [Function.update, hk]
+
+theorem upd_base (a : Attrs) (k v : ℕ) : (a.upd k v).base = a.base := by
+  unfold upd; split <;> rfl
+
 end Attrs
 
 structure Sess where
