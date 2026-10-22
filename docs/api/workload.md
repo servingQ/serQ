@@ -177,21 +177,20 @@ outputs to the workload: the session's statements after it read the turn
 that has ended (`set K = K + n + o;`), until it sets a hidden attribute again.
 
 The pools' and the engines' keys are the scheduler too. They never read
-the attribute itself, and they read an attribute set from it only once a
-run has revealed it, as the scheduler reads the session: a pool's
-`queue by` keys at a `hold` on it and during a request to an engine that
-takes it or admits from it; its `preempt by` keys wherever the session
-waits holding it, and its `queue by` keys there too, since a victim goes
-back to the queue; an engine's `advance running by` keys and its `only`s
-during a request to it. An eviction key or a `spill` clause reads the
-session that wrote the entry, and a `preempt leases by` or `suspend by`
-key the session the lease is of, wherever that session is: in a run, a
-queue or a request, at a release, after the request, and in the
-workload's `tool` calls. `set y = o;` then `queue by (y)` is a link error
-as `queue by (o)` is; `run A (cost(A, o)); set y = o;` before the `hold`
-is not. An engine's admission reads a request's `taking`, `reuse`,
-`prefix` and its connector's `load`; its `cache` and the connector's
-`save` are read at release.
+the attribute itself, and read an attribute set from it only where the
+scheduler reads the session after the run that reveals it: `set y = o;`
+then `queue by (y)` does not link, and `run A (cost(A, o)); set y = o;`
+before the `hold` does.
+
+| Read | Checked |
+|---|---|
+| a pool's `queue by` | at a `hold` on it; during a request to an engine that takes it or admits from it; wherever the session waits in a hold on a pool that preempts with `requeue tail`, which puts the hold back as a newcomer |
+| a pool's `preempt by` | wherever the session waits holding it; during a request to an engine that takes it |
+| an engine's `advance running by`, `advance running only`, `admit waiting only` | during a request to it |
+| an engine's `taking`, `reuse`, `prefix`, its connector's `load` | at the request |
+| a pool's `evict by`, `spill … when`, `preempt leases by`, `suspend by` | wherever the session is: at each wait and release, after the request, and in the workload's `tool` calls |
+| a hold's header | at the hold; on a pool that preempts, wherever its body waits too, since a preempted hold is admitted again |
+| a hold's `lease` time | at the hold and at its end, where the lease starts |
 
 Paths join conservatively: after a branch, the attribute counts as revealed
 only if both arms reveal it, and a loop's body may not run at all. Loop-carried

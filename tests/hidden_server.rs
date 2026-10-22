@@ -695,17 +695,78 @@ fn an_eviction_key_reads_the_session_after_its_request() {
 }
 
 /// A preempted hold goes back to its queue with the attributes it has then
-/// (`Interp::preempt`), and is selected by the queue's keys again; a pool
-/// that does not preempt never puts it back.
+/// (`Interp::preempt`): under `requeue tail` as a newcomer, selected by the
+/// queue's keys again. Under `requeue head` (and `preempt lifo`) it goes
+/// back ahead of the keys, which never read it (`next_waiter_among`), and
+/// a pool that does not preempt never puts it back: neither is refused.
 #[test]
 fn a_preempted_hold_is_selected_again_by_its_queue_keys() {
-    let server = "hold kv (cost(kv, 1)) { set y = o; run A (cost(A, o)); }";
+    let server = "set y = 1; hold kv (cost(kv, 1)) { set y = o; run A (cost(A, o)); }";
     key_refused(
         &pool_program("queue by (y); preempt by (1) requeue tail;", server),
         DRAW,
         "`y` is set from the hidden `o` in the server, but is read in a pool's queue keys",
     );
-    compile(&pool_program("queue by (y);", server), DRAW, 100.0).unwrap();
+    for clause in [
+        "queue by (y);",
+        "queue by (y); preempt by (1);",
+        "queue by (y); preempt lifo;",
+    ] {
+        compile(&pool_program(clause, server), DRAW, 100.0).unwrap();
+    }
+}
+
+/// A preempted hold's header is evaluated again when it goes back to the
+/// queue and at each admission it tries (`Interp::wanted`, `pending_now`),
+/// on the attributes as they are then, whether it re-enters at the head or
+/// the tail: a copy its body set before a run revealed it is read there.
+#[test]
+fn a_preempted_hold_s_header_is_read_again() {
+    let server = "set y = 1; hold kv (cost(kv, y)) { set y = o; run A (cost(A, o)); }";
+    for clause in ["preempt by (1);", "preempt by (1) requeue tail;"] {
+        key_refused(
+            &pool_program(clause, server),
+            DRAW,
+            "`y` is set from the hidden `o` in the server, but the server's admission of a \
+             preempted hold reads it before a run reveals it",
+        );
+    }
+    // a pool that does not preempt reads the header once, at the hold
+    compile(&pool_program("", server), DRAW, 100.0).unwrap();
+    // set once `A` has revealed `o`, the copy is the scheduler's
+    compile(
+        &pool_program(
+            "preempt by (1);",
+            "set y = 1; hold kv (cost(kv, y)) { run A (cost(A, o)); set y = o; run A (cost(A, 1)); }",
+        ),
+        DRAW,
+        100.0,
+    )
+    .unwrap();
+}
+
+/// A lease's time is read at the hold's end, where the lease starts
+/// (`Interp::end_hold`), on the attributes as they are there.
+#[test]
+fn a_lease_s_time_is_read_at_the_hold_s_end() {
+    key_refused(
+        &pool_program(
+            "",
+            "set y = 1; hold kv (cost(kv, 1)) { run A (cost(A, 1)); set y = o; } lease kv (y);",
+        ),
+        DRAW,
+        "`y` is set from the hidden `o` in the server, but the server's lease reads it before a \
+         run reveals it",
+    );
+    compile(
+        &pool_program(
+            "",
+            "set y = 1; hold kv (cost(kv, 1)) { set y = o; run A (cost(A, o)); } lease kv (y);",
+        ),
+        DRAW,
+        100.0,
+    )
+    .unwrap();
 }
 
 /// A key reads the session where the scheduler reads it: what a run has
@@ -717,12 +778,15 @@ fn a_key_may_read_what_a_run_has_revealed() {
         compile(&pool_program(clause, revealed), DRAW, 100.0).unwrap();
     }
     // the queue reads `y` at the hold, after `A` has revealed `o`; an
-    // eviction key reads it during `A` too, before
+    // eviction key reads it during `A` too, before: in the second turn the
+    // entry the first turn's hold wrote is read while `A` runs
+    // (`Interp::node_writer`: the live session's attributes)
     let during = "set y = o; run A (cost(A, o)); hold kv (cost(kv, 1)) { run B (cost(B, 1)); }";
     compile(&pool_program("queue by (y);", during), DRAW, 100.0).unwrap();
     key_refused(
         &pool_program("evict by (y);", during),
-        DRAW,
+        "workload { arrive poisson(1); turn { Size o = ~exp(10); } send (o);
+           session { turn; turn; end; } }",
         "`y` is set from the hidden `o` in the server, but is read in an eviction key",
     );
     // an engine's request reveals its output when it ends

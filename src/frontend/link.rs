@@ -1344,13 +1344,18 @@ struct EngineReads<'a> {
 
 /// What the scheduler reads of a session outside the server's statements,
 /// by where the session is when it is read (`hidden_in_server`).
+#[derive(Default)]
 struct SchedulerReads<'a> {
     /// A pool's `queue by` keys: read while the session waits in its queue.
     select: BTreeMap<String, Vec<Key<'a>>>,
     /// A pool's `preempt by` keys: read while the session holds the pool.
+    /// A pool here preempts its holder, whose hold `Interp::preempt` puts
+    /// back in a queue with its header evaluated again.
     victim: BTreeMap<String, Vec<Key<'a>>>,
-    /// The pools that preempt a holder: its hold goes back to the queue,
-    /// whose keys read the session as it was when preempted.
+    /// Of those, the pools that put it back as a newcomer (`requeue tail`),
+    /// whose queue's keys read the session as it was when preempted. With
+    /// `requeue head` it goes back ahead of the keys, which never read it
+    /// (`Interp::next_waiter_among`).
     requeue: BTreeSet<String>,
     /// Eviction keys and spill clauses, which read the session that wrote
     /// a cache entry, and `preempt leases by` and `suspend by` keys, which
@@ -1368,13 +1373,7 @@ fn scheduler_reads(prog: &Program) -> SchedulerReads<'_> {
             .as_ref()
             .is_some_and(|p| p.iter().any(|n| n == name))
     };
-    let mut reads = SchedulerReads {
-        select: BTreeMap::new(),
-        victim: BTreeMap::new(),
-        requeue: BTreeSet::new(),
-        anywhere: vec![],
-        engines: BTreeMap::new(),
-    };
+    let mut reads = SchedulerReads::default();
     for p in prog.pools.iter().filter(|p| !client(&p.name)) {
         let key = |moment, expr| Key {
             owner: format!("pool `{}`", p.name),
@@ -1388,10 +1387,12 @@ fn scheduler_reads(prog: &Program) -> SchedulerReads<'_> {
         }
         match &p.preempt {
             PreemptOrder::None => {}
-            PreemptOrder::By { keys, .. } => {
+            PreemptOrder::By { keys, tail } => {
                 let victim = keys.iter().map(|e| key(Moment::Victim, e)).collect();
                 reads.victim.insert(p.name.clone(), victim);
-                reads.requeue.insert(p.name.clone());
+                if *tail {
+                    reads.requeue.insert(p.name.clone());
+                }
             }
             PreemptOrder::Leases { keys, suspend, .. } => reads.anywhere.extend(
                 keys.iter()
@@ -1424,28 +1425,10 @@ fn scheduler_reads(prog: &Program) -> SchedulerReads<'_> {
         if let Serve::By(keys) = &sp.serve {
             serve.extend(keys.iter().map(key));
         }
-        fn body<'a>(stmts: &'a [IterStmt], out: &mut Vec<&'a Expr>) {
-            for st in stmts {
-                match st {
-                    IterStmt::Serve { only, order } => {
-                        out.extend(only);
-                        if let Some(Serve::By(keys)) = order {
-                            out.extend(keys);
-                        }
-                    }
-                    IterStmt::Admit { only, .. } => out.extend(only),
-                    IterStmt::Branch(_, a, b) => {
-                        body(a, out);
-                        body(b, out);
-                    }
-                    IterStmt::Set(..) => {}
-                }
-            }
-        }
         let mut read = vec![];
         match &sp.schedule {
             Schedule::Procedure(only) => read.extend(only),
-            Schedule::Body(stmts) => body(stmts, &mut read),
+            Schedule::Body(stmts) => serve_reads(stmts, &mut read),
         }
         serve.extend(read.into_iter().map(key));
         let r = sp.request.as_ref();
@@ -1483,6 +1466,27 @@ fn scheduler_reads(prog: &Program) -> SchedulerReads<'_> {
     reads
 }
 
+/// What a scheduler body reads of each running request: its `only`s and
+/// its `advance running by (…)` keys, in both arms of an `if`.
+fn serve_reads<'a>(stmts: &'a [IterStmt], out: &mut Vec<&'a Expr>) {
+    for st in stmts {
+        match st {
+            IterStmt::Serve { only, order } => {
+                out.extend(only);
+                if let Some(Serve::By(keys)) = order {
+                    out.extend(keys);
+                }
+            }
+            IterStmt::Admit { only, .. } => out.extend(only),
+            IterStmt::Branch(_, a, b) => {
+                serve_reads(a, out);
+                serve_reads(b, out);
+            }
+            IterStmt::Set(..) => {}
+        }
+    }
+}
+
 /// A hidden attribute is the target's until a run reveals it: the server
 /// may run work by it (the model ends a decode, not the scheduler), cache by
 /// it at release, and observe it, but a decision on it before it is
@@ -1508,16 +1512,18 @@ fn scheduler_reads(prog: &Program) -> SchedulerReads<'_> {
 /// checked here (#554), each key where the scheduler reads the session, on
 /// the attributes as they stand there: a pool's `queue by` keys at a `hold`
 /// on it, and at a request to an engine that takes it or admits from it;
-/// its `preempt by` keys wherever the session waits holding it, and its
-/// `queue by` keys there too, since a victim's hold goes back to the queue;
-/// an engine's `advance running by` keys and its `only`s during a request
-/// to it, before the request's end reveals its output. An eviction key or a
-/// spill clause reads the session that wrote the entry, and a lease's keys
-/// the session the lease is of, wherever it is: they are checked wherever
-/// the session waits (a run, a queue, a request, a `grow` or `load`), at a
-/// release (a hold's end, `release P;`), whose entry keeps the attributes
-/// as they are then, at the server's end, and wherever the workload waits
-/// (a `tool` run, a hold).
+/// its `preempt by` keys wherever the session waits holding it, and, under
+/// `requeue tail`, its `queue by` keys there too, since a victim's hold goes
+/// back to the queue as a newcomer; an engine's `advance running by` keys
+/// and its `only`s during a request to it, before the request's end reveals
+/// its output. An eviction key or a spill clause reads the session that
+/// wrote the entry, and a lease's keys the session the lease is of,
+/// wherever it is: they are checked wherever the session waits (a run, a
+/// queue, a request, a `grow` or `load`), at a release (a hold's end,
+/// `release P;`), whose entry keeps the attributes as they are then, at the
+/// server's end, and wherever the workload waits (a `tool` run, a hold).
+/// A hold's header is read again where a pool that preempts puts the hold
+/// back, wherever its body waits, and its lease's time at its end.
 fn hidden_in_server(
     init: &[Stmt],
     turn: &[Stmt],
@@ -1645,6 +1651,59 @@ fn hidden_in_server(
             )
         }
     }
+    /// The first name `e` reads that holds a hidden attribute, or what was
+    /// set from one, before a run has revealed it.
+    fn reads_unrevealed<'t>(e: &Expr, t: &'t Taint) -> Option<(String, &'t Origins)> {
+        names(e).into_iter().find_map(|n| {
+            let from = t.attrs.get(&n)?;
+            (!from.possible.is_subset(&t.revealed)).then_some((n, from))
+        })
+    }
+    /// `t` with only what was set from a hidden attribute: where
+    /// `Program::validate` refuses the attribute itself, the check leaves
+    /// it to validate.
+    fn copies(t: &Taint) -> Taint {
+        let mut derived = t.clone();
+        derived.attrs.retain(|_, from| from.derived);
+        derived
+    }
+    /// The server's `what` may not read a name `t` holds unrevealed.
+    fn check(e: &Expr, what: &str, t: &Taint) -> LResult<()> {
+        match reads_unrevealed(e, t) {
+            Some((n, from)) => Err(refuse(e, what, &n, from, t)),
+            None => Ok(()),
+        }
+    }
+    /// A hold's header, read at its admission: the index that picks each
+    /// pool, and the copies its units, `reserve`, `reuse` and `prefix`
+    /// read.
+    fn header(hold: &Stmt, what: &str, t: &Taint) -> LResult<()> {
+        let Stmt::Hold {
+            pools,
+            reuse,
+            prefix,
+            ..
+        } = hold
+        else {
+            return Ok(());
+        };
+        let copies = copies(t);
+        for (r, units, reserve) in pools {
+            if let Some(i) = index(r) {
+                check(i, "choice of a pool", t)?;
+            }
+            for e in std::iter::once(units).chain(reserve) {
+                check(e, what, &copies)?;
+            }
+        }
+        let rest = reuse
+            .iter()
+            .chain(prefix.iter().flatten().flat_map(|(k, n)| [k, n]));
+        for e in rest {
+            check(e, what, &copies)?;
+        }
+        Ok(())
+    }
     fn refuse(e: &Expr, what: &str, name: &str, from: &Origins, t: &Taint) -> LinkError {
         let why = why(name, from, t);
         let span = match e {
@@ -1687,14 +1746,12 @@ fn hidden_in_server(
     /// revealed, refused with `Program::validate`'s words for the attribute
     /// itself, which it refuses at every moment and is left to it.
     fn keys(ks: &[Key], t: &Taint) -> LResult<()> {
+        if ks.is_empty() {
+            return Ok(());
+        }
+        let copies = copies(t);
         for k in ks {
-            for n in names(k.expr) {
-                let Some(from) = t.attrs.get(&n) else {
-                    continue;
-                };
-                if !from.derived || from.possible.is_subset(&t.revealed) {
-                    continue;
-                }
+            if let Some((n, from)) = reads_unrevealed(k.expr, &copies) {
                 let hidden = from
                     .possible
                     .difference(&t.revealed)
@@ -1714,21 +1771,27 @@ fn hidden_in_server(
         }
         Ok(())
     }
-    /// Where the session waits inside the holds `held` (each hold's pools,
-    /// outermost first): what reads it wherever it is, the preempt keys of
-    /// the pools it holds, and, where one of a hold's pools preempts, the
-    /// queue keys the hold is selected by again (`Interp::preempt` puts it
-    /// back in its queue with the attributes it has then).
-    fn waits(t: &Taint, reads: &SchedulerReads, held: &[Vec<String>]) -> LResult<()> {
+    /// Where the session waits inside the holds `held`, outermost first:
+    /// what reads it wherever it is, and the preempt keys of the pools it
+    /// holds. A hold on a pool that preempts goes back to a queue with the
+    /// attributes the session has then (`Interp::preempt`): its header is
+    /// read again at its admission (`Interp::wanted`, `pending_now`), and
+    /// under `requeue tail` its queue's keys select it again.
+    fn waits(t: &Taint, reads: &SchedulerReads, held: &[&Stmt]) -> LResult<()> {
         keys(&reads.anywhere, t)?;
-        for hold in held {
-            for p in hold {
-                if let Some(ks) = reads.victim.get(p) {
-                    keys(ks, t)?;
-                }
+        for &hold in held {
+            let Stmt::Hold { pools, .. } = hold else {
+                continue;
+            };
+            let names = || pools.iter().map(|(r, _, _)| r.name.as_str());
+            for ks in names().filter_map(|p| reads.victim.get(p)) {
+                keys(ks, t)?;
             }
-            if hold.iter().any(|p| reads.requeue.contains(p)) {
-                for ks in hold.iter().filter_map(|p| reads.select.get(p)) {
+            if names().any(|p| reads.victim.contains_key(p)) {
+                header(hold, "admission of a preempted hold", t)?;
+            }
+            if names().any(|p| reads.requeue.contains(p)) {
+                for ks in names().filter_map(|p| reads.select.get(p)) {
                     keys(ks, t)?;
                 }
             }
@@ -1738,22 +1801,12 @@ fn hidden_in_server(
     fn index(r: &Ref) -> Option<&Expr> {
         r.index.as_deref()
     }
-    fn walk(
-        stmts: &[Stmt],
+    fn walk<'s>(
+        stmts: &'s [Stmt],
         t: &mut Taint,
         reads: &SchedulerReads,
-        held: &mut Vec<Vec<String>>,
+        held: &mut Vec<&'s Stmt>,
     ) -> LResult<()> {
-        let check = |e: &Expr, what: &str, t: &Taint| {
-            for n in names(e) {
-                if let Some(from) = t.attrs.get(&n)
-                    && !from.possible.is_subset(&t.revealed)
-                {
-                    return Err(refuse(e, what, &n, from, t));
-                }
-            }
-            Ok(())
-        };
         for s in stmts {
             match s {
                 Stmt::Set(n, e) => {
@@ -1791,34 +1844,12 @@ fn hidden_in_server(
                     }
                 }
                 Stmt::Hold {
-                    pools,
-                    reuse,
-                    body,
-                    cache: _,
-                    prefix,
-                    lease,
+                    pools, body, lease, ..
                 } => {
                     // the header is read at admission, where `Program::validate`
                     // refuses the hidden attribute itself; what the server set from
                     // it is left here
-                    let mut derived = t.clone();
-                    derived.attrs.retain(|_, from| from.derived);
-                    for (r, units, reserve) in pools {
-                        if let Some(i) = index(r) {
-                            check(i, "choice of a pool", t)?;
-                        }
-                        check(units, "admission", &derived)?;
-                        if let Some(e) = reserve {
-                            check(e, "admission", &derived)?;
-                        }
-                    }
-                    if let Some(e) = reuse {
-                        check(e, "admission", &derived)?;
-                    }
-                    for (k, n) in prefix.iter().flatten() {
-                        check(k, "admission", &derived)?;
-                        check(n, "admission", &derived)?;
-                    }
+                    header(s, "admission", t)?;
                     if let Some((_, e)) = lease {
                         check(e, "lease", t)?;
                     }
@@ -1830,11 +1861,16 @@ fn hidden_in_server(
                         }
                     }
                     waits(t, reads, held)?;
-                    held.push(pools.iter().map(|(r, _, _)| r.name.clone()).collect());
+                    held.push(s);
                     walk(body, t, reads, held)?;
                     held.pop();
-                    // its end releases the pools, as `release P;` does
+                    // its end releases the pools, as `release P;` does, and
+                    // starts the lease, whose time is read there
+                    // (`Interp::end_hold`)
                     keys(&reads.anywhere, t)?;
+                    if let Some((_, e)) = lease {
+                        check(e, "lease", t)?;
+                    }
                 }
                 Stmt::Grow(r, e) | Stmt::Shrink(r, e) | Stmt::Load(r, e) => {
                     if let Some(i) = index(r) {
@@ -1862,8 +1898,7 @@ fn hidden_in_server(
                     check(input, "admission", t)?;
                     // the admission's clauses, as a hold's header: the
                     // hidden attribute itself `Program::validate` refuses
-                    let mut derived = t.clone();
-                    derived.attrs.retain(|_, from| from.derived);
+                    let derived = copies(t);
                     let engine = reads.engines.get(&stage.name);
                     let read = engine.map_or(&[][..], |e| e.admission.as_slice());
                     for e in read {

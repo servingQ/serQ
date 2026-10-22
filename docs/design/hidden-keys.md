@@ -9,7 +9,8 @@ passed: the server could copy `o` into `y` and order its queue by `y`
 (#554, found in the review of #550). The linker's `hidden_in_server`
 (`src/frontend/link.rs`) follows what is set from a hidden attribute until
 a run reveals it, and refused the copy in a server `if`, a `choose`, a
-hold's header and an engine's admission, but not in a key. This document
+hold's header and an engine's admission, but not in a key, nor where a
+preempted hold reads its header again. This document
 makes a key follow the same rule as the `if`, where the scheduler reads
 the session. A stricter check: no IR field moves, and `IR_VERSION` does
 not.
@@ -80,6 +81,21 @@ link error: pool `kv`: `x` is set from the hidden `o` in the workload's turn, bu
 link error: engine `vllm`: `y` is set from the hidden `output` in the server, but is read in an engine's `advance running by (…)` keys or an `only`, read for each running session
 ```
 
+A hold whose body sets the copy its header reads, on a pool that
+preempts (`pool kv { cap 30; preempt by (1); }`), is refused in the
+words of the header check, since a preempted hold is admitted again:
+
+```serq
+server (hidden o) {
+  set y = 1;
+  hold kv (cost(kv, y)) { set y = o; run A (cost(A, o)); }
+}
+```
+
+```text
+link error: `y` is set from the hidden `o` in the server, but the server's admission of a preempted hold reads it before a run reveals it
+```
+
 and a copy set once a run has revealed `o` links, in any key:
 
 ```serq
@@ -96,17 +112,30 @@ example and tutorial links as before and no generated file moves.
 
 ## The rule
 
-A key is checked where the scheduler reads the session, on the
-attributes as they stand there, as the `if` is checked where it stands:
+A key, a hold's header and a lease's time are checked where the
+scheduler reads the session, on the attributes as they stand there, as
+the `if` is checked where it stands:
 
-| Key | Moment | Checked |
+| Read | Moment | Checked |
 |-----|--------|---------|
-| a pool's `queue by` | `Select` | at a `hold` on the pool; during a request to an engine that takes the pool or admits from it; wherever the session waits in a hold on a pool that preempts (the victim's hold goes back to its queue, `Interp::preempt`) |
+| a pool's `queue by` | `Select` | at a `hold` on the pool; during a request to an engine that takes the pool or admits from it; wherever the session waits in a hold on a pool that preempts with `requeue tail` (the victim's hold goes back to its queue as a newcomer, `Interp::preempt`) |
 | a pool's `preempt by` | `Victim` | wherever the session waits in a hold on the pool; during a request to an engine that takes it |
 | an engine's `advance running by`, `advance running only`, `admit waiting only` | `Serve` | during a request to the engine, before its end reveals the output |
 | an engine's `taking`, `reuse`, `prefix`, its connector's `load` | `Request` | at the request (as before; `load` is new) |
 | a pool's `evict by`, its `spill … when` | `Evict` | everywhere the session is (below) |
 | a pool's `preempt leases by`, `suspend by` | `Victim` | everywhere the session is |
+| a hold's units, `reserve`, `reuse`, `prefix`, its pools' index | `Admit` | at the hold (as before); on a pool that preempts, wherever its body waits too (new) |
+| a hold's `lease` time | `Session` | at the hold (as before) and at its end (new) |
+
+Under `requeue head`, the default, and `preempt lifo`, a victim's hold
+goes back ahead of the keys: `Interp::next_waiter_among` returns a
+resumed head without evaluating them, so a copy set in the hold's body is
+never read by them. Its header is, under either: `Interp::preempt`
+evaluates the units and the pools' index again (`Interp::wanted`) and
+the `prefix`, and each admission it tries evaluates the units, `reserve`
+and `reuse` (`Interp::pending_now`), on the attributes the session has
+then. A lease's time is read where the lease starts, at the hold's end
+(`Interp::end_hold`).
 
 "Wherever the session waits" is a run, a hold's queue, an engine
 request, a `grow` and a `load`. "Everywhere the session is" adds each
@@ -130,6 +159,26 @@ the program as the parser expanded it and already keeps that state for
 the `if`; the keys read the same state, so the rule is written once.
 
 ## Self-critique
+
+**Every preempting pool's queue keys at every wait.** The first
+version put every `preempt by` pool's queue keys in the waits of a hold
+on it. Under `requeue head` they never read the victim, and
+`set y = 1; hold kv (cost(kv, 1)) { set y = o; run A (cost(A, o)); }`
+with `queue by (y); preempt by (1);` was refused with "read before
+selecting a waiting session", which is false of that program (the review
+of this change): only `requeue tail` puts the hold back among the keys.
+
+**The header at the hold only.** The hold-header check read the header
+where the hold is written, and the lease's time there too. A preempted
+hold reads its header again where its body waits, and a lease's time is
+read at the hold's end: `set y = 1; hold kv (cost(kv, y)) { set y = o;
+run A (cost(A, o)); }` under `preempt by (1)` linked on main, as did
+`hold kv (…) { run A (…); set y = o; } lease kv (y);`.
+Both are checked now where they are read, and the check at the hold
+stays: a `lease` time is still refused there, where it is not read, so
+`hold kv (…) { run A (cost(A, o)); } lease kv (o);` does not link though
+the lease reads `o` after `A` has revealed it. Dropping that check is a
+loosening of its own, left to a separate change.
 
 **One set of names for every key.** A simpler rule collects every name
 set from a hidden attribute anywhere in the server and refuses it in
