@@ -65,17 +65,16 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install elan (the toolchain is pinned by lean/lean-toolchain)
+      - name: Install elan (the toolchain is pinned by lean-toolchain)
         run: |
           curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh | sh -s -- -y --default-toolchain none
           echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
       - uses: actions/cache@v4
         with:
           # the dependencies only (Mathlib's oleans); the package itself is rebuilt
-          path: lean/.lake/packages
-          key: lean-${{ hashFiles('lean/lean-toolchain', 'lean/lake-manifest.json') }}
+          path: .lake/packages
+          key: lean-${{ hashFiles('lean-toolchain', 'lake-manifest.json') }}
       - name: Mathlib cache
-        working-directory: lean
         run: lake exe cache get
       - name: oracle theorems current, lake build (and serq-lean-bench), no sorry, axiom audit
         run: scripts/check_lean.sh
