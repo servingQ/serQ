@@ -48,10 +48,10 @@ response    779    0.05994    ±0.00397  0.567    0.19769
 
 …
 
-pool    used    cached  queue  holders    wait  admits  evict(n)  evict(u)  preempt  spill  rej  stuck
-----  ------  --------  -----  -------  ------  ------  --------  --------  -------  -----  ---  -----
-kv    1251.5  144310.0  0.000    0.171     NaN     798        76    545120        0      0    0      0
-reqs     0.2       0.0  0.001    0.171  0.0005     798         0         0        0      0    0      0
+pool    used    cached  queue  holders    wait  admits  evict(n)  evict(u)  preempt  spill  rej  preempted in recompute
+----  ------  --------  -----  -------  ------  ------  --------  --------  -------  -----  ---  ----------------------
+kv    1251.5  144310.0  0.000    0.171     NaN     798        76    545120        0      0    0                       0
+reqs     0.2       0.0  0.001    0.171  0.0005     798         0         0        0      0    0                       0
 ```
 
 `observe` rows are the program's own, and its engines' records
@@ -63,9 +63,12 @@ a measurement.
 `ttft` from sending the turn to its first output token, `tpot` the time per
 output token after the first, `response` from sending to the answer
 ([what the client sees](language.md#what-the-client-sees)). Before reading the means, check the pool columns: `rej`
-(requests that can never fit), `stuck` (sessions preempted again without
-progress, a livelock) and `preempt`. A run with non-zero `stuck` has a
-mean over the sessions that got through, not over the traffic.
+(requests that can never fit), `preempt`, and `preempted in recompute`
+(sessions preempted again while recomputing what a preemption dropped:
+ordinary under overload, and also how a hold that can never fit shows).
+The means are over completed turns: a session that is rejected, or has
+not finished when the run ends, contributes none, so compare `ended` with
+`arrivals` as well.
 
 `--json` prints the same report as JSON, and `--dump DIR` writes one CSV per
 `observe` with columns `time,session,turn,value`, for a distribution, a
@@ -89,7 +92,7 @@ done
 
 Compare both TTFT and preemptions across seeds. Near saturation, different
 seeds can produce different congestion histories; a confidence interval
-within one run does not describe that spread. Check rejections and `stuck`
+within one run does not describe that spread. Check rejections and `ended`
 as well before interpreting a lower latency as an improvement.
 
 ### Compare two designs

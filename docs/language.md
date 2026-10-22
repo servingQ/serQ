@@ -1128,7 +1128,8 @@ victim. It lasts `worker`'s time at zero tokens, which is a modelling
 choice: the real engine skips the forward pass of an empty step, so the
 fixed part of the time overstates it. A hold whose body can never fit then
 preempts itself forever (vLLM refuses such a KV cache at start-up, above);
-the `stuck` counter below reports it. A hold that reserves what it will
+`preempted_in_recompute` below counts it, with the ordinary preemptions
+during a recompute. A hold that reserves what it will
 need (`reserve (known)` after a preemption) is rejected instead, once the
 reservation is above the cap.
 
@@ -1603,8 +1604,17 @@ time, session and turn. `--dump DIR` exports these samples. The
 [CLI reference](reference/cli.md) defines the reported statistics and
 resource counters.
 
-`stuck` counts sessions preempted again without advancing past their previous
-preemption. Such sessions do not contribute completed response samples.
+`preempted_in_recompute` counts, per pool, the sessions preempted again
+there before passing the position of their previous preemption there:
+preempted while recomputing what the first preemption dropped. Each
+session is counted once in the run, at the first pool where it happens. A
+preempted request keeps its tokens and recomputes their KV
+(`scheduler.py:1561`), and a re-admitted request is the last of `running`,
+the next victim (`scheduler.py:1296`, `scheduler.py:799`): under overload a
+preemption during that recompute is ordinary, and the session goes on to
+finish. A
+hold that can never fit is counted the same way, and its session never
+ends; the count does not tell the two apart.
 `growing_at_end` counts the holds still waiting to grow when the run ends
 (`grow:` in the text report): under `preempt none`, or with nothing the
 pool's `preempt` may take, a growth waits for room another holder frees.

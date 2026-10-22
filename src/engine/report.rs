@@ -130,9 +130,13 @@ pub struct PoolReport {
     pub preemptions: u64,
     pub spills: u64,
     pub rejected: u64,
-    /// Sessions preempted a second time without progress past their
-    /// previous preemption: a livelock the run would otherwise hide.
-    pub stuck: u64,
+    /// Sessions preempted again at this pool before passing the position of
+    /// their previous preemption here: while recomputing what it dropped.
+    /// vLLM's recompute does this under ordinary overload, and the session
+    /// may still finish; a hold that can never fit does it for ever. Each
+    /// session is counted once in the run, at the first pool where it
+    /// happens.
+    pub preempted_in_recompute: u64,
     /// The run ended with the head of a queue asking this pool for more
     /// than its cap: the queue's pool and what the head asks. A hold whose
     /// units or `reserve` read the deployment's state is not rejected when
@@ -266,7 +270,9 @@ impl ClaimReport {
 /// consumers read by name (serving-queue-theory, pyserq). Bump it on a
 /// renamed, removed or retyped field, by the rules of `docs/ir.md`
 /// (Stability); `tests/report.rs` holds the shape.
-pub const REPORT_VERSION: u32 = 1;
+///
+/// 2: `pools[].stuck` is `preempted_in_recompute`.
+pub const REPORT_VERSION: u32 = 2;
 
 #[derive(Clone, Debug)]
 pub struct Report {
@@ -523,23 +529,34 @@ impl Report {
                     p.preemptions.to_string(),
                     p.spills.to_string(),
                     p.rejected.to_string(),
-                    p.stuck.to_string(),
+                    p.preempted_in_recompute.to_string(),
                 ]
             });
             table(
                 &mut s,
                 &[
-                    "pool", "used", "cached", "queue", "holders", "wait", "admits", "evict(n)",
-                    "evict(u)", "preempt", "spill", "rej", "stuck",
+                    "pool",
+                    "used",
+                    "cached",
+                    "queue",
+                    "holders",
+                    "wait",
+                    "admits",
+                    "evict(n)",
+                    "evict(u)",
+                    "preempt",
+                    "spill",
+                    "rej",
+                    "preempted in recompute",
                 ],
                 rows,
             );
             for p in &self.pools {
-                if p.stuck > 0 {
+                if p.preempted_in_recompute > 0 {
                     let _ = writeln!(
                         s,
-                        "stuck: {} session(s) preempted again at pool `{}` without passing the position of their previous preemption",
-                        p.stuck,
+                        "preempted in recompute: {} session(s) preempted again at pool `{}` before passing the position of their previous preemption there; vLLM's recompute does this under overload, and a counted session may still finish",
+                        p.preempted_in_recompute,
                         label(&p.name, p.index)
                     );
                 }
@@ -719,7 +736,7 @@ impl Report {
             }
             let _ = write!(
                 s,
-                "{{\"name\":\"{}\",\"index\":{},\"mean_used\":{},\"mean_cached\":{},\"mean_queue\":{},\"mean_holders\":{},\"mean_wait\":{},\"admissions\":{},\"evicted_entries\":{},\"evicted_units\":{},\"preemptions\":{},\"spills\":{},\"rejected\":{},\"stuck\":{},\"over_cap\":{},\"growing_at_end\":{},\"growing_stalled\":{}}}",
+                "{{\"name\":\"{}\",\"index\":{},\"mean_used\":{},\"mean_cached\":{},\"mean_queue\":{},\"mean_holders\":{},\"mean_wait\":{},\"admissions\":{},\"evicted_entries\":{},\"evicted_units\":{},\"preemptions\":{},\"spills\":{},\"rejected\":{},\"preempted_in_recompute\":{},\"over_cap\":{},\"growing_at_end\":{},\"growing_stalled\":{}}}",
                 p.name,
                 index(p.index),
                 f(p.mean_used),
@@ -733,7 +750,7 @@ impl Report {
                 p.preemptions,
                 p.spills,
                 p.rejected,
-                p.stuck,
+                p.preempted_in_recompute,
                 match &p.over_cap {
                     Some((queue, need)) =>
                         format!("{{\"queue\":\"{queue}\",\"need\":{}}}", f(*need)),

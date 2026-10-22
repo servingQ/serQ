@@ -6,6 +6,7 @@
 mod common;
 
 use serq::Overrides;
+use serq::engine::log::EventKind;
 
 /// `n` requests present at t = 0 (closed population, one turn each), with
 /// prompt `prompt` and `out` output tokens, on a device of `blocks` blocks
@@ -169,7 +170,7 @@ fn a_request_preempted_during_decode_resumes_from_its_outputs() {
     let r = run(&src, &common::horizon(1000.0));
     let kv = r.pool("kv").unwrap();
     assert_eq!(kv.preemptions, 1, "{}", r.text());
-    assert_eq!(kv.stuck, 0, "{}", r.text());
+    assert_eq!(kv.preempted_in_recompute, 0, "{}", r.text());
     // what each admission prefilled (no cache here): its tokens
     assert_eq!(
         r.observe("llm.prefill").unwrap().samples,
@@ -365,6 +366,106 @@ fn a_request_preempted_twice_in_a_queue_keeps_its_outputs() {
     );
     assert_eq!(r.observe("first").unwrap().samples, vec![16.0, 16.0, 32.0]);
     assert_eq!(r.observe("done").unwrap().samples, vec![31.0, 61.0, 74.0]);
+}
+
+/// `examples/multi-turn/vllm.sq` as shipped, on `blocks` blocks of 16 with
+/// prefill chunks of 16 while more than one request is in the engine, and
+/// three 16-token requests at t = 0: A (serial 0) generates 32 tokens, C
+/// (serial 1) 64 and B (serial 2) 48. Logged, so a test can tell whose
+/// preemptions the pool counted. Its cost is not 1: the steps below are
+/// iterations, not times.
+fn vllm_three_requests(blocks: &str) -> serq::Report {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let src = std::fs::read_to_string(root.join("examples/multi-turn/vllm.sq")).unwrap();
+    let mut ov = common::horizon(100.0);
+    ov.set("blocks", blocks).unwrap();
+    ov.set("chunk_cap", "16").unwrap();
+    let workload = "workload { arrive batch(3);
+          init { set n = 16; set o = serial == 0 ? 32 : (serial == 1 ? 64 : 48); }
+          send (input: n, output: o);
+          session { turn; end; }
+        }";
+    let p = common::compile(&src, workload, &ov).unwrap_or_else(|e| panic!("{e}"));
+    serq::run_ir_logged(&p, None, usize::MAX).unwrap()
+}
+
+/// The serial of each preemption at pool `name`, in the order of the run.
+fn preempted_serials(r: &serq::Report, name: &str) -> Vec<u64> {
+    let log = r.log.as_ref().expect("a logged run");
+    let pool = log
+        .pools
+        .iter()
+        .position(|(n, _)| n == name)
+        .expect("the pool");
+    log.events
+        .iter()
+        .filter_map(|e| match e.kind {
+            EventKind::Preempt { who, pool: p } if p == pool => Some(who.serial),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A request preempted again while it recomputes what its first
+/// preemption dropped is counted in `preempted_in_recompute`, and it
+/// finishes: vLLM does this under ordinary overload. `_preempt_request`
+/// resets `num_computed_tokens` and keeps the outputs (scheduler.py:1561),
+/// a re-admitted request is appended to `running` (scheduler.py:1296), and
+/// the victim is `running.pop()` (scheduler.py:799), so the request just
+/// re-admitted to recompute is the next victim.
+///
+/// On 6 blocks: step 1 prefills the three prompts, step 2 grows each to a
+/// second block, and the 6 are taken. At step 18 A's and C's tokens 33
+/// need a third block each: B, the last admitted, is preempted with 32
+/// computed and 17 outputs (33 tokens to recompute), and A and C take its
+/// two blocks. A ends at step 32; at step 33 B is admitted again with none
+/// of its tokens cached and prefills a chunk of 16. At step 34 C's token
+/// 49 needs a fourth block and B, the last admitted again, is preempted at
+/// 16, short of 32: counted. C ends at step 64; B is admitted at step 65
+/// with its first block cached, recomputes the other 17 tokens and decodes
+/// the 30 outputs left, ending at step 95.
+#[test]
+fn a_request_preempted_again_in_its_recompute_is_counted_and_finishes() {
+    let r = vllm_three_requests("6");
+    let kv = r.pool("kv").unwrap();
+    assert_eq!(kv.preemptions, 2, "{}", r.text());
+    assert_eq!(preempted_serials(&r, "kv"), vec![2, 2], "{}", r.text());
+    assert_eq!(kv.preempted_in_recompute, 1, "{}", r.text());
+    assert_eq!((r.arrivals, r.ended), (3, 3), "{}", r.text());
+    assert!(
+        r.text().contains(
+            "preempted in recompute: 1 session(s) preempted again at pool `kv` before passing the position of their previous preemption there"
+        ),
+        "{}",
+        r.text()
+    );
+}
+
+/// The same requests on 7 blocks: B is preempted twice too, but the second
+/// time after its recompute has passed the first preemption's position, so
+/// it is not counted. A count of sessions preempted again would read 1
+/// here; the pool counts preemptions in a recompute, and there are none.
+///
+/// At step 18 A takes the free block for its token 33 and C, needing one
+/// for its own, preempts B, the last admitted, at 32. A ends at step 32; at
+/// step 33 B is admitted again with its first block cached and recomputes
+/// the other 17 tokens in two chunks (steps 33 and 34), passing 32. At step
+/// 50 C takes the free block for its token 65, and B, needing a fourth for
+/// its token 49, is the last admitted and is preempted at 48. C ends at
+/// step 64; B is admitted at step 65 and ends at step 79.
+#[test]
+fn a_request_preempted_again_past_its_recompute_is_not_counted() {
+    let r = vllm_three_requests("7");
+    let kv = r.pool("kv").unwrap();
+    assert_eq!(kv.preemptions, 2, "{}", r.text());
+    assert_eq!(preempted_serials(&r, "kv"), vec![2, 2], "{}", r.text());
+    assert_eq!(kv.preempted_in_recompute, 0, "{}", r.text());
+    assert_eq!((r.arrivals, r.ended), (3, 3), "{}", r.text());
+    assert!(
+        !r.text().contains("preempted in recompute:"),
+        "{}",
+        r.text()
+    );
 }
 
 /// A holder preempted before it computed anything resumes from nothing.

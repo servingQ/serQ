@@ -11,7 +11,7 @@ for L in 1.5 1.7 1.8 1.9 2.0; do
 done
 ```
 
-| sessions/s | from cache | TTFT (s) | preemptions | `stuck` | utilisation |
+| sessions/s | from cache | TTFT (s) | preemptions | preempted in recompute | utilisation |
 |---|---|---|---|---|---|
 | 1.5 | 0.442 | 0.131 | 350 | 0 | 0.598 |
 | 1.7 | 0.326 | 0.263 | 1,104 | 0 | 0.726 |
@@ -22,7 +22,7 @@ done
 *From cache* is the share of the prompt tokens the cache supplied,
 `llm.reused / (llm.reused + llm.prefill)` (the means of the report's two
 `observe` rows); TTFT is the `client` section's mean, preemptions and
-`stuck` the `kv` pool's, utilisation the `llm` stage's.
+preempted in recompute the `kv` pool's, utilisation the `llm` stage's.
 
 A mean from one run is a level only if a longer run gives about the same.
 The same seed at longer horizons:
@@ -59,10 +59,14 @@ before it: the level doubles from 1.7 to 1.8 and grows about 3.3 times
 from 1.8 to 1.9. The share of prompt tokens from cache at 320 000 s falls
 from 0.44 at 1.5 to 0.13 at 1.9, and to 0.03 at 2.0.
 
-No run here reports a `stuck` session (a request preempted again without
-progress); when one does, its latency samples do not describe all
-offered traffic. Inspect these counters, and the run length, before using
-a mean for capacity planning, and repeat the experiment across seeds.
+No run here counts a session preempted in recompute (a request preempted
+again before its recompute passed the position of its previous
+preemption); under overload such a session still finishes, and its turn
+has a latency sample. A session that is rejected, or has not finished when
+the run ends, has none, so the means do not describe all offered traffic.
+Inspect these counters, `ended` against `arrivals`, and the run length,
+before using a mean for capacity planning, and repeat the experiment across
+seeds.
 
 Measured 2026-10-15 on serQ afee627 with whole token counts (#661, #700), by
 the commands on this page (seeds 2 and 3:

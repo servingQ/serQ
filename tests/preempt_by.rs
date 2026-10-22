@@ -274,14 +274,14 @@ fn lifo_is_by_minus_admission_on_a_pool_no_engine_reads() {
         let pool = r.pool("a").unwrap();
         (
             pool.preemptions,
-            pool.stuck,
+            pool.preempted_in_recompute,
             r.observe("s1").unwrap().samples.clone(),
         )
     };
     let lifo = report("preempt lifo;");
     // serial 1, the pool's last, is the victim; read by the session's
     // latest admission it would be serial 0, which preempts itself for
-    // ever (`stuck`)
+    // ever (counted in `preempted_in_recompute`)
     assert!(lifo.0 > 0 && lifo.1 == 0, "{lifo:?}");
     assert_eq!(report("preempt by (-admission, 0);"), lifo);
     assert_eq!(report("preempt by (-admission) requeue head;"), lifo);

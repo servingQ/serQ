@@ -61,9 +61,9 @@ stage  number   util   done    thru    wait  service  iters
 -----  ------  -----  -----  ------  ------  -------  -----
 svc     0.794  0.559  75462  0.7943  0.0000   0.9997      0
 
-pool  used  cached  queue  holders    wait  admits  evict(n)  evict(u)  preempt  spill  rej  stuck
-----  ----  ------  -----  -------  ------  ------  --------  --------  -------  -----  ---  -----
-mem    2.8     0.0  0.076    0.794  0.0961   79460         0         0        0      0    0      0
+pool  used  cached  queue  holders    wait  admits  evict(n)  evict(u)  preempt  spill  rej  preempted in recompute
+----  ----  ------  -----  -------  ------  ------  --------  --------  -------  -----  ---  ----------------------
+mem    2.8     0.0  0.076    0.794  0.0961   79460         0         0        0      0    0                       0
 ```
 
 Note `wait 0.0000` at the stage: nobody queues for a server. All the waiting

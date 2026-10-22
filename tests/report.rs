@@ -130,10 +130,10 @@ fn the_report_has_the_shape_its_version_names() {
             "mean_wait",
             "name",
             "over_cap",
+            "preempted_in_recompute",
             "preemptions",
             "rejected",
             "spills",
-            "stuck",
         ],
     );
     let want = (
@@ -146,6 +146,11 @@ fn the_report_has_the_shape_its_version_names() {
     assert_eq!(
         shape, want,
         "the report's shape moved: a renamed, removed or retyped field bumps REPORT_VERSION ({REPORT_VERSION}); an added one is recorded here; say so in the release"
+    );
+    // the version this shape is: a diff that moves one moves the other
+    assert_eq!(
+        REPORT_VERSION, 2,
+        "`pools[].stuck` became `preempted_in_recompute` in 2"
     );
 }
 

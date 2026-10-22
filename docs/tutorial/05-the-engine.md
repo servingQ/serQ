@@ -199,10 +199,10 @@ step  prefill only  decode only  mixed   idle  decodes  decode batch  decode ste
 ----  ------------  -----------  -----  -----  -------  ------------  -----------  --------  --------
 llm          0.037        0.097  0.007  0.859    0.113         1.080     0.000225  0.000209  0.000245
 
-pool   used   cached  queue  holders    wait  admits  evict(n)  evict(u)  preempt  spill  rej  stuck
-----  -----  -------  -----  -------  ------  ------  --------  --------  -------  -----  ---  -----
-kv    783.2  29643.4  0.000    0.158     NaN   49906       435   3514144        0      0    0      0
-reqs    0.2      0.0  0.003    0.158  0.0011   49906         0         0        0      0    0      0
+pool   used   cached  queue  holders    wait  admits  evict(n)  evict(u)  preempt  spill  rej  preempted in recompute
+----  -----  -------  -----  -------  ------  ------  --------  --------  -------  -----  ---  ----------------------
+kv    783.2  29643.4  0.000    0.158     NaN   49906       435   3514144        0      0    0                       0
+reqs    0.2      0.0  0.003    0.158  0.0011   49906         0         0        0      0    0                       0
 ```
 
 `done 89549` at `llm` against 44 889 turns — two runs per turn, prefill
