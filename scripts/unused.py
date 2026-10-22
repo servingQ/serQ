@@ -59,6 +59,10 @@ def tags(x, out):
     if isinstance(x, dict):
         for k, v in x.items():
             out.add(k)
+            # the constants' names and comments are the program's text, not
+            # tags: a comment that says `Fifo` uses no variant (`Program::consts`)
+            if k == "consts":
+                continue
             tags(v, out)
     elif isinstance(x, list):
         for v in x:

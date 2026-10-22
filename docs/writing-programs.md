@@ -73,8 +73,11 @@ language construct for a transfer's fixed delay.
 State units beside settings when the name alone does not make them clear,
 and the upstream name a setting stands for (`let B = 8192;  //
 max_num_batched_tokens`): a reader of the program alone still sees the
-correspondence. Comments should explain assumptions and source
-correspondence, not repeat syntax.
+correspondence. That comment, on the line the `let` ends, is the
+constant's line in the figure's legend
+([the legend](visualization/deployment.md#the-legend)); one above it is
+not. Comments should explain assumptions and source correspondence, not
+repeat syntax.
 
 A program a use case presents keeps, beyond those settings comments, only a
 short header that says what it models and where it is explained. The page

@@ -461,6 +461,41 @@ impl StmtSpan {
 /// Where each linked statement is in the text: per block, per statement.
 pub type Spans = Vec<Vec<StmtSpan>>;
 
+/// The program's constants for a reader (`ir::Program::consts`): each `let`
+/// the text writes, by its file, with the value `values` gives its index
+/// and whether a run supplied it. A name declared twice in one file is its
+/// last declaration, at its place: the one the linker folds into every
+/// expression, before it or after (only a parse-time array size reads an
+/// earlier one).
+fn declared_consts(prog: &Program, values: &[(f64, bool)]) -> Vec<crate::ir::Const> {
+    use crate::frontend::paired::written;
+    use crate::ir::{Const, ConstArg};
+    let mut out: Vec<Const> = vec![];
+    for note in &prog.let_notes {
+        let declared = &prog.lets[note.index].0;
+        let (value, supplied) = values[note.index];
+        let c = Const {
+            name: written(declared),
+            side: note.side,
+            value,
+            // a supplied input's default, a number too: the value is not it
+            written: (supplied || !note.number).then(|| note.written.clone()),
+            arg: prog
+                .inputs
+                .iter()
+                .find(|(_, d)| *d == note.index)
+                .map(|(key, _)| ConstArg {
+                    key: key.clone(),
+                    supplied,
+                }),
+            doc: note.doc.clone(),
+        };
+        out.retain(|d| (d.side, &d.name) != (c.side, &c.name));
+        out.push(c);
+    }
+    out
+}
+
 /// `link`, and where each statement of the IR came from, so that an error
 /// `Program::validate` finds in a statement can point at the text.
 pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> {
@@ -543,6 +578,7 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
         }
     }
     // Constants, in order; supplied inputs replace only their declared defaults.
+    let mut values = Vec::with_capacity(prog.lets.len());
     for (index, (name, e)) in prog.lets.iter().enumerate() {
         let input = prog
             .inputs
@@ -575,6 +611,7 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
             error
         })?;
         lk.consts.insert(name.clone(), v);
+        values.push((v, overridden));
     }
     // An array size or a relation's `ttl` is folded by the parser, which
     // knew only the `let`s above it, and reaches here as a number: its
@@ -583,6 +620,7 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
     for e in &prog.folded {
         lk.own_indices(e)?;
     }
+    let consts = declared_consts(prog, &values);
     // An attribute would shadow a constant of the same name everywhere
     // (a stage's cost has no session, so the constant would read as NaN).
     for (name, _) in &prog.lets {
@@ -1002,6 +1040,7 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
         claims,
         registers: lk.registers.clone(),
         routes: std::mem::take(&mut lk.routes),
+        consts,
         transfer_blocks: None,
         version: IR_VERSION,
         hidden,

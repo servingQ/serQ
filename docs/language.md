@@ -234,7 +234,9 @@ A plain `let` cannot be replaced externally. With `use "std/args";`, a
 `args.number("name", default)` as its entire initializer. CLI arguments
 (`--name value`), instance bindings and API `sets` supply only those named
 inputs. Defaults and supplied expressions are resolved at link time; the
-result is the same IR as a program written with those values. An input that
+result is the same IR as a program written with those values, but for
+`consts`, which says the run supplied it and what the program wrote (the
+figure's legend, [IR](ir.md)). An input that
 would change a parse-time array size is refused. See [std/args](api/std/args.md)
 for the full input contract. `use "std/kvt";` supplies the KV-transfer
 vocabulary ([std/kvt](api/std/kvt.md)), `kvt.nixl_pull (…)` and `kvt.nixl_push (…)`

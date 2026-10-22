@@ -1595,11 +1595,12 @@ fn the_client_sends_and_the_server_replies() {
         }
         assert!(arrivals > 0 && exits > 0, "{name}");
         // what is written past the server's wall is the server's, its
-        // title over the frame aside: a guard on an exit is written where
-        // the exit leaves, inside
+        // title over the frame aside and the legend under it: a guard on an
+        // exit is written where the exit leaves, inside
         for i in &f.items {
             if let Item::Text { at, text, .. } = i
                 && at.x > server.x
+                && at.y <= server.bottom()
                 && text != "server"
             {
                 assert!(inside(at), "{name}: {i:?} outside the server");
@@ -2295,6 +2296,110 @@ fn labels_do_not_overlap() {
             }
         }
     }
+}
+
+// --- the legend: what the labels' numbers are called (#15) ------------------
+
+/// Every text of `f` with where it is written.
+fn placed(f: &Figure) -> Vec<(serq::view::figure::Point, String, bool)> {
+    use serq::view::figure::Item;
+    f.items
+        .iter()
+        .filter_map(|i| match i {
+            Item::Text { at, text, dim, .. } => Some((*at, text.clone(), *dim)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A label prints a constant's value (`tokens cap … / 2e-5`); the legend
+/// under the server names it, a row a constant: its name, its value, and
+/// the comment on its line, the deployment's under one heading and the
+/// workload's under the other.
+#[test]
+fn a_legend_names_each_constant() {
+    let f = deployment::figure(&program("replica"));
+    let [server] = f.boxes(BoxStyle::Server)[..] else {
+        panic!("one server frame");
+    };
+    let t = placed(&f);
+    let at = |s: &str| {
+        t.iter()
+            .find(|(_, x, _)| x == s)
+            .unwrap_or_else(|| panic!("no `{s}` in {t:?}"))
+            .0
+    };
+    let row = [
+        at("omega"),
+        at("2e-4"),
+        at("weights read per iteration (s)"),
+    ];
+    assert!(row.iter().all(|p| p.y == row[0].y), "one row: {row:?}");
+    assert!(row[0].x < row[1].x && row[1].x < row[2].x);
+    assert!(row[0].y > server.bottom(), "under the server");
+    let (deployment, workload) = (at("deployment"), at("workload"));
+    assert!(deployment.y < row[0].y && row[0].y < workload.y);
+    assert!(workload.y < at("Lambda").y);
+    // the comment is a note on the name, which is not
+    assert!(
+        t.iter()
+            .any(|(_, x, dim)| x == "weights read per iteration (s)" && *dim)
+    );
+    assert!(t.iter().any(|(_, x, dim)| x == "omega" && !*dim));
+    // the value is written as a label writes it
+    assert!(t.iter().any(|(_, x, _)| x.contains("/ 2e-5")));
+}
+
+/// An input the run supplies says so beside its value, and what the
+/// program wrote; one left at its default names the argument that sets it.
+#[test]
+fn a_supplied_input_says_so_in_the_legend() {
+    let path = serq::program_path("vllm");
+    let mut ov = common::horizon(10.0);
+    ov.set("max_seqs", "32").unwrap();
+    let p = serq::load_paired(&path, &serq::paired_workload(&path).unwrap(), &ov).unwrap();
+    let t: Vec<String> = placed(&deployment::figure(&p))
+        .into_iter()
+        .map(|x| x.1)
+        .collect();
+    for s in ["32", "(--max_seqs; 16 in the program)", "(--blocks)"] {
+        assert!(t.iter().any(|x| x == s), "no `{s}` in {t:?}");
+    }
+}
+
+/// A constant computed from others shows how, and a long comment is cut at
+/// a space: the program says it in full.
+#[test]
+fn a_derived_constant_shows_its_definition() {
+    let long =
+        "a comment much longer than a legend's line has room for, which the program says in full";
+    let p = compile(
+        &format!(
+            "let blocks = 100;\nlet bs = 16;\nlet C = blocks * bs;  // KV pool, tokens\nlet x = 1;  // {long}\n\
+             fn main() {{\n  pool kv {{ cap C; }}\n  stage svc : fifo;\n\
+             server {{ hold kv (cost(kv, 1)) {{ run svc (cost(svc, ~exp(x))); }} }}\n}}\n"
+        ),
+        "workload { arrive poisson(0.5); session { turn; end; } }\n",
+    );
+    let t: Vec<String> = placed(&deployment::figure(&p))
+        .into_iter()
+        .map(|x| x.1)
+        .collect();
+    for s in ["cap 1600", "C", "1600", "= blocks * bs", "KV pool, tokens"] {
+        assert!(t.iter().any(|x| x == s), "no `{s}` in {t:?}");
+    }
+    let cut = t
+        .iter()
+        .find(|x| x.starts_with("a comment much longer"))
+        .unwrap();
+    assert!(cut.ends_with(" …") && cut.chars().count() <= 66, "{cut}");
+    // a program with no constant has no legend
+    let none = compile(
+        "stage svc : fifo;\nserver { run svc (cost(svc, ~exp(1))); }",
+        "workload { arrive poisson(0.5); session { turn; end; } }\n",
+    );
+    let t = placed(&deployment::figure(&none));
+    assert!(!t.iter().any(|(_, x, _)| x == "deployment"), "{t:?}");
 }
 
 // --- instances whose stages and pools two of them address (#206) ------------

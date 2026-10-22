@@ -40,7 +40,10 @@ let NAME = expr;
 ```
 
 A named constant, folded at link time. A plain `let` is internal to the
-program: CLI options and instances cannot replace it.
+program: CLI options and instances cannot replace it. A label in the
+figure prints its value; the figure's legend names it, with its value, its
+definition when that is not one number, and the `//` comment that ends its
+line ([the legend](../visualization/deployment.md#the-legend)).
 
 | Argument | Type | Description |
 |---|---|---|

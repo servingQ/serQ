@@ -207,10 +207,21 @@ impl<'a> Paired<'a> {
             t.line = t.line.min(self.lines);
         }
         let mut wl = lex(self.workload).map_err(|e| at_line(e.line + self.lines, e.col, &e.msg))?;
-        wl.retain(|t| t.tok != Tok::Eof);
+        // its trivia are numbered as its tokens are, the comments after its
+        // last token among them: the parser finds the comment that ends a
+        // `let`'s line by its line (`Program::consts`)
         for t in &mut wl {
             t.line += self.lines;
+            for tr in &mut t.leading {
+                tr.line += self.lines;
+            }
         }
+        let tail = wl
+            .iter_mut()
+            .filter(|t| t.tok == Tok::Eof)
+            .flat_map(|t| std::mem::take(&mut t.leading))
+            .collect::<Vec<_>>();
+        wl.retain(|t| t.tok != Tok::Eof);
         // the workload file's `use`s, which belong before `fn main()`
         let mut uses = vec![];
         let mut rest = vec![];
@@ -302,7 +313,9 @@ impl<'a> Paired<'a> {
         let mut toks = uses;
         toks.extend(dep[..close].iter().cloned());
         toks.extend(rest);
+        let at = toks.len();
         toks.extend(dep[close..].iter().cloned());
+        toks[at].leading.splice(0..0, tail);
         Ok(Spliced {
             toks,
             split: self.lines,

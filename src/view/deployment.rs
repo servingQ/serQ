@@ -2160,8 +2160,16 @@ const BACK_DROP: f64 = 26.0;
 const CACHE_ROOM: f64 = 20.0;
 /// Baseline-to-baseline for the stacked pool options.
 const NOTE_LINE: f64 = 11.0;
-/// Characters of a pool's queue keys a label writes before it cuts them.
+/// Characters of a pool's queue keys a label writes before it cuts them,
+/// and of a constant's definition the legend writes.
 const QUEUE_KEYS_MAX: usize = 40;
+/// Characters of a constant's comment the legend writes before it cuts it.
+const DOC_MAX: usize = 64;
+/// The legend: its room under the figure, the room between its columns,
+/// and its baseline-to-baseline.
+const LEGEND_GAP: f64 = 18.0;
+const LEGEND_COL_GAP: f64 = 10.0;
+const LEGEND_LINE: f64 = 11.0;
 /// A framed station: the room above its glyph for its name, its margin,
 /// and the height of one resident pool's row under it.
 const FRAME_HEAD: f64 = 26.0;
@@ -3373,8 +3381,102 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
         TextSize::Normal,
     );
 
+    // under it all, outside the server's frame: what the program calls
+    // the numbers its labels print
+    legend(p, &mut f);
     f.fit(MARGIN);
     f
+}
+
+/// The legend: each constant the program declares (`Program::consts`),
+/// the deployment's and then the workload's under their file's heading,
+/// one row each: its name, its value, where the value comes from and the
+/// comment on its line. A label prints a constant's value, folded
+/// (`cap 160000`); the legend is where the value is named.
+fn legend(p: &Program, f: &mut Figure) {
+    if p.consts.is_empty() {
+        return;
+    }
+    let mut rows: Vec<(Option<&str>, [String; 4])> = vec![];
+    for (side, heading) in [(Side::Server, "deployment"), (Side::Workload, "workload")] {
+        let mut first = true;
+        for c in p.consts.iter().filter(|c| c.side == side) {
+            if first {
+                rows.push((Some(heading), Default::default()));
+                first = false;
+            }
+            let written = c.written.as_deref().map(|w| cut_short(w, QUEUE_KEYS_MAX));
+            let source = match (&c.arg, written) {
+                (Some(a), Some(w)) if a.supplied => format!("(--{}; {w} in the program)", a.key),
+                (Some(a), Some(w)) => format!("= {w} (--{})", a.key),
+                (Some(a), None) => format!("(--{})", a.key),
+                (None, Some(w)) => format!("= {w}"),
+                (None, None) => String::new(),
+            };
+            let doc = c
+                .doc
+                .as_deref()
+                .map_or(String::new(), |d| cut_short(d, DOC_MAX));
+            rows.push((
+                None,
+                [c.name.clone(), crate::ir::show_num(c.value), source, doc],
+            ));
+        }
+    }
+    // a column's x is the one before it and its widest, and the gap; an
+    // empty column takes no room
+    let size = TextSize::Small;
+    let mut xs = [MARGIN; 4];
+    for k in 1..4 {
+        let widest = rows
+            .iter()
+            .map(|(_, r)| size.width_of(&r[k - 1]))
+            .fold(0.0, f64::max);
+        xs[k] = xs[k - 1]
+            + if widest > 0.0 {
+                widest + LEGEND_COL_GAP
+            } else {
+                0.0
+            };
+    }
+    f.fit(0.0);
+    let top = f.height + LEGEND_GAP;
+    let mut y = top;
+    for (heading, row) in rows {
+        if let Some(h) = heading {
+            // a file's heading, set off from the other file's rows
+            if y > top {
+                y += LEGEND_LINE / 2.0;
+            }
+            f.text(pt(MARGIN, y), h, Anchor::Start, TextSize::Normal);
+            y += LEGEND_LINE + 2.0;
+            continue;
+        }
+        for (k, text) in row.into_iter().enumerate() {
+            if text.is_empty() {
+                continue;
+            }
+            // the name and its value are the row's; where it comes from
+            // and what it is are notes on them
+            if k < 2 {
+                f.text(pt(xs[k], y), text, Anchor::Start, size);
+            } else {
+                f.note(pt(xs[k], y), text, Anchor::Start);
+            }
+        }
+        y += LEGEND_LINE;
+    }
+}
+
+/// `s`, or its first `max` characters cut at a space, not inside a name or
+/// a number, and ` …` after them: a label says it short, the program in full.
+fn cut_short(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let cut: String = s.chars().take(max).collect();
+    let cut = cut.rsplit_once(' ').map_or(cut.as_str(), |(head, _)| head);
+    format!("{} …", cut.trim_end())
 }
 
 /// A pool rule's keys as the program reads them, comma-separated.
@@ -3399,15 +3501,7 @@ fn pool_notes(p: &Program, i: usize, cached: bool) -> Vec<String> {
     // key the IR writes out whole (a `def` inlined) is cut short: the
     // program says it in full
     if let Some(keys) = &pool.queue {
-        let all = show_keys(p, keys);
-        let shown = if all.chars().count() > QUEUE_KEYS_MAX {
-            let cut: String = all.chars().take(QUEUE_KEYS_MAX).collect();
-            // at a space, not inside a name or a number
-            let cut = cut.rsplit_once(' ').map_or(cut.as_str(), |(head, _)| head);
-            format!("{} …", cut.trim_end())
-        } else {
-            all
-        };
+        let shown = cut_short(&show_keys(p, keys), QUEUE_KEYS_MAX);
         parts.push(format!("queue by ({shown})"));
     }
     if let Some(dt) = pool.queue_every {

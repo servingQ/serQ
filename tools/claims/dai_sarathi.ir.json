@@ -351,5 +351,46 @@
         ]
       }
     }
+  ],
+  "consts": [
+    {
+      "name": "bmax",
+      "side": "Server",
+      "value": 128.0,
+      "doc": "token budget b_max"
+    },
+    {
+      "name": "c",
+      "side": "Server",
+      "value": 1128.0,
+      "doc": "t_b = c + a ceil(b / b0), 10 µs"
+    },
+    {
+      "name": "a",
+      "side": "Server",
+      "value": 3547.0
+    },
+    {
+      "name": "b0",
+      "side": "Server",
+      "value": 128.0,
+      "doc": "b0 divides b_max (the paper's Assumption 1)"
+    },
+    {
+      "name": "vp",
+      "side": "Server",
+      "value": 290.0
+    },
+    {
+      "name": "vd",
+      "side": "Server",
+      "value": 990.0
+    },
+    {
+      "name": "gap",
+      "side": "Workload",
+      "value": 46750.0,
+      "doc": "one arrival every 467.5 ms"
+    }
   ]
 }

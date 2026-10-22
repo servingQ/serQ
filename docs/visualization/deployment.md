@@ -149,6 +149,51 @@ A hold with a `growing` run caches in that pool alone. A hold without one
 caches in all its pools. The cache strip follows this behavior, rather
 than assuming every cached pool represents KV memory.
 
+## The legend
+
+A label prints a constant's value, folded: `replica.sq` writes `tokens cap
+max(running.decoding, floor((omega + beta * running.kv_decode) / a))`,
+and the figure `… floor((2e-4 + 2e-9 * running.kv_decode) / 2e-5))`. The
+legend under the figure names the numbers: each constant the program
+declares (`let`, an `args.number` input among them), the deployment's under
+`deployment` and the workload file's under `workload`, a row each, in the
+order each file declares them:
+
+```text
+deployment
+B       8       batch cap (prefilling and decoding turns)
+C       600000  KV pool, tokens
+s0      5e-3    per-turn overhead (s)
+a       2e-5    prefill compute per token (s)
+b       2e-9    prefill attention per token per context token (s)
+omega   2e-4    weights read per iteration (s)
+beta    2e-9    KV read per iteration per context token (s)
+
+workload
+Lambda  0.28    sessions per second
+maxctx  300000  half the KV pool (the server's C / 2)
+cap     24      live sessions (entry queue beyond)
+```
+
+A row is the constant's name, its value, where the value comes from, and
+the `//` comment that ends the line of its `;` (cut at 64 characters; one
+above the `let` is not its). Where it comes from says nothing for a
+constant written as one number, and otherwise:
+
+| Column | Means |
+|---|---|
+| `= blocks * bs` | the definition as written (cut at 40 characters) |
+| `(--blocks)` | an input left at its default: `--blocks` sets it |
+| `= C / 2 (--x)` | an input whose default is computed, left at it |
+| `(--max_seqs; 16 in the program)` | an input the run supplied: the value is not what the program writes |
+
+A name both files declare is one row under each, and a name one file
+declares twice is its last declaration, the one the labels after it print.
+The legend reads `consts` in the IR ([IR](../ir.md)), so a program and its
+JSON IR draw the same legend. It names the numbers, and does not say which
+of them a label was computed from: `vllm.sq`'s `cap 16` is `max_seqs` and
+its `block 16` is `bs`, and the legend lists both as 16.
+
 ## Nesting
 
 ![The paper's two-resource replica](../assets/replica.deployment.svg)

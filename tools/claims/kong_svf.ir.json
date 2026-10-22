@@ -473,5 +473,24 @@
         ]
       }
     }
+  ],
+  "consts": [
+    {
+      "name": "M",
+      "side": "Server",
+      "value": 20000.0,
+      "doc": "memory, tokens"
+    },
+    {
+      "name": "P",
+      "side": "Server",
+      "value": 2500.0,
+      "doc": "the largest peak s + o; alpha = P / M"
+    },
+    {
+      "name": "N",
+      "side": "Workload",
+      "value": 200.0
+    }
   ]
 }
