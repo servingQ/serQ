@@ -1,6 +1,8 @@
-// Dai et al., Sarathi-Serve in the basic LLM queueing model (arXiv 2504.07347),
-// as a serQ program. docs/use-cases/dai.md explains it a part at a time;
-// its workload is examples/workloads/dai_periodic.sq.
+// Dai et al., the basic LLM queueing model (arXiv 2504.07347) with
+// Sarathi-Serve's token budget and mixed batches, served in the order the
+// runs started, not Sarathi-Serve's decode first, as a serQ program.
+// docs/use-cases/dai.md explains it a part at a time; its workload is
+// examples/workloads/dai_periodic.sq.
 
 // --8<-- [start:settings]
 let bmax = 128;  // token budget b_max

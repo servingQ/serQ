@@ -387,15 +387,15 @@ $g_0 + \sum_{\ell_0 < \ell' \le \ell} \min(\mathrm{rem}_{\ell'}(k),\ B - d_{\ell
 iteration $\ell'$ lasts $\tau(\text{batch}_{\ell'})$.
 
 *Proof.* `Fill.assign_eq_fillIter` (no growing job, `engineQueuesEmpty`,
-`Fill.lean:255`) and `assign_iter_eq_fillIter` (growing jobs whose
+`Fill.lean:256`) and `assign_iter_eq_fillIter` (growing jobs whose
 allocation covers the position they reach, distinct owners, nobody
-waiting, `Fill.lean:181`): the iteration's assignment *is* `fillIter`,
+waiting, `Fill.lean:182`): the iteration's assignment *is* `fillIter`,
 which serves in order (`fillAmounts_fifo`), gives no job more than it
 wants (`fillAmounts_le_want`) and hands out the budget or all that is
 wanted (`fillAmounts_sum`). In the shape the fill is decode-first:
-`assign_decode_first` (`Fill.lean:473`) makes the iteration the fill of the
+`assign_decode_first` (`Fill.lean:475`) makes the iteration the fill of the
 residents in decode-first order, and `fillAmounts_decoders_first`
-(`Fill.lean:433`) splits that fill: the $d_\ell \le B$ decoders take one
+(`Fill.lean:435`) splits that fill: the $d_\ell \le B$ decoders take one
 token each, and the prefills have the fill of the $B - d_\ell$ they leave.
 `serve_fillAmounts` is the link to `Serve`: the fill leaves the jobs what
 `Serve.serve` leaves the residents, so `Serve`'s shape theorems hold of
@@ -410,23 +410,24 @@ arrivals, whose service capacity per slot is $B - d_\ell$ tokens and whose
 slot length is $\tau(\text{batch}_\ell)$, both functions of the state, is
 the natural extension and is a conjecture. The paper models the prefill
 stage as "a FIFO queue whose server is available a fraction $1 - \rho_D$
-of the time" (`main.tex:318-320`, verbatim); identifying that server with
+of the time" (`main.tex:328-329`, verbatim); identifying that server with
 this queue at the constant per-slot capacity $(1 - \rho_D) B$ is this
 document's reading. The decode-first order is the invariant `Shape`
-(`Serve.lean:33-36`, decoders before prefills in the residents' list),
+(`Serve.lean:34-37`, decoders before prefills in the residents' list),
 carried by `shape_append_prefill` under FIFO admission and, for one
 iteration of `Exec`, by `fill_preserves_shape`, and broken by preemption,
 which re-queues a resident. That a path keeps `Exec`'s job list in the
 shape is a hypothesis, not a theorem, and it fails for an engine whose
 requests hold no memory: none is admitted, so a decode joins behind the
 prompts that arrived while it prefilled (`dai_sarathi.sq`,
-`DaiChain.absSlot_leaves_shape`). The paper's proof marker on its
-decode-first sentence (`main.tex:317`, `\provedby{serve_preserves_shape,
+`DaiChain.absSlot_leaves_shape`; which of the program and the language
+changes is #734). The paper's proof marker on its
+decode-first sentence (`main.tex:326`, `\provedby{serve_preserves_shape,
 …}`) holds of one iteration of `Exec` under that hypothesis. The
 hypotheses are the theorems': a chunk cap breaks the order
 (`chunk_cap_breaks_fill_shape`), and an iteration whose growth crosses a
 block boundary or that admits while filling is not yet covered by
-`Fill.lean` (`Fill.lean:30-33`). `vllm.sq`'s decodes grow `kv` by a block
+`Fill.lean` (`Fill.lean:31-34`). `vllm.sq`'s decodes grow `kv` by a block
 every `bs` tokens, so the proposition covers its iterations between
 boundary crossings, not all of them.
 

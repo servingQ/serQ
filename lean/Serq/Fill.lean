@@ -17,8 +17,9 @@ The fill is `Serve.serve` (`Serq/Serve.lean`) on the engine's jobs. `Serve`
 sees a job as the prefill work it has left, `0` for a decode (`prefillLeft`).
 Without a chunk cap the fill leaves the jobs what `Serve.serve` leaves them
 (`serve_fillAmounts`), with a cap `c` what `Serve.serveCap c` does
-(`serveCap_fillAmounts`), for jobs that hold work (every job on a machine
-`exec` reaches). So `Serve`'s theorems hold of `Exec`'s jobs: while every
+(`serveCap_fillAmounts`), for jobs that hold work (`prefillLeft` says why
+every job on a machine `exec` reaches does; this is read off `exec`, not
+proved). So `Serve`'s theorems hold of `Exec`'s jobs: while every
 decoding job is ahead of every prefilling one (`Serve.Shape`), the fill in
 the jobs' order is the fill in decode-first order
 (`fillAmounts_eq_decode_first`), each of the first decoders takes one token
@@ -303,8 +304,9 @@ theorem assign_eq_fillIter (hD : D.only = none) (m : Machine) (hq : engineQueues
 a decode. `Serve` cannot tell a decode from a prefill with nothing left, nor
 a decode with a token left from one with none, so the theorems below take
 every job to hold work (`0 < j.left`). Every job on a machine `exec` reaches
-does: a run of zero work never becomes a job (`exec`, `.run`), and
-`endIteration` and preemption drop a job with nothing left. -/
+does: a run of zero work never becomes a job (`exec`, `.run`),
+`endIteration` drops a job with nothing left, and preemption only removes
+jobs. This is read off `exec`, not proved: `Inv` does not carry it. -/
 def prefillLeft (j : Job) : ℕ := if j.mode = .decode then 0 else j.left
 
 /-- The jobs in decode-first order: decodes first, each group in its order. -/
@@ -376,7 +378,7 @@ theorem decodeFirst_prefillLeft (js : List Job) (hpos : ∀ j ∈ js, 0 < j.left
   · apply List.filter_congr; intro j hj; simp [key j hj]
   · apply List.filter_congr; intro j hj; simp [key j hj]
 
-/-- In the shape, admission order is decode-first order. -/
+/-- In the shape, the jobs' order is decode-first order. -/
 theorem decodeFirstJobs_eq_self :
     ∀ (js : List Job), (∀ j ∈ js, 0 < j.left) → Serve.Shape (js.map prefillLeft) →
       decodeFirstJobs js = js
@@ -410,7 +412,7 @@ theorem decodeFirstJobs_eq_self :
       simp only [ne_eq] at h1
       rw [h0, h1]; rfl
 
-/-- **Admission order is decode-first, in `Exec`** (`Serve.serve_eq_decode_first`
+/-- **The jobs' order is decode-first, in `Exec`** (`Serve.serve_eq_decode_first`
 for the fill): in the shape, the greedy fill of the jobs in their order is the
 greedy fill in decode-first order. -/
 theorem fillAmounts_eq_decode_first (js : List Job) (left : ℕ) (hpos : ∀ j ∈ js, 0 < j.left)

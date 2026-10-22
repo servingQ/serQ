@@ -20,9 +20,11 @@ The operating point of the program is the paper's point C (§6.2): CodeLlama-34B
 ## The system in serQ
 
 `examples/papers/dai_sarathi.sq` is the basic model of §3.1 with
-Sarathi-Serve's scheduler (§4: decode first, chunked prefill, mixed batches)
-at operating point C. The sections below build it a part at a time: what the
-paper's model says, what the program needs for it, and how serQ writes it.
+Sarathi-Serve's token budget and mixed batches (§4) at operating point C.
+Its order is `admission`, which on this engine is not Sarathi-Serve's
+decode first (below). The sections below build it a part at a time: what
+the paper's model says, what the program needs for it, and how serQ writes
+it.
 
 ### Settings
 
@@ -47,9 +49,15 @@ while every decode is ahead of every prefill (`Exec.assign_decode_first`),
 but this engine's requests hold no memory, so none is admitted and the
 residents are served in the order their runs started. A request's decode
 starts when its prefill ends, behind the prompts that arrived while it
-prefilled, where Sarathi-Serve would serve it first
-(`DaiChain.absSlot_leaves_shape`). The propositions below are proved of the
-program as it runs, in this order.
+prefilled, where Sarathi-Serve would serve it first: with the periodic
+workload below, session 96's decode gets no token for nine iterations
+from $t = 4\,581\,500$, behind the prompt of session 97, which arrived as
+its prefill ended; on the random-arrival chain of the stability proof the
+same happens (`DaiChain.absSlot_leaves_shape`). `advance running decode
+first;` would be Sarathi-Serve's order, but the claim generator reads only
+an engine that serves in admission order, so the proofs below would not
+cover it. The propositions below are proved of the program as it runs,
+in this order.
 
 ```serq
 --8<-- "examples/papers/dai_sarathi.sq:engine"

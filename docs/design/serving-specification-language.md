@@ -168,9 +168,11 @@ running request: `decoding` and `admission`. That is the Serve block's
 signature on this target (§2). The scenarios of `tools/oracle/serve/` are
 chosen so that each order gives a different answer from FCFS in the
 interpreter, and a control in admission order checks the PRIORITY plumbing.
-Decode-first is not among them: in this engine it is admission order
-already (`Serq/Serve.lean`, `serve_eq_decode_first`), and no random case
-found it differ.
+Decode-first is not among them: in this engine, whose requests hold their
+KV blocks and join the running list as prefills, it is admission order
+already while every decoding request is ahead of every prefilling one
+(`Serq/Serve.lean`, `serve_eq_decode_first`; for an iteration of `Exec`,
+`Exec.assign_decode_first`), and no random case found it differ.
 
 Run on vLLM at the pin (`0.30.1rc1.dev215+g0c87a197b`, CPU scheduler, the
 oracle's fake model runner), the four scenarios agree with the interpreter,
@@ -324,7 +326,8 @@ them.
   compiler reads. A target's knowledge stays in its backend (`serq target`)
   until an architecture can be declared in serQ itself.
 - **Decode-first is not a 4b scenario.** It was the first order tried. In
-  this engine it equals admission order (`serve_eq_decode_first`), and 4000
+  this engine it equals admission order while the decoders are ahead of
+  the prefills (`serve_eq_decode_first`, `Exec.assign_decode_first`), and 4000
   random cases found no difference, so it would test nothing the FCFS
   oracle does not.
 - **Not yet the interface, nor an architecture without a backend.** Both

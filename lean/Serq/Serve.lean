@@ -3,8 +3,9 @@
 
 A decode-first replica serves prefill "from the token budget the decode
 batch leaves": decoding turns first, prefill after. vLLM
-v1 serves its running requests in admission order (`scheduler.py`,
-`running` list) and gives each `min(remaining, budget left)` tokens. The
+v1 serves its running requests in admission order (`scheduler.py:626`,
+`running` list) and gives each `min(remaining, budget left)` tokens
+(`scheduler.py:670-679`, at the pin `0c87a197`). The
 two rules coincide whenever every decoding resident precedes every
 prefilling one. This module proves that a greedy step preserves that
 shape when a prefill may take the whole budget left (no per-request chunk
