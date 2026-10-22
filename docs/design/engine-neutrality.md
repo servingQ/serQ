@@ -71,8 +71,10 @@ engine's default.
 each (vllm-rbln, FasterTransformer as Dai et al. model it) and neither
 escapes it for SGLang. `exclusive prefill` selects one prefill; three
 two-token prompts on a budget of eight run in three iterations, where SGLang
-runs one. The program (the `iter` events of `serq run --log` list its
-iterations):
+runs one. The program, in the notation of the time, and its iterations
+(`SERQ_TRACE_ITER=1 serq run` printed these then; since #728 the `iter`
+events of `serq run --log` carry them, and `tools/serq_iter_trace.py`
+prints these lines from them):
 
 ```
 pool reqs { cap 8; admit via engine; }

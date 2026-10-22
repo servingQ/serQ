@@ -118,49 +118,47 @@ pub fn run_example(path: &str, ov: &serq::Overrides) -> Result<serq::Report, Str
     serq::run_ir(&example(path, ov)?, workload.parent())
 }
 
-/// The iterations of a logged run, one line each in the form the removed
-/// `SERQ_TRACE_ITER` switch printed (#728), so the schedules the tests were
-/// written in stay as written: `ITER t s:turn:mn` per request of the batch,
-/// `m` its mode (`p` prefill, `d` decode) and `n` its tokens (the `iter`
-/// event's `each`). The turn is the session's last `turn` (a leg takes its
-/// session's when it is forked), the mode its request's last `status`.
+/// The iterations of a logged run, one line each, as
+/// `tools/serq_iter_trace.py --block BLOCK` prints them (the form the
+/// removed `SERQ_TRACE_ITER` switch printed, #728): `ITER t s:turn:mn` per
+/// request of the batch, `m` its mode (`p` prefill, `d` decode) and `n` its
+/// tokens (the `iter` event's `each`), then ` | used U cached C`, the
+/// engine's memory in blocks of `block` units. The tests run the tool, not
+/// a copy of it: it is what a diff against `ORACLE_TRACE_ITER` runs
+/// (serving-queue-theory's `scripts/exp/first_divergence.sh`), and these
+/// schedules check it.
+pub fn iter_trace(log: &serq::engine::log::Log, block: f64) -> Vec<String> {
+    use std::io::Write as _;
+    use std::process::Stdio;
+    let tool = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tools/serq_iter_trace.py");
+    let mut child = Command::new("python3")
+        .arg(&tool)
+        .args(["-", "--block", &block.to_string()])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap_or_else(|e| panic!("python3 {}: {e}", tool.display()));
+    // a tool that stops before reading it all says why on stderr, below
+    let _ = child.stdin.take().unwrap().write_all(log.json().as_bytes());
+    let out = child.wait_with_output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}: {}",
+        tool.display(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8(out.stdout)
+        .unwrap()
+        .lines()
+        .map(str::to_owned)
+        .collect()
+}
+
+/// `iter_trace`'s lines without the memory after ` | `: the schedule.
 pub fn iter_lines(log: &serq::engine::log::Log) -> Vec<String> {
-    use serq::engine::log::{EventKind, Who};
-    use serq::frontend::ast::RunMode;
-    use std::collections::HashMap;
-    let key = |w: &Who| (w.serial, w.leg);
-    let mut turn: HashMap<(u64, Option<u32>), u32> = HashMap::new();
-    let mut mode: HashMap<(u64, Option<u32>), RunMode> = HashMap::new();
-    let mut lines = vec![];
-    for e in &log.events {
-        match &e.kind {
-            EventKind::Turn { who, turn: n } => {
-                turn.insert(key(who), *n);
-            }
-            EventKind::Fork { who } => {
-                let n = turn.get(&(who.serial, None)).copied().unwrap_or(0);
-                turn.insert(key(who), n);
-            }
-            EventKind::Status { who, mode: m, .. } => {
-                mode.insert(key(who), *m);
-            }
-            EventKind::Iter { reqs, each, .. } => {
-                let parts: Vec<String> = reqs
-                    .iter()
-                    .zip(each)
-                    .map(|(w, n)| {
-                        let m = match mode.get(&key(w)) {
-                            Some(RunMode::Decode) => "d",
-                            _ => "p",
-                        };
-                        let tn = turn.get(&key(w)).copied().unwrap_or(0);
-                        format!("{}:{tn}:{m}{n}", w.serial)
-                    })
-                    .collect();
-                lines.push(format!("ITER {:.4} {}", e.t, parts.join(" ")));
-            }
-            _ => {}
-        }
-    }
-    lines
+    iter_trace(log, 1.0)
+        .iter()
+        .map(|l| l.split(" | ").next().unwrap().to_owned())
+        .collect()
 }

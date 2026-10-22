@@ -237,9 +237,9 @@ fn an_iteration_gives_each_request_its_tokens_its_budget_and_its_memory() {
 
 /// The budget is the `tokens cap` as each iteration reads it, so it is in
 /// the event and not the header: `replica.sq`'s cap is `max(running.decoding,
-/// floor((omega + beta * running.kv_decode) / a))`, 10 until the decoders'
-/// context passes 10⁴ tokens (from t ≈ 20.7 at the default seed) and more
-/// after.
+/// floor((omega + beta * running.kv_decode) / a))`, `floor(omega / a)` = 10
+/// until the decoders' context passes 10⁴ tokens (first at t = 20.66 at the
+/// default seed) and more after (up to 12 by t = 40).
 #[test]
 fn the_budget_is_read_per_iteration() {
     let (p, base) = load(&serq::program_path("replica"), common::horizon(40.0));
@@ -257,7 +257,8 @@ fn the_budget_is_read_per_iteration() {
         .collect();
     let lo = budgets.iter().copied().fold(f64::INFINITY, f64::min);
     let hi = budgets.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-    assert!(lo.is_finite() && lo < hi, "{lo} .. {hi}");
+    assert_eq!(lo, 10.0, "floor(omega / a)");
+    assert!(lo < hi, "{lo} .. {hi}");
 }
 
 /// A leg (`fork`) shares its session's serial: the log tells them apart

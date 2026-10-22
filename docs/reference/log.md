@@ -97,7 +97,7 @@ report's `arrivals`. The keys are short because the events are many.
 | `revoke` | `s`, `pool` | its lease of `pool` is taken (`preempt leases by`) |
 | `status` | `s`, `r`, `stage`, `status`, `mode` | its engine request `r` (its `r`-th call, from 1) to engine `stage` enters [`status`](cli.md#request-statuses) (`waiting`, `waiting_for_kv`, `running`, `preempted`, `finished`), or its `mode` there changes: `prefill` or `decode` while `running`, absent otherwise |
 | `transfer` | `s`, `r`, `stage`, `kind`, `at` | a KV move of that request: `kind` `load`, `save` or `send`, `at` `registered` (it exists: a load or save begun, a send its request's end left), `start` (its copy runs) or `done` (copied, read, or expired) |
-| `iter` | `stage`, `dur`, `tokens`, `budget`, `reqs`, `each`, `used`, `cached` | an iteration of engine `stage` starts: it lasts `dur`, schedules `tokens` of its `budget` (the engine's `tokens cap` as this iteration reads it, `null` without one), over the requests `reqs` in the batch's order, each `[s]` for a session's or `[s, leg]` for a leg's. `each` is the tokens of each of `reqs`, in its order (a decode's 1, a prefill's chunk), and sums to `tokens`. `used` and `cached` are the units allocated and cached in the engine's memory (its device's pool, `pool kv on gpu`) once the iteration is scheduled: `used(p)`, and what the report's `mean_used` and `mean_cached` average. They are units, not blocks (divide by the pool's `block` for blocks), and absent for an engine with no memory |
+| `iter` | `stage`, `dur`, `tokens`, `budget`, `reqs`, `each`, `used`, `cached` | an iteration of engine `stage` starts: it lasts `dur`, schedules `tokens` of its `budget` (the engine's `tokens cap` as this iteration reads it, `null` when it is `inf`), over the requests `reqs` in the batch's order, each `[s]` for a session's or `[s, leg]` for a leg's. `each` is the tokens of each of `reqs`, in its order (a decode's 1, a prefill's chunk), and sums to `tokens`. `used` and `cached` are the units allocated and cached in the engine's memory (its device's pool, `pool kv on gpu`) once the iteration is scheduled: `used(p)`, and what the report's `mean_used` and `mean_cached` average. They are units, not blocks (divide by the pool's `block` for blocks), and absent for an engine with no memory |
 | `end` | `s` (`leg`) | the session (the leg) ends |
 
 A request to an engine is its session's `wait` and `admit` at the engine's
@@ -126,6 +126,15 @@ is its last `status`'s `mode`.
 
 ```bash
 jq -c '.events[] | select(.ev == "iter") | [.t, .stage, .reqs, .each, .used, .cached]' log.json
+```
+
+The same, in the form `tools/vllm_replay_oracle.py` prints vLLM's
+scheduler steps with `ORACLE_TRACE_ITER=1`, so the two diff line by line
+(`ITER t s:turn:mn … | used U cached C`, the memory in blocks of
+`--block` units):
+
+```bash
+python3 tools/serq_iter_trace.py log.json --block 16
 ```
 
 Not logged, since no time passes or no session is there: a run of no work

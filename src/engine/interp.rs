@@ -5639,7 +5639,8 @@ impl<'p> Interp<'p> {
         self.served[st] += ntok;
         if self.log.is_some() {
             // each request with its tokens, in one pass so the two lists
-            // line up; the memory pool as the iteration leaves it, in units
+            // line up; the memory pool once the iteration is scheduled, in
+            // units
             let (reqs, each): (Vec<Who>, Vec<f64>) = assign
                 .iter()
                 .filter_map(|&(id, t)| {

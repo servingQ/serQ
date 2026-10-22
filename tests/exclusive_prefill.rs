@@ -52,14 +52,26 @@ fn batch(n: usize) -> String {
     format!("workload {{ arrive batch({n}); session {{ turn; end; }} }}")
 }
 
-/// The log of a run of `src` with `AB` to 20, in which both sessions arrive
-/// and end.
+/// The log of a run of `src`, one of `source`'s, with `AB` to 20, in which
+/// both sessions arrive and end, and every iteration reads the budget of
+/// `source`'s `tokens cap 4`.
 fn logged(name: &str, src: &str) -> Log {
     let p = common::compile(&common::main_source(src), AB, &common::horizon(20.0))
         .unwrap_or_else(|e| panic!("{name}: {e}"));
     let r = run_ir_logged(&p, None, usize::MAX).unwrap_or_else(|e| panic!("{name}: {e}"));
     assert_eq!((r.arrivals, r.ended), (2, 2), "{name}");
-    r.log.unwrap()
+    let log = r.log.unwrap();
+    let budgets: Vec<f64> = log
+        .events
+        .iter()
+        .filter_map(|e| match &e.kind {
+            EventKind::Iter { budget, .. } => Some(*budget),
+            _ => None,
+        })
+        .collect();
+    assert!(!budgets.is_empty(), "{name}: no iteration");
+    assert!(budgets.iter().all(|&b| b == 4.0), "{name}: {budgets:?}");
+    log
 }
 
 /// Its iterations (`common::iter_lines`).
@@ -95,13 +107,24 @@ fn waiting_prefill_replaces_decodes_and_gets_the_full_budget() {
             "ITER 3.0000 0:1:d1",
         ]
     );
-    // `kv` as each iteration leaves it: A's 2 at t=0; at t=1 A's tentative
-    // decode has grown its hold to 3 before B's prefill displaced it, and B
-    // holds its 4: 7; B ended at t=2 and its 4 are cached, A decodes within
-    // its 3; at t=3 A grows to 4.
+    // `kv` once each iteration is scheduled, in units: A's 2 at t=0; at
+    // t=1 A's tentative decode has grown its hold to 3 before B's prefill
+    // displaced it, and B holds its 4: 7; B ended at t=2 and its 4 are
+    // cached, A decodes within its 3; at t=3 A grows to 4.
     assert_eq!(
         memory("takeover", &src),
         [(2.0, 0.0), (7.0, 0.0), (3.0, 4.0), (4.0, 4.0)]
+    );
+    // The same as `tools/vllm_replay_oracle.py`'s `ORACLE_TRACE_ITER`
+    // lines put it, in blocks: of 2 units, whatever the pool's `block`.
+    assert_eq!(
+        common::iter_trace(&logged("takeover", &src), 2.0),
+        [
+            "ITER 0.0000 0:1:p2 | used 1 cached 0",
+            "ITER 1.0000 1:1:p4 | used 3.5 cached 0",
+            "ITER 2.0000 0:1:d1 | used 1.5 cached 2",
+            "ITER 3.0000 0:1:d1 | used 2 cached 2",
+        ]
     );
     let ov = common::horizon(20.0);
     let r = common::run(&common::main_source(&src), AB, &ov).unwrap();

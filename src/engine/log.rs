@@ -88,8 +88,8 @@ pub enum EventKind {
         stage: usize,
         dur: f64,
         tokens: f64,
-        /// The engine's `tokens cap` as this iteration read it; infinite
-        /// without one.
+        /// The engine's `tokens cap` as this iteration read it, infinite
+        /// when it is `inf`.
         budget: f64,
         reqs: Vec<Who>,
         /// The tokens of each of `reqs`, in its order: a decode's 1, a
@@ -436,12 +436,12 @@ mod tests {
         );
     }
 
-    /// An engine without a `tokens cap` has no budget to write but `null`
-    /// (the report's convention for a value that is not finite), and one
-    /// without a memory pool writes no `used` or `cached`: not 0, which
+    /// An engine whose `tokens cap` is `inf` has no budget to write but
+    /// `null` (the report's convention for a value that is not finite), and
+    /// one without a memory pool writes no `used` or `cached`: not 0, which
     /// would claim an empty pool.
     #[test]
-    fn an_iteration_without_a_cap_or_memory() {
+    fn an_iteration_with_an_infinite_cap_and_no_memory() {
         let mut l = Log {
             stages: vec![("E".into(), None)],
             pools: vec![],

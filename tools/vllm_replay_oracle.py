@@ -177,7 +177,8 @@ def main():
         # per step: each request's tokens and the block pool's used and
         # cached blocks. serQ's counterpart is the log's `iter` event
         # (`serq run --log`): `each`, and `used`/`cached` in units, the
-        # blocks times the pool's `block`.
+        # blocks times the pool's `block`; `tools/serq_iter_trace.py
+        # LOG --block 16` prints it as these lines.
         if os.environ.get("ORACLE_TRACE_ITER"):
             parts = []
             for rid in ids:
