@@ -26,8 +26,8 @@ its hold to the position it will reach. An attempt that schedules no token
 and preempts nobody waits for the next event without running a timed
 iteration. The server calls it with a
 [request](../language.md#an-engines-request), `ENGINE (input, output);`,
-whose state it keeps, and so does a queue's entry, its queue's engine as
-`Q (prompt, 1);`.
+whose state it keeps; a queue's entry calls its queue's engine the same
+way, `Q (prompt, 1);`.
 
 An engine cannot be named `engine`: it is named for what it models (`vllm`,
 `sglang`, `tgi`) or `llm`. Inside a [`queue`](../language.md#queues), `device

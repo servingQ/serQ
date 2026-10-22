@@ -1369,9 +1369,9 @@ report too, one per admission.
 The server, a gateway's `route` and the session may not run an engine's
 prefill or decode, nor hold a pool an engine admits (`pool P on E`, `pool
 kv on E.gpu`, an engine's capacity); each is refused with what to write
-instead: the `taking` and the call, or in the session a turn (#539). A
-pool no engine admits (a top-level pool, one `on DEVICE`) is held
-anywhere, around the call too, as
+instead: the `taking` and the call, or in the workload the session's turn
+(#539). A pool no engine admits (a top-level pool, one `on DEVICE`) is
+held anywhere, around the call too, as
 `examples/single-turn/fastertransformer.sq` holds its `reqs`. A queue's
 entries run their own engine and no other. A queue's engine admits by
 its `taking` as any engine does, and the queue's entries call it, `E

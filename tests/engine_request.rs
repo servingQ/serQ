@@ -556,10 +556,12 @@ fn a_session_does_not_call_an_engine() {
 
 /// Each refusal to run or call an engine names a spelling its caller
 /// accepts (#510): the server and a queue's entry call the engine, the
-/// session makes a turn. The `prefill` statement's help named an engine's
-/// `request`, which #592 removed, and `run E prefill (…)`, which the server
-/// may not write; in the session the helps named the call or a queue's
-/// entry, which a session may not make (`a_session_does_not_call_an_engine`).
+/// session makes a turn, and the workload's `init` and `turn` blocks, which
+/// set sizes, leave the turn to the session. The `prefill` statement's help
+/// named an engine's `request`, which #592 removed, and `run E prefill
+/// (…)`, which the server may not write; in the workload the helps named the
+/// call or a queue's entry, which it may not make
+/// (`a_session_does_not_call_an_engine`).
 #[test]
 fn a_refusal_names_what_its_caller_may_write() {
     let kernel = |e: &str| {
@@ -609,9 +611,34 @@ fn a_refusal_names_what_its_caller_may_write() {
         assert!(e.contains(said), "{e}");
         assert!(e.contains("make a turn, `turn;`"), "{e}");
         assert!(!e.contains("`llm (input, output);`"), "{e}");
+        // the engine's admission is the deployment's, not the workload's
+        assert!(!e.contains("taking"), "{e}");
         kernel(&e);
     }
-    // a queue's engine: the server calls an entry, the session makes a turn
+    // `init` and `turn`: the session's turn, and no stage's run, since the
+    // blocks set sizes and a run's work is a cost
+    let sizes = |block: &str| {
+        format!("the `{block}` block sets sizes, and the `session` makes a turn, `turn;`")
+    };
+    for body in ["prefill (6);", "llm (n, o);"] {
+        for (block, workload) in [
+            (
+                "turn",
+                WORKLOAD.replace("set o = 3; }", &format!("set o = 3; {body} }}")),
+            ),
+            (
+                "init",
+                WORKLOAD.replace("turn {", &format!("init {{ {body} }} turn {{")),
+            ),
+        ] {
+            let e = refusal_with(&program(), &workload);
+            assert!(e.contains(&sizes(block)), "{e}");
+            assert!(!e.contains("`llm (input, output);`"), "{e}");
+            assert!(!e.contains("`run S "), "{e}");
+            kernel(&e);
+        }
+    }
+    // a queue's engine: the server calls an entry, the workload makes a turn
     let queue = "`P (…)` is a request to queue `P`'s engine";
     let e = refusal_with(&prefiller("P (prompt, 1);", "P (n, 1);"), PREFILLS);
     assert!(e.contains(queue), "{e}");
@@ -624,6 +651,67 @@ fn a_refusal_names_what_its_caller_may_write() {
     assert!(e.contains(queue), "{e}");
     assert!(e.contains("make a turn, `turn;`"), "{e}");
     assert!(!e.contains("`P.VERB"), "{e}");
+    let turn = PREFILLS.replace("set n = 6; }", "set n = 6; P (n, 1); }");
+    let e = refusal_with(
+        &prefiller("P (prompt, 1);", "P[serial].prefill (n);"),
+        &turn,
+    );
+    assert!(e.contains(queue), "{e}");
+    assert!(e.contains(&sizes("turn")), "{e}");
+    assert!(!e.contains("`P.VERB"), "{e}");
+    // a queue's pool: the server calls an entry, the session makes a turn
+    let pool = "`kv` is a pool of queue `P`, and only `P`'s entries hold it";
+    let e = refusal_with(
+        &prefiller(
+            "P (prompt, 1);",
+            "hold P[0].kv (cost(P[0].kv, 1)) { P[serial].prefill (n); }",
+        ),
+        PREFILLS,
+    );
+    assert!(e.contains(pool), "{e}");
+    assert!(e.contains("`P.VERB (…);`"), "{e}");
+    let session = PREFILLS.replace(
+        "send (n); }",
+        "send (n); session { hold P[0].kv (1) { turn; } } }",
+    );
+    let e = refusal_with(
+        &prefiller("P (prompt, 1);", "P[serial].prefill (n);"),
+        &session,
+    );
+    assert!(e.contains(pool), "{e}");
+    assert!(e.contains("make a turn, `turn;`"), "{e}");
+    assert!(!e.contains("`P.VERB"), "{e}");
+}
+
+/// The workload's `init` and `turn` blocks call no queue's entry and make
+/// no turn, as the session calls none (#510): both linked to an internal
+/// error, since only the session's entries are expanded and only its turns
+/// get the server spliced in.
+#[test]
+fn init_and_turn_neither_call_an_entry_nor_make_a_turn() {
+    let src = prefiller("P (prompt, 1);", "P[serial].prefill (n);");
+    compiled_with(&src, PREFILLS);
+    for (body, said) in [
+        (
+            "P[0].prefill (n);",
+            "queue entries belong in `server`; a session describes turns with `turn;`",
+        ),
+        (
+            "turn;",
+            "`turn` is the session's: the `turn` block sets sizes, and the `session` makes a turn",
+        ),
+    ] {
+        let workload = PREFILLS.replace("set n = 6; }", &format!("set n = 6; {body} }}"));
+        let e = refusal_with(&src, &workload);
+        assert!(e.contains(said), "{e}");
+        assert!(!e.contains("survived parsing"), "{e}");
+    }
+    let workload = PREFILLS.replace("turn {", "init { turn; } turn {");
+    let e = refusal_with(&src, &workload);
+    assert!(
+        e.contains("`turn` is the session's: the `init` block"),
+        "{e}"
+    );
 }
 
 // Where a request may not be.
