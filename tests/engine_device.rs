@@ -903,6 +903,14 @@ fn an_aggregate_index_is_no_register() {
         engine(ok).replace("tokens cap 8;", "tokens cap 8; state q = 0; state s = n;")
     );
     refused(&src, &format!("`sum q in`: `q` {refusal}"));
+    // the bug as found: an array size is folded by the parser, which knows
+    // no register, and reached the linker as a number, so it linked (#561)
+    let src = format!(
+        "stage colo[sum r in 2 (1)] : delay;\n{}",
+        engine("set r = r; advance running; admit waiting while (running.preempted == 0);")
+            .replace("tokens cap 8;", "tokens cap 8; state r = 0;")
+    );
+    refused(&src, &format!("`sum r in`: `r` {refusal}"));
 }
 
 #[test]

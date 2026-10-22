@@ -238,6 +238,20 @@ fn a_leg_may_only_run_the_request() {
 const PROMPT10: &str =
     "workload { arrive batch(1); init { set prompt = 10; } send (prompt); session { turn; end; } }";
 
+/// `push` with a leg that ends a second after its prefill, its relation
+/// closed by `ttl` (`, ttl = 0.5`, or nothing).
+fn leg_outlives_prefill(ttl: &str) -> String {
+    let route = "set t0 = now;
+         fork { P.prefill (prompt); run gate (cost(gate, 1)); }
+         D.decode (prompt) from P;
+         observe done_at = now - t0;
+         observe loaded_at = D.load_done - t0;";
+    push(route, 100, 1.0).replace(
+        "share = share.maxmin);",
+        &format!("share = share.maxmin{ttl});\n        stage gate : delay;"),
+    )
+}
+
 /// A leg whose send expired (`ttl = 0.5`) before it ended (at 11, a second
 /// after its prefill): its session's load, waiting for a send no leg is
 /// left to register, does not wait for ever (PR #719's first review) and
@@ -246,17 +260,7 @@ const PROMPT10: &str =
 /// its decode at 12-13, where the read would have answered at 15.
 #[test]
 fn a_load_whose_send_expired_computes_the_prompt_itself() {
-    let route = "set t0 = now;
-         fork { P.prefill (prompt); run gate (cost(gate, 1)); }
-         D.decode (prompt) from P;
-         observe done_at = now - t0;
-         observe loaded_at = D.load_done - t0;";
-    let src = |ttl: &str| {
-        push(route, 100, 1.0).replace(
-            "share = share.maxmin);",
-            &format!("share = share.maxmin{ttl});\n        stage gate : delay;"),
-        )
-    };
+    let src = leg_outlives_prefill;
     let r = run(&src(", ttl = 0.5"), PROMPT10);
     assert_eq!(samples(&r, "done_at"), [13.0]);
     assert_eq!(r.stage("D.nic").map(|s| s.completed), Some(0));
@@ -299,6 +303,30 @@ fn a_load_whose_send_expired_computes_the_prompt_itself() {
     assert_eq!(samples(&r, "done_at"), [15.0]);
     assert_eq!(samples(&r, "D.loaded"), [10.0]);
     assert_eq!(samples(&r, "D.prefill"), [1.0]);
+}
+
+/// A `ttl` is folded by the parser, which knows only the `let`s above it,
+/// and reaches the linker as a number; an aggregate's index in it is a name
+/// the program does not already have, as in any expression. Until #561,
+/// `sum prompt in 2 (0.25)` linked with `prompt` an attribute. The
+/// relation's `latency` is a constant of the program, which the linker
+/// asks the same.
+#[test]
+fn a_relations_aggregate_index_is_its_own() {
+    let refusal = "`sum prompt in`: `prompt` is also a session attribute";
+    refused(
+        &leg_outlives_prefill(", ttl = sum prompt in 2 (0.25)"),
+        PROMPT10,
+        refusal,
+    );
+    refused(
+        &leg_outlives_prefill("").replace("latency = 1,", "latency = sum prompt in 2 (0.5),"),
+        PROMPT10,
+        refusal,
+    );
+    // an index of its own: the same `ttl` as `0.5`
+    let r = run(&leg_outlives_prefill(", ttl = sum k in 2 (0.25)"), PROMPT10);
+    assert_eq!(samples(&r, "done_at"), [13.0]);
 }
 
 /// The load ends the send its copy started on, not a later one: leg A's

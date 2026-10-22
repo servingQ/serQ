@@ -842,6 +842,11 @@ pub struct Program {
     /// Composite Cost names and resource fields; source-only namespace data.
     pub cost_records: Vec<(String, Vec<String>)>,
     pub lets: Vec<(String, Expr)>,
+    /// The constants the parser folds and keeps no expression of (an array
+    /// size, a relation's `ttl`) that hold an aggregate. The value is the
+    /// parser's; the linker asks each aggregate's index of the whole
+    /// program, as it does in an expression (#561).
+    pub folded: Vec<Expr>,
     pub pools: Vec<PoolDecl>,
     pub stages: Vec<StageDecl>,
     pub workload: Option<Workload>,
@@ -959,6 +964,7 @@ pub(crate) fn without_locations(mut p: Program) -> Program {
     for (_, e) in &mut p.lets {
         expr(e);
     }
+    p.folded.iter_mut().for_each(expr);
     for d in &mut p.pools {
         d.span = None;
         expr(&mut d.cap);

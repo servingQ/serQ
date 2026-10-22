@@ -341,6 +341,14 @@ fn a_latency_is_the_links_constant() {
             "`latency` is a number or a constant over `let`s",
         );
     }
+    // an aggregate's index in it is its own: the latency's constant is the
+    // program's, and the linker asks the index of the whole program (#499,
+    // #561: the parser no longer keeps a copy of the rule)
+    refused(
+        &program("sum x in 2 (x)", "y"),
+        workload,
+        "`sum x in`: `x` is also a `let` constant",
+    );
 }
 
 /// In an expression a word that is also a keyword (`latency`, `cap`) can

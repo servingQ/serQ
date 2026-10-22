@@ -206,6 +206,8 @@ struct Parser {
     queues: Vec<QueueDecl>,
     /// `let` constants with a constant value, for a family's size.
     consts: Vec<(String, f64)>,
+    /// `Program::folded`: the folded constants that hold an aggregate.
+    folded: Vec<Expr>,
     /// Constants whose values a `let` override can change, including dependents.
     structural_overrides: Vec<String>,
     /// The queue whose entry is being parsed.
@@ -958,16 +960,13 @@ fn a_device(queue: &str, verb: &str, name: &str) -> String {
     )
 }
 
-/// The constants the parser knows: the `let`s folded so far. It knows no
-/// other name, so an aggregate's index clashes with a folded `let` only,
-/// and an aggregate's terms are bounded per expression. Of its errors only
-/// a clash is shown (#499): an array size or a `latency` that is no
-/// constant says so itself, and a `let` the parser cannot fold, the linker
-/// says why.
+/// The constants the parser knows: the `let`s folded so far, and an
+/// aggregate's terms are bounded per expression. None of its errors is
+/// shown: an array size, a `latency` or a `ttl` that is no constant says
+/// so itself, and a `let` the parser cannot fold, the linker says why.
 struct Lets<'a> {
     consts: &'a [(String, f64)],
     terms: Cell<usize>,
-    clashed: Cell<bool>,
 }
 
 impl Constants for Lets<'_> {
@@ -990,10 +989,11 @@ impl Constants for Lets<'_> {
         Ok(())
     }
 
-    fn index_clash(&self, j: &str) -> Option<&'static str> {
-        let clash = self.consts.iter().any(|(c, _)| c == j);
-        self.clashed.set(self.clashed.get() || clash);
-        clash.then_some("a `let` constant")
+    /// None: the parser knows no name an index could clash with that the
+    /// linker does not, and the linker asks it of the whole program, of the
+    /// constants the parser folds too (`Program::folded`, #561).
+    fn index_clash(&self, _: &str) -> Option<&'static str> {
+        None
     }
 
     fn terms_written(&self) -> &Cell<usize> {
@@ -1508,6 +1508,7 @@ impl Parser {
             paired_own: None,
             queues: vec![],
             consts: vec![],
+            folded: vec![],
             structural_overrides: vec![],
             in_queue: None,
             entry_from: None,
@@ -2096,6 +2097,7 @@ impl Parser {
         self.check_declared_names(&prog)?;
         self.check_deferred(&prog, &served)?;
         prog.definitions = std::mem::take(&mut self.definitions);
+        prog.folded = std::mem::take(&mut self.folded);
         prog.cost_records = std::mem::take(&mut self.cost_records).into_iter().collect();
         Ok(prog)
     }
@@ -2873,12 +2875,11 @@ impl Parser {
                 // as vLLM's lease is a setting
                 let t_at = self.pos;
                 let e = self.expr()?;
-                let v = match self.const_or_clash(&e) {
-                    Err(clash) => return self.err_at(t_at, clash),
-                    Ok(v) => v,
-                };
-                match v {
-                    Some(v) if v > 0.0 && v.is_finite() => ttl = Some(v),
+                match self.const_value(&e) {
+                    Some(v) if v > 0.0 && v.is_finite() => {
+                        self.keep_folded(e);
+                        ttl = Some(v);
+                    }
                     // the default, spelt: one meaning, one spelling
                     Some(v) if v == f64::INFINITY => {
                         return self.err_at(
@@ -3718,11 +3719,7 @@ impl Parser {
                     ),
                 );
             }
-            let n = match self.const_or_clash(&e) {
-                Err(clash) => return self.err_at(at, clash),
-                Ok(n) => n,
-            };
-            let n = match n {
+            let n = match self.const_value(&e) {
                 Some(x) if x > MAX_FAMILY as f64 && x.fract() == 0.0 => {
                     return self.err_at(
                         at,
@@ -3747,8 +3744,8 @@ impl Parser {
                 }
             };
             // the size folded, so a name that is no constant is an argument
-            // a definition does not read; the linker never sees an array
-            // size, so it is resolved here, where only constants are known
+            // a definition does not read; the linker sees the size as a
+            // number, so it is resolved here, where only constants are known
             if let Some(name) = vars
                 .iter()
                 .chain(refs.iter().map(|r| &r.name))
@@ -3762,6 +3759,7 @@ impl Parser {
                     ),
                 );
             }
+            self.keep_folded(e);
             self.expect(&Tok::RBracket)?;
             Ok(Some(n))
         } else {
@@ -3773,22 +3771,20 @@ impl Parser {
     /// if it is one: the linker's evaluator over the `let`s folded so far,
     /// so that a `let` the linker folds sizes an array here too (#274).
     fn const_value(&self, e: &Expr) -> Option<f64> {
-        self.const_or_clash(e).ok().flatten()
-    }
-
-    /// [`Self::const_value`], or the linker's error for an aggregate whose
-    /// index is also a `let` constant: an array size and a `latency` are
-    /// folded here and never reach the linker, which would refuse it (#499).
-    fn const_or_clash(&self, e: &Expr) -> Result<Option<f64>, String> {
         let lets = Lets {
             consts: &self.consts,
             terms: Cell::new(0),
-            clashed: Cell::new(false),
         };
-        match lets.eval_const(e) {
-            Ok(v) => Ok(Some(v)),
-            Err(err) if lets.clashed.get() => Err(err.message),
-            Err(_) => Ok(None),
+        lets.eval_const(e).ok()
+    }
+
+    /// Keep `e`, a constant folded here whose expression the program keeps
+    /// nowhere else (an array size, a `ttl`), for the linker when it holds an
+    /// aggregate: the index is a name the program does not already have,
+    /// and only the linker knows the program's names (#561).
+    fn keep_folded(&mut self, e: Expr) {
+        if e.any(&|x| matches!(x, Expr::Over(..))) {
+            self.folded.push(e);
         }
     }
 
@@ -4333,11 +4329,7 @@ impl Parser {
                 if self.eat_kw("latency") {
                     let l_at = self.pos;
                     let e = self.expr()?;
-                    let v = match self.const_or_clash(&e) {
-                        Err(clash) => return self.err_at(l_at, clash),
-                        Ok(v) => v,
-                    };
-                    let Some(v) = v else {
+                    let Some(v) = self.const_value(&e) else {
                         return self.err_at(
                             l_at,
                             "`latency` is a number or a constant over `let`s: a link's fixed wait, \
@@ -5897,11 +5889,7 @@ impl Parser {
         // the side that posts the copy waits before each one
         let poster = if push { &source } else { &reader };
         let latency = if let Some((l_at, e)) = latency {
-            let v = match self.const_or_clash(&e) {
-                Err(clash) => return self.err_at(l_at, clash),
-                Ok(v) => v,
-            };
-            let Some(v) = v else {
+            let Some(v) = self.const_value(&e) else {
                 return self.err_at(
                     l_at,
                     Code::CopyLatency.message(

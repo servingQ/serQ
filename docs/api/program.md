@@ -100,7 +100,11 @@ what an expression reads at its moment ([Moments](../ir.md#moments)) does
 not see it, and a hold's body that passes a binding unread does not set it.
 An array size is resolved while the program is parsed, where only `let`
 constants are known, so an unread argument there must be one. The same
-holds for a device's time resource (`compute (t) = 1e-3;`).
+holds for a device's time resource (`compute (t) = 1e-3;`). An aggregate
+in an array size is still the program's: its index is a name the program
+does not already have, so `stage s[sum r in 2 (1)]` is refused when `r`
+is a register, an attribute, a pool, a stage or a `let`, wherever that is
+declared.
 
 An expression definition's body can separately be given from outside: `--def NAME=expr` on the command line, `defs={"NAME": "expr"}` in
 pyserq. The program is then the one written with that body, so a

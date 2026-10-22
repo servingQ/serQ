@@ -576,6 +576,13 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
         })?;
         lk.consts.insert(name.clone(), v);
     }
+    // An array size or a relation's `ttl` is folded by the parser, which
+    // knew only the `let`s above it, and reaches here as a number: its
+    // aggregates' indices are asked of the whole program, as an
+    // expression's are (#561).
+    for e in &prog.folded {
+        lk.own_indices(e)?;
+    }
     // An attribute would shadow a constant of the same name everywhere
     // (a stage's cost has no session, so the constant would read as NaN).
     for (name, _) in &prog.lets {
@@ -1831,6 +1838,27 @@ fn collect_attrs(stmts: &[Stmt], lk: &mut Linker) {
 }
 
 impl Linker<'_> {
+    /// Refuse, at the aggregate, an aggregate in `e` whose index is not a
+    /// name of its own: `e` is a constant the parser folded (an array size,
+    /// a `ttl`), whose indices are asked of the whole program as an
+    /// expression's are. Nothing is evaluated: the value is the parser's,
+    /// over the `let`s above it.
+    fn own_indices(&self, e: &Expr) -> LResult<()> {
+        let refused = Cell::new(None);
+        e.any(&|x| {
+            let (span, x) = match x {
+                Expr::Located(span, inner) => (Some(*span), &**inner),
+                x => (None, x),
+            };
+            let Expr::Over(agg, j, ..) = x else {
+                return false;
+            };
+            let own = self.own_index(*agg, j);
+            own.map_err(|e| refused.set(Some(e.at(span)))).is_err()
+        });
+        refused.into_inner().map_or(Ok(()), Err)
+    }
+
     /// What the bare name `n` means read as a value, if anything: the one
     /// order of the linker's lookups (#538).
     fn resolve(&self, n: &str) -> Option<Meaning> {
@@ -3032,7 +3060,9 @@ impl Linker<'_> {
 /// What a constant expression may name. The one constant evaluator,
 /// `eval_const`, and the aggregates' `over_terms` read it: the linker's
 /// knows the whole program, the parser's (`Lets`) only the `let`s folded so
-/// far, with which it sizes an array the linker never sees.
+/// far, with which it sizes an array the linker sees as a number. The
+/// linker asks the indices of what the parser folded through
+/// `Program::folded` (#561).
 pub(crate) trait Constants {
     /// The value of the constant `name`, or why there is none.
     fn constant(&self, name: &str) -> LResult<f64>;
@@ -3042,6 +3072,18 @@ pub(crate) trait Constants {
     fn resolve_unread(&self, a: &Arg) -> LResult<()>;
     /// What else an aggregate's index `j` names, if anything.
     fn index_clash(&self, j: &str) -> Option<&'static str>;
+    /// Whether `j`, the index of an aggregate `agg`, is a name of its own:
+    /// one that also named something else would leave the body saying two
+    /// things.
+    fn own_index(&self, agg: Agg, j: &str) -> LResult<()> {
+        match self.index_clash(j) {
+            Some(c) => Err(LinkError::new(format!(
+                "`{} {j} in`: `{j}` is also {c}\nhelp: give the index a name of its own",
+                agg.name()
+            ))),
+            None => Ok(()),
+        }
+    }
     /// The terms aggregates have written out so far, against `MAX_OVER`.
     fn terms_written(&self) -> &Cell<usize>;
 
@@ -3156,12 +3198,8 @@ pub(crate) trait Constants {
     /// own: a constant, an attribute, a pool, a stage or a context variable
     /// of the same name would leave the body saying two things.
     fn over_terms(&self, agg: Agg, j: &str, n: &Expr, body: &Expr) -> LResult<Vec<Expr>> {
+        self.own_index(agg, j)?;
         let what = format!("`{} {j} in`", agg.name());
-        if let Some(c) = self.index_clash(j) {
-            return Err(LinkError::new(format!(
-                "{what}: `{j}` is also {c}\nhelp: give the index a name of its own"
-            )));
-        }
         let count = self.eval_const_named(n, &format!("{what}'s count"))?;
         if !(count >= 1.0 && count.fract() == 0.0 && count.is_finite()) {
             return Err(LinkError::new(format!(

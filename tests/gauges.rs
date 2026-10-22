@@ -256,22 +256,68 @@ fn an_aggregates_index_and_count_are_its_own() {
     }
 }
 
-/// An array size is folded by the parser and never reaches the linker, so
-/// the parser refuses an index that is also a `let` there, with the
-/// linker's words for the same aggregate in a `let` (#499).
+/// An array size is folded by the parser, which knows only the `let`s above
+/// it, and reaches the linker as a number; the linker asks its aggregates'
+/// indices of the whole program, in the words it has for the same
+/// aggregate in an expression (#499, #561). Until #561 a name the parser
+/// did not know (a later `let`, an attribute, a pool, a stage) linked.
 #[test]
 fn an_array_sizes_aggregate_index_is_its_own() {
-    for decl in [
-        "let N = 4; stage colo[sum N in 2 (1)] : delay;",
-        "let N = 4; let M = sum N in 2 (1);",
+    for (decl, want) in [
+        (
+            "let N = 4; stage colo[sum N in 2 (1)] : delay;",
+            "`sum N in`: `N` is also a `let` constant",
+        ),
+        (
+            "let N = 4; let M = sum N in 2 (1);",
+            "`sum N in`: `N` is also a `let` constant",
+        ),
+        // a `let` declared after the array
+        (
+            "stage colo[sum N in 2 (1)] : delay; let N = 4;",
+            "`sum N in`: `N` is also a `let` constant",
+        ),
+        // `j` is the session's `choose`
+        (
+            "stage colo[sum j in 2 (1)] : delay;",
+            "`sum j in`: `j` is also a session attribute",
+        ),
+        (
+            "stage colo[sum kv in 2 (1)] : delay;",
+            "`sum kv in`: `kv` is also a pool",
+        ),
+        (
+            "stage colo[sum svc in 2 (1)] : delay;",
+            "`sum svc in`: `svc` is also a stage",
+        ),
+        // a pool family's size
+        (
+            "pool extra[max svc in 2 (1)] { cap 1; }",
+            "`max svc in`: `svc` is also a stage",
+        ),
+        // an aggregate in the body of one with an index of its own
+        (
+            "stage colo[sum k in 2 (sum j in 1 (1))] : delay;",
+            "`sum j in`: `j` is also a session attribute",
+        ),
+        // the branch the size does not take is the program's too
+        (
+            "stage colo[1 ? 2 : sum j in 2 (1)] : delay;",
+            "`sum j in`: `j` is also a session attribute",
+        ),
     ] {
         let e = link_error(&format!("{DEPLOYMENT}{decl}"), WORKLOAD);
         assert!(
-            e.contains("`sum N in`: `N` is also a `let` constant")
-                && e.contains("give the index a name of its own"),
+            e.contains(want) && e.contains("give the index a name of its own"),
             "{decl}: {e}"
         );
     }
+    // an index of its own is no clash
+    let own = DEPLOYMENT.replace("stage svc[2]", "stage svc[sum k in 2 (1)]");
+    assert!(
+        common::compile(&common::main_source(&own), WORKLOAD, &options()).is_ok(),
+        "{own}"
+    );
 }
 
 /// Aggregate expansion must reach the index diagnostic on a bounded stack.
