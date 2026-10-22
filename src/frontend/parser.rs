@@ -2520,6 +2520,12 @@ impl Parser {
                     };
                     return self.err_at(at, msg);
                 }
+                if !ok
+                    && self.engines.iter().any(|e| e.name == qn)
+                    && let Some(msg) = device::outside_engine(qn, field)
+                {
+                    return self.err_at(at, msg);
+                }
                 if !ok {
                     return self.err_at(
                         at,
