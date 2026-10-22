@@ -42,8 +42,8 @@ use serde::{Deserialize, Serialize};
 /// keeps its blocks until the reader's load ends it or its `ttl` does; and
 /// `Join` goes, the push mode's reader waiting for the send instead. 16
 /// makes a request's `admitted` record its first admission, which a
-/// readmission after a preemption does not move (vLLM's `scheduled_ts`;
-/// `docs/design/first-admission.md`): it was the latest.
+/// readmission after a preemption does not move (the rule of vLLM's
+/// `scheduled_ts`; `docs/design/first-admission.md`): it was the latest.
 pub const IR_VERSION: u32 = 16;
 
 /// A reason `Program::validate` refuses a program, and the statement it is

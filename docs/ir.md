@@ -110,7 +110,8 @@ decoder's read: vLLM's `delay_free_blocks`). An engine whose requests are
 sent and that no connector's `source` reads is refused, since nothing
 would read the send. The request waits in its first pool's queue. Its
 `records` are the slots the engine writes: the observations `reused` and
-`prefill` for each admission, and the attributes `admitted`, `first`,
+`prefill` for each admission, and the attributes `admitted` (its first
+admission: a readmission after a preemption does not move it), `first`,
 `last_reused` and `last_prefill` (`E.reused`, `E.prefill`) the caller reads
 after the call. A family engine's members each have their own `CStep`,
 whose `CRequest` names the member's pools. A `CConnector` has `load?` and

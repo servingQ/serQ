@@ -250,11 +250,45 @@ fn a_decoder_preempted_after_its_read_keeps_its_read_s_end() {
             held[serial]
         );
     }
-    // every request's read: the first admission, then the load's end
-    let admit_wait = &r.observe("admit_wait").unwrap().samples;
+    // every request's read: `admit_wait` is the session's first admission
+    // to the decoder's blocks less its send's registration, from the log
+    // (the latest admission would be the readmission's), and `transfer`
+    // the rest of the send's hold
+    let log = r.log.as_ref().unwrap();
+    let d_kv: Vec<usize> = (0..log.pools.len())
+        .filter(|&k| log.pools[k].0 == "D.kv")
+        .collect();
+    let mut registered = std::collections::HashMap::new();
+    let mut first_admitted = std::collections::HashMap::new();
+    for e in &log.events {
+        match &e.kind {
+            EventKind::Transfer {
+                who,
+                kind: Transfer::Send,
+                moved: Moved::Registered,
+                ..
+            } => {
+                registered.insert(who.serial, e.t);
+            }
+            EventKind::Admit { who, pool } if d_kv.contains(pool) => {
+                first_admitted.entry(who.serial).or_insert(e.t);
+            }
+            _ => {}
+        }
+    }
+    let admit_wait = r.observe("admit_wait").unwrap();
     let transfer = &r.observe("transfer").unwrap().samples;
     assert_eq!(transfer.len(), send_held.samples.len());
-    for ((a, t), h) in admit_wait.iter().zip(transfer).zip(&send_held.samples) {
+    for (a, (_, serial, _)) in admit_wait.samples.iter().zip(&admit_wait.records) {
+        let first = first_admitted[serial] - registered[serial];
+        assert!((a - first).abs() < 1e-9, "session {serial}: {a} {first}");
+    }
+    for ((a, t), h) in admit_wait
+        .samples
+        .iter()
+        .zip(transfer)
+        .zip(&send_held.samples)
+    {
         assert!(*t >= 0.0, "transfer {t}");
         assert!((a + t - h).abs() < 1e-9, "{a} + {t} != {h}");
     }

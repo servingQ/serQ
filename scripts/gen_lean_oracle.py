@@ -54,7 +54,9 @@ OUT = os.path.join(ROOT, "lean", "Serq", "Oracle.lean")
 # source keeps a request's blocks for the reader's load) and removes the
 # statement `Join`. A connector was outside the fragment and stays so (below),
 # a send is, and no oracle program had a `Join`: a 14 file and a 15 file
-# translate alike.
+# translate alike. 16 (docs/design/first-admission.md) makes a request's
+# `admitted` its first admission: the kernel hold sets it while `again` is
+# 0; a 15 file or older translates with the latest, as it meant.
 IR_VERSION = 16
 SUPPORTED_IR_VERSIONS = (7, 8, 9, 10, 11, 12, 13, 14, 15, IR_VERSION)
 
@@ -657,14 +659,8 @@ class Lean:
         # `admitted`: from IR 16 the first admission (`again` still 0), the
         # latest before
         if self.ir["version"] >= 16:
-            first_admitted = [
-                f"{inner}branch (if ((x.attr {again}) = 0) then 1 else 0) {{",
-                f"{inner}  set {rec['admitted']} = x.now;",
-                f"{inner}  done",
-                f"{inner}}} else {{",
-                f"{inner}  done",
-                f"{inner}}};",
-            ] if rec["admitted"] in self.read else []
+            first_admitted = [f"{inner}set {rec['admitted']} = if ((x.attr {again}) = 0) "
+                              f"then x.now else (x.attr {rec['admitted']});"]
             latest_admitted = []
         else:
             first_admitted = []

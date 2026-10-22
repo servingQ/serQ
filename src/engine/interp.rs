@@ -2751,9 +2751,10 @@ impl<'p> Interp<'p> {
         let r = self.sessions[sid].req.as_mut().expect("a request");
         r.phase = Phase::Admitted;
         let (known, spec, loaded, st) = (r.known, r.spec, r.loaded, r.stage);
-        // its first admission: a readmission after a preemption does not
-        // move it (vLLM's `scheduled_ts`, metrics/stats.py:524)
-        let first = !r.preempted;
+        // `E.admitted` is its first admission: a readmission after a
+        // preemption does not move it (the rule of vLLM's `scheduled_ts`,
+        // metrics/stats.py:524)
+        let first_admission = !r.preempted;
         if let Some(spec) = spec {
             // what it computes: past what it read and loads, and its last
             // token again when a load brings every one (`load_ended`)
@@ -2765,7 +2766,7 @@ impl<'p> Interp<'p> {
             self.observe_for(sid, spec.records.reused, pos);
             self.observe_for(sid, spec.records.prefill, prefill);
             let attrs = &mut self.sessions[sid].attrs;
-            if first {
+            if first_admission {
                 attrs[spec.records.admitted] = now;
             }
             attrs[spec.records.last_reused] = pos;

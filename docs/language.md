@@ -1361,9 +1361,11 @@ it), and so is the output when the admission reads `request.output`. The
 engine's records are attributes the caller reads after the call: `E.reused`
 (the cached tokens its latest admission read), `E.prefill` (the tokens its
 prefill computes), `E.admitted` (when it was first admitted: a readmission
-after a preemption does not move it, as vLLM's `scheduled_ts` ignores
-preemptions, `metrics/stats.py:524`) and `E.first` (when its first token
-was sampled); a connector adds `E.loaded`, `E.saved` and `E.load_done`
+after a preemption does not move it, as vLLM's `scheduled_ts` keeps the
+first scheduling, `metrics/stats.py:524`; for a request that loads, vLLM
+schedules it, and stamps that, once its KV has arrived,
+`scheduler.py:1264-1294, 1300-1303`, nearer `E.load_done`) and `E.first`
+(when its first token was sampled); a connector adds `E.loaded`, `E.saved` and `E.load_done`
 (below). `E.reused`, `E.prefill` and `E.loaded` are observations of the
 report too, one per admission.
 

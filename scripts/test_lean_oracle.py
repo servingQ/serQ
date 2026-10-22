@@ -104,10 +104,12 @@ class FragmentBoundaries(unittest.TestCase):
             lean = generator.Lean(ir)
             lean.read = set(lean.read) | {rec["admitted"]}
             written[version] = lean.block(ir["session"], 1)
-        admitted = f"set {rec['admitted']} = x.now;"
-        first = r"branch \(if \(\(x\.attr \d+\) = 0\) then 1 else 0\) \{"
-        self.assertRegex(written[16], first + r"\n\s*" + admitted.replace(".", r"\."))
-        self.assertIn(admitted, written[15])
+        latest = f"set {rec['admitted']} = x.now;"
+        first = (rf"set {rec['admitted']} = if \(\(x\.attr \d+\) = 0\) "
+                 rf"then x\.now else \(x\.attr {rec['admitted']}\);")
+        self.assertRegex(written[16], first)
+        self.assertNotIn(latest, written[16])
+        self.assertIn(latest, written[15])
         self.assertNotRegex(written[15], first)
 
     def test_prefix_chains_are_not_silently_discarded(self):

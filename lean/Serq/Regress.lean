@@ -100,12 +100,7 @@ def firstAdmission : Prog := [route|
   hold 1 (1), 0 (if ((x.attr 19) ≠ 0) then (max (x.attr 17) ((x.attr 8) + 1)) else (x.attr 17)) {
     set 18 = if ((x.attr 19) ≠ 0) then (max (x.attr 17) ((x.attr 8) + 1)) else (x.attr 17);
     set 17 = x.attr 18;
-    branch (if ((x.attr 19) = 0) then 1 else 0) {
-      set 11 = x.now;
-      done
-    } else {
-      done
-    };
+    set 11 = if ((x.attr 19) = 0) then x.now else (x.attr 11);
     set 19 = 1;
     observe 3 = x.cached;
     observe 4 = (x.attr 18) - x.cached;

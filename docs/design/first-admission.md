@@ -15,6 +15,15 @@ its read is rescheduled without a second transfer
 (`scheduler.py:1560-1561`); its first scheduling is still the one its read
 followed.
 
+What serQ takes from it is the rule, the first and not the latest, not the
+event. A request whose connector loads asynchronously is given its blocks
+and set aside, `WAITING_FOR_REMOTE_KVS`, before its `SCHEDULED` is recorded
+(`scheduler.py:1264-1294`), and is scheduled, and stamped, once its KV has
+arrived (`scheduler.py:1300-1303`): a P/D decoder's `scheduled_ts` is after
+its read, nearer `E.load_done`, and its queued time holds the transfer.
+`E.admitted` is the admission that gives it its blocks, before the read,
+which is what `admit_wait` and `transfer` divide the send's hold at.
+
 ## In serQ
 
 `examples/pd-disaggregation/pd_batching.sq`'s gateway reads the decoder's
@@ -77,6 +86,16 @@ admission times, one of which a program must pick, and nothing in the
 examples or in vLLM's metrics reads the latest: a readmission after a
 preemption is the scheduler's business, not the caller's. One record, the
 first, as vLLM keeps.
+
+**`E.reused`, `E.prefill` and `E.loaded` the first admission's too.** They
+describe an admission, what it read of the cache, what it computes, what
+it loads, and each is an observation per admission as well, one sample
+each; the latest is what the call's end reflects. `E.admitted`, `E.first`
+and `E.load_done` are times of the call. The records of one call so name
+different admissions after a preemption: a decoder preempted after its
+read has `D.loaded` 0 (its readmission's) and `D.load_done - D.admitted`
+its read's time, and a program dividing the one by the other mixes them.
+The language does not refuse that; the names say which is which.
 
 **The latest admission, as it was.** It is when the request last entered
 the batch, but the caller reads it after the call, against times of the
