@@ -238,11 +238,12 @@ run STAGE [, STAGE]* (work [, share = POLICY], latency = x);
 
 Blocks the session until the work is done.
 
-A run on a step engine is written where the engine's own work is: a queue's
-entry runs its queue's engine this way, and a top-level engine runs its
-[requests](../language.md#an-engines-request) itself. The server, a
-gateway's `route` and the session call the engine instead, `E (input,
-output);`, and do not hold a pool an engine admits either (#539).
+An engine runs the prefill and decode of the
+[requests](../language.md#an-engines-request) it keeps. The server, a
+gateway's `route` and a queue's entry call it, `E (input, output);`, and
+the session reaches it by a turn. Only a queue's entry writes a run on a
+step engine, on its own engine, for what a request cannot say; the server,
+a route and the session do not hold a pool an engine admits either (#539).
 
 With several stages the run is one job, a *flow*, that holds all of them
 from its start to its end; its work goes down at one rate everywhere, which

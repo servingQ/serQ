@@ -5129,10 +5129,17 @@ impl Parser {
             && (s == "prefill" || s == "decode")
         {
             let s = s.clone();
+            // an entry's own engine is named after its queue (`engine on
+            // gpu` in `queue P`), and the entry calls it
+            let own = self
+                .in_queue
+                .map(|qi| self.queues[qi].name.clone())
+                .filter(|q| self.engines.iter().any(|e| e.name == *q));
+            let reach = request::reach(self.side == Side::WorkloadSession, own.as_deref(), false);
             return self.err(format!(
-                "`{s}` is the mode of a `run` on a step engine, not a statement, except in an \
-                 engine's `request`, where `{s} (e)` is `run E {s} (cost(E, e))`\n\
-                 help: write `run E {s} (cost(E, T));` on the step engine `E`, or `run S (cost(S, W));` on another stage"
+                "`{s}` is not a statement: an engine prefills and decodes the requests it keeps, \
+                 and `{s}` is the mode of a `run` on a step engine\n\
+                 help: {reach}, or `run S (cost(S, W));` on a stage that is not a step engine"
             ));
         }
         if self.is_kw("Size") || self.is_kw("Cost") {
@@ -6694,10 +6701,12 @@ mod tests {
                 e.msg.contains(&format!("`{kw}` is the mode of a `run`")),
                 "{e}"
             );
-            assert!(
-                e.msg.contains(&format!("`run E {kw} (cost(E, T));`")),
-                "{e}"
-            );
+            // the help names the call: not the engine's `request`, which
+            // #592 removed, nor the kernel run, which the server may not
+            // write (#510)
+            assert!(e.msg.contains("`E (input, output);`"), "{e}");
+            assert!(!e.msg.contains("engine's `request`"), "{e}");
+            assert!(!e.msg.contains("`run E "), "{e}");
             assert_eq!((e.line, e.col), (7, 34), "{e}");
         }
     }
