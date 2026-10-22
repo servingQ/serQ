@@ -78,10 +78,9 @@ pub fn vllm(p: &Program) -> Result<Value, String> {
     };
     // vLLM's `schedule()`: the running first, then the waiting while the
     // step has not preempted (scheduler.py:624-823, 868-1128), which is the
-    // engine whose schedule lowers to no body, or a body that writes it out
-    if let Some(body) = &step.iteration
-        && !is_vllm_iteration(body)
-    {
+    // engine whose schedule lowers to no body. A body is the program's own
+    // even where it computes vLLM's: the procedure has one spelling (#721)
+    if step.iteration.is_some() {
         return refuse(format!(
             "`{}` has its own schedule; vLLM's is `advance running; admit waiting while \
              (running.preempted == 0);`",
@@ -358,19 +357,4 @@ fn observable(e: &CExpr) -> bool {
             false
         }
     }
-}
-
-/// The body `[Serve, Admit while !preempted]`, vLLM's `schedule()` written
-/// out: the engine's own order and no `only`. The frontend lowers that
-/// schedule to no body; an IR may still carry it as one.
-fn is_vllm_iteration(body: &[crate::ir::CIter]) -> bool {
-    use crate::ir::{CIter, UnOp};
-    let not_preempted = CExpr::Unary(UnOp::Not, Box::new(CExpr::Ctx(CtxVar::Preempted)));
-    matches!(
-        body,
-        [
-            CIter::Serve { only: None, by: None },
-            CIter::Admit { only: None, gate: Some(g) },
-        ] if *g == not_preempted
-    )
 }

@@ -496,10 +496,12 @@ fn execute_is_the_workers_forward() {
     );
 }
 
-/// Each form of the kernel's step is a schedule: the procedure is no body,
-/// an order is the serve keys, a common `only` is the body `serve only`
-/// is, `exclusive prefill` is its rule and a per-run cap the `chunk`; any
-/// other schedule is its body, as written.
+/// Each form of the kernel's step is a schedule: the procedure, spelt
+/// `running.preempted == 0`, is no body, an order is the serve keys, a
+/// common `only` is the body `serve only` is, `exclusive prefill` is its
+/// rule and a per-run cap the `chunk`; any other schedule is its body, as
+/// written, a gate that computes the procedure's otherwise among them
+/// (#721).
 #[test]
 fn the_stage_forms_are_schedules() {
     let p = compiled(
@@ -519,6 +521,19 @@ fn the_stage_forms_are_schedules() {
         (8.0, Some(stage(&p, "vllm", None)))
     );
     let decoding = || ctx(CtxVar::Decoding);
+    let decode_first = || CExpr::Cond(Box::new(decoding()), Box::new(num(0.0)), Box::new(num(1.0)));
+    // the body `advance running; admit waiting while (g);`, which the
+    // procedure is only when `g` is spelt `running.preempted == 0`
+    let gated = |g: CExpr| Schedule {
+        body: Some(vec![
+            serve(),
+            CIter::Admit {
+                only: None,
+                gate: Some(g),
+            },
+        ]),
+        ..procedure()
+    };
     for (schedule, kernel) in [
         (
             "advance running; admit waiting while (running.preempted == 0);",
@@ -526,16 +541,37 @@ fn the_stage_forms_are_schedules() {
         ),
         (
             "advance running; admit waiting while (!running.preempted);",
-            procedure(),
+            gated(not(ctx(CtxVar::Preempted))),
+        ),
+        (
+            "advance running; admit waiting while (0 == running.preempted);",
+            gated(bin(BinOp::Eq, num(0.0), ctx(CtxVar::Preempted))),
+        ),
+        (
+            "advance running; admit waiting while (running.preempted < 1);",
+            gated(bin(BinOp::Lt, ctx(CtxVar::Preempted), num(1.0))),
+        ),
+        // an order in a body is its `serve`'s, and the step's own keys none
+        (
+            "advance running decode first; admit waiting while (!running.preempted);",
+            Schedule {
+                body: Some(vec![
+                    CIter::Serve {
+                        only: None,
+                        by: Some(vec![decode_first()]),
+                    },
+                    CIter::Admit {
+                        only: None,
+                        gate: Some(not(ctx(CtxVar::Preempted))),
+                    },
+                ]),
+                ..procedure()
+            },
         ),
         (
             "advance running decode first; admit waiting while (running.preempted == 0);",
             Schedule {
-                keys: Some(vec![CExpr::Cond(
-                    Box::new(decoding()),
-                    Box::new(num(0.0)),
-                    Box::new(num(1.0)),
-                )]),
+                keys: Some(vec![decode_first()]),
                 ..procedure()
             },
         ),
@@ -1150,6 +1186,17 @@ engine e2 on gpu {{ tokens cap 4; scheduler {{ advance running; }} worker {{ for
     refused(
         &engine("exclusive prefill; if (running.count == 0) { admit waiting; }"),
         "takes back decodes already chosen",
+    );
+    // the exclusive rule's schedule has the procedure's one spelling: a gate
+    // written otherwise makes it a body, which cannot take decodes back
+    // (#721), and the refusal names the spelling
+    let e = error(&engine(
+        "exclusive prefill; admit waiting while (!running.preempted);",
+    ));
+    assert!(
+        e.contains("takes back decodes already chosen")
+            && e.contains("`exclusive prefill; admit waiting while (running.preempted == 0);`"),
+        "{e}"
     );
     // one engine per device, and a family of them a queue family (#539)
     refused(

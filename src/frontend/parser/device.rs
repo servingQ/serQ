@@ -1068,7 +1068,9 @@ impl Parser {
     }
 
     /// Write a schedule as the kernel's step: vLLM's procedure and the
-    /// stage-level forms as no body, anything else as the body.
+    /// stage-level forms as no body, anything else as the body. The
+    /// procedure is recognised as spelt, its gate `running.preempted == 0`
+    /// (`vllm_gate`), not by what a gate computes (#721).
     fn write_schedule(&self, at: usize, s: &mut StepSpec, body: Vec<SStmt>) -> PResult<()> {
         if let [
             first,
@@ -1078,7 +1080,7 @@ impl Parser {
                 ..
             },
         ] = &body[..]
-            && not_preempted(g)
+            && vllm_gate(g)
         {
             match first {
                 SStmt::Advance { only, order, .. }
@@ -1647,17 +1649,17 @@ fn pool_on_as_written(cap: &str, owner: &str) -> String {
     }
 }
 
-/// `!running.preempted` or `running.preempted == 0`, as written.
-fn not_preempted(e: &Expr) -> bool {
-    let is_preempted = |e: &Expr| matches!(strip(e), Expr::Var(n) if n == "preempted");
-    match strip(e) {
-        Expr::Unary(UnOp::Not, a) => is_preempted(a),
-        Expr::Binary(BinOp::Eq, a, b) => {
-            (is_preempted(a) && matches!(strip(b), Expr::Num(z) if *z == 0.0))
-                || (is_preempted(b) && matches!(strip(a), Expr::Num(z) if *z == 0.0))
-        }
-        _ => false,
-    }
+/// `running.preempted == 0`, as written: vLLM's procedure has one spelling
+/// (#721). A gate that computes the same otherwise (`!running.preempted`,
+/// `0 == running.preempted`, `running.preempted < 1`) makes the schedule a
+/// body of the program's own, which runs alike.
+fn vllm_gate(e: &Expr) -> bool {
+    matches!(
+        strip(e),
+        Expr::Binary(BinOp::Eq, a, b)
+            if matches!(strip(a), Expr::Var(n) if n == "preempted")
+                && matches!(strip(b), Expr::Num(z) if *z == 0.0)
+    )
 }
 
 fn strip(e: &Expr) -> &Expr {
