@@ -61,11 +61,11 @@ lake env lean examples/papers/Dai.lean
 
 Open the repository, or any folder inside it, with the Lean extension. The
 extension takes the nearest directory above a file that holds a
-`lean-toolchain` as that file's project. For `lean/` and `examples/papers/`
-that directory is the repository root, so a proof beside its program imports
-`Serq` the same way a file in `lean/` does. `make lean` fails if a
-`lean-toolchain` or a lakefile appears anywhere below the root, since the
-files below it would then open as a separate project.
+`lean-toolchain` or a lakefile as that file's project. For `lean/` and
+`examples/papers/` that directory is the repository root, so a proof beside
+its program imports `Serq` the same way a file in `lean/` does. `make lean`
+fails if a `lean-toolchain` or a lakefile appears anywhere below the root,
+since the files below it would then open as a separate project.
 
 ## Use from another Lean project
 
@@ -78,8 +78,9 @@ git = "https://github.com/servingQ/serQ"
 rev = "<tag or commit>"
 ```
 
-Revisions up to `v0.1.7-alpha.2` keep the package in `lean/` and need
-`subDir = "lean"` in this entry.
+A revision whose package is still in `lean/` (it has `lean/lakefile.toml`),
+every tag up to `v0.1.7-alpha.2` among them, needs `subDir = "lean"` in this
+entry.
 
 Import `Serq` or a specific module. Definitions use the namespace `SerqLang`.
 The library `Serq` contains the semantics; `papers` contains proofs from

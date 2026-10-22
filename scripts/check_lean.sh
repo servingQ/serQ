@@ -8,15 +8,17 @@ cd "$(dirname "$0")/.."
 
 echo "== one Lake package, at the root =="
 # An editor opens a .lean file in the project of the nearest lean-toolchain
-# above it and never reads a lakefile's srcDir: a second package file below
-# the root splits lean/ and examples/papers/ into two projects, and the
-# proofs no longer find `Serq` (#365).
+# or lakefile above it and never reads a lakefile's srcDir: a second package
+# file below the root splits lean/ and examples/papers/ into two projects,
+# and the proofs no longer find `Serq` (#365).
+# vscode-lean4 src/utils/projectInfo.ts:98-120 (findLeanProjectRootInfo,
+# 7dfbc35b): the walk stops at a lean-toolchain or a lakefile.
 extra=$(git ls-files --cached --others --exclude-standard -- \
   '*lean-toolchain' '*lakefile.toml' '*lakefile.lean' '*lake-manifest.json' | grep / || true)
 if [ -n "$extra" ]; then
   echo "FAIL: a Lake package file below the repository root:"; echo "$extra"
   echo "an editor opens a .lean file in the project of the nearest lean-toolchain"
-  echo "above it, so the package's files must be the root's alone (#365)"
+  echo "or lakefile above it, so the package's files must be the root's alone (#365)"
   exit 1
 fi
 

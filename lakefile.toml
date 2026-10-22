@@ -1,7 +1,8 @@
 # The Lean model of serQ (docs/lean.md). The package is the repository root,
-# not lean/: an editor takes the nearest lean-toolchain above a file as that
-# file's project, and the root is the one directory above both lean/ and
-# examples/papers/ (#365). scripts/check_lean.sh refuses a second one.
+# not lean/: an editor takes the nearest lean-toolchain or lakefile above a
+# file as that file's project, and the root is the one directory above both
+# lean/ and examples/papers/ (#365). scripts/check_lean.sh refuses a
+# lean-toolchain or lakefile anywhere below the root.
 name = "Serq"
 defaultTargets = ["Serq", "papers"]
 
