@@ -6,7 +6,7 @@
 //! are stored in an arena so that a session's continuation is a stack of
 //! `(block, pc)` frames.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
 
@@ -889,13 +889,19 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
         }
     }
     if let Some(w) = prog.workload.as_ref() {
+        let reads = scheduler_reads(prog);
+        admission_reads_set_above(
+            &prog.server,
+            prog.interface.as_ref().map_or(&[][..], |i| &i.params),
+            &reads,
+        )?;
         hidden_in_server(
             &w.init,
             &w.turn,
             &prog.session,
             &prog.server,
             &w.hidden,
-            &scheduler_reads(prog),
+            &reads,
         )?;
     }
     let mut gauges = vec![];
@@ -1494,6 +1500,209 @@ fn serve_reads<'a>(stmts: &'a [IterStmt], out: &mut Vec<&'a Expr>) {
     }
 }
 
+/// The names an expression reads, the ones in a reference's index
+/// (`kv[j]`) as well: what the checks of the server below take an
+/// expression to read.
+fn names_read(e: &Expr) -> Vec<String> {
+    let (mut vars, mut refs) = (vec![], vec![]);
+    crate::frontend::parser::names(e, &mut vars, &mut refs);
+    for r in refs {
+        if let Some(i) = r.index.as_deref() {
+            crate::frontend::parser::names(i, &mut vars, &mut vec![]);
+        }
+    }
+    vars
+}
+
+/// What a hold's admission reads of the session, its header: each pool's
+/// units and `reserve`, with the pool, then the `reuse` and `prefix` keys
+/// and lengths, with none. Not the index that picks a pool, read where the
+/// statement is reached, nor `cache` and a lease's time, read at the
+/// release. The one list of them, for `admission_reads_set_above` and
+/// `hidden_in_server`.
+fn hold_header(hold: &Stmt) -> Vec<(Option<&Ref>, &Expr)> {
+    let Stmt::Hold {
+        pools,
+        reuse,
+        prefix,
+        ..
+    } = hold
+    else {
+        return vec![];
+    };
+    let rest = reuse
+        .iter()
+        .chain(prefix.iter().flatten().flat_map(|(k, n)| [k, n]))
+        .map(|e| (None, e));
+    pools
+        .iter()
+        .flat_map(|(r, units, reserve)| {
+            std::iter::once(units)
+                .chain(reserve)
+                .map(move |e| (Some(r), e))
+        })
+        .chain(rest)
+        .collect()
+}
+
+/// Where `e` reads `name`, as the text writes it: the name, or a bare
+/// argument a call reads as a number (`cost(mem, m)`). A parameter an
+/// entry substituted keeps its own place around the argument the call
+/// passed for it (`queue::Ctx::ref_var`), so a name passed at a call is
+/// written twice: at the parameter in the entry, then at the argument in
+/// the call. Outermost first; empty where `e` does not read it.
+fn written_at(e: &Expr, name: &str) -> Vec<Span> {
+    let found = RefCell::new(vec![]);
+    e.any(&|x| {
+        let mut at = vec![];
+        let mut read = x;
+        while let Expr::Located(s, inner) = read {
+            at.push(*s);
+            read = inner;
+        }
+        if !matches!(read, Expr::Var(n) if n == name) {
+            at.clear();
+        }
+        if at.is_empty()
+            && let Expr::Call(_, args) = x
+        {
+            at.extend(args.iter().find_map(|a| match a {
+                Arg::Ref(r) if r.index.is_none() && r.name == name => r.span,
+                _ => None,
+            }));
+        }
+        let hit = !at.is_empty();
+        if hit {
+            *found.borrow_mut() = at;
+        }
+        hit
+    });
+    found.into_inner()
+}
+
+/// A hold's header is read when the request is admitted, before its body
+/// runs, and so is an engine's admission (`taking`, `reuse`, `prefix`, a
+/// connector's `load`, read at the call `E (…)`). An attribute the server
+/// sets keeps its value on the session from one request to the next, so
+/// until this request sets it, it holds what an earlier request left
+/// there, or 0 at the session's first: `hold mem (cost(mem, m)) { set m =
+/// items; … }` held 0 units at a session's first request, and linked
+/// (#504). So what the server sets is read there only once it is set
+/// above, on every way to the hold or the call (`parser::set_above`); a
+/// program that means the earlier request's value copies it above (`set
+/// earlier = m;`). What the server sets is what it `set`s or `choose`s and
+/// the records a call `E (…)` writes (`E.prefill`); the parameters are
+/// bound anew at each request, and the server sets none. The server is
+/// read as the parser expanded it, so an entry's hold is checked where it
+/// is called: its locals are the queue's (`E.kept`), which only an entry
+/// sets, and a parameter is the caller's argument (`route { E.decode (m);
+/// set m = prompt; }`). The reads are the admission's, as
+/// `hidden_in_server` takes them: `hold_header`, and an engine's
+/// `EngineReads::admission`.
+fn admission_reads_set_above(
+    server: &[Stmt],
+    params: &[String],
+    reads: &SchedulerReads,
+) -> LResult<()> {
+    let mut sets = vec![];
+    crate::frontend::parser::assigned_in(server, &mut sets);
+    calls(server, &mut |stage| {
+        sets.extend(crate::frontend::parser::request_records(&stage.name))
+    });
+    sets.retain(|n| !params.contains(n));
+    // the first name `reads` read that the server sets, and not above
+    let unset = |reads: &[&Expr], above: &[String]| {
+        reads
+            .iter()
+            .flat_map(|e| names_read(e))
+            .find(|n| sets.contains(n) && !above.contains(n))
+    };
+    let ways = "in both arms of an `if` and not in a loop, `while` or `fork` that ends before it";
+    let why = "so it would read what an earlier request left there, or 0, not what";
+    crate::frontend::parser::set_above(server, &mut vec![], &mut |s, above| match s {
+        Stmt::Hold { pools, .. } => {
+            let header = hold_header(s);
+            // the pool whose own expression reads it, else the first
+            let rest: Vec<&Expr> = header
+                .iter()
+                .filter(|(r, _)| r.is_none())
+                .map(|&(_, e)| e)
+                .collect();
+            let found = header
+                .iter()
+                .find_map(|&(r, e)| Some((r?, unset(&[e], above)?)))
+                .or_else(|| Some((&pools.first()?.0, unset(&rest, above)?)));
+            let Some((pool, n)) = found else {
+                return Ok(());
+            };
+            let pool = &pool.name;
+            let at = header
+                .iter()
+                .map(|(_, e)| written_at(e, &n))
+                .find(|at| !at.is_empty())
+                .unwrap_or_default();
+            // a name the call passed for the entry's parameter is set
+            // above the call, where the call writes it
+            if let [param, arg] = at[..]
+                && param != arg
+            {
+                return Err(LinkError::new(format!(
+                    "`hold {pool}`: the admission header reads `{n}`, which the call passes to \
+                     the entry and which is not set above the call on every way to it; the \
+                     header is read when the request is admitted, {why} a later statement \
+                     sets\nnote: the entry's header reads it as its parameter at {}:{}\nhelp: \
+                     set `{n}` above the call, {ways}",
+                    param.line, param.col
+                ))
+                .at(Some(arg)));
+            }
+            Err(LinkError::new(format!(
+                "`hold {pool}`: the admission header reads `{n}`, which is not set above this \
+                 hold on every way to it; the header is read when the request is admitted, \
+                 {why} the hold's body or a later statement sets\nhelp: set it above the hold, \
+                 {ways}, or write its value in the header; to mean an earlier request's value, \
+                 copy it into another attribute above the hold and read that"
+            ))
+            .at(at.first().copied().or_else(|| stmt_span(s))))
+        }
+        Stmt::EngineRequest { stage, .. } => {
+            let read = reads
+                .engines
+                .get(&stage.name)
+                .map_or(&[][..], |r| &r.admission[..]);
+            let Some(n) = unset(read, above) else {
+                return Ok(());
+            };
+            let e = &stage.name;
+            let note = read
+                .iter()
+                .find_map(|x| written_at(x, &n).last().copied())
+                .map_or(String::new(), |s| {
+                    format!("\nnote: `{e}` reads it at {}:{}", s.line, s.col)
+                });
+            Err(LinkError::new(format!(
+                "`{e} (…)`: the engine's admission (`taking`, `reuse`, `prefix`, a connector's \
+                 `load`) reads `{n}`, which is not set above this request on every way to it; \
+                 the admission is read when `{e}`'s scheduler admits the request, {why} a later \
+                 statement sets{note}\nhelp: set it above `{e} (…)`, {ways}"
+            ))
+            .at(stage.span))
+        }
+        _ => Ok(()),
+    })?;
+    Ok(())
+}
+
+/// `f` on the engine of each call `E (…)` in `stmts`, at any depth.
+fn calls(stmts: &[Stmt], f: &mut impl FnMut(&Ref)) {
+    for s in stmts {
+        if let Stmt::EngineRequest { stage, .. } = s {
+            f(stage);
+        }
+        s.blocks().for_each(|b| calls(b, f));
+    }
+}
+
 /// A hidden attribute is the target's until a run reveals it: the server
 /// may run work by it (the model ends a decode, not the scheduler), cache by
 /// it at release, and observe it, but a decision on it before it is
@@ -1554,16 +1763,6 @@ fn hidden_in_server(
         // what a run by that value reveals, even if a prior pass revealed it.
         revealed: BTreeSet<String>,
     }
-    fn names(e: &Expr) -> Vec<String> {
-        let (mut vars, mut refs) = (vec![], vec![]);
-        crate::frontend::parser::names(e, &mut vars, &mut refs);
-        for r in refs {
-            if let Some(i) = r.index.as_deref() {
-                crate::frontend::parser::names(i, &mut vars, &mut vec![]);
-            }
-        }
-        vars
-    }
     /// Origins read on every evaluation path. Conditional arms and the
     /// right side of a short-circuit operator need not be evaluated.
     fn certain(e: &Expr, t: &Taint) -> BTreeSet<String> {
@@ -1620,7 +1819,7 @@ fn hidden_in_server(
             certain: certain(e, t),
             ..Default::default()
         };
-        for n in names(e) {
+        for n in names_read(e) {
             if let Some(from) = t.attrs.get(&n) {
                 out.possible.extend(from.possible.iter().cloned());
             }
@@ -1661,7 +1860,7 @@ fn hidden_in_server(
     /// The first name `e` reads that holds a hidden attribute, or what was
     /// set from one, before a run has revealed it.
     fn reads_unrevealed<'t>(e: &Expr, t: &'t Taint) -> Option<(String, &'t Origins)> {
-        names(e).into_iter().find_map(|n| {
+        names_read(e).into_iter().find_map(|n| {
             let from = t.attrs.get(&n)?;
             (!from.possible.is_subset(&t.revealed)).then_some((n, from))
         })
@@ -1685,28 +1884,16 @@ fn hidden_in_server(
     /// pool, and the copies its units, `reserve`, `reuse` and `prefix`
     /// read.
     fn header(hold: &Stmt, what: &str, t: &Taint) -> LResult<()> {
-        let Stmt::Hold {
-            pools,
-            reuse,
-            prefix,
-            ..
-        } = hold
-        else {
+        let Stmt::Hold { pools, .. } = hold else {
             return Ok(());
         };
-        let copies = copies(t);
-        for (r, units, reserve) in pools {
+        for (r, _, _) in pools {
             if let Some(i) = index(r) {
                 check(i, "choice of a pool", t)?;
             }
-            for e in std::iter::once(units).chain(reserve) {
-                check(e, what, &copies)?;
-            }
         }
-        let rest = reuse
-            .iter()
-            .chain(prefix.iter().flatten().flat_map(|(k, n)| [k, n]));
-        for e in rest {
+        let copies = copies(t);
+        for (_, e) in hold_header(hold) {
             check(e, what, &copies)?;
         }
         Ok(())
@@ -1728,21 +1915,9 @@ fn hidden_in_server(
     /// Where a key reads `name`: the name as written, else the key, else
     /// its declaration.
     fn located(k: &Key, name: &str) -> Option<Span> {
-        let found = Cell::new(None);
-        k.expr.any(&|x| {
-            let at = match x {
-                Expr::Located(s, e) if matches!(&**e, Expr::Var(n) if n == name) => Some(*s),
-                Expr::Call(_, args) => args.iter().find_map(|a| match a {
-                    Arg::Ref(r) if r.index.is_none() && r.name == name => r.span,
-                    _ => None,
-                }),
-                _ => None,
-            };
-            found.set(at);
-            at.is_some()
-        });
-        found
-            .get()
+        written_at(k.expr, name)
+            .last()
+            .copied()
             .or(match k.expr {
                 Expr::Located(s, _) => Some(*s),
                 _ => None,
@@ -1918,7 +2093,7 @@ fn hidden_in_server(
                     // and the call's output, when they read `request.output`
                     let reads_output = read
                         .iter()
-                        .any(|e| names(e).iter().any(|n| n == "request.output"));
+                        .any(|e| names_read(e).iter().any(|n| n == "request.output"));
                     if reads_output {
                         check(output, "admission", t)?;
                     }

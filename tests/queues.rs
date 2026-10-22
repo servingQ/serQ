@@ -547,6 +547,8 @@ fn a_header_reads_a_local_both_arms_set() {
 
 /// What the hold's body sets, a statement after it, or one arm, a loop or a
 /// fork above it that may not have run, is not set when the header is read.
+/// The linker refuses it on the server the entry expands into, as it does
+/// a server's own hold (#504, `tests/admission_reads.rs`).
 #[test]
 fn a_header_does_not_read_a_local_set_below_or_beside_it() {
     for (above, inside, below) in [
@@ -573,7 +575,8 @@ fn a_header_does_not_read_a_local_set_below_or_beside_it() {
                  {SERVER}"
             ),
             WORKLOAD,
-            "the admission header reads local `kept`, which the entry does not set above this hold",
+            "`hold E.kv`: the admission header reads `E.kept`, which is not set above this hold \
+             on every way to it",
         );
     }
 }

@@ -693,9 +693,18 @@ hold, as a server's header reads an attribute set before it (`set kept =
 prompt;` before it, or in both arms of an `if`; not in a loop or `fork`
 that may not have run); a `prefix` key also reads `serial`, the session's
 number, so that an entry keys the session's own context (`prefix (system:
-S, serial: inf)`) whose role fixes its parameters. A local set only in the hold's body or after it is
-refused; one also set above is read at its latest value: after a
-preemption, the one the body set (this is what `kept` relies on). Its body
+S, serial: inf)`) whose role fixes its parameters. A local the header
+reads is refused unless it is set above the hold on every way the request
+reaches it; one also set in the body is read at its latest value: after a
+preemption, the one the body set (this is what `kept` relies on). The
+linker checks this where the entry is called, on the server it expands
+into, with the rule a server's own hold follows
+([below](#a-holds-header-is-read-at-admission)): a parameter is then the
+caller's argument, which the caller sets above the call, and a local is
+the queue's attribute (`E.kept`), which an earlier call of the queue's
+entries in the same request may have set (`E.prefill (prompt); E.decode
+(prompt);`, where `prefill` sets `kept`). An entry no statement calls is
+not checked: its header never runs. Its body
 also reads `now`, what it
 sets itself and the request's `hidden` attributes, and nothing else the
 session has set, nor another queue's
@@ -1382,8 +1391,11 @@ without `taking` takes nothing and admits a request as it is called.
 
 The clauses also read the session's attributes, the engine's pools,
 `cached`, `computed` and the constants, and `taking` the engine's `state`
-registers. The input is the scheduler's (a `hidden` attribute may not be
-it), and so is the output when the admission reads `request.output`. The
+registers. Those read at the admission (`taking`, `reuse`, `prefix`, a
+connector's `load`) read an attribute the server sets only once it is set
+above the call on every way to it, as a hold's header does
+([below](#a-holds-header-is-read-at-admission)). The input is the
+scheduler's (a `hidden` attribute may not be it), and so is the output when the admission reads `request.output`. The
 engine's records are attributes the caller reads after the call: `E.reused`
 (the cached tokens its latest admission read), `E.prefill` (the tokens its
 prefill computes), `E.admitted` (when) and `E.first` (when its first token
@@ -1476,6 +1488,23 @@ A body that needs the admission's value of an expression of attributes
 and constants sets it at its top, `set x = e;`: the body starts at the
 admission's instant. One of live state (`cachedin(kv)`, `now`) has moved
 by then; the body reads `cached`, the units the admission consumed.
+
+An attribute the server sets is read in a header only once it is set
+above the hold on every way to it: in both arms of an `if` (an arm that
+`end;`s goes no further), and not only in a loop, a `while` or a `fork`
+that may not have run. The linker refuses a header that reads one
+otherwise. What the server sets stays on the session to its next request,
+so until this request sets it, it holds what an earlier request left
+there, or 0 at the session's first: the header of `hold mem (cost(mem,
+m)) { set m = items; … }` would read that, not `items`. A program that
+means the earlier request's value copies it above the hold, `set earlier
+= m;`, and the header reads `earlier`. The parameters are bound at each
+request and the server sets none, so a header reads them anywhere. An
+engine's records (`E.prefill`, `E.first`) are set by the call `E (…)`, so
+a header reads them below it. An engine's admission (`taking`, `reuse`,
+`prefix`, a connector's `load`) is read at the call `E (…)` and follows
+the same rule there; an entry's hold follows it where the entry is
+called, on the server the entry expands into.
 
 ### `hidden`
 

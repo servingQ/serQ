@@ -61,8 +61,12 @@ expr  += QUEUE [ '[' expr ']' ] . POOL            -- from outside, a pool's read
    `at admission` bindings — reads the parameters, the queue's pools and stage,
    the `let` constants, and what the entry sets above the hold (#475: `set
    kept = prompt;` before it, as a server's header reads an attribute set
-   before it). A local set only in the hold's body or after it is refused;
-   one also set above is read at its latest value: after a preemption, the
+   before it). A local the header reads is refused unless it is set above
+   the hold on every way the request reaches it (since #504 by the linker,
+   where the entry is called, on the server it expands into, so an earlier
+   call of the queue's entries may set it: [Admission reads what is set
+   above](admission-reads-set-above.md)); one also set in the body is read
+   at its latest value: after a preemption, the
    one the body set (this is what `kept` relies on). The body also reads `now`, `cached`, the context
    variables and the request's `hidden` attributes; any other session
    attribute, and another queue's `Q.x`, is an error at the entry, and so

@@ -777,23 +777,81 @@ pub(crate) fn assigned_in(stmts: &[Stmt], out: &mut Vec<String>) {
     }
 }
 
+/// The records a call `E (…)` writes on the session for its caller to
+/// read after it (`E.prefill`, `E.loaded`): the `REQUEST_ATTRS` and the
+/// `CONNECTOR_ATTRS`, which only an engine with a connector writes and a
+/// program reads.
+pub(crate) fn request_records(engine: &str) -> impl Iterator<Item = String> + '_ {
+    REQUEST_ATTRS
+        .iter()
+        .chain(&CONNECTOR_ATTRS)
+        .map(move |a| format!("{engine}.{a}"))
+}
+
+/// What `stmts` set on every way through them, the one walk of that rule:
+/// the server's reply (`Parser::interface`) and what a hold's header or an
+/// engine's admission reads (`link::admission_reads_set_above`, #504). A
+/// `set` or `choose` sets its name for the statements after it, and a call
+/// `E (…)` its `request_records`; a hold's body runs to its end before the
+/// next statement; after an `if`, what both arms set, an arm that `end;`s
+/// leaving no way on; what a loop, a `while` or a `fork` sets may not have
+/// run, so it is not set after it. `at` is told each hold, before its
+/// body, and each engine request, with what is set above it. Returns
+/// whether some way goes on past `stmts`, `above` then holding what each
+/// of them sets.
+pub(crate) fn set_above<E>(
+    stmts: &[Stmt],
+    above: &mut Vec<String>,
+    at: &mut impl FnMut(&Stmt, &[String]) -> Result<(), E>,
+) -> Result<bool, E> {
+    for s in stmts {
+        match s {
+            Stmt::Set(n, _) | Stmt::Choose { var: n, .. } => {
+                if !above.contains(n) {
+                    above.push(n.clone());
+                }
+            }
+            Stmt::End => return Ok(false),
+            Stmt::Hold { body, .. } => {
+                at(s, above)?;
+                if !set_above(body, above, at)? {
+                    return Ok(false);
+                }
+            }
+            Stmt::EngineRequest { stage, .. } => {
+                at(s, above)?;
+                for n in request_records(&stage.name) {
+                    if !above.contains(&n) {
+                        above.push(n);
+                    }
+                }
+            }
+            Stmt::Branch(_, a, b) => {
+                let (mut in_a, mut in_b) = (above.clone(), above.clone());
+                let on_a = set_above(a, &mut in_a, at)?;
+                let on_b = set_above(b, &mut in_b, at)?;
+                *above = match (on_a, on_b) {
+                    (true, true) => in_a.into_iter().filter(|n| in_b.contains(n)).collect(),
+                    (true, false) => in_a,
+                    (false, true) => in_b,
+                    (false, false) => return Ok(false),
+                };
+            }
+            Stmt::Loop(body) | Stmt::While(_, body) | Stmt::Fork(body) => {
+                set_above(body, &mut above.clone(), at)?;
+            }
+            _ => {}
+        }
+    }
+    Ok(true)
+}
+
 /// Whether `name` is a built-in attribute the workload keeps (a turn draws
 /// it from a trace): a server reads one only as a parameter. Of the
 /// others, the `KEY_ATTRS` (`serial`, the session's number) every request
 /// carries, and the scheduler sets the `SCHEDULER_ATTRS`.
 fn turn_attr(name: &str) -> bool {
     BUILTIN_ATTRS.contains(&name) && !SCHEDULER_ATTRS.contains(&name) && !KEY_ATTRS.contains(&name)
-}
-
-/// Whether every way through `stmts` that does not `end;` sets `name`.
-fn sets_always(stmts: &[Stmt], name: &str) -> bool {
-    stmts.iter().any(|s| match s {
-        Stmt::Set(n, _) | Stmt::Choose { var: n, .. } => n == name,
-        Stmt::End => true,
-        Stmt::Branch(_, a, b) => sets_always(a, name) && sets_always(b, name),
-        Stmt::Hold { body, .. } => sets_always(body, name),
-        _ => false,
-    })
 }
 
 /// What `f` finds first in `stmts`, at any depth: a statement before the
@@ -1282,19 +1340,18 @@ fn pass_help(q: &QueueDecl, e: &queue::Entry, n: &str, header: bool) -> String {
 }
 
 /// The expressions of an entry's body, the holds' headers apart from the
-/// rest: the header is the admission and sees less. Each header comes with
-/// the locals set above its hold (`set kept = prompt;` before it, in the
-/// entry's statement order: in both arms of an `if`, not in a loop or a
-/// `fork` that may not have run), the only ones it reads. The index of every reference the body
+/// rest: the header is the admission and sees less. Each header comes
+/// marked when it is a `prefix` key, which also sees the `KEY_ATTRS`, the
+/// session's number by which it keys the session's own context. Whether a
+/// local a header reads is set above its hold is checked on the server the
+/// entry expands into, where it is called (`link::admission_reads_set_above`,
+/// #504). The index of every reference the body
 /// names (`run nic[k]`, `hold kv`, `release src`) is in `indices`: read as
 /// the body reads, and the only place a `from` name may stand as a number.
-/// A `prefix` key also sees the `KEY_ATTRS`, the session's number by which
-/// it keys the session's own context.
 /// A `Stmt::Unread`'s arguments are in `unread`.
 fn split_reads<'a>(
     stmts: &'a [Stmt],
-    above: &mut Vec<String>,
-    headers: &mut Vec<(&'a Expr, Vec<String>)>,
+    headers: &mut Vec<(&'a Expr, bool)>,
     bodies: &mut Vec<&'a Expr>,
     indices: &mut Vec<&'a Expr>,
     unread: &mut Vec<&'a Arg>,
@@ -1312,11 +1369,7 @@ fn split_reads<'a>(
             | Stmt::Turn
             | Stmt::End
             | Stmt::Request => {}
-            Stmt::Set(n, e) => {
-                bodies.push(e);
-                above.push(n.clone());
-            }
-            Stmt::Observe(_, e) => bodies.push(e),
+            Stmt::Set(_, e) | Stmt::Observe(_, e) => bodies.push(e),
             Stmt::Unread(args) => unread.extend(args),
             Stmt::Grow(r, e) | Stmt::Shrink(r, e) | Stmt::Load(r, e) => {
                 index(r, indices);
@@ -1342,19 +1395,17 @@ fn split_reads<'a>(
             } => {
                 for (r, e, f) in pools {
                     index(r, indices);
-                    headers.push((e, above.clone()));
+                    headers.push((e, false));
                     if let Some(f) = f {
-                        headers.push((f, above.clone()));
+                        headers.push((f, false));
                     }
                 }
                 for (k, n) in prefix.iter().flatten() {
-                    let mut keyed = above.clone();
-                    keyed.extend(KEY_ATTRS.map(String::from));
-                    headers.push((k, keyed));
-                    headers.push((n, above.clone()));
+                    headers.push((k, true));
+                    headers.push((n, false));
                 }
                 if let Some(r) = reuse {
-                    headers.push((r, above.clone()));
+                    headers.push((r, false));
                 }
                 if let Some(c) = cache {
                     bodies.push(c);
@@ -1363,8 +1414,7 @@ fn split_reads<'a>(
                     index(r, indices);
                     bodies.push(t);
                 }
-                // the body runs to its end before the next statement
-                split_reads(body, above, headers, bodies, indices, unread);
+                split_reads(body, headers, bodies, indices, unread);
             }
             Stmt::Run {
                 stage,
@@ -1382,32 +1432,19 @@ fn split_reads<'a>(
                 bodies.push(work);
                 bodies.extend(latency.iter());
             }
-            // a branch sets after it what both arms set; a pass of a loop,
-            // or a fork beside the session, may not have run
             Stmt::Branch(p, a, b) => {
                 bodies.push(p);
-                let (mut in_a, mut in_b) = (above.clone(), above.clone());
-                split_reads(a, &mut in_a, headers, bodies, indices, unread);
-                split_reads(b, &mut in_b, headers, bodies, indices, unread);
-                for n in in_a {
-                    if in_b.contains(&n) && !above.contains(&n) {
-                        above.push(n);
-                    }
-                }
+                split_reads(a, headers, bodies, indices, unread);
+                split_reads(b, headers, bodies, indices, unread);
             }
             Stmt::While(e, b) => {
                 bodies.push(e);
-                split_reads(b, &mut above.clone(), headers, bodies, indices, unread);
+                split_reads(b, headers, bodies, indices, unread);
             }
-            Stmt::Loop(b) | Stmt::Fork(b) => {
-                split_reads(b, &mut above.clone(), headers, bodies, indices, unread)
-            }
-            Stmt::Choose {
-                var, count, key, ..
-            } => {
+            Stmt::Loop(b) | Stmt::Fork(b) => split_reads(b, headers, bodies, indices, unread),
+            Stmt::Choose { count, key, .. } => {
                 bodies.push(count);
                 bodies.extend(key);
-                above.push(var.clone());
             }
             Stmt::Call {
                 queue,
@@ -2679,8 +2716,12 @@ impl Parser {
             return Ok(());
         };
         if let Some((_, server)) = &self.server {
+            let mut set = vec![];
+            let Ok(goes_on) = set_above(server, &mut set, &mut |_, _| {
+                Ok::<(), std::convert::Infallible>(())
+            });
             for (at, r) in &sig.reply {
-                if !sets_always(server, r) {
+                if goes_on && !set.contains(r) {
                     return self.err_at(
                         *at,
                         format!(
@@ -4665,8 +4706,9 @@ impl Parser {
         // the gateway's `route` is the deployment's and reads as a server
         // does; any other entry of a queue that is also a gateway is an entry
         let is_gateway = verb == queue::GATEWAY_VERB && q.roles.iter().any(|r| r == "gateway");
-        // `seen`: the locals a read sees, all of them in the body and in a
-        // header those set above its hold
+        // `seen`: the locals a read sees, all of them, and with them the
+        // `KEY_ATTRS` in a `prefix` key; whether a header's is set above its
+        // hold is checked where the entry is called (#504)
         let allowed_var = |n: &str, header: bool, seen: &[String]| -> bool {
             queue::in_entry(n, params.iter().map(String::as_str), seen).is_some()
                 || supplied(n) == Some(Supplied::Inf)
@@ -4698,14 +4740,7 @@ impl Parser {
             let mut bodies = vec![];
             let mut indices = vec![];
             let mut unread = vec![];
-            split_reads(
-                &body,
-                &mut vec![],
-                &mut headers,
-                &mut bodies,
-                &mut indices,
-                &mut unread,
-            );
+            split_reads(&body, &mut headers, &mut bodies, &mut indices, &mut unread);
             // an own pool, or the `from` name, is all an entry's statements hold
             let mut named = vec![];
             pools_named(&body, &mut named);
@@ -4727,10 +4762,15 @@ impl Parser {
                     ),
                 );
             }
+            let keyed: Vec<String> = locals
+                .iter()
+                .cloned()
+                .chain(KEY_ATTRS.map(String::from))
+                .collect();
             let mut sources = vec![];
             for (e, header, in_index, seen) in headers
                 .iter()
-                .map(|(e, above)| (*e, true, false, above))
+                .map(|(e, key)| (*e, true, false, if *key { &keyed } else { &locals }))
                 .chain(bodies.iter().map(|e| (*e, false, false, &locals)))
                 .chain(indices.iter().map(|e| (*e, false, true, &locals)))
             {
@@ -4773,12 +4813,6 @@ impl Parser {
                     }
                     if allowed_var(&v, header, seen) {
                         continue;
-                    }
-                    if header && locals.contains(&v) {
-                        return self.err_at(at, format!(
-                            "{}: the admission header reads local `{v}`, which the entry does not set above this hold; a header sees the parameters, the queue's resources and the locals set before its hold, not a value its own body or a later statement calculates\nhelp: set `{v}` before the hold, in both arms of an `if` and not in a loop or `fork` that ends before it, or write its value in the header",
-                            entry_name(q, &verb)
-                        ));
                     }
                     if v.contains('.') {
                         let message = match through_queue(&qname, &v) {
