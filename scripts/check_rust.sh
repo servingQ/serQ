@@ -58,7 +58,7 @@ done
 # The site's own programs, written in the page rather than included: each
 # page's "model.sq" and "workload.sq" fences link, and the page's
 # `serq … model.sq` commands run on them; any other fence that declares
-# `fn main` is marked an excerpt (```serq { .excerpt }).
+# `fn main` writes `…` for what it leaves out.
 python3 scripts/test_check_docs_examples.py
 python3 scripts/check_docs_examples.py
 # Experimental runners must explicitly select their execution conditions too.

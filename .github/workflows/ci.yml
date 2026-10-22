@@ -51,6 +51,8 @@ jobs:
         run: python pyserq/tests/test_pyserq.py
       # the wheel is this tree's, so the pages' scripts run against the code they document
       - name: the docs' pyserq scripts run
+        env:
+          PYSERQ_FROM_TREE: "1"
         run: |
           python scripts/test_check_docs_examples.py
           python scripts/check_docs_examples.py --python

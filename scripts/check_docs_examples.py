@@ -2,7 +2,7 @@
 """The site's example programs link and run.
 
     scripts/check_docs_examples.py            # the ```serq fences (make check); needs target/release/serq
-    scripts/check_docs_examples.py --python   # the ```python fences (CI's pyserq job); needs pyserq installed
+    scripts/check_docs_examples.py --python   # the fences that import pyserq (CI's pyserq job); needs pyserq installed
 
 A page shows a complete program as two ```serq fences titled "model.sq" and
 "workload.sq", the names it tells the reader to save them under. This saves
@@ -10,13 +10,15 @@ them under those names in a temporary directory, links them (`serq check
 model.sq --workload workload.sq`) and runs there every `serq` line of the
 page's ```sh fences that names `model.sq`, as `serq` with its arguments (no
 shell). Any other ```serq fence that declares `fn main` (not one that names
-it in a comment) shows part of a program, and says so:
-```serq { .excerpt }. The marker on a fence the check would link anyway, or
-on one with no `fn main`, is refused, so the marked fences are exactly the
-ones the check leaves out.
+it in a comment) shows part of a program, and says so where the reader sees
+it: it writes `…` for what it leaves out. serq refuses `…` (`unexpected
+character`), so such a fence is one no reader could save and link, and one
+with no `…` is a program the check links. A fence is serQ when the site draws
+it as serQ: its language, spelt any way Pygments looks it up, is one of
+SerqLexer's aliases (docs/hooks/serq_lexer.py).
 
-A ```python fence that imports pyserq is a script, and runs in a temporary
-directory with the Python running this.
+A fence that imports pyserq, whatever its language, is a script, and runs in
+a temporary directory with the Python running this.
 
 A fence with neither is a fragment: `scripts/check_docs_lexer.py` lexes it.
 A fragment worth linking is included from a program `make check` links, by a
@@ -29,6 +31,7 @@ is the code as it was.
 SERQ_CLI names the serq binary, as for pyserq/tests/test_pyserq.py.
 """
 
+import ast
 import os
 import re
 import shlex
@@ -44,16 +47,45 @@ BRACES = re.compile(r"\{([^}]*)\}")
 CLASS = re.compile(r"(?<![\w-])\.([\w-]+)")
 TITLE = re.compile(r'\btitle="([^"]*)"')
 MAIN = re.compile(r"\bfn\s+main\s*\(")
-COMMENT = re.compile(r"/\*.*?\*/|//[^\n]*", re.S)
+# what is not code: a string, then a comment, as serq_lexer.py reads them
+NOT_CODE = re.compile(r'"[^"\n]*"|/\*.*?\*/|//[^\n]*', re.S)
+ELIDED = "…"
 PYSERQ = re.compile(r"^\s*import pyserq\b", re.M)
-EXCERPT = "{ .excerpt }"
 PAIR = ("model.sq", "workload.sq")
 SHELL = ("sh", "bash", "shell")
+LEXER = ROOT / "docs" / "hooks" / "serq_lexer.py"
+
+
+def serq_languages(lexer=LEXER):
+    """SerqLexer.aliases, the languages the site draws as serQ, read from the class without importing Pygments."""
+    for node in ast.parse(lexer.read_text()).body:
+        if isinstance(node, ast.ClassDef) and node.name == "SerqLexer":
+            for stmt in node.body:
+                if isinstance(stmt, ast.Assign) and [getattr(t, "id", None) for t in stmt.targets] == ["aliases"]:
+                    try:
+                        return frozenset(ast.literal_eval(stmt.value))
+                    except ValueError:
+                        break
+    sys.exit(f"check_docs_examples: no literal `aliases = [...]` in {lexer}'s SerqLexer, which says "
+             "which fences are serQ: teach serq_languages() where they are")
+
+
+SERQ_LANGS = serq_languages()
+
+
+def code(body):
+    """The fence without its strings and comments."""
+    return NOT_CODE.sub(" ", body)
 
 
 def declares_main(body):
     """The fence declares `fn main`, not merely names it in a comment (`// in fn main()`)."""
-    return bool(MAIN.search(COMMENT.sub("", body)))
+    return bool(MAIN.search(code(body)))
+
+
+def elides(body):
+    """The fence writes `…` in its code, which serq refuses: the page leaves part of the program out."""
+    return ELIDED in code(body)
 
 
 def excluded(mkdocs_text):
@@ -86,20 +118,22 @@ def pages(root=ROOT):
 
 
 def info_parts(info):
-    """(language, classes, title) of a fence's info string.
+    """(language, title) of a fence's info string, the language as Pygments looks it up.
 
-    `serq title="model.sq"`, `serq { .excerpt }` and `{ .serq .excerpt }` are
-    all spellings superfences reads, so the language of the brace form is its
-    first class: a fence cannot leave the check by how it is spelt.
+    superfences draws `serq title="model.sq"`, `.serq`, `SERQ`, `seq` and
+    `{ .serq }` all as serQ: it reads the language after an optional `.`, or in
+    the brace form as the first class, and Pygments finds the lexer by the
+    language in lower case. So the language here is the same word, and a serQ
+    fence cannot leave the check by how its language is spelt.
     """
-    classes = [c for b in BRACES.findall(info) for c in CLASS.findall(b)]
     words = info.split()
     if words and not words[0].startswith("{"):
         lang = words[0]
     else:
-        lang = classes.pop(0) if classes else ""
+        classes = [c for b in BRACES.findall(info) for c in CLASS.findall(b)]
+        lang = classes[0] if classes else ""
     t = TITLE.search(info)
-    return lang, classes, t.group(1) if t else None
+    return lang.removeprefix(".").lower(), t.group(1) if t else None
 
 
 def fences(path):
@@ -145,19 +179,16 @@ def check_serq(page, rel):
     errors, linked, ran = [], 0, 0
     fs = [(line, *info_parts(info), body) for line, info, body in fences(page)]
     titled = {}
-    for line, lang, classes, name, body in fs:
-        if lang != "serq" or "--8<--" in body:
+    for line, lang, name, body in fs:
+        if lang not in SERQ_LANGS or "--8<--" in body:
             continue
         if name in PAIR:
             titled.setdefault(name, []).append((line, body))
-        if "excerpt" in classes:
-            if not declares_main(body) or name in PAIR:
-                errors.append(f"{rel}:{line}: `{EXCERPT}` marks a fence the check would otherwise link, "
-                              "one with `fn main` and no model.sq title; this one is not: drop the marker")
-        elif declares_main(body) and name != "model.sq":
-            errors.append(f"{rel}:{line}: a ```serq fence with `fn main` is a program a reader can save: "
-                          'title it "model.sq" beside the page\'s "workload.sq" fence, which make check links, '
-                          f"or, if it shows part of a program, mark it ```serq {EXCERPT}")
+        elif declares_main(body) and not elides(body):
+            errors.append(f"{rel}:{line}: a ```serq fence that declares `fn main` and writes no `{ELIDED}` is a "
+                          'program a reader can save: title it "model.sq" beside the page\'s "workload.sq" fence, '
+                          f"which make check links, or, if it shows part of a program, write `{ELIDED}` where "
+                          f"the rest goes (serq refuses `{ELIDED}`, so the reader sees the fence is not whole)")
     if not titled:
         return errors, linked, ran
     for name in PAIR:
@@ -178,7 +209,7 @@ def check_serq(page, rel):
             errors.append(f"{rel}:{line}: the page's model.sq with its workload.sq does not link "
                           f"(lines are the fence's):\n{out}")
             return errors, linked, ran
-        for line, lang, _, _, body in fs:
+        for line, lang, _, body in fs:
             if lang not in SHELL:
                 continue
             for k, cmd, words in commands(body):
@@ -189,6 +220,13 @@ def check_serq(page, rel):
                 if code:
                     errors.append(f"{rel}:{line + k}: `{cmd}` fails on the page's model.sq and workload.sq:\n{out}")
     return errors, linked, ran
+
+
+def pyserq_scripts(path):
+    """(line, body) of each fence that imports pyserq: ```python, ```py or any other spelling."""
+    for line, _, body in fences(path):
+        if PYSERQ.search(body):
+            yield line, body
 
 
 def run_python(body, where):
@@ -211,12 +249,11 @@ def main(argv):
         n = 0
         for page in pages():
             rel = page.relative_to(ROOT)
-            for line, info, body in fences(page):
-                if info_parts(info)[0] == "python" and PYSERQ.search(body):
-                    n += 1
-                    e = run_python(body, f"{rel}:{line}")
-                    if e:
-                        errors.append(e)
+            for line, body in pyserq_scripts(page):
+                n += 1
+                e = run_python(body, f"{rel}:{line}")
+                if e:
+                    errors.append(e)
         summary = f"{n} pyserq scripts run (pyserq {pyserq.__version__})"
     else:
         linked = ran = 0

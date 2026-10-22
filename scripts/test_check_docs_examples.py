@@ -1,10 +1,11 @@
 """scripts/check_docs_examples.py refuses what it says it refuses.
 
 Run from the repository root: python3 scripts/test_check_docs_examples.py
-(needs target/release/serq; the pyserq case needs pyserq installed and is
-skipped, by name, without it)
+(needs target/release/serq; the pyserq case runs only where PYSERQ_FROM_TREE
+is set, as CI's pyserq job sets it beside the wheel it builds from this tree,
+and is skipped, by name, elsewhere)
 """
-import importlib.util
+import os
 import sys
 import tempfile
 import unittest
@@ -50,6 +51,16 @@ class Pages(unittest.TestCase):
             (root / "docs" / "design" / "b.md").write_text("")
             self.assertEqual([p.name for p in docs.pages(root)], ["a.md"])
 
+    def test_the_serq_languages_are_the_lexer_aliases(self):
+        with tempfile.TemporaryDirectory() as d:
+            lexer = Path(d) / "serq_lexer.py"
+            lexer.write_text('class SerqLexer(RegexLexer):\n    name = "serQ"\n    aliases = ["serq", "sq"]\n')
+            self.assertEqual(docs.serq_languages(lexer), {"serq", "sq"})
+            # a list it cannot read stops the check rather than leave every fence out
+            lexer.write_text('class SerqLexer(RegexLexer):\n    aliases = ALIASES\n')
+            with self.assertRaises(SystemExit):
+                docs.serq_languages(lexer)
+
     def test_an_exclusion_it_cannot_read_stops_the_check(self):
         # a glob read as a prefix would check pages the site leaves out, or skip ones it builds
         with self.assertRaises(SystemExit) as e:
@@ -72,6 +83,7 @@ class Serq(unittest.TestCase):
     def test_a_command_that_fails_names_its_line(self):
         errors, _, _ = check(pair(run="serq run model.sq --workload workload.sq"))
         self.assertEqual(len(errors), 1)
+        # line 17 is the sh fence (1 + 9 + 1 + 5 + 1), so its first command is line 18
         self.assertTrue(errors[0].startswith("page.md:18:"), errors[0])
         self.assertIn("no horizon", errors[0])
 
@@ -79,32 +91,35 @@ class Serq(unittest.TestCase):
         self.assertEqual(check(pair(run="serq run model.sq \\\n  --workload workload.sq --horizon 10")),
                          ([], 1, 1))
 
-    def test_a_main_with_no_title_and_no_marker_is_refused(self):
+    def test_a_main_with_no_ellipsis_is_refused(self):
         errors, _, _ = check(f"{FENCE}serq\n{MODEL}{FENCE}\n")
         self.assertEqual(len(errors), 1)
-        self.assertIn("{ .excerpt }", errors[0])
+        self.assertIn("write `…`", errors[0])
 
-    def test_the_brace_spelling_is_read_too(self):
-        errors, _, _ = check(f"{FENCE}{{ .serq }}\n{MODEL}{FENCE}\n")
-        self.assertEqual(len(errors), 1)
-        self.assertIn("{ .excerpt }", errors[0])
-        self.assertEqual(check(f"{FENCE}{{ .serq .excerpt }}\nfn main() {{ … }}\n{FENCE}\n"), ([], 0, 0))
+    def test_every_spelling_the_site_draws_as_serq_is_read(self):
+        # superfences draws all of these with SerqLexer (`seq` is its other alias)
+        for info in ("seq", ".serq", "SERQ", "{ .serq }", '{ .seq title="a.sq" }'):
+            with self.subTest(info=info):
+                errors, _, _ = check(f"{FENCE}{info}\n{MODEL}{FENCE}\n")
+                self.assertEqual(len(errors), 1)
+                self.assertIn("write `…`", errors[0])
+        # a title read in the brace form links like any other
+        text = pair().replace('serq title="model.sq"', '{ .serq title="model.sq" }')
+        self.assertEqual(check(text), ([], 1, 1))
 
     def test_an_excerpt_is_not_linked(self):
-        self.assertEqual(check(f"{FENCE}serq {{ .excerpt }}\nfn main() {{ … }}\n{FENCE}\n"), ([], 0, 0))
+        # serq refuses `…`, so the fence cannot be a program the reader saves
+        self.assertEqual(check(f"{FENCE}serq\nfn main() {{\n  server {{ … }}\n}}\n{FENCE}\n"), ([], 0, 0))
+
+    def test_an_ellipsis_in_a_comment_or_a_string_leaves_nothing_out(self):
+        for elsewhere in ('// the rest …\n', 'let s = "…";\n'):
+            with self.subTest(elsewhere=elsewhere):
+                errors, _, _ = check(f"{FENCE}serq\n{elsewhere}{MODEL}{FENCE}\n")
+                self.assertEqual(len(errors), 1)
+                self.assertIn("write `…`", errors[0])
 
     def test_a_main_named_in_a_comment_is_a_fragment(self):
         self.assertEqual(check(f"{FENCE}serq\n// in fn main()\nserver {{ … }}\n{FENCE}\n"), ([], 0, 0))
-
-    def test_a_marker_on_a_fragment_is_refused(self):
-        errors, _, _ = check(f"{FENCE}serq {{ .excerpt }}\npool kv {{ cap 1; }}\n{FENCE}\n")
-        self.assertEqual(len(errors), 1)
-        self.assertIn("drop the marker", errors[0])
-
-    def test_a_marker_on_a_titled_program_is_refused(self):
-        errors, _, _ = check(pair().replace('title="model.sq"', 'title="model.sq" { .excerpt }'))
-        self.assertEqual(len(errors), 1)
-        self.assertIn("drop the marker", errors[0])
 
     def test_a_model_needs_its_workload(self):
         errors, _, _ = check(f'{FENCE}serq title="model.sq"\n{MODEL}{FENCE}\n')
@@ -118,12 +133,24 @@ class Serq(unittest.TestCase):
 
 
 class Python(unittest.TestCase):
+    def test_a_script_is_found_by_its_import_whatever_its_language(self):
+        text = "".join(f"{FENCE}{lang}\nimport pyserq\n{FENCE}\n" for lang in ("python", "py", ".Python3", "text"))
+        text += f"{FENCE}python\nimport json\n{FENCE}\n"
+        with tempfile.TemporaryDirectory() as d:
+            page = Path(d) / "page.md"
+            page.write_text(text)
+            self.assertEqual([line for line, _ in docs.pyserq_scripts(page)], [1, 4, 7, 10])
+
     def test_a_failing_script_names_its_page_line(self):
         e = docs.run_python("raise SystemExit('no')\n", "page.md:5")
         self.assertTrue(e.startswith("page.md:5:"), e)
         self.assertIsNone(docs.run_python("assert 1 + 1 == 2\n", "page.md:5"))
 
-    @unittest.skipUnless(importlib.util.find_spec("pyserq"), "pyserq is not installed")
+    # Only against a wheel of this tree: the repository's pyserq/ directory, or an
+    # older pyserq installed here, would be found as "pyserq" and answer for another
+    # language (one before #390 links a bare-number cost).
+    @unittest.skipUnless(os.environ.get("PYSERQ_FROM_TREE"),
+                         "PYSERQ_FROM_TREE is unset: the pyserq found here may not be this tree's")
     def test_a_bare_number_cost_fails_in_python(self):
         # #497 as it was found: a pyserq page's program that no longer links
         body = ("import pyserq\n"
