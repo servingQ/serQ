@@ -18,6 +18,7 @@
     "examples/workloads/subagents.sq"
   ],
   "examples/multi-turn/vllm_lmcache.sq": "examples/workloads/chat.sq",
+  "examples/multi-turn/vllm_lmcache_replicas.sq": "examples/workloads/chat.sq",
   "examples/multi-turn/vllm_system_prompt.sq": "examples/workloads/chat_products.sq",
   "examples/oracle/vllm_request.sq": "examples/workloads/one_request.sq",
   "examples/oracle/vllm_shared_prompt.sq": "examples/workloads/shared_trace.sq",

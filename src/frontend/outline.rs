@@ -103,15 +103,19 @@ pub struct Accepts {
     pub pools: Vec<Spot>,
 }
 
-/// `kvt.nixl_pull (SOURCE, READER, …);` or `kvt.nixl_push (…);`.
+/// `kvt.nixl_pull (SOURCE, READER, …);`, `kvt.nixl_push (…);` or
+/// `kvt.l2_link (L2, QUEUE, …);` (`parser::KVT_RELATIONS`).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Relation {
-    /// `pull` or `push`.
+    /// `pull`, `push` or `link`.
     pub mode: String,
+    /// The first queue: a NIXL copy's source, or the L2 of a link.
     pub source: String,
+    /// The second: the queue that reads the copy, or whose engine's
+    /// connector copies through the L2.
     pub reader: String,
     pub range: Range,
-    /// The function's name, `nixl_pull` or `nixl_push`.
+    /// The function's name, `nixl_pull`, `nixl_push` or `l2_link`.
     pub function: Range,
 }
 
@@ -442,9 +446,10 @@ impl Recorder {
             }
             "kvt" => {
                 let function = Self::name_at(toks, at + 2);
-                let mode = function
-                    .strip_prefix("nixl_")
-                    .unwrap_or(&function)
+                let mode = crate::frontend::parser::KVT_RELATIONS
+                    .iter()
+                    .find(|(f, _, _)| *f == function)
+                    .map_or(function.as_str(), |(_, mode, _)| mode)
                     .to_string();
                 self.out.relations.push(Relation {
                     mode,

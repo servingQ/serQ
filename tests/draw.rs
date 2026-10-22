@@ -2297,6 +2297,24 @@ fn labels_do_not_overlap() {
     }
 }
 
+/// `vllm_lmcache_replicas.sq` (#600): a replica's link to the L2 is its
+/// own, so it is in the box of the replica the router chose, with the
+/// engine; the L2 is every replica's, outside the boxes. The save crosses
+/// the link the load does: walked as the call's member (`E.nic[j]`), not
+/// member 0's, which would leave the link in no box.
+#[test]
+fn an_engine_s_link_to_an_l2_is_in_its_box() {
+    let p = program("vllm_lmcache_replicas");
+    let net = deployment::project(&p);
+    let node = |name: &str| net.node_of(stage(&p, name)).unwrap();
+    let (l2, nic, e) = (node("lmc"), node("E.nic"), node("E"));
+    assert_eq!(net.flows, vec![vec![l2, nic]]);
+    assert_eq!(net.instance_of(l2), None);
+    let k = net.instance_of(nic).expect("the replica's box");
+    assert_eq!(net.instance_of(e), Some(k));
+    assert_eq!(net.instances.len(), 1);
+}
+
 // --- instances whose stages and pools two of them address (#206) ------------
 
 fn instance_net(decls: &str, session: &str) -> (Program, deployment::Net) {

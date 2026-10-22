@@ -1,6 +1,6 @@
 // Multi-turn chat sessions: a context that grows by each turn's prompt and
 // output, a tool call between turns (examples/multi-turn/vllm.sq starts
-// under it, and vllm_lmcache.sq runs it).
+// under it, and vllm_lmcache.sq and vllm_lmcache_replicas.sq run it).
 use "std/args";
 
 let p = 0.9;  // continue after a turn

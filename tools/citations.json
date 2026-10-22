@@ -177,5 +177,6 @@
  "scheduler.py:950-953": "d078d5a8a38a6451",
  "single_type_kv_cache_manager.py:245-263": "f781f99efb0e6cb2",
  "single_type_kv_cache_manager.py:557-585": "0ad7a0997eb9640d",
- "single_type_kv_cache_manager.py:743-838": "ed694b11462a9943"
+ "single_type_kv_cache_manager.py:743-838": "ed694b11462a9943",
+ "v1/base.py:25-26": "02901f7d3e18f6d7"
 }

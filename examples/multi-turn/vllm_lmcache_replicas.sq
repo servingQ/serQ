@@ -1,0 +1,83 @@
+// J vLLM replicas sharing one LMCache server: `multi-turn/vllm_lmcache.sq`'s
+// engine on each replica, under the same workload
+// (examples/workloads/chat.sq), a turn sent to the least loaded replica.
+// What one replica saves, another loads: the L2's contents are every
+// replica's, as Mooncake's store is shared by the vLLM instances that use
+// it (vLLM's docs/features/mooncake_store_connector_usage.md, lines 6 and
+// 52-59, at 0c87a197). The copies are not: a connector's worker side runs
+// in each worker (kv_connector/v1/base.py:25-26), so each replica copies
+// over its own PCIe or NIC link, and the server's bandwidth is what the
+// links' copies share. `kvt.l2_link` says so (docs/design/l2-link.md).
+//
+// What the model leaves out, beyond `vllm_lmcache.sq`'s: a link carries a
+// load and a save in one direction at a time, and the router reads no
+// replica's prefix cache.
+use "std/args";
+use "std/kvt";
+use "std/share";
+
+let J = 2;             // vLLM replicas
+let B = 8192;          // max_num_batched_tokens
+let bs = 16;           // block_size
+let a = 2e-5;          // compute per scheduled token (s)
+let omega = 2e-4;      // weights read per iteration (s)
+let beta = 2e-9;       // KV read per iteration per resident context token (s)
+let c0 = 0;            // fixed cost per iteration (s)
+let chunk = 256;       // LMCache's chunk: what it stores and finds, in tokens
+let r = 5e-6;          // seconds per token over one replica's link (128 KiB/token at ~25 GB/s)
+
+fn main() {
+  let max_seqs = args.number("max_seqs", 16);   // max_num_seqs
+  let blocks = args.number("blocks", 2000);   // num_gpu_blocks of a replica
+  let l2_cap = args.number("l2_cap", 1e6);    // tokens the LMCache server holds
+  let l2_bw = args.number("l2_bw", 2);        // the server's bandwidth, in replica links
+
+  // The LMCache server: its memory, and the bandwidth all the replicas'
+  // copies divide.
+  queue lmc : l2 {
+    device host { kv cap l2_cap; }
+    pool kv on host { block chunk; evict lru; }
+    serve ps(l2_bw);
+  }
+
+  // `vllm_lmcache.sq`'s: the whole chunks the L2 holds past the GPU's hit
+  def beyond(known, hit) {
+    max(0, min(floor(cachedin(lmc.kv), chunk), known - 1) - hit)
+  }
+
+  queue E[J] : agg {
+    device gpu { compute (t) = t * a; hbm (k) = omega + beta * k; kv cap blocks * bs; }
+    engine on gpu {
+      reqs cap max_seqs;
+      tokens cap B;
+      connector lmc {
+        per_token (r);
+        load (request.preempted ? 0 : beyond(request.known, request.hit));
+        save (floor(request.input + request.output, chunk));
+      }
+      scheduler {
+        advance running;
+        admit waiting while (running.preempted == 0)
+          taking reqs (1),
+            kv (min(request.known, request.hit + (request.loaded > 0 ? request.loaded : budget_left(E))))
+            reserve (request.known)
+          reuse (floor(request.known - 1, bs))
+          cache (request.input + request.output);
+      }
+      worker {
+        forward (c0 + max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
+      }
+    }
+    nic ps(1);   // the replica's own link to the server
+    pool reqs on E { queue fifo; }
+    pool kv on E.gpu { block bs; evict lru; preempt lifo; }
+    decode (prompt) { E (prompt, output); }
+  }
+  // each replica's copies cross the server's `serve` and its own `nic` at once
+  kvt.l2_link (lmc, E, share = share.maxmin);
+
+  server (input, hidden output) {
+    choose j in J by (holders(E[j].kv) + queued(E[j].kv));
+    E[j].decode (input);
+  }
+}

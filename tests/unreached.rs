@@ -67,6 +67,11 @@ fn a_nic_no_copy_crosses_does_not_link() {
         e.contains("kvt.nixl_pull"),
         "names the relation to write: {e}"
     );
+    // or the link of an engine whose connector copies through an L2 (#600)
+    assert!(
+        e.contains("`kvt.l2_link (L2, E1, share = …)`"),
+        "names the link to write: {e}"
+    );
     // at the `nic` (the `decode` line of `queue` above, its 11th column),
     // not at the queue's name `E1` (1:7) (#645 A1)
     assert!(
