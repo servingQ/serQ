@@ -117,3 +117,50 @@ pub fn run_example(path: &str, ov: &serq::Overrides) -> Result<serq::Report, Str
     let workload = serq::paired_workload(&root.join(path)).expect("a pair");
     serq::run_ir(&example(path, ov)?, workload.parent())
 }
+
+/// The iterations of a logged run, one line each in the form the removed
+/// `SERQ_TRACE_ITER` switch printed (#728), so the schedules the tests were
+/// written in stay as written: `ITER t s:turn:mn` per request of the batch,
+/// `m` its mode (`p` prefill, `d` decode) and `n` its tokens (the `iter`
+/// event's `each`). The turn is the session's last `turn` (a leg takes its
+/// session's when it is forked), the mode its request's last `status`.
+pub fn iter_lines(log: &serq::engine::log::Log) -> Vec<String> {
+    use serq::engine::log::{EventKind, Who};
+    use serq::frontend::ast::RunMode;
+    use std::collections::HashMap;
+    let key = |w: &Who| (w.serial, w.leg);
+    let mut turn: HashMap<(u64, Option<u32>), u32> = HashMap::new();
+    let mut mode: HashMap<(u64, Option<u32>), RunMode> = HashMap::new();
+    let mut lines = vec![];
+    for e in &log.events {
+        match &e.kind {
+            EventKind::Turn { who, turn: n } => {
+                turn.insert(key(who), *n);
+            }
+            EventKind::Fork { who } => {
+                let n = turn.get(&(who.serial, None)).copied().unwrap_or(0);
+                turn.insert(key(who), n);
+            }
+            EventKind::Status { who, mode: m, .. } => {
+                mode.insert(key(who), *m);
+            }
+            EventKind::Iter { reqs, each, .. } => {
+                let parts: Vec<String> = reqs
+                    .iter()
+                    .zip(each)
+                    .map(|(w, n)| {
+                        let m = match mode.get(&key(w)) {
+                            Some(RunMode::Decode) => "d",
+                            _ => "p",
+                        };
+                        let tn = turn.get(&key(w)).copied().unwrap_or(0);
+                        format!("{}:{tn}:{m}{n}", w.serial)
+                    })
+                    .collect();
+                lines.push(format!("ITER {:.4} {}", e.t, parts.join(" ")));
+            }
+            _ => {}
+        }
+    }
+    lines
+}

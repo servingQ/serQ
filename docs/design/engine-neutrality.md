@@ -71,7 +71,7 @@ engine's default.
 each (vllm-rbln, FasterTransformer as Dai et al. model it) and neither
 escapes it for SGLang. `exclusive prefill` selects one prefill; three
 two-token prompts on a budget of eight run in three iterations, where SGLang
-runs one. The program (`SERQ_TRACE_ITER=1 serq run` on it prints the
+runs one. The program (the `iter` events of `serq run --log` list its
 iterations):
 
 ```

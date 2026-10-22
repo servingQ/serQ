@@ -7,7 +7,9 @@
 //! Every event names what the IR names: a session by its serial (a leg of
 //! it, `fork`, by its serial and its leg number), a stage and a pool by
 //! their index in the program, which the log's header lists with their
-//! names. The events are in time order; ties keep the order they happened.
+//! names; an iteration's `used` and `cached` are its engine's memory pool's,
+//! which the IR names (`CStep::memory`). The events are in time order; ties
+//! keep the order they happened.
 
 use std::fmt::Write as _;
 
@@ -86,7 +88,18 @@ pub enum EventKind {
         stage: usize,
         dur: f64,
         tokens: f64,
+        /// The engine's `tokens cap` as this iteration read it; infinite
+        /// without one.
+        budget: f64,
         reqs: Vec<Who>,
+        /// The tokens of each of `reqs`, in its order: a decode's 1, a
+        /// prefill's chunk. They sum to `tokens`.
+        each: Vec<f64>,
+        /// The units allocated (`used(p)`) and cached in the engine's
+        /// memory pool (`CStep::memory`) once the iteration is scheduled,
+        /// what the report's `mean_used` and `mean_cached` average; `None`
+        /// for an engine without one.
+        memory: Option<(f64, f64)>,
     },
     /// It ends.
     End { who: Who },
@@ -247,7 +260,10 @@ impl Log {
                     stage,
                     dur,
                     tokens,
+                    budget,
                     reqs,
+                    each,
+                    memory,
                 } => {
                     // each request as `[serial]`, or `[serial, leg]` for a leg
                     let list: Vec<String> = reqs
@@ -257,13 +273,25 @@ impl Log {
                             None => format!("[{}]", w.serial),
                         })
                         .collect();
+                    let each: Vec<String> = each.iter().map(|&n| json_num(n)).collect();
                     let _ = write!(
                         s,
-                        ",\"ev\":\"iter\",\"stage\":{stage},\"dur\":{},\"tokens\":{},\"reqs\":[{}]",
+                        ",\"ev\":\"iter\",\"stage\":{stage},\"dur\":{},\"tokens\":{},\"budget\":{},\"reqs\":[{}],\"each\":[{}]",
                         json_num(*dur),
                         json_num(*tokens),
-                        list.join(",")
+                        json_num(*budget),
+                        list.join(","),
+                        each.join(",")
                     );
+                    // the memory pool's, absent for an engine without one
+                    if let Some((used, cached)) = memory {
+                        let _ = write!(
+                            s,
+                            ",\"used\":{},\"cached\":{}",
+                            json_num(*used),
+                            json_num(*cached)
+                        );
+                    }
                 }
                 EventKind::End { who: w } => {
                     s.push_str(",\"ev\":\"end\"");
@@ -390,6 +418,7 @@ mod tests {
                 stage: 1,
                 dur: 0.01,
                 tokens: 16.0,
+                budget: 16.0,
                 reqs: vec![
                     w,
                     Who {
@@ -397,11 +426,47 @@ mod tests {
                         leg: None,
                     },
                 ],
+                each: vec![10.0, 6.0],
+                memory: Some((32.0, 0.0)),
             },
         );
         assert_eq!(
             l.json(),
-            r#"{"version":0,"stages":[{"name":"P.nic","index":0},{"name":"D.nic","index":1}],"pools":[{"name":"kv","index":null}],"truncated":false,"events":[{"t":1.25,"ev":"run","s":7,"leg":0,"stages":[0,1]},{"t":1.5,"ev":"iter","stage":1,"dur":0.01,"tokens":16,"reqs":[[7,0],[8]]}]}"#
+            r#"{"version":0,"stages":[{"name":"P.nic","index":0},{"name":"D.nic","index":1}],"pools":[{"name":"kv","index":null}],"truncated":false,"events":[{"t":1.25,"ev":"run","s":7,"leg":0,"stages":[0,1]},{"t":1.5,"ev":"iter","stage":1,"dur":0.01,"tokens":16,"budget":16,"reqs":[[7,0],[8]],"each":[10,6],"used":32,"cached":0}]}"#
+        );
+    }
+
+    /// An engine without a `tokens cap` has no budget to write but `null`
+    /// (the report's convention for a value that is not finite), and one
+    /// without a memory pool writes no `used` or `cached`: not 0, which
+    /// would claim an empty pool.
+    #[test]
+    fn an_iteration_without_a_cap_or_memory() {
+        let mut l = Log {
+            stages: vec![("E".into(), None)],
+            pools: vec![],
+            events: vec![],
+            cap: 10,
+            truncated: false,
+        };
+        l.push(
+            2.0,
+            EventKind::Iter {
+                stage: 0,
+                dur: 0.5,
+                tokens: 1.0,
+                budget: f64::INFINITY,
+                reqs: vec![Who {
+                    serial: 4,
+                    leg: None,
+                }],
+                each: vec![1.0],
+                memory: None,
+            },
+        );
+        assert_eq!(
+            l.json(),
+            r#"{"version":0,"stages":[{"name":"E","index":null}],"pools":[],"truncated":false,"events":[{"t":2,"ev":"iter","stage":0,"dur":0.5,"tokens":1,"budget":null,"reqs":[[4]],"each":[1]}]}"#
         );
     }
 }
