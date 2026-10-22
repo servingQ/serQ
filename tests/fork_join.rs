@@ -363,6 +363,20 @@ fn a_load_ends_the_send_its_copy_read() {
     assert!(!sends.contains(&(Some(1), Moved::Done, 21.0)), "{sends:?}");
 }
 
+/// A `ttl` under half a tick of the clock rounds to none: the send would
+/// expire at the instant its request ended (`docs/design/integer-clock.md`).
+#[test]
+fn a_ttl_under_a_tick_does_not_link() {
+    refused(
+        &push("P.prefill (prompt); D.decode (prompt) from P;", 100, 1.0).replace(
+            "kvt.nixl_push (P, D, latency = 1, share = share.maxmin);",
+            "kvt.nixl_pull (P, D, share = share.maxmin, ttl = 1e-10);",
+        ),
+        PROMPT10,
+        "a send's `ttl` 0.0000000001 is under half a tick of the clock (1e-9 of its unit)",
+    );
+}
+
 /// Two relations from one source name one `ttl`: a request of the source
 /// keeps its blocks for one send, whichever reader reads it.
 #[test]

@@ -62,7 +62,7 @@ arrive renewal(2);             // one every 2 clock units
 
 | Argument | Type | Description |
 |---|---|---|
-| `gap` | `expr` | The interarrival time. It may read numbers, `let` constants, [functions](functions.md#arithmetic) of them and [draws](distributions.md), and not a session attribute, a pool, a stage or a context variable. Each gap must be positive and finite, or the run aborts. |
+| `gap` | `expr` | The interarrival time. It may read numbers, `let` constants, [functions](functions.md#arithmetic) of them and [draws](distributions.md), and not a session attribute, a pool, a stage or a context variable. Each gap must be positive and finite, or the run aborts; a constant gap is at least one [tick](../language.md#time), or the workload does not link. |
 
 The first arrival is one gap after time 0, where `poisson` has one at 0: with
 the same seed, `renewal(~exp(1 / rate))` arrives at the same times as

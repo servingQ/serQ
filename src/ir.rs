@@ -41,7 +41,12 @@ use serde::{Deserialize, Serialize};
 /// source registers a send at each request's end (`CRequest::send`), which
 /// keeps its blocks until the reader's load ends it or its `ttl` does; and
 /// `Join` goes, the push mode's reader waiting for the send instead.
-pub const IR_VERSION: u32 = 15;
+/// 16 counts the clock in whole ticks, `1 / TICKS_PER_UNIT` of its unit:
+/// every duration the run computes is rounded to the nearest tick where it
+/// is scheduled, so two sums of the same durations are one instant, and
+/// `waited`, `age` and `last` read the ticks since (`docs/design/integer-clock.md`).
+/// No field changes shape; the same program may run differently.
+pub const IR_VERSION: u32 = 16;
 
 /// A reason `Program::validate` refuses a program, and the statement it is
 /// about (block, index in it) when it is about one.
@@ -119,6 +124,45 @@ impl From<String> for Invalid {
 /// is a state of its own, made before the run begins.
 pub const MAX_SESSIONS: usize = 1_000_000;
 
+/// Ticks per unit of the clock. The run's clock is a whole number of ticks,
+/// 1 ns of a program whose times are seconds; the IR keeps every time in
+/// the clock's unit, and the run rounds each duration to ticks where it
+/// schedules it (`to_ticks`; `docs/language.md`, Time). The checks and
+/// the interpreter read the resolution here.
+pub const TICKS_PER_UNIT: f64 = 1e9;
+
+/// A duration, in the clock's unit, as whole ticks: the nearest, a half to
+/// the even one. NaN and what is not above 0 are 0 ticks; what lies past
+/// the clock's last tick is that tick, `u64::MAX` (the cast saturates).
+pub fn to_ticks(x: f64) -> u64 {
+    (x * TICKS_PER_UNIT).round_ties_even() as u64
+}
+
+/// Whole ticks in the clock's unit: the nearest `f64`.
+pub fn from_ticks(t: u64) -> f64 {
+    t as f64 / TICKS_PER_UNIT
+}
+
+/// One tick in the clock's unit, as a message writes it (`1e-9`).
+pub fn tick_text() -> String {
+    format!("{:e}", 1.0 / TICKS_PER_UNIT)
+}
+
+/// A period or a lifetime the program gives as a constant (`what`, of
+/// `dt`) is at least one tick: under half of one it rounds to none, and
+/// what it times would end, or come again, at the instant it began.
+fn no_tick(what: &str, dt: f64) -> Result<(), String> {
+    if to_ticks(dt) > 0 {
+        return Ok(());
+    }
+    Err(format!(
+        "{what} is under half a tick of the clock ({} of its unit), which counts whole ticks: \
+         it would round to no time, and what it times would end, or come again, at the instant \
+         it began",
+        tick_text()
+    ))
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum UnOp {
     Neg,
@@ -168,7 +212,8 @@ pub enum Preempt {
     /// (`docs/design/thunderagent.md`).
     ///
     /// With `every`, the pool acts at its ticks instead, at every multiple
-    /// of `every` seconds: a lease's growth allocates at once, past the cap
+    /// of `every` seconds (at least one tick of the clock, `TICKS_PER_UNIT`):
+    /// a lease's growth allocates at once, past the cap
     /// if it must, and at a tick the pool ends leases in the same order
     /// while it is over its cap (ThunderAgent's periodic `_pause_until_safe`).
     /// With `suspend` too, a lease taken is set aside, not ended: its units
@@ -878,7 +923,8 @@ pub struct CPool {
     /// None is FIFO. Equal keys retain queue order; resumed holds go first.
     pub queue: Option<Vec<CExpr>>,
     /// `queue … every (dt)`: the pool admits waiting holds only at every
-    /// multiple of `dt` seconds, in the queue's order, each admitted one
+    /// multiple of `dt` seconds (at least one tick of the clock,
+    /// `TICKS_PER_UNIT`), in the queue's order, each admitted one
     /// running until it blocks before the next is tried, and one that does
     /// not fit passed over; a hold queued during a tick waits for the next.
     /// The pools' ticks at one instant act after its other events, in the
@@ -949,7 +995,8 @@ pub fn sends(st: &CStep) -> bool {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CSend {
     /// How long, at most, an unread send keeps the blocks, in seconds from
-    /// the request's end: the relation's `ttl`, a constant above 0. Absent,
+    /// the request's end: the relation's `ttl`, a constant of at least one
+    /// tick of the clock (`TICKS_PER_UNIT`). Absent,
     /// until the session's end. A send a copy has begun to read stays until
     /// the read is done.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1286,6 +1333,9 @@ pub struct Program {
     pub turn: BlockId,
     pub session: BlockId,
     pub blocks: Vec<Vec<CStmt>>,
+    /// The run's end and the measurement's start, in the clock's unit: the
+    /// run ends at the tick `to_ticks(horizon)`, and `to_ticks(warmup)` is
+    /// before it.
     pub horizon: f64,
     pub warmup: f64,
     pub seed: u64,
@@ -2290,7 +2340,8 @@ impl Program {
     /// some hold leases, and no engine's memory, where a lease is KV another
     /// instance has still to read (a prefiller's blocks before the
     /// decoder's transfer) and the engine's own rule is `preempt by`. Its
-    /// `every` is a positive number of seconds, on a pool without `reserve
+    /// `every` is a positive number of seconds, at least one tick of the
+    /// clock, on a pool without `reserve
     /// held`, whose promise a growth let past the cap would break;
     /// `suspend` needs `every`, since a set-aside lease comes back at a
     /// tick.
@@ -2306,6 +2357,9 @@ impl Program {
                 return Err(at(&format!(
                     "`every ({dt})`: a tick is a positive, finite number of seconds"
                 )));
+            }
+            if let Some(dt) = every {
+                no_tick(&format!("`every ({dt})`"), *dt).map_err(|e| at(&e))?;
             }
             if every.is_some() && p.reserve_held {
                 return Err(at(
@@ -2406,6 +2460,7 @@ impl Program {
                         "`queue … every ({dt})`: a tick is a positive, finite number of seconds"
                     )));
                 }
+                no_tick(&format!("`queue … every ({dt})`"), dt).map_err(at)?;
                 if p.admit_via.is_some() {
                     return Err(at(
                         "`queue … every` on a pool an engine admits: the engine's schedule \
@@ -2655,6 +2710,16 @@ impl Program {
                     "`arrive renewal({gap})`: an interarrival time must be positive"
                 ));
             }
+            if let CExpr::Num(gap) = e
+                && to_ticks(*gap) == 0
+            {
+                return Err(format!(
+                    "`arrive renewal({gap})`: an interarrival time is at least one tick of the \
+                     clock ({} of its unit), which counts whole ticks; under half of one, every \
+                     arrival would come at one instant and the run would never pass it",
+                    tick_text()
+                ));
+            }
         }
         // a rate that is not positive draws gaps that are not: time runs
         // backwards and the run never ends (#286)
@@ -2717,6 +2782,17 @@ impl Program {
         }
         if !(self.horizon.is_finite() && self.warmup >= 0.0 && self.warmup < self.horizon) {
             return Err("run: need 0 <= warmup < horizon".into());
+        }
+        // the run measures from the warmup's tick to the horizon's
+        if to_ticks(self.warmup) >= to_ticks(self.horizon) {
+            return Err(format!(
+                "run: warmup {} and horizon {} round to one tick of the clock ({} of its unit), \
+                 so the measurement would last no time: need 0 <= warmup < horizon, at least one \
+                 tick apart",
+                self.warmup,
+                self.horizon,
+                tick_text()
+            ));
         }
         Ok(())
     }
@@ -3467,6 +3543,9 @@ impl Validator<'_> {
                 "a send's `ttl` {} is not a number above 0: leave it out for none",
                 sd.ttl.unwrap_or_default()
             ));
+        }
+        if let Some(t) = sd.ttl {
+            no_tick(&format!("a send's `ttl` {t}"), t)?;
         }
         let read = self.p.connectors().any(|(_, c)| {
             c.load

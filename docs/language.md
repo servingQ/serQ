@@ -147,9 +147,9 @@ the CLI flags, an explicit instance file, or the host API; `run { ... }` is
 not a model declaration. The resolved IR includes the execution settings.
 
 `arrive renewal(e)` draws or gives each gap,
-which must be positive and finite (a constant gap that is not does not
-link; a drawn one stops the run), and the first renewal arrival comes after
-one gap; `poisson(rate)` (a positive, finite constant) arrives at time 0 and
+which must be positive and finite (a constant gap that is not, or that is
+under half a [tick](#time), does not link; a drawn one stops the run), and
+the first renewal arrival comes after one gap; `poisson(rate)` (a positive, finite constant) arrives at time 0 and
 then after exponential gaps of mean `1 / rate`. `--arrivals N` runs exactly `N` open-workload arrivals and drains their
 sessions; failing to by `horizon`, or draining at or before `warmup`, is an
 error. A count is a whole number, or the program does not link: `closed(n)`
@@ -718,7 +718,7 @@ bodies. They add no IR constructs.
 
 ### Configuration
 
-Time; the live sessions with their attributes,
+Time, a whole number of ticks ([Time](#time)); the live sessions with their attributes,
 continuation (a stack of block frames), place (ready, queued at a pool,
 at a stage, waiting to grow, its engine request's load waiting for its
 source's send, ended), its engine request in progress and that request's
@@ -739,6 +739,34 @@ retries growers and admissions at every pool not served by a stage, until
 nothing changes; then it starts an iteration on every idle step stage that
 has residents or a waiting queue it serves, provided no other event is
 pending at the same instant (a scheduler step sees every arrival up to it).
+
+### Time
+
+The clock counts whole *ticks*, 10⁻⁹ of its unit: a nanosecond when the
+program's times are seconds. A program writes its times as numbers in the
+unit — `horizon` and `warmup`, a `run`'s work at rate 1, a `latency`, an
+iteration's `cost`, an arrival's gap, a lease's time, a send's `ttl`, a
+pool's `every` — and the run rounds each duration to the nearest tick, a
+half to the even one, where it schedules it: what ends `d` after the
+instant `t` ends at the tick `t + round(d)`. Two times that round to one
+tick are one instant, its events in the order [Ties](#ties) gives: runs of
+0.2 then 0.1 end at the instant runs of 0.25 then 0.05 do. A duration
+under half a tick takes none: it ends at the instant it began, after the
+events already scheduled there.
+
+`now`, a request's `E.admitted`, `E.first` and `E.load_done`, and the
+log's `t` read the instant in the clock's unit, the nearest number to its
+tick. `waited` and `age` read the ticks since the hold queued and since
+the entry was released, and `last` the release's tick, so `waited >= 0.2`
+holds from the 2·10⁸th tick after the hold queued, whatever the numbers
+of its two instants. A difference a program writes itself, `now -
+E.admitted`, is arithmetic on those numbers.
+
+A constant `every`, a send's `ttl` and a constant renewal gap are at least
+one tick, and `warmup` and `horizon` at least one tick apart, or the
+program does not link. A horizon past the clock's last tick, 2⁶⁴ − 1 ticks
+(about 1.8·10¹⁰ of its unit), is an error when the run starts. The
+[integer clock](design/integer-clock.md) has the reasons.
 
 ### Legs
 
@@ -1035,7 +1063,7 @@ the order the entries were released. An engine's running requests: the
 `preempt by` keys, then the candidate admitted last (for a pool that is
 no engine's memory, the holder the pool admitted last). `choose`: the keys, in order, then the smallest
 index. A pool's growers: the order they stalled, the head blocking the
-rest. Events at one instant: the order they were scheduled; sessions run
+rest. Events at one instant (one tick, [Time](#time)): the order they were scheduled; sessions run
 in the order they became ready; jobs of a `ps` stage with equal finish
 tags finish in the order they started. The pools' ticks at an instant
 come after its other events, in the order the pools are declared (a
@@ -1090,7 +1118,8 @@ at rate 1, the clock's unit; an engine's `prefill` and `decode` work is in
 tokens, the unit of its `tokens cap`. The clock itself has no unit: a
 program whose costs are seconds runs in seconds, and
 `examples/oracle/vllm_request.sq` runs on the step clock with `forward
-(1)`, so its times are iterations.
+(1)`, so its times are iterations. Its resolution is a tick, 10⁻⁹ of the
+unit, whatever the unit is ([Time](#time)).
 
 An iteration serves the running requests in the order its schedule's
 `advance running` names: `by (k₁, …)` (ascending keys evaluated for each
@@ -1561,13 +1590,14 @@ through its body: every path through it reaches a `run` (a constant zero
 work does not count), a `hold` whose body does, or `end`; the linker
 refuses a loop that does not (`loop { set w = w + 1; }`, or a `run` on one
 arm of an `if` only). What the linker cannot see — a `run` whose
-computed work is 0 on every pass, a `hold` that fits, grows past its pool
-and preempts itself — the run time catches: a session that executes a
-million statements without blocking, or that becomes ready a thousand
-times at one instant, ends the run with an error naming it. Likewise an
-iteration that schedules tokens lasts a positive time: a `cost` that
-evaluates to 0 on it is an error (the step that only preempted may cost 0,
-above).
+computed work is 0 on every pass, or under half a [tick](#time), a `hold`
+that fits, grows past its pool and preempts itself — the run time catches:
+a session that executes a million statements without blocking, or that
+becomes ready a thousand times at one instant, ends the run with an error
+naming it, and so do a million open arrivals at one instant (drawn gaps
+under half a tick). Likewise an iteration that schedules tokens lasts a
+positive time, at least one tick: a `cost` that evaluates to under half a
+tick on it is an error (the step that only preempted may cost 0, above).
 
 ### Lints
 
@@ -1904,5 +1934,10 @@ the A100 cost fit, calibration, comparison runs and their limitations.
   recomputed ([one status per request](https://github.com/servingQ/serQ/blob/main/docs/design/request-state.md)).
 * One eviction order per pool; a priced order uses `price(stage, …)` with
   the stage's online estimates.
+* The clock's resolution is fixed, a tick of 10⁻⁹ of its unit: a duration
+  under half a tick takes none, and two events closer than a tick are one
+  instant. A program that needs finer times writes them in a smaller unit,
+  which brings the clock's last tick nearer in that unit
+  ([Time](#time)).
 * The Lean model covers a fragment, and there is no proof that the
   interpreter implements it ([the Lean model](lean.md#what-is-not-covered-yet)).

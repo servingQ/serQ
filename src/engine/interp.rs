@@ -27,7 +27,10 @@ use crate::frontend::link::*;
 use crate::ir::Preempt;
 use crate::ir::Side;
 use crate::ir::trace::Corpus;
-use crate::ir::{CConnector, CIter, CRequest, CStageKind, ClaimKind};
+use crate::ir::{
+    CConnector, CIter, CRequest, CStageKind, ClaimKind, TICKS_PER_UNIT, from_ticks, tick_text,
+    to_ticks,
+};
 
 /// The tolerance of a comparison of amounts that sums of floats produce
 /// (units, tokens, work): below it, two amounts are equal.
@@ -71,7 +74,7 @@ enum Ev {
 }
 
 struct Entry {
-    time: f64,
+    tick: u64,
     seq: u64,
     ev: Ev,
 }
@@ -97,8 +100,8 @@ impl Entry {
 
 impl Ord for Entry {
     fn cmp(&self, o: &Self) -> Ordering {
-        o.time
-            .total_cmp(&self.time)
+        o.tick
+            .cmp(&self.tick)
             .then_with(|| o.rank().cmp(&self.rank()))
             .then_with(|| o.seq.cmp(&self.seq))
     }
@@ -386,7 +389,8 @@ struct Pending<'p> {
     chain: Chain,
     lease: Option<(usize, Expiry<'p>)>,
     body: BlockId,
-    queued_at: f64,
+    /// The tick it queued at: `waited` is the ticks since.
+    queued_at: u64,
     /// An engine's request's admission (`Hold::request`).
     request: bool,
     /// The pools a request's admission read after its load and had taken
@@ -461,10 +465,10 @@ struct Session<'p> {
     /// Turns taken, the key of `rng_wl`'s reseeding: the interpreter's
     /// count, not the attribute `turn_no`, which a program may overwrite.
     turn_count: u64,
-    /// (instant, times the session became ready at it): a session that
-    /// keeps becoming ready without time passing is a loop that never
-    /// blocks (`READIES_PER_INSTANT`).
-    readies: (f64, u64),
+    /// (the instant's tick, times the session became ready at it): a
+    /// session that keeps becoming ready without time passing is a loop
+    /// that never blocks (`READIES_PER_INSTANT`).
+    readies: (u64, u64),
     /// The turn in progress, as the session's client sees it.
     client: Option<ClientTurn>,
     /// Whether this is a leg (`fork`), and of which session.
@@ -523,10 +527,17 @@ const STREAM_LEG: u64 = 3;
 const STEPS_PER_INSTANT: u64 = 1_000_000;
 
 /// Times one session may become ready at one instant: a run of zero work
-/// or a hold admitted and released inside a loop re-readies its session
-/// without time passing. Per session, so that an instant with many
-/// sessions (a `batch` arrival) is not mistaken for one.
+/// (or of under half a tick of the clock) or a hold admitted and released
+/// inside a loop re-readies its session without time passing. Per session,
+/// so that an instant with many sessions (a `batch` arrival) is not
+/// mistaken for one.
 const READIES_PER_INSTANT: u64 = 1_000;
+
+/// Open arrivals at one instant before the run is an error: gaps drawn
+/// under half a tick of the clock take none, and the next arrival comes at
+/// the same instant, without end. As many as a `batch` may hold
+/// (`ir::MAX_SESSIONS`).
+const ARRIVALS_PER_INSTANT: u64 = crate::ir::MAX_SESSIONS as u64;
 
 /// A turn as the virtual client that sent it sees it
 /// (`docs/design/client-metrics.md`): sent at its `Turn`, answered when
@@ -887,6 +898,12 @@ pub struct Interp<'p> {
     /// First error raised by the running program. The event loop stops before
     /// producing a report; internal invariant failures remain panics.
     error: Option<String>,
+    /// The clock, a whole number of ticks (`ir::TICKS_PER_UNIT`): an
+    /// instant is a tick, and every event is scheduled at one (`at`,
+    /// `after`), so two sums of the same durations are one instant.
+    clock: u64,
+    /// The clock in its unit, `from_ticks(clock)`, set only where the clock
+    /// moves: what `now`, the log and the statistics read.
     now: f64,
     warm: bool,
     heap: BinaryHeap<Entry>,
@@ -953,6 +970,8 @@ pub struct Interp<'p> {
     next_adm: u64,
     next_release: u64,
     arrivals: u64,
+    /// (the instant's tick, open arrivals at it) (`ARRIVALS_PER_INSTANT`).
+    arrivals_at: (u64, u64),
     ended: u64,
     turns: u64,
     events: u64,
@@ -1074,8 +1093,9 @@ impl<'p> Interp<'p> {
         Interp {
             p,
             error: None,
+            clock: 0,
             now: 0.0,
-            warm: p.warmup <= 0.0,
+            warm: to_ticks(p.warmup) == 0,
             heap: BinaryHeap::new(),
             seq: 0,
             sessions: vec![],
@@ -1129,6 +1149,7 @@ impl<'p> Interp<'p> {
             next_adm: 0,
             next_release: 0,
             arrivals: 0,
+            arrivals_at: (u64::MAX, 0),
             ended: 0,
             turns: 0,
             events: 0,
@@ -1168,18 +1189,24 @@ impl<'p> Interp<'p> {
         self.log(kind(who));
     }
 
-    fn at(&mut self, time: f64, ev: Ev) {
-        debug_assert!(
-            time.is_finite() && time >= self.now,
-            "event at {time} < {}",
-            self.now
-        );
+    /// `ev` at the instant `tick`, after the events already scheduled there.
+    fn at(&mut self, tick: u64, ev: Ev) {
+        debug_assert!(tick >= self.clock, "event at {tick} < {}", self.clock);
         self.heap.push(Entry {
-            time,
+            tick,
             seq: self.seq,
             ev,
         });
         self.seq += 1;
+    }
+
+    /// `ev` after `dt` of the clock's unit, rounded to the nearest tick
+    /// (`ir::to_ticks`): each duration is rounded where it is scheduled, so
+    /// the clock adds whole ticks.
+    fn after(&mut self, dt: f64, ev: Ev) {
+        debug_assert!(dt >= 0.0, "a duration of {dt}");
+        let t = self.clock.saturating_add(to_ticks(dt));
+        self.at(t, ev);
     }
 
     fn rng(&mut self, w: Which) -> &mut StdRng {
@@ -1210,14 +1237,28 @@ impl<'p> Interp<'p> {
     /// Run to the horizon and return the report.
     pub fn run(mut self) -> Result<Report, String> {
         let p = self.p;
-        if p.warmup > 0.0 {
-            self.at(p.warmup, Ev::EndWarmup);
+        // the clock is a u64 of ticks: a horizon past its last tick would
+        // saturate there (not a `validate` check: `check` and `draw` give a
+        // program without one a placeholder of `f64::MAX`, `lib::inspected`)
+        if p.horizon * TICKS_PER_UNIT >= u64::MAX as f64 {
+            return Err(format!(
+                "run: horizon {} is past the clock's last tick, {} of its unit (2^64 - 1 ticks \
+                 of {})",
+                p.horizon,
+                from_ticks(u64::MAX),
+                tick_text()
+            ));
+        }
+        let horizon = to_ticks(p.horizon);
+        let warmup = to_ticks(p.warmup);
+        if warmup > 0 {
+            self.at(warmup, Ev::EndWarmup);
         }
         match &p.arrival {
-            CArrival::Poisson(_) => self.at(0.0, Ev::Arrive),
+            CArrival::Poisson(_) => self.at(0, Ev::Arrive),
             CArrival::Renewal(e) => {
                 if let Some(gap) = self.renewal_gap(e) {
-                    self.at(gap, Ev::Arrive);
+                    self.after(gap, Ev::Arrive);
                 }
             }
             &CArrival::Closed(n) | &CArrival::Batch(n) => {
@@ -1242,19 +1283,20 @@ impl<'p> Interp<'p> {
             if arrivals_done && self.live == 0 {
                 break;
             }
-            if e.time > p.horizon {
+            if e.tick > horizon {
                 break;
             }
             // the clock moves on: the instant behind it is over, and what its
             // last event left is what the gauges read
-            if e.time > self.now {
+            if e.tick > self.clock {
                 self.read_gauges();
                 if let Some(error) = self.error.take() {
                     return Err(error);
                 }
             }
             let e = self.heap.pop().unwrap();
-            self.now = e.time;
+            self.clock = e.tick;
+            self.now = from_ticks(e.tick);
             self.events += 1;
             self.handle(e.ev);
             self.settle();
@@ -1293,14 +1335,15 @@ impl<'p> Interp<'p> {
                     self.live, p.horizon
                 ));
             }
-            if self.now <= p.warmup {
+            if self.clock <= warmup {
                 return Err(format!(
                     "run: arrivals drained at {} before or at warmup {}; no measurement interval",
                     self.now, p.warmup
                 ));
             }
         } else {
-            self.now = p.horizon;
+            self.clock = horizon;
+            self.now = from_ticks(horizon);
         }
         Ok(self.report())
     }
@@ -1351,14 +1394,34 @@ impl<'p> Interp<'p> {
                 }
             }
             Ev::Arrive => {
+                if self.arrivals_at.0 != self.clock {
+                    self.arrivals_at = (self.clock, 0);
+                }
+                self.arrivals_at.1 += 1;
+                if self.arrivals_at.1 > ARRIVALS_PER_INSTANT {
+                    let arrive = match &self.p.arrival {
+                        CArrival::Poisson(rate) => format!("poisson({rate})"),
+                        CArrival::Renewal(e) => format!("renewal({})", self.p.show_expr(e)),
+                        _ => unreachable!("only an open arrival schedules the next"),
+                    };
+                    self.error = Some(format!(
+                        "`arrive {arrive}`: {} arrivals at the instant t = {}: its gaps are under \
+                         half a tick of the clock ({} of its unit), which counts whole ticks, so \
+                         they take no time",
+                        self.arrivals_at.1,
+                        self.now,
+                        tick_text()
+                    ));
+                    return;
+                }
                 match self.p.arrival.clone() {
                     CArrival::Poisson(rate) if self.may_schedule_open_arrival() => {
                         let gap = -(1.0 - self.rng_arr.random::<f64>()).ln() / rate;
-                        self.at(self.now + gap, Ev::Arrive);
+                        self.after(gap, Ev::Arrive);
                     }
                     CArrival::Renewal(e) if self.may_schedule_open_arrival() => {
                         if let Some(gap) = self.renewal_gap(&e) {
-                            self.at(self.now + gap, Ev::Arrive);
+                            self.after(gap, Ev::Arrive);
                         }
                     }
                     _ => {}
@@ -1416,18 +1479,20 @@ impl<'p> Interp<'p> {
     fn run_ready(&mut self) {
         loop {
             while let Some(sid) = self.ready.pop_front() {
-                let now = self.now;
+                let (now, clock) = (self.now, self.clock);
                 let s = &mut self.sessions[sid];
-                if s.readies.0 != now {
-                    s.readies = (now, 0);
+                if s.readies.0 != clock {
+                    s.readies = (clock, 0);
                 }
                 s.readies.1 += 1;
                 if s.readies.1 > READIES_PER_INSTANT {
                     self.error = Some(format!(
                         "the instant t = {now} does not settle: session {} became ready {} times \
-                         without time passing (a `run` of zero work, or a `hold` admitted and released, \
-                         inside a loop)",
-                        s.serial, s.readies.1
+                         without time passing (a `run` of zero work or of under half a tick of the \
+                         clock ({} of its unit), or a `hold` admitted and released, inside a loop)",
+                        s.serial,
+                        s.readies.1,
+                        tick_text()
                     ));
                     return;
                 }
@@ -1573,7 +1638,7 @@ impl<'p> Interp<'p> {
         }
         // An iteration starts only once every event of this instant has
         // been handled (a scheduler step sees all the arrivals up to it).
-        let pending_now = self.heap.peek().is_some_and(|e| e.time <= self.now);
+        let pending_now = self.heap.peek().is_some_and(|e| e.tick <= self.clock);
         for s in 0..self.stages.len() {
             if let Kind::Step {
                 iter: None,
@@ -1684,7 +1749,7 @@ impl<'p> Interp<'p> {
             rng_wl: substream(self.p.seed, serial, 0, STREAM_WORKLOAD),
             rng: substream(self.p.seed, serial, 0, STREAM_SESSION),
             turn_count: 0,
-            readies: (f64::NAN, 0),
+            readies: (u64::MAX, 0),
             leg: Leg::No,
             legs: 0,
             forks: 0,
@@ -2005,7 +2070,7 @@ impl<'p> Interp<'p> {
             rng_wl: s.rng_wl.clone(),
             rng: substream(p.seed, s.serial, n, STREAM_LEG),
             turn_count: s.turn_count,
-            readies: (f64::NAN, 0),
+            readies: (u64::MAX, 0),
             leg: Leg::Of(sid, n as u32),
             legs: 0,
             forks: 0,
@@ -2376,7 +2441,7 @@ impl<'p> Interp<'p> {
                         chain,
                         lease,
                         body: *body,
-                        queued_at: self.now,
+                        queued_at: self.clock,
                         request: false,
                         part: false,
                     };
@@ -2553,7 +2618,7 @@ impl<'p> Interp<'p> {
             chain,
             lease,
             body: 0,
-            queued_at: self.now,
+            queued_at: self.clock,
             request: true,
             part: false,
         };
@@ -2661,7 +2726,7 @@ impl<'p> Interp<'p> {
             chain: Vec::new().into(),
             lease: None,
             body: 0,
-            queued_at: self.now,
+            queued_at: self.clock,
             request: false,
             part: true,
         };
@@ -3389,7 +3454,8 @@ impl<'p> Interp<'p> {
                 continue;
             }
             let mut ctx = Ctx::session(sid);
-            ctx.waited = self.now - self.sessions[sid].pending.as_ref().unwrap().queued_at;
+            ctx.waited =
+                from_ticks(self.clock - self.sessions[sid].pending.as_ref().unwrap().queued_at);
             let key = KeyOrd(
                 keys.iter()
                     .map(|k| self.eval(k, &ctx, Which::Session))
@@ -3675,7 +3741,7 @@ impl<'p> Interp<'p> {
         let pl = first_pool(&pending);
         self.log_who(sid, |who| EventKind::Admit { who, pool: pl });
         if self.warm {
-            let w = self.now - pending.queued_at;
+            let w = from_ticks(self.clock - pending.queued_at);
             self.pools[pl].wait.push(w);
         }
         let seq = self.next_adm;
@@ -3772,7 +3838,7 @@ impl<'p> Interp<'p> {
     fn entry_key(&mut self, pl: usize, node: usize) -> Vec<f64> {
         let n = self.pools[pl].cache.node(node);
         if let CEvict::Lru = &self.p.pools[pl].evict {
-            return vec![n.last, n.seq as f64];
+            return vec![from_ticks(n.last), n.seq as f64];
         }
         let (size, last, seq, snap) = (n.len, n.last, n.seq, n.snap.clone());
         let live = self.node_writer(pl, node);
@@ -3781,14 +3847,14 @@ impl<'p> Interp<'p> {
             sid: live,
             snap: if live.is_some() { None } else { Some(snap) },
             size,
-            age: self.now - last,
-            last,
+            age: from_ticks(self.clock - last),
+            last: from_ticks(last),
             queued: if queued { 1.0 } else { 0.0 },
             ..Default::default()
         };
         let p = self.p;
         match &p.pools[pl].evict {
-            CEvict::Lru => vec![last, seq as f64],
+            CEvict::Lru => vec![from_ticks(last), seq as f64],
             CEvict::By(keys) => {
                 let mut v: Vec<f64> = keys
                     .iter()
@@ -3854,7 +3920,7 @@ impl<'p> Interp<'p> {
         pl: usize,
         (owner, dead, live): (u64, Option<u64>, Option<usize>),
         units: f64,
-        last: f64,
+        last: u64,
         snap: Vec<f64>,
     ) {
         let Some(sp) = self.p.pools[pl].spill.clone() else {
@@ -3871,8 +3937,8 @@ impl<'p> Interp<'p> {
                 Some(snap.clone())
             },
             size: units,
-            age: self.now - last,
-            last,
+            age: from_ticks(self.clock - last),
+            last: from_ticks(last),
             queued: if queued { 1.0 } else { 0.0 },
             ..Default::default()
         };
@@ -3882,7 +3948,7 @@ impl<'p> Interp<'p> {
         let work = self.eval(&sp.work, &ctx, Which::Evict).max(0.0);
         let to = sp.to;
         self.make_room(to, 0.0);
-        let now = self.now;
+        let now = self.clock;
         // extend or create the tier entry
         let rseq = self.next_release;
         self.next_release += 1;
@@ -3957,7 +4023,7 @@ impl<'p> Interp<'p> {
                     self.schedule_tick(q);
                     if t.is_finite() {
                         let serial = self.sessions[sid].serial;
-                        self.at(self.now + t, Ev::LeaseEnd { sid, serial, id });
+                        self.after(t, Ev::LeaseEnd { sid, serial, id });
                     }
                 }
                 _ => {
@@ -4054,7 +4120,7 @@ impl<'p> Interp<'p> {
                 let root = self.root(sid);
                 self.sessions[root].cached_chain.insert(q, chain.clone());
             }
-            let now = self.now;
+            let now = self.clock;
             delta = self.pools[q]
                 .cache
                 .write(&chain, keep, path, serial, &snap, now, rseq);
@@ -4604,7 +4670,7 @@ impl<'p> Interp<'p> {
             chain,
             lease: lease_pool,
             body,
-            queued_at: self.now,
+            queued_at: self.clock,
             request: false,
             part: false,
         };
@@ -4666,12 +4732,11 @@ impl<'p> Interp<'p> {
         if self.pools[pl].next_tick.is_some() {
             return;
         }
-        let mut k = (self.now / dt).floor() as u64 + 1;
-        if k as f64 * dt <= self.now {
-            k += 1;
-        }
+        // the first multiple of the period after the clock, in ticks
+        let dt = to_ticks(dt);
+        let k = self.clock / dt + 1;
         self.pools[pl].next_tick = Some(k);
-        self.at(k as f64 * dt, Ev::PoolTick { pool: pl });
+        self.at(k.saturating_mul(dt), Ev::PoolTick { pool: pl });
     }
 
     /// A tick of `pl`: under `suspend by`, the leases set aside come back
@@ -4734,7 +4799,10 @@ impl<'p> Interp<'p> {
         // (a lease set aside in this tick may have scheduled the next)
         if leased && self.pools[pl].next_tick.is_none() {
             self.pools[pl].next_tick = Some(k + 1);
-            self.at((k + 1) as f64 * dt, Ev::PoolTick { pool: pl });
+            self.at(
+                (k + 1).saturating_mul(to_ticks(*dt)),
+                Ev::PoolTick { pool: pl },
+            );
         }
         self.try_admit_all();
     }
@@ -4748,12 +4816,10 @@ impl<'p> Interp<'p> {
         if self.pools[pl].next_queue_tick.is_some() {
             return;
         }
-        let mut k = (self.now / dt).floor() as u64 + 1;
-        if k as f64 * dt <= self.now {
-            k += 1;
-        }
+        let dt = to_ticks(dt);
+        let k = self.clock / dt + 1;
         self.pools[pl].next_queue_tick = Some(k);
-        self.at(k as f64 * dt, Ev::QueueTick { pool: pl });
+        self.at(k.saturating_mul(dt), Ev::QueueTick { pool: pl });
     }
 
     /// A tick of `pl` under `queue … every`: the holds that waited when it
@@ -4783,7 +4849,10 @@ impl<'p> Interp<'p> {
         // (a hold queued in this tick may have scheduled the next)
         if !self.pools[pl].queue.is_empty() && self.pools[pl].next_queue_tick.is_none() {
             self.pools[pl].next_queue_tick = Some(k + 1);
-            self.at((k + 1) as f64 * dt, Ev::QueueTick { pool: pl });
+            self.at(
+                (k + 1).saturating_mul(to_ticks(dt)),
+                Ev::QueueTick { pool: pl },
+            );
         }
     }
 
@@ -4851,7 +4920,7 @@ impl<'p> Interp<'p> {
             },
         );
         if wait > 0.0 {
-            self.at(now + wait, Ev::Start { stage: st, job: id });
+            self.after(wait, Ev::Start { stage: st, job: id });
             return;
         }
         self.begin_job(st, id);
@@ -4895,8 +4964,8 @@ impl<'p> Interp<'p> {
             }
             Kind::Delay => {
                 stage.jobs.get_mut(&id).unwrap().started = Some(now);
-                self.at(
-                    now + work,
+                self.after(
+                    work,
                     Ev::Finish {
                         stage: st,
                         job: id,
@@ -4992,8 +5061,8 @@ impl<'p> Interp<'p> {
         }
         if waiting {
             // present at its stages, at rate 0 until its wait is over
-            self.at(
-                now + wait,
+            self.after(
+                wait,
                 Ev::Start {
                     stage: stages[0],
                     job: id,
@@ -5103,15 +5172,14 @@ impl<'p> Interp<'p> {
             self.flows_solve(share, &ids, &comp_stages);
         }
         self.flow_epoch += 1;
-        let now = self.now;
         let next = self
             .flows
             .iter()
             .filter(|(_, f)| f.rate > 0.0)
-            .map(|(id, f)| (now + f.remaining / f.rate, *id))
+            .map(|(id, f)| (f.remaining / f.rate, *id))
             .min_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
         if let Some((t, id)) = next {
-            self.at(
+            self.after(
                 t,
                 Ev::Finish {
                     stage: self.flows[&id].stages[0],
@@ -5224,10 +5292,10 @@ impl<'p> Interp<'p> {
             let j = stage.jobs.get_mut(&id).unwrap();
             j.started = Some(now);
             active.push(id);
-            to_schedule.push((now + j.work, id));
+            to_schedule.push((j.work, id));
         }
         for (t, id) in to_schedule {
-            self.at(
+            self.after(
                 t,
                 Ev::Finish {
                     stage: st,
@@ -5278,8 +5346,8 @@ impl<'p> Interp<'p> {
             && *rate > 0.0
         {
             let dt = ((tag - *v) / *rate).max(0.0);
-            self.at(
-                now + dt,
+            self.after(
+                dt,
                 Ev::Finish {
                     stage: st,
                     job: id,
@@ -5626,16 +5694,22 @@ impl<'p> Interp<'p> {
             ..Default::default()
         };
         let cost = self.eval(&spec.cost, &ctx, Which::Session).max(0.0);
-        // An iteration that schedules tokens lasts a positive time; only the
-        // step that merely preempted may cost 0 (`docs/language.md` §3).
-        if ntok > 0.0 && cost <= 0.0 {
+        // An iteration that schedules tokens lasts a positive time, at least
+        // one tick of the clock; only the step that merely preempted may
+        // cost 0 (`docs/language.md` §3, Every instant settles).
+        let dur = to_ticks(cost);
+        if ntok > 0.0 && dur == 0 {
             self.error = Some(format!(
-                "engine `{}`: its `worker` is {cost} for an iteration of {ntok} tokens; an iteration that \
-                 schedules tokens lasts a positive time",
-                p.stages[st].name
+                "engine `{}`: its `worker` is {cost} for an iteration of {ntok} tokens, under half \
+                 a tick of the clock ({} of its unit); an iteration that schedules tokens lasts a \
+                 positive time, at least one tick",
+                p.stages[st].name,
+                tick_text()
             ));
             return;
         }
+        // the duration the clock counts
+        let cost = from_ticks(dur);
         self.check_iteration(st, chunk, &ctx);
         self.served[st] += ntok;
         if self.trace_iter {
@@ -5698,7 +5772,7 @@ impl<'p> Interp<'p> {
             steps.duration.push(cost);
         }
         self.at(
-            now + cost,
+            self.clock.saturating_add(dur),
             Ev::IterEnd {
                 stage: st,
                 epoch: g,
@@ -6547,7 +6621,9 @@ impl<'p> Interp<'p> {
             self.debug_pools();
         }
         let now = self.now;
-        let span = now - self.p.warmup;
+        // the measurement begins at the warmup's tick
+        let warmup = from_ticks(to_ticks(self.p.warmup));
+        let span = now - warmup;
         let p = self.p;
         let observes = self
             .observes
@@ -6567,7 +6643,7 @@ impl<'p> Interp<'p> {
             .iter()
             .zip(&p.gauges)
             .map(|(pts, g)| {
-                let ts = time_stats(pts, p.warmup, now, 20);
+                let ts = time_stats(pts, warmup, now, 20);
                 GaugeReport {
                     name: g.name.clone(),
                     mean: ts.mean,

@@ -222,6 +222,21 @@ pub struct Instant { pub tick: u64, pub sub: u32 }   // ns; `sub` orders same-ti
 pub struct Program { …, pub tick_ns: u64, pub horizon: u64, pub warmup: u64, … }
 ```
 
+**Outcome.** Integer ticks landed in IR 16 (#66,
+[the integer clock](integer-clock.md)): the interpreter's clock is a `u64`
+of ticks, 10⁻⁹ of the clock's unit, and each duration is rounded to the
+nearest tick where it is scheduled. The sketch's types were not added. The
+IR keeps its times as numbers in the clock's unit, because most of them are
+expressions only the run can evaluate (a run's work, a step's `cost`, a
+draw), and a few fields in ticks beside them would give one dimension two
+units; so there is no `tick_ns`, and the unit stays the program's. `sub`
+was not added: the event queue's existing (rank, sequence number) order is
+the `n` of the instant (§3, #52), and a counter beside it would record the
+same order twice. "Finish every `n` before `t` advances" was already the
+settle rule. The zero-work `run` is a run of no time (a duration under half
+a tick, too); the loop that does nothing else is refused by the linker or
+stopped by the run (`docs/language.md`, Every instant settles).
+
 ## 5. A session is an automaton, not a stack
 
 Today a session's state is "a stack of block frames", and Lean has not
@@ -426,7 +441,8 @@ report of 7. #21's "same shape, different meaning → bump plus release note"
 applies here. The preemption-recovery bug of 5 is fixed before v4a in
 today's interpreter by exposing the run position as an attribute, with one
 oracle scenario added. Of v4a, the admission block node and the `on_end`
-move were not added (§1, §2 **Outcome**); 4 is open.
+move were not added (§1, §2 **Outcome**); 4 landed in IR 16 (#66, §4
+**Outcome**).
 
 **v4b** (redesign): 5, then 6 on top, and the theorem of 7. The equation of
 2 goes into either, after the Lean-side check.

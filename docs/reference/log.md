@@ -39,19 +39,19 @@ sessions and the engines' iterations left out, `…`):
     {"t": 0, "ev": "admit", "s": 0, "pool": 0},
     {"t": 0, "ev": "run", "s": 0, "stages": [0], "mode": "prefill"},
     {"t": 0, "ev": "status", "s": 0, "r": 1, "stage": 0, "status": "running", "mode": "prefill"},
-    {"t": 0, "ev": "iter", "stage": 0, "dur": 0.027420000000000003, "tokens": 1371, "reqs": [[0]]},
+    {"t": 0, "ev": "iter", "stage": 0, "dur": 0.02742, "tokens": 1371, "reqs": [[0]]},
     …
-    {"t": 0.027420000000000003, "ev": "done", "s": 0, "stage": 0},
-    {"t": 0.027420000000000003, "ev": "status", "s": 0, "r": 1, "stage": 0, "status": "finished"},
-    {"t": 0.027420000000000003, "ev": "transfer", "s": 0, "r": 1, "stage": 0, "kind": "send", "at": "registered"},
-    {"t": 0.027420000000000003, "ev": "wait", "s": 0, "pool": 6},
-    {"t": 0.027420000000000003, "ev": "status", "s": 0, "r": 2, "stage": 4, "status": "waiting"},
-    {"t": 0.027420000000000003, "ev": "admit", "s": 0, "pool": 6},
-    {"t": 0.027420000000000003, "ev": "transfer", "s": 0, "r": 2, "stage": 4, "kind": "load", "at": "registered"},
-    {"t": 0.027420000000000003, "ev": "status", "s": 0, "r": 2, "stage": 4, "status": "waiting_for_kv"},
-    {"t": 0.027420000000000003, "ev": "transfer", "s": 0, "r": 2, "stage": 4, "kind": "load", "at": "start"},
-    {"t": 0.027420000000000003, "ev": "transfer", "s": 0, "r": 1, "stage": 0, "kind": "send", "at": "start"},
-    {"t": 0.027420000000000003, "ev": "run", "s": 0, "stages": [2, 6]},
+    {"t": 0.02742, "ev": "done", "s": 0, "stage": 0},
+    {"t": 0.02742, "ev": "status", "s": 0, "r": 1, "stage": 0, "status": "finished"},
+    {"t": 0.02742, "ev": "transfer", "s": 0, "r": 1, "stage": 0, "kind": "send", "at": "registered"},
+    {"t": 0.02742, "ev": "wait", "s": 0, "pool": 6},
+    {"t": 0.02742, "ev": "status", "s": 0, "r": 2, "stage": 4, "status": "waiting"},
+    {"t": 0.02742, "ev": "admit", "s": 0, "pool": 6},
+    {"t": 0.02742, "ev": "transfer", "s": 0, "r": 2, "stage": 4, "kind": "load", "at": "registered"},
+    {"t": 0.02742, "ev": "status", "s": 0, "r": 2, "stage": 4, "status": "waiting_for_kv"},
+    {"t": 0.02742, "ev": "transfer", "s": 0, "r": 2, "stage": 4, "kind": "load", "at": "start"},
+    {"t": 0.02742, "ev": "transfer", "s": 0, "r": 1, "stage": 0, "kind": "send", "at": "start"},
+    {"t": 0.02742, "ev": "run", "s": 0, "stages": [2, 6]},
     {"t": 0.036275, "ev": "done", "s": 0, "stage": 2},
     {"t": 0.036275, "ev": "transfer", "s": 0, "r": 1, "stage": 0, "kind": "send", "at": "done"},
     {"t": 0.036275, "ev": "transfer", "s": 0, "r": 2, "stage": 4, "kind": "load", "at": "done"},
@@ -75,7 +75,10 @@ sessions and the engines' iterations left out, `…`):
 one by its index, and an array's members share a name and carry an
 `index` (`null` for a single stage or pool). `truncated` says whether the
 cap stopped the log before the run ended. Events are in time order; ties
-keep the order they happened in.
+keep the order they happened in. `t` is the instant in the clock's unit,
+a whole number of [ticks](../language.md#time) (10⁻⁹ of it), and an
+iteration's `dur` the ticks it lasts, in that unit: 1371 tokens at
+2·10⁻⁵ s last 0.02742.
 
 `s` is the session's serial. A leg of it ([`fork`](../api/statements.md))
 shares the serial and carries its number as `leg` in every event about

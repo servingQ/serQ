@@ -58,7 +58,8 @@ pub(super) struct Node {
     children: Vec<(Edge, usize)>,
     /// The serials of the holds that read through it, one per hold.
     lockers: Vec<u64>,
-    pub last: f64,
+    /// The tick of its last release (`age` and `last` read ticks).
+    pub last: u64,
     pub seq: u64,
     pub snap: Vec<f64>,
     /// The serial of the session that wrote it first: whose attributes an
@@ -78,7 +79,7 @@ pub(super) struct Node {
 }
 
 impl Node {
-    fn fresh(seg: usize, off: f64, len: f64, owner: u64, snap: &[f64], now: f64, seq: u64) -> Self {
+    fn fresh(seg: usize, off: f64, len: f64, owner: u64, snap: &[f64], now: u64, seq: u64) -> Self {
         Node {
             parent: None,
             seg,
@@ -132,7 +133,7 @@ pub(super) struct Trie {
 impl Trie {
     pub fn new(serial_ns: u64) -> Self {
         Trie {
-            nodes: vec![Node::fresh(usize::MAX, 0.0, 0.0, 0, &[], 0.0, 0)],
+            nodes: vec![Node::fresh(usize::MAX, 0.0, 0.0, 0, &[], 0, 0)],
             free: vec![],
             dead_spills: HashMap::new(),
             serial_ns,
@@ -406,7 +407,7 @@ impl Trie {
         path: &[usize],
         owner: u64,
         snap: &[f64],
-        now: f64,
+        now: u64,
         seq: u64,
     ) -> f64 {
         let mut delta = 0.0;
@@ -574,7 +575,7 @@ impl Trie {
         dead: Option<u64>,
         units: f64,
         snap: Vec<f64>,
-        now: f64,
+        now: u64,
         seq: u64,
     ) -> f64 {
         let extend = |n: &mut Node| {

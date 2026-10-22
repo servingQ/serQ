@@ -209,7 +209,8 @@ A program can rely on the following invariants. Each one says what holds it:
    iteration only after every event at that instant has been handled, so an
    arrival at the same instant is in its waiting queue. *Interpreter.*
 4. **An iteration that schedules tokens lasts a positive time.** A `forward`
-   that evaluates to 0 on a batch with tokens ends the run with an error.
+   that evaluates to 0, or to under half a [tick](language.md#time) of the
+   clock, on a batch with tokens ends the run with an error.
    A step that only preempts may last zero time. *Run-time check*
    ([Every instant settles](language.md#every-instant-settles)).
 5. **The batch fits the token budget.** An iteration schedules at most

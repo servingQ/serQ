@@ -91,6 +91,33 @@ fn a_hold_queued_during_a_tick_waits_for_the_next() {
     assert_eq!(r.observe("at").unwrap().samples, vec![5.0, 10.0]);
 }
 
+/// A tick at the instant of a release admits at that instant, the pool's
+/// ticks acting after its other events (`docs/language.md`, Ties). Serial
+/// 0, let in at the tick at t = 0.1, releases after 1.1 then 0.1, at 1.3,
+/// the 13th tick: serial 1 goes in there. Before, with the clock an `f64`,
+/// the release came at 1.3000000000000003, after the tick at 13 * 0.1 =
+/// 1.3, and serial 1 waited for 1.4000000000000001
+/// (`docs/design/integer-clock.md`).
+#[test]
+fn a_tick_at_a_release_admits_at_that_instant() {
+    let r = run(
+        2,
+        r#"
+        stage d : delay;
+        pool gate { cap 1; queue fifo every (0.1); }
+        server {
+          hold gate (cost(gate, 1)) {
+            observe who = serial;
+            observe at = now;
+            if (serial == 0) { run d (cost(d, 1.1)); run d (cost(d, 0.1)); }
+          }
+        }
+"#,
+    );
+    assert_eq!(r.observe("who").unwrap().samples, vec![0.0, 1.0]);
+    assert_eq!(r.observe("at").unwrap().samples, vec![0.1, 1.3]);
+}
+
 #[test]
 fn a_queue_tick_is_positive_and_no_engines() {
     let refused = |src: &str, needle: &str| {

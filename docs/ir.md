@@ -17,7 +17,7 @@ than host-language code, and every input passes `Program::validate`.
 The source model and externally supplied execution settings resolve to one
 complete `Program`; its JSON records the experiment as well as the deployment.
 
-Source: `src/ir.rs`. Current version: `IR_VERSION = 15`.
+Source: `src/ir.rs`. Current version: `IR_VERSION = 16`.
 
 ## Format
 
@@ -43,7 +43,7 @@ variants as strings, `"Lru"`). JSON has no infinity: an infinite constant
 | `trace`, `trace_ordered` | a trace corpus the workload draws turns from (path, resolved against the program's directory unless overridden) |
 | `init`, `turn`, `session` | block indices: the workload's `init` and `turn` blocks and the session program |
 | `blocks` | the statement blocks (an arena; bodies of holds, branches and loops refer to blocks by index) |
-| `horizon`, `warmup`, `seed`, `arrivals` | the run; `arrivals` requires exactly N open arrivals and draining by `horizon` |
+| `horizon`, `warmup`, `seed`, `arrivals` | the run; `horizon` and `warmup` are in the clock's unit, at least one tick apart ([Time](#time)); `arrivals` requires exactly N open arrivals and draining by `horizon` |
 | `hidden` | attribute slots the scheduler may not read (a `hidden` parameter, `server (hidden output)`): legal at `Session` and `Given`, below |
 | `gauges` | `[{name, expr}]`: functions of the state whose time average the report gives, each read at the `Gauge` moment after every instant; omitted when empty. They read and do not act, so a reader that ignores them runs the same program |
 | `claims` | `[{name, given?, kind, expr}]`; read-only properties checked on the simulated path; omitted when empty |
@@ -68,9 +68,9 @@ runs identically (`tests/ir.rs`).
 | `name`, `index?` | Resource name and optional array-member label. `index` is present even for a one-member array; it labels reports and does not affect execution. |
 | `cap`, `block` | Capacity in units and optional allocation granularity. |
 | `evict` | `Lru` or `By([keys])`, read at `Evict`. |
-| `preempt` | `None`, `By {keys, tail}` or `Leases {keys, every?, suspend?}`. The least keys at `Victim` select the victim; ties select the last admitted. Under `By`, the victim is a hold, which runs again; `tail` defaults to false (requeue at the head); true requeues as a newcomer. Under `Leases`, the candidates are the sessions that lease the pool and hold it in no scope, and the victim's lease ends while its session goes on. With `every: dt` (seconds) the pool acts at every multiple of `dt` instead: a lease's growth is let through past the cap, and at a tick leases end in the keys' order while the pool is over its cap; `every` does not link with `reserve_held`; with `suspend: [keys]` (which needs `every`) a lease taken, at a tick or by a hold's growth, is set aside, its units back, a prefix it read let go and `Allocated` 0, and a later tick, before it takes any, gives set-aside leases back in the order of the `suspend` keys (read at `Victim`), each that fits; `Release` or the session's end drops one. |
+| `preempt` | `None`, `By {keys, tail}` or `Leases {keys, every?, suspend?}`. The least keys at `Victim` select the victim; ties select the last admitted. Under `By`, the victim is a hold, which runs again; `tail` defaults to false (requeue at the head); true requeues as a newcomer. Under `Leases`, the candidates are the sessions that lease the pool and hold it in no scope, and the victim's lease ends while its session goes on. With `every: dt` (seconds, at least one tick) the pool acts at every multiple of `dt` instead: a lease's growth is let through past the cap, and at a tick leases end in the keys' order while the pool is over its cap; `every` does not link with `reserve_held`; with `suspend: [keys]` (which needs `every`) a lease taken, at a tick or by a hold's growth, is set aside, its units back, a prefix it read let go and `Allocated` 0, and a later tick, before it takes any, gives set-aside leases back in the order of the `suspend` keys (read at `Victim`), each that fits; `Release` or the session's end drops one. |
 | `queue` | `null` for FIFO, otherwise nonempty pure selection keys, read at `Select`. |
-| `queue_every` | Optional seconds: the pool admits only at every multiple, the holds that waited when the tick began in the queue's order, each admitted one run until it blocks before the next is tried, one that does not fit passed over; a hold queued during a tick waits for the next. At an instant the pools' ticks follow its other events, in pool order, a pool's `queue_every` tick before its `Leases` `every` tick. Not on a pool with `admit_via`. |
+| `queue_every` | Optional seconds, at least one tick: the pool admits only at every multiple, the holds that waited when the tick began in the queue's order, each admitted one run until it blocks before the next is tried, one that does not fit passed over; a hold queued during a tick waits for the next. At an instant the pools' ticks follow its other events, in pool order, a pool's `queue_every` tick before its `Leases` `every` tick. Not on a pool with `admit_via`. |
 | `spill` | Optional `CSpill {to, via, work, when}`: destination pool, transfer stage, work and predicate. |
 | `admit_via` | Optional index of the step stage serving this pool's queue; a stage of another kind is refused, since nothing would admit the queue. |
 | `reserve_held` | Outstanding reservations count against later admissions and other holds' growth. Omitted when false. |
@@ -102,7 +102,7 @@ units, reserve?)]`, `reuse?`, `prefix?` (read at `Request`), `cache?` and
 relation's source: each request registers a send of its allocation of the
 engine's `memory` (a pool it takes) when it ends, which keeps it, as a
 hold's `lease` keeps one, until a reader's load ends the send, `ttl`
-seconds (a constant above 0; absent, never) pass before a reader's copy
+seconds (a constant of at least one tick; absent, never) pass before a reader's copy
 begins, or the session ends; a load whose send has ended before its copy
 began loads nothing, and the request computes those tokens; `cache` is read when the request ends
 and applied when the send does (the P/D prefiller's blocks, kept for the
@@ -375,6 +375,20 @@ The IR does not distinguish server statements from workload statements.
 The additional [server hidden-attribute rule](api/workload.md#hidden) is
 checked by the text linker.
 
+## Time
+
+The clock is a whole number of ticks, `1 / TICKS_PER_UNIT` (10⁻⁹) of the
+unit the IR's times are in (`src/ir.rs`: `TICKS_PER_UNIT`, `to_ticks`,
+`from_ticks`; [Time](language.md#time)). Every time in the IR stays a
+number in that unit; the interpreter rounds each duration it schedules (a
+run's work at rate 1, a `latency`, a step's `cost`, a gap, a lease, a
+`ttl`, a tick's period, `horizon` and `warmup`) to the nearest tick, a half
+to the even one, and adds ticks. Two times that round to one tick are one
+instant. `Now` reads the instant in the unit; `Waited`, `Age` and `Last`
+read tick differences. This is IR 16's meaning: an IR 15 program may run
+differently, where two of its sums differed in the last bit
+([the integer clock](design/integer-clock.md)).
+
 ## Ties
 
 Tie-breaking rules are defined in [language semantics](language.md#3-semantics).
@@ -416,7 +430,7 @@ the IR over natural numbers, event by event as the interpreter does: pools
 with LRU eviction and LIFO preemption, one step engine (stage 0) whose
 iteration cost uses supported terms in `tokens`, `prefilled`, `decoders`,
 `kv_decode` and `attention`, with natural coefficients and a constant term
-of at least 1 (`cost 1` is the step clock; attention coefficients must be even), delay stages, explicit sessions with preset attributes and turns, and the
+of at least 1 (`cost 1` is the step clock, 10⁹ of the interpreter's ticks, so every fragment time is a whole number of ticks; attention coefficients must be even), delay stages, explicit sessions with preset attributes and turns, and the
 statements `Turn`, `Hold`, `Run`, `Set`, `Observe`, `Branch`, `Loop`, `While`, `End`
 (not `Release`, `Load`, `Fork`, a hold with a `lease` or an engine whose requests are sent)
 with expressions built from integer constants, attributes, `Now`,

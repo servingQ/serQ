@@ -35,11 +35,11 @@ an `observe`, a `stage`, a `pool`, a `device`, an `engine`, a `queue`, a
 
 | Name | Type | Moments | Meaning |
 |---|---|---|---|
-| `now` | number | except `Gauge`, `Given`, `only` predicates and iteration guards | simulation clock |
-| `waited` | number | `Select` | seconds since this hold entered the queue; reset on re-entry |
+| `now` | number | except `Gauge`, `Given`, `only` predicates and iteration guards | simulation clock: the instant's tick in the clock's unit ([Time](../language.md#time)) |
+| `waited` | number | `Select` | the ticks since this hold entered the queue, in the clock's unit; reset on re-entry |
 | `size` | number | `Evict` | units of the entry |
-| `age` | number | `Evict` | `now − last` |
-| `last` | number | `Evict` | time the entry was released |
+| `age` | number | `Evict` | the ticks since the entry was released, in the clock's unit (`now − last` up to the last bit) |
+| `last` | number | `Evict` | the instant the entry was released |
 | `waiting` | 0 / 1 | `Evict` | 1 if the entry's session waits in a pool queue |
 | `present` | number | `Ps` | jobs present |
 | `residents` | number | `Budget`, `Step`, `Serve`, `Plan`, `Iteration` | residents, scheduled or not |

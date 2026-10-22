@@ -86,7 +86,7 @@ What a [`grow`](statements.md#grow) (or a `growing` run) does when the pool has 
 | `by (k, …)` | Preempt the candidate with the least keys, compared in order; ties go to the last admitted. |
 | `lifo` | Shorthand for `by (-admission) requeue head`: preempt the last admitted. |
 | `leases by (k, …)` | End the lease with the least keys, compared in order; ties go to the last admitted. No hold is preempted. |
-| `leases by (k, …) every (dt)` | A lease's growth goes through, past the cap if it must; at every multiple of `dt` seconds, end leases in that order while the pool is over its cap. A hold's growth takes a lease at once. Not on a pool with `reserve held`. |
+| `leases by (k, …) every (dt)` | A lease's growth goes through, past the cap if it must; at every multiple of `dt` seconds (a constant of at least one [tick](../language.md#time)), end leases in that order while the pool is over its cap. A hold's growth takes a lease at once. Not on a pool with `reserve held`. |
 | `leases by (k, …) every (dt) suspend by (s, …)` | As `every`, but a lease taken is set aside, and each later tick, before it takes any, gives set-aside leases back in the order of the `s` keys, each that fits; `release` or the session's end drops one. |
 
 Candidates are holders resident in the stage whose `memory` is this pool.
@@ -159,7 +159,7 @@ This admits immediate requests, then aged long requests, then short requests,
 then other long requests. `serial` orders requests within a lane in this
 single-hold workload.
 
-`every (dt)` admits only at every multiple of `dt` seconds. At a tick the
+`every (dt)` admits only at every multiple of `dt` seconds, a constant of at least one [tick](../language.md#time). At a tick the
 holds that waited when it began are tried in the queue's order; each one
 admitted runs until it blocks before the next is tried, and one that does
 not fit is passed over rather than blocking the rest. A hold queued during
