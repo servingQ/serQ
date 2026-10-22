@@ -1430,8 +1430,9 @@ holds blocks and no running slot while it reads:
 
 (`examples/pd-disaggregation/llmd_nixl_pull.sq`). The engine records
 `E.loaded` for each admission and sets `E.loaded`, `E.saved` and
-`E.load_done` (when its latest load ended; an admission that loads
-nothing leaves it) for the caller.
+`E.load_done` (when its latest load ended; an admission whose `load` is
+0 leaves it, while one whose send is gone ends its load as it is admitted)
+for the caller.
 
 ### A hold's header is read at admission
 

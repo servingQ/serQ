@@ -168,8 +168,12 @@ fn a_read_is_waiting_for_kv_and_the_prefiller_s_send_keeps_it_finished() {
     let lease = r.observe("send_held").unwrap();
     assert!(lease.count > 0);
     assert_eq!(status(&r, Status::Finished).stays as usize, held.len());
+    // one to one: each sample takes a send's time no other sample took
+    let mut left = held.clone();
     for x in &lease.samples {
-        assert!(held.iter().any(|h| (h - x).abs() < 1e-12), "{x} {held:?}");
+        let i = left.iter().position(|h| (h - x).abs() < 1e-12);
+        let i = i.unwrap_or_else(|| panic!("{x} matches no send left: {left:?}"));
+        left.swap_remove(i);
     }
 }
 
