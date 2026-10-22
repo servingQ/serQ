@@ -1402,10 +1402,11 @@ A request its entry took from no source loads nothing. A read whose send
 has ended before its copy began (its `ttl`, with no leg left to leave
 another) has no KV to read: the source's blocks are gone, `request.loaded`
 is 0, and the request computes those tokens itself, as vLLM recomputes a
-read of invalid blocks: its load ends as it is admitted. A load the
-connector's `load` makes 0 is none, of a send or of anything: a decoder
-preempted after its read loads nothing when it is admitted again
-(`request.preempted ? 0 : …`), and its read's end stands. A push's reader that finds no send once its last
+read of invalid blocks: its load ends as it is admitted. A `load` of 0 is
+no read: a decoder preempted after its read and admitted again under
+`request.preempted ? 0 : …` reads nothing, and `E.load_done` keeps its
+read's end, while `E.admitted` is the readmission's (so `E.load_done -
+E.admitted` is the read only where `E.loaded > 0`). A push's reader that finds no send once its last
 leg has ended first takes the running slot its admission left for after
 the load. A send whose copy has begun stays until the copy is done. Such
 a connector has no `per_token` or `save`.

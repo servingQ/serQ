@@ -980,7 +980,7 @@ pub struct CConnector {
     pub loaded: usize,
     pub saved: usize,
     /// Attribute slot: when its latest load ended, or found its send gone
-    /// (`E.load_done`).
+    /// (`E.load_done`). An admission whose `load` is 0 leaves it.
     pub load_done: usize,
     /// A KV relation's (`kvt.nixl_pull`): the attribute its request's entry
     /// sets to the source's member it took `from`, -1 for none, which loads

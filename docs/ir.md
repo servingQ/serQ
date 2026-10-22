@@ -129,7 +129,7 @@ request's status is `waiting_for_kv` (a load) or `finished` (a save);
 Grow; Run; Load }`) for the interpreter and the figure, which the IR does
 not hold. One status per request (`docs/design/request-state.md`). `record` is
 the observation of what each admission loaded, `load_done` the attribute
-of when its latest load ended. After a load the interpreter computes the
+of when its latest load ended (an admission whose `load` is 0 leaves it). After a load the interpreter computes the
 request's last token again if every one has KV, and reads the `CRequest`
 again: the pools it took none of and takes now, it waits for, as a part of
 its hold. The blocks are roots of the block tree, not bodies of a

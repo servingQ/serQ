@@ -304,18 +304,20 @@ after its read is admitted again, and the examples' connectors load
 nothing then (`request.preempted ? 0 : …`; vLLM reschedules it without a
 second transfer, `nixl/pull_scheduler.py:187-189`, and prefills locally
 what it lost, `scheduler.py:1560-1561`).
-That is no load, of a send or of anything, and `E.load_done` keeps its
-read's end. v0.1.7-alpha.2 tested for a send gone before reading what the
+A `load` of 0 is no read, and `E.load_done` keeps its read's end. v0.1.7-alpha.2 tested for a send gone before reading what the
 connector loads, took that readmission for a read of a send gone, and
 ended its load at the readmission: `pd_batching.sq` with decoders short of
 memory (`--blocksD 300 --Bw 2e4 --x0 0.01`, seed 1, `--horizon 100`)
 preempted 89 of 811 decoders after their read, and its `send_held`
 overstated their sends' hold (mean 43.6624 s against the log's 43.6491 s);
 the companion repository's port found it. The examples' observations of
-the read (`admit_wait`, `transfer`, the push's `parked`) read the latest
-admission, which for those decoders is not the read's, and are taken only
-where it read (`D.loaded > 0`); `send_held` is the send's own and is taken
-for every request.
+the read (`admit_wait`, `transfer`, the push's `parked`) subtract the
+latest admission, which for those decoders is the readmission's, not the
+read's: they are taken only where the latest admission read
+(`D.loaded > 0`), so a decoder preempted after its read is not observed
+there, a selection of the requests memory pressed hardest. No record keeps
+the read's admission; `send_held` is the send's own and is taken for
+every request.
 
 ### 5. One spelling of the source
 

@@ -59,7 +59,7 @@ fn main() {
         P.prefill (prompt);              // the sidecar's order: the prefill's answer first
       }
       D.decode (prompt) from P;          // the decode request; it waits for the prefill's KV inside
-      if (D.loaded > 0) {                // not a decoder admitted again after a preemption, reading nothing
+      if (D.loaded > 0) {                // its latest admission read the KV (a readmission after a preemption reads none)
         observe parked = D.load_done - D.admitted;   // how long the decoder's blocks waited for the KV
       }
       observe sent = t0;

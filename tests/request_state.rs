@@ -202,7 +202,7 @@ fn sends_held(log: &Log) -> Vec<f64> {
 /// `pd_batching.sq` with decoders short of memory, as the companion's port
 /// to v0.1.7-alpha.2 found it: a decoder preempted after its read is
 /// admitted again and its connector loads nothing (`request.preempted ? 0
-/// : …`). That is no load, of a send or of anything: `D.load_done` stays
+/// : …`). A `load` of 0 is no read: `D.load_done` keeps
 /// its read's end, so the program's `send_held` is how long the
 /// prefiller's send held its blocks, sample for sample. It had been read
 /// as a read of a send gone, and its load had ended at the readmission.

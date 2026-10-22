@@ -2588,15 +2588,14 @@ impl<'p> Interp<'p> {
             Some(t) => {
                 let what = format!("connector of {} load", self.p.stages[st].name);
                 let n = self.amount(&t.amount, sid, &what);
-                // a read of a send gone (its `ttl`) with no leg left to leave
-                // another reads nothing: the request computes the tokens. A
-                // load of nothing (`request.preempted ? 0 : …`) is no read,
-                // of a send or of anything, and its latest load stands
-                // (`E.load_done`)
+                // a read of a send gone reads nothing: the request computes
+                // the tokens. A `load` of 0 is no read: a decoder admitted
+                // again after its read (`request.preempted ? 0 : …`) reads
+                // nothing, and `E.load_done` keeps its read's end
                 if n > 0.0
                     && t.source.as_ref().is_some_and(|src| {
                         let pl = self.session_index(src, sid);
-                        self.send_of(sid, pl).is_none() && self.sessions[sid].legs == 0
+                        self.send_gone(sid, pl)
                     })
                 {
                     unread = true;
@@ -2837,7 +2836,7 @@ impl<'p> Interp<'p> {
                 // those tokens itself, waiting first for the slot its
                 // admission left for after the load (vLLM: a read of
                 // invalid blocks is recomputed, scheduler.py:3140, 3254-3257)
-                if self.send_of(sid, pl).is_none() {
+                if self.send_gone(sid, pl) {
                     self.load_nothing(sid);
                     if self.request_more(sid) {
                         return false;
@@ -2984,6 +2983,13 @@ impl<'p> Interp<'p> {
     /// it, or no leg is left to leave one (it then reads nothing).
     fn send_ready(&self, sid: usize, pl: usize) -> bool {
         self.send_of(sid, pl).is_some() || self.sessions[sid].legs == 0
+    }
+
+    /// Whether a read of `pl` by `sid` finds its send gone: it holds none
+    /// (expired at its `ttl`, or never left), and no leg is left to leave
+    /// one. Read only for a load of something (`request_hit`, `request_next`).
+    fn send_gone(&self, sid: usize, pl: usize) -> bool {
+        self.send_of(sid, pl).is_none() && self.sessions[sid].legs == 0
     }
 
     /// The request has generated its output: it gives its pools back,
