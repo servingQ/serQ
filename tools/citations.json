@@ -47,6 +47,7 @@
  "lmcache_mp_connector.py:952": "0073aaddd3f6ddda",
  "metrics/stats.py:472-474": "f4b8f73ff7f0ec32",
  "metrics/stats.py:499-505": "66638a711f9dc29d",
+ "metrics/stats.py:524": "22660718f539234c",
  "metrics/stats.py:541": "e3ac4abb82fc9d04",
  "metrics/stats.py:552": "5665e535562f1daf",
  "nixl/base_scheduler.py:119-120": "a91fe0a4e7a3a744",

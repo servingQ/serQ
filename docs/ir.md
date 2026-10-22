@@ -17,7 +17,7 @@ than host-language code, and every input passes `Program::validate`.
 The source model and externally supplied execution settings resolve to one
 complete `Program`; its JSON records the experiment as well as the deployment.
 
-Source: `src/ir.rs`. Current version: `IR_VERSION = 15`.
+Source: `src/ir.rs`. Current version: `IR_VERSION = 16`.
 
 ## Format
 

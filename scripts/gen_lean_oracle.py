@@ -55,8 +55,8 @@ OUT = os.path.join(ROOT, "lean", "Serq", "Oracle.lean")
 # statement `Join`. A connector was outside the fragment and stays so (below),
 # a send is, and no oracle program had a `Join`: a 14 file and a 15 file
 # translate alike.
-IR_VERSION = 15
-SUPPORTED_IR_VERSIONS = (7, 8, 9, 10, 11, 12, 13, 14, IR_VERSION)
+IR_VERSION = 16
+SUPPORTED_IR_VERSIONS = (7, 8, 9, 10, 11, 12, 13, 14, 15, IR_VERSION)
 
 
 def is_delay(kind):
@@ -654,6 +654,21 @@ class Lean:
         rec = spec["records"]
         inner = "  " * (ind + 1)
         n, c = f"(x.attr {known})", "x.cached"
+        # `admitted`: from IR 16 the first admission (`again` still 0), the
+        # latest before
+        if self.ir["version"] >= 16:
+            first_admitted = [
+                f"{inner}branch (if ((x.attr {again}) = 0) then 1 else 0) {{",
+                f"{inner}  set {rec['admitted']} = x.now;",
+                f"{inner}  done",
+                f"{inner}}} else {{",
+                f"{inner}  done",
+                f"{inner}}};",
+            ] if rec["admitted"] in self.read else []
+            latest_admitted = []
+        else:
+            first_admitted = []
+            latest_admitted = [f"{inner}set {rec['admitted']} = x.now;"]
         return self.records([
             f"{pad}set {inp} = {self.top(v['input'])};",
             f"{pad}set {outp} = {self.top(v['output'])};",
@@ -662,10 +677,11 @@ class Lean:
             f"{pad}hold {', '.join(ps)}{ru} {{",
             f"{inner}set {known} = {self.top(at_admission)};",
             f"{inner}set {kept} = x.attr {known};",
+            *first_admitted,
             f"{inner}set {again} = 1;",
             f"{inner}observe {rec['reused']} = {c};",
             f"{inner}observe {rec['prefill']} = {n} - {c};",
-            f"{inner}set {rec['admitted']} = x.now;",
+            *latest_admitted,
             f"{inner}set {rec['last_reused']} = {c};",
             f"{inner}set {rec['last_prefill']} = {n} - {c};",
             f"{inner}run {e} prefill ({n} - {c}) growing {mem};",

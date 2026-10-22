@@ -1360,7 +1360,9 @@ registers. The input is the scheduler's (a `hidden` attribute may not be
 it), and so is the output when the admission reads `request.output`. The
 engine's records are attributes the caller reads after the call: `E.reused`
 (the cached tokens its latest admission read), `E.prefill` (the tokens its
-prefill computes), `E.admitted` (when) and `E.first` (when its first token
+prefill computes), `E.admitted` (when it was first admitted: a readmission
+after a preemption does not move it, as vLLM's `scheduled_ts` ignores
+preemptions, `metrics/stats.py:524`) and `E.first` (when its first token
 was sampled); a connector adds `E.loaded`, `E.saved` and `E.load_done`
 (below). `E.reused`, `E.prefill` and `E.loaded` are observations of the
 report too, one per admission.
@@ -1405,8 +1407,8 @@ is 0, and the request computes those tokens itself, as vLLM recomputes a
 read of invalid blocks: its load ends as it is admitted. A `load` of 0 is
 no read: a decoder preempted after its read and admitted again under
 `request.preempted ? 0 : …` reads nothing, and `E.load_done` keeps its
-read's end, while `E.admitted` is the readmission's (so `E.load_done -
-E.admitted` is the read only where `E.loaded > 0`). A push's reader that finds no send once its last
+read's end, as `E.admitted` keeps its first admission, so `E.load_done -
+E.admitted` is its read. A push's reader that finds no send once its last
 leg has ended first takes the running slot its admission left for after
 the load. A send whose copy has begun stays until the copy is done. Such
 a connector has no `per_token` or `save`.

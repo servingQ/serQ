@@ -267,7 +267,8 @@ request as `request.input`, `request.output`, `request.known`,
 `request.hit`, `request.loaded` and `request.preempted`; `cache`, read when
 the request gives its pools back, reads `request.finished`. The engine's
 records are attributes the caller reads after the call: `ENGINE.reused`,
-`ENGINE.prefill`, `ENGINE.admitted` and `ENGINE.first` (a connector adds
+`ENGINE.prefill`, `ENGINE.admitted` (its first admission, which a
+readmission after a preemption does not move) and `ENGINE.first` (a connector adds
 `ENGINE.loaded`, `ENGINE.saved` and `ENGINE.load_done`); `ENGINE.reused`,
 `ENGINE.prefill` and `ENGINE.loaded` are observations of the report too,
 one per admission.

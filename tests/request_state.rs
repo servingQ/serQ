@@ -174,9 +174,17 @@ fn a_read_is_waiting_for_kv_and_the_prefiller_s_send_keeps_it_finished() {
 }
 
 /// How long each send held its source's blocks, registered to done, from
-/// the run log.
+/// the run log, in the order the sends ended.
 fn sends_held(log: &Log) -> Vec<f64> {
-    let mut held: Vec<f64> = vec![];
+    sends_held_by_session(log)
+        .into_iter()
+        .map(|(_, h)| h)
+        .collect()
+}
+
+/// `sends_held`, with the serial of the session whose request sent.
+fn sends_held_by_session(log: &Log) -> Vec<(u64, f64)> {
+    let mut held: Vec<(u64, f64)> = vec![];
     let mut since = std::collections::HashMap::new();
     for e in &log.events {
         if let EventKind::Transfer {
@@ -191,7 +199,7 @@ fn sends_held(log: &Log) -> Vec<f64> {
                 Moved::Registered => {
                     since.insert((who.serial, who.leg, *call), e.t);
                 }
-                Moved::Done => held.push(e.t - since[&(who.serial, who.leg, *call)]),
+                Moved::Done => held.push((who.serial, e.t - since[&(who.serial, who.leg, *call)])),
                 Moved::Start => {}
             }
         }
@@ -202,10 +210,14 @@ fn sends_held(log: &Log) -> Vec<f64> {
 /// `pd_batching.sq` with decoders short of memory, as the companion's port
 /// to v0.1.7-alpha.2 found it: a decoder preempted after its read is
 /// admitted again and its connector loads nothing (`request.preempted ? 0
-/// : …`). A `load` of 0 is no read: `D.load_done` keeps
-/// its read's end, so the program's `send_held` is how long the
-/// prefiller's send held its blocks, sample for sample. It had been read
-/// as a read of a send gone, and its load had ended at the readmission.
+/// : …`). A `load` of 0 is no read: `D.load_done` keeps its read's end,
+/// so the program's `send_held` is how long the prefiller's send held its
+/// blocks, session by session. It had been read as a read of a send gone,
+/// and its load had ended at the readmission. And `D.admitted` keeps the
+/// first admission (IR 16; it was the latest), so the program's
+/// `admit_wait` and `transfer` are the read's for every request: they
+/// add up to `send_held`, where the readmission had made `transfer`
+/// negative (or 0, before the first fix).
 #[test]
 fn a_decoder_preempted_after_its_read_keeps_its_read_s_end() {
     let mut ov = common::horizon(10.0);
@@ -224,20 +236,28 @@ fn a_decoder_preempted_after_its_read_keeps_its_read_s_end() {
     // a decoder admitted again after its read loaded nothing
     let loaded = &r.observe("D.loaded").unwrap().samples;
     assert!(loaded.contains(&0.0), "no decoder read nothing");
-    let held = sends_held(r.log.as_ref().unwrap());
-    let send_held = &r.observe("send_held").unwrap().samples;
-    assert_eq!(send_held.len(), held.len());
-    for x in send_held {
-        assert!(held.iter().any(|h| (h - x).abs() < 1e-9), "{x}");
+    // each session's one send, against its own `send_held` (a session of
+    // `pd_batching`'s workload is one turn, one prefill)
+    let held: std::collections::HashMap<u64, f64> = sends_held_by_session(r.log.as_ref().unwrap())
+        .into_iter()
+        .collect();
+    let send_held = r.observe("send_held").unwrap();
+    assert_eq!(send_held.samples.len(), held.len());
+    for (x, (_, serial, _)) in send_held.samples.iter().zip(&send_held.records) {
+        assert!(
+            (held[serial] - x).abs() < 1e-9,
+            "session {serial}: {x} {}",
+            held[serial]
+        );
     }
-    // the program observes the read only where its latest admission read
-    assert!(
-        r.observe("transfer")
-            .unwrap()
-            .samples
-            .iter()
-            .all(|&t| t >= 0.0)
-    );
+    // every request's read: the first admission, then the load's end
+    let admit_wait = &r.observe("admit_wait").unwrap().samples;
+    let transfer = &r.observe("transfer").unwrap().samples;
+    assert_eq!(transfer.len(), send_held.samples.len());
+    for ((a, t), h) in admit_wait.iter().zip(transfer).zip(&send_held.samples) {
+        assert!(*t >= 0.0, "transfer {t}");
+        assert!((a + t - h).abs() < 1e-9, "{a} + {t} != {h}");
+    }
 }
 
 /// `vllm_nixl_push.sq`: the prefill is a leg's request, the decoder's is the

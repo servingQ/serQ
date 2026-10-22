@@ -72,13 +72,8 @@ fn main() {
         choose j in ND by (holders(D[j].kv) + queued(D[j].kv));
         D[j].decode (prompt) from P[i];
         set first = D.first;
-        // where its latest admission read the KV: a decoder preempted after
-        // its read is admitted again, reads none (D.loaded 0), and keeps
-        // its read's end but not the read's admission
-        if (D.loaded > 0) {
-          observe admit_wait = D.admitted - t_prefill;  // the decoder's admission: the prompt's blocks
-          observe transfer = D.load_done - D.admitted;  // the read: the wait before it and both NICs
-        }
+        observe admit_wait = D.admitted - t_prefill;  // the decoder's admission: the prompt's blocks
+        observe transfer = D.load_done - D.admitted;  // the read: the wait before it and both NICs
         observe send_held = D.load_done - t_prefill;  // how long the prefiller kept its blocks for the read
       }
       observe ttft = first - t0;

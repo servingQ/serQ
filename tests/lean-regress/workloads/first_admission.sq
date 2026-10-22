@@ -1,0 +1,6 @@
+// The sessions of tests/lean-regress/first_admission.sq.
+workload {
+  arrive batch(2);
+  init { set p = 0; set o = 0; }
+  send (p, o);
+}

@@ -311,13 +311,11 @@ memory (`--blocksD 300 --Bw 2e4 --x0 0.01`, seed 1, `--horizon 100`)
 preempted 89 of 811 decoders after their read, and its `send_held`
 overstated their sends' hold (mean 43.6624 s against the log's 43.6491 s);
 the companion repository's port found it. The examples' observations of
-the read (`admit_wait`, `transfer`, the push's `parked`) subtract the
-latest admission, which for those decoders is the readmission's, not the
-read's: they are taken only where the latest admission read
-(`D.loaded > 0`), so a decoder preempted after its read is not observed
-there, a selection of the requests memory pressed hardest. No record keeps
-the read's admission; `send_held` is the send's own and is taken for
-every request.
+the read (`admit_wait`, `transfer`, the push's `parked`) subtract
+`D.admitted`, which was the latest admission, the readmission's for
+those decoders: IR 16 makes it the first
+([the first admission](first-admission.md)), so every observation is the
+read's, for every request.
 
 ### 5. One spelling of the source
 

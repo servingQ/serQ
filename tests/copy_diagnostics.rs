@@ -100,7 +100,7 @@ fn a_push_read_by_transfer_without_a_fork_runs() {
 #[test]
 fn a_push_whose_reader_has_no_connector_names_the_connector() {
     let (src, workload) = example("examples/pd-disaggregation/vllm_nixl_push.sq");
-    let parked = "        observe parked = D.load_done - D.admitted;   // how long the decoder's blocks waited for the KV\n";
+    let parked = "      observe parked = D.load_done - D.admitted;   // how long the decoder's blocks waited for the KV\n";
     assert!(src.contains(CONNECTOR) && src.contains(parked));
     let e = refused(&src.replace(CONNECTOR, "").replace(parked, ""), &workload);
     // not the `fork` the program wrote, which the missing `join` left alone
@@ -146,7 +146,7 @@ fn a_connector_whose_engine_does_not_take_its_memory_names_the_taking() {
         "{e}"
     );
     assert!(
-        e.contains(" 104:9: error[E-connector-untaken]"),
+        e.contains(" 102:9: error[E-connector-untaken]"),
         "at `D`: {e}"
     );
     assert!(!e.contains("link error"), "{e}");

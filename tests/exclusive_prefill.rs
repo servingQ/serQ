@@ -248,9 +248,14 @@ fn preemption_keeps_only_committed_progress_and_defers_readmission() {
     let r = common::run(&common::main_source(src), &batch(2), &common::horizon(20.0)).unwrap();
     assert_eq!(r.ended, 2, "{}", r.text());
     assert_eq!(r.pool("kv").unwrap().preemptions, 1);
-    // what each admission prefilled: A, B, then B again with its tokens
-    assert_eq!(r.observe("llm.prefill").unwrap().samples, [2.0, 2.0, 4.0]);
-    assert_eq!(r.observe("admitted_b").unwrap().samples, [5.0]);
+    // what each admission prefilled: A, B, then B again with its tokens,
+    // at 5 (each admission's sample is recorded as it is admitted)
+    let prefill = r.observe("llm.prefill").unwrap();
+    assert_eq!(prefill.samples, [2.0, 2.0, 4.0]);
+    assert_eq!(prefill.records[2].0, 5.0);
+    // `llm.admitted` is B's first admission, which its readmission does not
+    // move (IR 16, docs/design/first-admission.md)
+    assert_eq!(r.observe("admitted_b").unwrap().samples, [1.0]);
     assert_eq!(r.observe("done").unwrap().samples, [5.0, 8.0]);
     assert_eq!(r.observe("cached_extent").unwrap().samples, [5.0, 5.0]);
 }
