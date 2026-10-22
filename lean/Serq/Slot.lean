@@ -307,7 +307,7 @@ theorem ci_r1 {L : ℕ → ℕ × ℕ} {g : Ghost} {m : Machine} (hI : CI M L g 
   have hev : evalE m1 i (fun x => (M.len x.attr).1) = (L i).1 := by
     show (M.len (getS m1 i).attr.get).1 = _
     rw [hg1, hl1]
-  obtain ⟨a, b, hab, he⟩ := Exec.exec_runEngine' M.D 9998 m1 i .prefill (fun x => (M.len x.attr).1) (Q3 M)
+  obtain ⟨a, b, hab, he⟩ := Exec.exec_runEngine_split M.D 9998 m1 i .prefill (fun x => (M.len x.attr).1) (Q3 M)
     (by rw [hg1]; exact hst) (by rw [hg1]; rfl) (by rw [hev]; omega)
   rw [he, hev]
   set s2 : Sess := { getS m1 i with prog := Q3 M, status := .engine } with hs2
@@ -339,7 +339,7 @@ theorem ci_r3 {L : ℕ → ℕ × ℕ} {g : Ghost} {m : Machine} (hI : CI M L g 
   set m0 : Machine := { m with ready := rest } with hm0
   have hg0 : ∀ j, getS m0 j = getS m j := fun _ => rfl
   have hev : evalE m0 i (fun x => (M.len x.attr).2) = (L i).2 := congrArg Prod.snd hlen
-  obtain ⟨a, b, hab, he⟩ := Exec.exec_runEngine' M.D 9999 m0 i .decode (fun x => (M.len x.attr).2) Q4
+  obtain ⟨a, b, hab, he⟩ := Exec.exec_runEngine_split M.D 9999 m0 i .decode (fun x => (M.len x.attr).2) Q4
     (by rw [hg0]; exact hst) (by rw [hg0, hp]; rfl) (by rw [hev]; omega)
   rw [show (10000 : ℕ) = 9999 + 1 from rfl, he, hev]
   set s2 : Sess := { getS m0 i with prog := Q4, status := .engine } with hs2

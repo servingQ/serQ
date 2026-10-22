@@ -18,8 +18,6 @@ open Exec DaiChain
 /-- A machine's job list: each job's mode and left work, in admission order. -/
 def σ (m : Machine) : List AJob := m.jobs.map fun j => (j.mode, j.left)
 
-theorem σ_empty : σ DaiStable.empty = [] := rfl
-
 /-! ### The job list, exactly
 
 `Serq/Slot.lean` follows the list through an instant; what is Sarathi's own

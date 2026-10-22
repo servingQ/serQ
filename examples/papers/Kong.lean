@@ -2051,9 +2051,6 @@ theorem prefixTotal_perm {l₁ l₂ : List ℕ} (h : l₁.Perm l₂) : Exec.pref
   rw [prefixTotal_eq, prefixTotal_eq, KongMath.prefixTotal_eq, KongMath.prefixTotal_eq, h.sum_eq,
     KongMath.pmin_perm h]
 
-theorem filter_all {n : ℕ} (p : ℕ → Bool) (h : ∀ i < n, p i = true) : (List.range n).filter p = List.range n :=
-  List.filter_eq_self.mpr fun i hi => h i (List.mem_range.mp hi)
-
 /-- **The claim of `kong_svf.sq`.** When every request has ended,
 `(M - P) Σ_j W_j ≤ 2 Σ_j Σ_{i ≺ j} vol_i`, with `W_j` the latency less the
 decode time. -/

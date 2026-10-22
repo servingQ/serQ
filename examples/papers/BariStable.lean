@@ -102,6 +102,9 @@ def Arrivals.work {N : ℕ} (A : Arrivals N) (o : ℕ) : ℕ := ((A.arr o).map f
 /-- The mean tokens a slot brings. -/
 def Arrivals.load {N : ℕ} (A : Arrivals N) : ℝ := ∑ o ∈ Finset.range (N + 1), A.p o * A.work o
 
+theorem Arrivals.load_nonneg {N : ℕ} (A : Arrivals N) : 0 ≤ A.load :=
+  Finset.sum_nonneg fun o _ => mul_nonneg (A.nonneg o) (Nat.cast_nonneg _)
+
 /-- The chain: a slot with the arrivals of outcome `o`, drawn from `A`. -/
 noncomputable def kernel {N : ℕ} (A : Arrivals N) : Kernel State ℕ :=
   Kernel.ofOutcomes N A.p A.nonneg A.sum_one fun x o =>

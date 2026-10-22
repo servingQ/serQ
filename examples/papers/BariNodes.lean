@@ -352,9 +352,6 @@ theorem apply_kernel {N g : ℕ} [NeZero g] (A : Arrivals N) (f : State g → �
     (kernel A).apply f x = ∑ ω, prob A g ω * f (step A x ω) :=
   Kernel.apply_ofFintype _ _ _ _ _ _
 
-theorem load_nonneg {N : ℕ} (A : Arrivals N) : 0 ≤ A.load :=
-  Finset.sum_nonneg fun o _ => mul_nonneg (A.nonneg o) (Nat.cast_nonneg _)
-
 /-- A node receives at most `10 000` requests of `1536` tokens in a slot. -/
 theorem work_route_le {N g : ℕ} (A : Arrivals N) (ω : Outcome A g) (i : Fin g) :
     (work (route (A.arr ω.1) ω.2 i) : ℝ) ≤ 15360000 := by
@@ -416,7 +413,7 @@ theorem apply_sq_off {N g : ℕ} [NeZero g] (A : Arrivals N) (i : Fin g) (x : St
     rw [Finset.sum_congr rfl fun ω _ => e ω, Finset.sum_add_distrib, ← Finset.mul_sum, ← Finset.mul_sum,
       prob_sum, mul_one]
   have hg : (0 : ℝ) < g := Nat.cast_pos.mpr (Nat.pos_of_ne_zero (NeZero.ne g))
-  have hL : 0 ≤ A.load / g := div_nonneg (load_nonneg A) hg.le
+  have hL : 0 ≤ A.load / g := div_nonneg A.load_nonneg hg.le
   rw [h2, hE] at h1
   unfold ε C
   nlinarith
@@ -498,10 +495,6 @@ theorem route_nil {N g : ℕ} (A : Arrivals N) {o0 : Fin (N + 1)} (harr : A.arr 
     (r : Fin (A.arr o0).length → Fin g) (i : Fin g) : route (A.arr o0) r i = [] :=
   List.eq_nil_of_length_eq_zero (Nat.le_zero.mp ((route_length _ _ _).trans (by simp [harr])))
 
-theorem idle_backlog {m : BariStable.State} (h : BariProgram.Idle m) : backlog m.1 = 0 := by
-  rw [BariProgram.backlog_eq, show BariSim.σ m.1 = [] from h]
-  simp [BariChain.backlog]
-
 /-- Without arrivals every node drains: from backlogs `≤ j`, every node is
 empty within `j` slots with probability at least `p₀ʲ`. -/
 theorem drain {N g : ℕ} [NeZero g] (A : Arrivals N) {o0 : Fin (N + 1)} (harr : A.arr o0 = []) :
@@ -528,7 +521,7 @@ theorem drain {N g : ℕ} [NeZero g] (A : Arrivals N) {o0 : Fin (N + 1)} (harr :
         show backlog (slot (route (A.arr o0) _ i) (x i).1) ≤ j
         rw [route_nil A harr (noArrival A o0).2 i]
         by_cases hi : BariProgram.Idle (x i)
-        · have := idle_backlog hi; omega
+        · have := BariProgram.idle_backlog hi; omega
         · have := (BariRecurrent.sS_cases _ (BariProgram.good_σ (x i).2) hi).1
           have := hb i; omega
       have ih := drain A harr j _ hb'
@@ -565,7 +558,7 @@ theorem hit_le {N g : ℕ} [NeZero g] (A : Arrivals N) (hA : A.load < 128 * g)
     {o0 : Fin (N + 1)} (hp : 0 < A.p o0) (harr : A.arr o0 = []) :
     ∃ c : ℝ, ∀ n (x : State g), hit (kernel A) AllIdle n x ≤ Q x + c := by
   have h := hit_le_of_reach (kernel (g := g) A) AllIdle (fun _ => Kernel.integrable_ofFintype _ _ _ _ _)
-    (driftQ A hA) (fun x hx i => by have := idle_backlog (hx i); omega) (L := R A g)
+    (driftQ A hA) (fun x hx i => by have := BariProgram.idle_backlog (hx i); omega) (L := R A g)
     (B := g * ((R A g : ℝ) + 15360000 * (R A g : ℕ)) ^ 2) (pow_pos hp _)
     (fun x hx => drain A harr _ x hx)
     (fun x hx => by
@@ -599,7 +592,7 @@ theorem return_idle {N g : ℕ} [NeZero g] (A : Arrivals N) (hA : A.load < 128 *
   refine ⟨_, fun n x hx => return_le_of_hit_le (kernel A) AllIdle (Kernel.integrable_ofFintype _ _ _ _ _)
     (V := Q) (a := 1) (c := c) zero_le_one (fun n y => by linarith [hc n y]) (d := g * 15360000 ^ 2) ?_ n⟩
   have h1 := applyN_Q_le A 1 x
-  have h0 : ∀ i, V i x = 0 := fun i => by unfold V; exact_mod_cast idle_backlog (hx i)
+  have h0 : ∀ i, V i x = 0 := fun i => by unfold V; exact_mod_cast BariProgram.idle_backlog (hx i)
   simp only [Kernel.applyN, h0] at h1
   simpa using h1
 

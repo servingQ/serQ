@@ -56,6 +56,11 @@ theorem good_σ {m : Exec.Machine} (h : Reach m) : BariRecurrent.Good (BariSim.�
 theorem backlog_eq (m : Exec.Machine) : backlog m = BariChain.backlog (BariSim.σ m) := by
   simp [backlog, Slot.backlog, BariChain.backlog, BariSim.σ, List.map_map, Function.comp_def]
 
+/-- An empty engine has no backlog. -/
+theorem idle_backlog {x : State} (h : Idle x) : backlog x.1 = 0 := by
+  rw [backlog_eq, show BariSim.σ x.1 = [] from h]
+  simp [BariChain.backlog]
+
 /-- A slot changes the backlog by its arrivals less its batch. -/
 theorem backlog_nxt {N : ℕ} (A : Arrivals N) (x : State) (o : ℕ) :
     backlog (nxtS A x o).1 + BariRecurrent.sS (BariSim.σ x.1) =
@@ -174,28 +179,14 @@ empty again is bounded by one constant. -/
 theorem return_idle {N : ℕ} (A : Arrivals N) (hA : A.load < 128) :
     ∃ C : ℝ, ∀ n x, Idle x → 1 + (kernel A).apply (hit (kernel A) Idle n) x ≤ C := by
   obtain ⟨c, hc⟩ := hit_le A hA
-  refine ⟨1 + (15360000 / ε A + c), fun n x hx => ?_⟩
   have hε : 0 < ε A := by unfold ε; linarith
-  have hs : BariRecurrent.sS (BariSim.σ x.1) = 0 := by
-    unfold Idle at hx; rw [hx]; rfl
-  suffices h : (kernel A).apply (hit (kernel A) Idle n) x ≤ 15360000 / ε A + c by linarith
-  rw [apply_k]
-  calc ∑ o ∈ Finset.range (N + 1), A.p o * hit (kernel A) Idle n (nxtS A x o)
-      ≤ ∑ o ∈ Finset.range (N + 1), A.p o * (15360000 / ε A + c) := by
-        refine Finset.sum_le_sum fun o _ => mul_le_mul_of_nonneg_left ?_ (A.nonneg o)
-        refine le_trans (hc n _) ?_
-        have h1 := backlog_nxt A x o
-        rw [hs] at h1
-        have h2 : backlog x.1 = 0 := by
-          rw [backlog_eq]; unfold Idle at hx; rw [hx]; rfl
-        have h3 := BariRecurrent.work_le (A.arr o) (A.fits o)
-        have h4 := A.small o
-        have h5 : (backlog (nxtS A x o).1 : ℝ) ≤ 15360000 := by
-          have : backlog (nxtS A x o).1 ≤ 15360000 := by omega
-          exact_mod_cast this
-        have := div_le_div_of_nonneg_right h5 hε.le
-        linarith
-    _ = 15360000 / ε A + c := by rw [← Finset.sum_mul, A.sum_one, one_mul]
+  refine ⟨_, fun n x hx => return_le_of_hit_le (kernel A) Idle (Kernel.integrable_ofOutcomes _ _ _ _ _ _)
+    (a := 1 / ε A) (by positivity) (fun n y => by rw [one_div, ← div_eq_inv_mul]; exact hc n y)
+    (d := 15360000) ?_ n⟩
+  have h1 := applyN_le A 1 x
+  simp only [Kernel.applyN] at h1
+  rw [idle_backlog hx] at h1
+  simpa using h1
 
 end BariProgram
 end Papers

@@ -33,12 +33,27 @@ instance {K : ℕ} : DecidablePred (Idle (K := K)) := fun x => by unfold Idle; i
 theorem backlog_σ (m : Exec.Machine) : backlog m = DaiChain.backlog (DaiSim.σ m) := by
   simp [backlog, Slot.backlog, DaiChain.backlog, DaiSim.σ, Function.comp_def]
 
-/-- Every reached machine's job list is one the list chain can hold. -/
-theorem good_σ {K : ℕ} : ∀ {m : Exec.Machine}, Reach K m → DaiRecurrent.Good (DaiSim.σ m)
-  | _, .empty => by rw [DaiSim.σ_empty]; intro j hj; simp at hj
-  | _, .slot k hk h => by
-    rw [DaiSim.simulation ⟨_, h⟩ k hk]
-    exact DaiRecurrent.good_absSlot k (good_σ h)
+/-- An empty engine has no backlog, on this chain and on `DaiPoisson`'s. -/
+theorem idle_backlog {m : Exec.Machine} (h : DaiSim.σ m = []) : backlog m = 0 := by
+  rw [backlog_σ, h]
+  simp [DaiChain.backlog]
+
+/-- A machine with the slot invariant holds a job list the list chain can
+hold: every reached machine does (`DaiSim.reach_inv`; `DaiPoisson.reach_inv`
+on `DaiPoisson`'s chain). -/
+theorem good_σ {m : Exec.Machine} (h : DaiSim.Inv m) : DaiRecurrent.Good (DaiSim.σ m) := by
+  obtain ⟨L, g, hB, -, -⟩ := h
+  intro a ha
+  obtain ⟨j, hj, rfl⟩ := List.mem_map.mp ha
+  obtain ⟨ho, hc, -, hl⟩ := hB.toCI.jobs j hj
+  have hL : L j.owner = (290, 990) := ((hB.toCI.sess _ ho).2.2.1).symm
+  rcases hc with ⟨hp, hm⟩ | ⟨hd, hm⟩
+  · obtain ⟨h1, -, h2⟩ := hB.toCI.leftP _ ho hp
+    rw [hL] at h2
+    exact ⟨by simp only; omega, Or.inl ⟨hm, by simp only; omega⟩⟩
+  · obtain ⟨h1, h2⟩ := hB.toCI.leftD _ ho hd
+    rw [hL] at h2
+    exact ⟨by simp only; omega, Or.inr ⟨hm, by simp only; omega⟩⟩
 
 section Chain
 
@@ -101,7 +116,7 @@ theorem drain (hA : 1280 * A.mean < 128) : ∀ (n : ℕ) (x : State K), backlog 
   | 0, x, hb => by
     have hx : Idle x := by
       by_contra h
-      have := DaiRecurrent.backlog_pos (good_σ x.2) h
+      have := DaiRecurrent.backlog_pos (good_σ (DaiSim.reach_inv x.2)) h
       rw [backlog_σ] at hb; omega
     rw [reach_of_mem (kernel A) Idle hx]; simp
   | n + 1, x, hb => by
@@ -112,7 +127,7 @@ theorem drain (hA : 1280 * A.mean < 128) : ∀ (n : ℕ) (x : State K), backlog 
         show backlog (slot 0 x.1) ≤ n
         rw [backlog_σ, DaiSim.simulation x 0 (Nat.zero_le K)]
         have h1 := DaiRecurrent.backlog_absSlot 0 hx
-        have h2 := DaiRecurrent.one_le_shares (good_σ x.2) hx
+        have h2 := DaiRecurrent.one_le_shares (good_σ (DaiSim.reach_inv x.2)) hx
         rw [backlog_σ] at hb
         omega
       have ih := drain hA n _ hb'
@@ -138,7 +153,7 @@ include A in
 theorem backlog_le_of_G {x : State K} (hx : G x) : backlog x.1 ≤ 128 * 1280 := by
   rcases hx with h | h
   · exact (backlog_lt_of_F x h).le
-  · rw [backlog_σ, show DaiSim.σ x.1 = [] from h]; simp [DaiChain.backlog]
+  · rw [idle_backlog h]; omega
 
 /-- The truncated hitting times of `Idle`, bounded. -/
 theorem hit_bound (hA : 1280 * A.mean < 128) : ∀ n x,
@@ -163,22 +178,14 @@ theorem hit_idle_le {K : ℕ} (A : Arrivals K) (hA : 1280 * A.mean < 128) :
 empty again is bounded by one constant. -/
 theorem return_idle {K : ℕ} (A : Arrivals K) (hA : 1280 * A.mean < 128) :
     ∃ C : ℝ, ∀ n x, Idle x → 1 + (kernel A).apply (hit (kernel A) Idle n) x ≤ C := by
-  set M : ℝ := ((128 * 1280 : ℕ) + (128 * 1280 + 1280 * K * (128 * 1280 : ℕ)) / ε A) /
-    A.p 0 ^ (128 * 1280)
   have hε : 0 < ε A := (DaiStable.drift A hA).pos
-  refine ⟨1 + (1 / ε A) * (1280 * K) + M, fun n x hx => ?_⟩
-  have h1 : ∀ y, hit (kernel A) Idle n y ≤ (1 / ε A) * (backlog y.1 : ℝ) + M := fun y => by
-    have := hit_bound A hA n y
-    rw [one_div, ← div_eq_inv_mul]; exact this
-  have h2 := (kernel A).apply_mono (Kernel.integrable_ofOutcomes _ _ _ _ _ _) (Kernel.integrable_ofOutcomes _ _ _ _ _ _) h1 x
-  rw [(kernel A).apply_add (Kernel.integrable_ofOutcomes _ _ _ _ _ _) (Kernel.integrable_ofOutcomes _ _ _ _ _ _), Kernel.apply_const, Kernel.apply_const_mul] at h2
+  refine ⟨_, fun n x hx => return_le_of_hit_le (kernel A) Idle (Kernel.integrable_ofOutcomes _ _ _ _ _ _)
+    (a := 1 / ε A) (by positivity) (fun n y => by rw [one_div, ← div_eq_inv_mul]; exact hit_bound A hA n y)
+    (d := 1280 * K) ?_ n⟩
   have h3 := applyN_le A 1 x
   simp only [Kernel.applyN] at h3
-  have h0 : (backlog x.1 : ℝ) = 0 := by
-    rw [backlog_σ, show DaiSim.σ x.1 = [] from hx]; simp [DaiChain.backlog]
-  have h4 : (1 / ε A) * (kernel A).apply (fun y => (backlog y.1 : ℝ)) x ≤ (1 / ε A) * (1280 * K) :=
-    mul_le_mul_of_nonneg_left (by push_cast at h3; linarith) (by positivity)
-  linarith
+  rw [idle_backlog hx] at h3
+  simpa using h3
 
 end DaiProgram
 end Papers
