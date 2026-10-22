@@ -2,12 +2,15 @@
 //!
 //! The view (`deployment`, the queueing network) produces a `Figure`; both
 //! writers (`svg`, `tikz`) consume one.
-//! Nothing in here knows about serQ, and nothing in a writer decides a
-//! coordinate: a figure is the test surface, which is why the tests assert on
-//! rectangles rather than on bytes.
+//! Nothing in here knows about serQ but the names of its distributions,
+//! which a delay's outline reads from the IR's table (`density`), and
+//! nothing in a writer decides a coordinate: a figure is the test surface,
+//! which is why the tests assert on rectangles rather than on bytes.
 //!
 //! Coordinates are points, x to the right and y **downwards**, origin at the
 //! figure's top left. The TikZ writer flips y on the way out.
+
+use crate::ir::DistKind;
 
 /// A point in figure coordinates.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -268,12 +271,14 @@ pub enum Item {
 /// the upper part of the station: decaying for `~exp` and `~h2`, a hump for
 /// `~erlang`, flat for `~uniform`, a spike for `~det` or a constant. Its
 /// shape, not its scale: the duration itself (`~exp(3)`) is written under
-/// it. `None` for a duration that is neither.
+/// it. `None` for a duration that is neither. The family is read from the
+/// IR's table of distributions (`DistKind`), so a new one has to be drawn
+/// here or said to have no outline.
 pub fn density(duration: &str, rect: Rect) -> Option<Vec<Point>> {
     let family = match duration.strip_prefix('~') {
-        Some(d) => d.split('(').next().unwrap_or(""),
-        None if duration.parse::<f64>().is_ok() => "det",
-        None => "",
+        Some(d) => DistKind::from_name(d.split('(').next().unwrap_or(""))?,
+        None if duration.parse::<f64>().is_ok() => DistKind::Det,
+        None => return None,
     };
     let (x0, x1) = (rect.x + 16.0, rect.right() - 16.0);
     let (top, base) = (rect.y + rect.h * 0.16, rect.y + rect.h * 0.6);
@@ -288,14 +293,14 @@ pub fn density(duration: &str, rect: Rect) -> Option<Vec<Point>> {
             .collect()
     };
     Some(match family {
-        "exp" => curve(&|t| (-3.5 * t).exp()),
-        "h2" => curve(&|t| 0.75 * (-9.0 * t).exp() + 0.25 * (-1.8 * t).exp()),
+        DistKind::Exp => curve(&|t| (-3.5 * t).exp()),
+        DistKind::H2 => curve(&|t| 0.75 * (-9.0 * t).exp() + 0.25 * (-1.8 * t).exp()),
         // k = 3: t² e^(-t), its peak at 2, scaled to one
-        "erlang" => curve(&|t| {
+        DistKind::Erlang => curve(&|t| {
             let u = 7.0 * t;
             u * u * (-u).exp() / (4.0 * (-2.0f64).exp())
         }),
-        "uniform" => vec![
+        DistKind::Uniform => vec![
             at(0.0, 0.0),
             at(0.2, 0.0),
             at(0.2, 0.7),
@@ -303,14 +308,15 @@ pub fn density(duration: &str, rect: Rect) -> Option<Vec<Point>> {
             at(0.8, 0.0),
             at(1.0, 0.0),
         ],
-        "det" => vec![
+        DistKind::Det => vec![
             at(0.0, 0.0),
             at(0.5, 0.0),
             at(0.5, 1.0),
             at(0.5, 0.0),
             at(1.0, 0.0),
         ],
-        _ => return None,
+        // a draw of 0 or 1, not a duration
+        DistKind::Bernoulli => return None,
     })
 }
 
