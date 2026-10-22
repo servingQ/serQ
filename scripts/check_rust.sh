@@ -61,7 +61,9 @@ done
 # `fn main` writes `…` for what it leaves out.
 python3 scripts/test_check_docs_examples.py
 python3 scripts/check_docs_examples.py
-# Experimental runners must explicitly select their execution conditions too.
+# Experimental runners must explicitly select their execution conditions too,
+# and their committed results reproduce (two rows each of results.csv and
+# sessions.csv, on seed 1).
 python3 tools/pd_batching/test_runners.py
 python3 scripts/check_oracle_gpu.py
 # The docs' `file.py:line` evidence for the vLLM correspondence. Skips loudly
