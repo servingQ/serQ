@@ -6,6 +6,8 @@
 
 use rand::Rng;
 
+use crate::ir::DistKind;
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Dist {
     /// Always `x`.
@@ -56,6 +58,35 @@ impl Dist {
 
     pub fn bernoulli(p: f64) -> Self {
         Self::Bernoulli { p }
+    }
+
+    /// The law of a draw `~name(a…)` whose parameters are `a`, as the
+    /// language reads them (`docs/api/distributions.md`): `~erlang`'s phase
+    /// count rounded down and at least 1, `~h2`'s CV² at least 1.
+    pub fn of(kind: DistKind, a: &[f64]) -> Self {
+        match kind {
+            DistKind::Det => Self::Deterministic(a[0]),
+            DistKind::Exp => Self::exp(a[0]),
+            DistKind::Uniform => Self::Uniform { lo: a[0], hi: a[1] },
+            DistKind::Erlang => Self::Erlang {
+                k: a[0].max(1.0) as u32,
+                mean: a[1],
+            },
+            DistKind::H2 => Self::hyperexp_balanced(a[0], a[1].max(1.0)),
+            DistKind::Bernoulli => Self::bernoulli(a[0]),
+        }
+    }
+
+    /// Whether the law is an exponential: an Erlang of one phase is, and so
+    /// is a hyperexponential of one phase or of two with one mean, as
+    /// `~h2` of CV² 1 is.
+    pub fn is_exponential(&self) -> bool {
+        match self {
+            Self::Exponential { .. } => true,
+            Self::Erlang { k, .. } => *k <= 1,
+            Self::HyperExp { p, mean1, mean2 } => mean1 == mean2 || *p == 0.0 || *p == 1.0,
+            _ => false,
+        }
     }
 
     pub fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> f64 {

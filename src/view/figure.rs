@@ -270,11 +270,11 @@ pub enum Item {
 /// The shape of a delay's duration density: its shape, not its scale.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Outline {
-    /// `~exp`
+    /// `~exp`, or a draw whose law is one (`~erlang(1, m)`, `~h2(m, 1)`)
     Decaying,
     /// `~h2`
     TwoPhase,
-    /// `~erlang`
+    /// `~erlang`, drawn with three phases
     Hump,
     /// `~uniform`
     Flat,
