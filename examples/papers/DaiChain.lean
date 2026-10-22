@@ -2,13 +2,19 @@
 # Sarathi's chain on job lists
 
 What the engine of `dai_sarathi.sq` holds at a slot boundary, with
-everything else forgotten: the list of its jobs, in admission order, each a
+everything else forgotten: the list of its jobs, in serving order, each a
 mode and the tokens it has left. `absSlot` is one slot on that list. The
 machine chain of `examples/papers/DaiStable.lean` projects onto it
 (`DaiSim.simulation`), and on it the empty list is a single state, to which
 the chain returns (`DaiRecurrent`).
+
+The requests hold no memory, so none is admitted and the serving order
+`admission` is the order the runs started: a decode starts behind the
+prompts that arrived while it prefilled, and the list leaves the shape in
+which `admission` is decode-first (`absSlot_leaves_shape`).
 -/
 import papers.DaiStable
+import Serq.Serve
 
 namespace SerqLang
 namespace Papers
@@ -25,7 +31,7 @@ def want : AJob → ℕ
   | (.decode, l) => min 1 l
   | (_, l) => l
 
-/-- The batch: each job's share, greedy in admission order, from a budget
+/-- The batch: each job's share, greedy in serving order, from a budget
 of `b`. -/
 def shares : List AJob → ℕ → List ℕ
   | [], _ => []
@@ -66,6 +72,19 @@ noncomputable def akernel {K : ℕ} (A : DaiStable.Arrivals K) : Kernel (AState 
 /-- The tokens the engine still has to serve. -/
 def backlog (js : List AJob) : ℕ :=
   (js.map fun j => j.2 + if j.1 = .prefill then 990 else 0).sum
+
+/-- **The chain leaves `Serve.Shape`**, so `Exec.assign_decode_first` does
+not apply to it: from the empty engine, with one arrival in each of three
+slots and none in the fourth, the first request decodes behind the two
+prompts that arrived while it prefilled. (`Serve` reads a job as the prompt
+it has left, `0` for a decode, `Exec.prefillLeft`.) -/
+theorem absSlot_leaves_shape :
+    ¬ Serve.Shape ((absSlot 0 (absSlot 1 (absSlot 1 (absSlot 1 [])))).map
+      fun j => if j.1 = .decode then 0 else j.2) := by
+  have : absSlot 0 (absSlot 1 (absSlot 1 (absSlot 1 []))) =
+      [(.prefill, 196), (.prefill, 290), (.decode, 990)] := by decide
+  rw [this]
+  simp [Serve.Shape]
 
 end DaiChain
 end Papers

@@ -1136,10 +1136,17 @@ reservation is above the cap.
 batch: a running prefill takes precedence, otherwise a waiting prefill that
 fits displaces the tentative decodes and takes the full budget, and once a
 prefill is selected nothing more is admitted in that iteration
-([Engine](api/engine.md#exclusive-prefill)). Without a per-request chunk
-cap, serving in admission order *is* serving decode-first
-(`SerqLang.Serve.serve_eq_decode_first`; a cap breaks it,
-`chunk_cap_breaks_shape`).
+([Engine](api/engine.md#exclusive-prefill)). Serving in admission order
+*is* serving decode-first while every decoding request is ahead of every
+prefilling one (`SerqLang.Exec.assign_decode_first`). Without a
+per-request chunk cap an iteration keeps that order
+(`fill_preserves_shape`), and so does admission: it adds a prefilling
+request at the end, and a request decodes in the place its admission gave
+it. A cap breaks it (`chunk_cap_breaks_fill_shape`), and so does an
+engine whose requests hold no memory: none is admitted, so they are served
+in the order their runs started, and a request's decode waits behind the
+prompts that arrived while it prefilled
+(`SerqLang.Papers.DaiChain.absSlot_leaves_shape`).
 
 `only (p)` on `advance running` and `admit waiting` says which requests
 the iteration serves; the order says in what order:

@@ -18,6 +18,11 @@ prefilling one `min(r, left)` (or `min(r, c, left)` with a cap `c`).
 
 Key theorems: `serve_preserves_shape`, `decodeFirst_eq_self`,
 `serve_eq_decode_first`, `chunk_cap_breaks_shape`.
+
+These steps are the engine's: `Exec.serve_fillAmounts` and
+`Exec.serveCap_fillAmounts` (`Serq/Fill.lean`) show that the greedy fill of
+an iteration leaves its jobs what `serve` and `serveCap` leave the residents,
+and `Exec.assign_decode_first` is the conclusion for an iteration of `Exec`.
 -/
 import Mathlib.Tactic
 

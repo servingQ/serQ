@@ -42,9 +42,14 @@ A batch holds at most $b_{\max}$ tokens and costs $t_b$; a request is its
 prefill followed by its decode. Sarathi-Serve serves the decodes first, then
 the oldest prefills, with no chunk cap. serQ writes the budget as `tokens
 cap`, the batch time as the device's `compute` plus the fixed `c`, and the
-order as `advance running admission`: residents are served in admission
-order, and without a chunk cap that order is decodes first
-(`Serve.serve_eq_decode_first`).
+order as `advance running admission`. Admission order is decodes first
+while every decode is ahead of every prefill (`Exec.assign_decode_first`),
+but this engine's requests hold no memory, so none is admitted and the
+residents are served in the order their runs started. A request's decode
+starts when its prefill ends, behind the prompts that arrived while it
+prefilled, where Sarathi-Serve would serve it first
+(`DaiChain.absSlot_leaves_shape`). The propositions below are proved of the
+program as it runs, in this order.
 
 ```serq
 --8<-- "examples/papers/dai_sarathi.sq:engine"
@@ -73,7 +78,7 @@ Each request is one call to the engine:
 | batch time $t_b = c + a\lceil b/b_0\rceil$ | `compute (t) = a * ceil(t / b0);` on the device, `worker { forward (c + compute(batch.tokens)); }` (time in 10 µs, so every number is an integer) |
 | request $i$ with $v_p$, $v_d$ | the request `sarathi (vp, vd + 1);`: a prefill of `vp` tokens, which samples the first, then `vd` decode steps |
 | deterministic arrivals | `arrive renewal(gap);` |
-| Sarathi-Serve: decodes first, then the oldest prefills | `advance running admission;` |
+| Sarathi-Serve: decodes first, then the oldest prefills | `advance running admission;`: the order the runs started, so a decode waits behind the prompts that arrived during its prefill |
 
 ??? example "The whole program, and its workload"
 
