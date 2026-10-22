@@ -229,9 +229,8 @@ fn the_marks_of_a_session_turn_do_not_depend_on_the_machine() {
         "
         )
     };
-    // the client's own `tool`, a stage of the workload's
-    let workload = "stage tool : delay;
-        workload {
+    // the client's own time, `sleep`, on a delay of the workload's
+    let workload = "workload {
           arrive poisson(0.3);
           init { set K = 0; set u0 = ~exp(1); }
           turn { set n = ceil(K == 0 ? ~uniform(1000, 3000) : ~exp(500));
@@ -243,7 +242,7 @@ fn the_marks_of_a_session_turn_do_not_depend_on_the_machine() {
               observe nn = n; observe oo = o; observe uu = u0;
               turn;
               set K = K + n + o;
-              if (more) { tool (~exp(3));  } else { end; }
+              if (more) { sleep (~exp(3));  } else { end; }
             }
           }
         }";

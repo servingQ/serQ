@@ -1528,7 +1528,7 @@ fn serve_reads<'a>(stmts: &'a [IterStmt], out: &mut Vec<&'a Expr>) {
 /// wherever it is: they are checked wherever the session waits (a run, a
 /// queue, a request, a `grow` or `load`), at a release (a hold's end,
 /// `release P;`), whose entry keeps the attributes as they are then, at the
-/// server's end, and wherever the workload waits (a `tool` run, a hold).
+/// server's end, and wherever the workload waits (a `sleep`, a hold).
 /// A hold's header is read again where a pool that preempts puts the hold
 /// back, wherever its body waits, and its lease's time at its end.
 fn hidden_in_server(
@@ -3297,22 +3297,19 @@ impl Linker<'_> {
     }
 
     /// For a pair of files: the workload runs on and holds its own stages
-    /// and pools (and the stage `tool` it needs none for: its `tool Z;`
-    /// runs on whichever file declares it), the deployment none of them
-    /// (`docs/design/paired-workload.md`). `what` is `stage` or `pool`: a
-    /// pool named `tool` is no stage, and the deployment's is its own.
+    /// and pools (the delay its `sleep` runs on among them), the
+    /// deployment none of them (`docs/design/paired-workload.md`). `what`
+    /// is `stage` or `pool`.
     fn paired_station(&self, name: &str, what: &str) -> LResult<()> {
         let (Some(wl), Some(side)) = (&self.prog.paired, self.reader.get()) else {
             return Ok(());
         };
         let ours = wl.iter().any(|w| w == name);
         match side {
-            crate::ir::Side::Workload if !ours && !(what == "stage" && name == "tool") => {
-                Err(LinkError::new(format!(
-                    "{what} `{name}` is the deployment file's: the workload runs on and holds \
-                     its own stages and pools, and sends the server what it runs"
-                )))
-            }
+            crate::ir::Side::Workload if !ours => Err(LinkError::new(format!(
+                "{what} `{name}` is the deployment file's: the workload runs on and holds \
+                 its own stages and pools, and sends the server what it runs"
+            ))),
             crate::ir::Side::Server if ours => Err(LinkError::new(format!(
                 "{what} `{name}` is the workload file's: the deployment runs on and holds its \
                  own stages and pools"

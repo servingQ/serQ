@@ -211,7 +211,7 @@ session {
   turn;
   while (more) {
     set K = K + n + o;
-    tool (~exp(Z));
+    sleep (~exp(Z));  // a tool call
     turn;
   }
 }

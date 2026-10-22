@@ -9,14 +9,14 @@ mod common;
 
 /// Two programs take 4 of 10 units each and lease them. Serial 1 comes
 /// back first, at t = 2, and grows its lease by 4, which does not fit
-/// beside serial 0's. Serial 0, at its tool until t = 11, then finds its
+/// beside serial 0's. Serial 0, asleep until t = 11, then finds its
 /// lease gone and is let in again at once: serial 1 ended at t = 3.
 /// One request, one turn: the workload of the tests that only link.
 const ONE: &str = "workload { arrive batch(1); session { turn; } }\n";
 
 const TWO: &str = "workload { arrive batch(2);
   send (turn_no);
-  session { turn; tool (serial == 0 ? 10 : 1); turn; }
+  session { turn; sleep (serial == 0 ? 10 : 1); turn; }
 }
 ";
 

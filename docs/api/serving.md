@@ -15,39 +15,11 @@ An already converted cost belongs in `run` or `load` directly.
 
 | Form | The request… | Kernel |
 |---|---|---|
-| [`tool Z;`](#tool) | waits outside the engine (a tool call, a person reading) | `run tool (cost(tool, Z));`, on the workload's own delay when no stage `tool` is declared; the kernel form alone needs the declared stage (without it, `run tool` is an unknown stage) |
 | [`transfer (X) from P to Q (n);`](#transfer-from-to) | has its KV moved to another instance | `run link (cost(link, X)); load Q (cost(Q, n)); release P;` |
+| [`sleep (Z);`](workload.md#sleep) | is the client's for `Z`, between turns (a tool call, a person reading) | `run sleep (cost(sleep, Z));`, on a delay of the workload's own that the parser supplies |
 
 Each form is shorthand for the [kernel statements](statements.md) in the
 last column.
-
-## `tool`
-
-```serq
-tool [ '[' j ']' | on STAGE [, STAGE]* ] work;
-```
-
-| Argument | Type | Description |
-|---|---|---|
-| `[j]` | `expr` | Index into the role's stage array: `tool[j] Z;`. |
-| `on STAGE` | `stage` | Names the stage explicitly: `tool on S2 (Z);`. |
-| `work` | `expr` | Clock time on a `fifo`, `ps` or `delay` stage. |
-
-### Stage selection
-
-Without `[j]` or `on`, the form finds its stage among those
-declared above it: the stage named for the role (`link` or `transfer`,
-`tool`). Exactly one must qualify: with none or several the parser stops
-at the form. In the workload, a `tool` with none declared runs on a delay
-of the workload's own: the parser supplies `stage tool : delay;` after the
-declared stages, so a client's tool call declares nothing. A tool server
-with capacity, which sessions share, is declared in the workload file,
-which runs on its own stages only (`stage sandbox[4] : fifo;`), and named,
-`tool on sandbox[j] (Z);`; a stage of the deployment's is refused there
-("stage `sandbox` is the deployment file's"). The run is plain: `transfer` and `tool` on a step engine are
-link errors, so they take no `growing`, which needs one. `transfer` finds its stage by the same rule and
-always says where the KV goes ([below](#transfer-from-to)); a link that only
-takes time is `run link (cost(link, X));`.
 
 ## `transfer … from … to`
 
@@ -61,8 +33,15 @@ transfer [ '[' j ']' | on STAGE [, STAGE]* ] (X) from P to Q (n);
 | `P` | `pool` | The session's lease (or hold) the KV comes from. Given back at the end. |
 | `Q` | `pool` | The session's hold the KV arrives in. |
 | `n` | `expr` | Tokens counted as computed at `Q`. |
+| `[j]` | `expr` | Index into the role's stage array: `transfer[j] (X) from P to Q (n);`. |
+| `on STAGE` | `stage` | Names the stage explicitly: `transfer on S2 (X) from P to Q (n);`. |
 
-`run link (cost(link, X)); load Q (cost(Q, n)); release P;`. The KV of a prefill/decode split lives
+`run link (cost(link, X)); load Q (cost(Q, n)); release P;`. Without `[j]`
+or `on`, the form finds its link among the stages declared above it: the
+stage named `link` or `transfer`. Exactly one must qualify: with none or
+both the parser stops at the form. The run is plain: a `transfer` on a
+step engine is a link error. A link that only takes time is `run link
+(cost(link, X));`. The KV of a prefill/decode split lives
 in two pools whose lifetimes overlap without nesting: the decode instance
 allocates before the prefill instance frees. `on a, b` names several stages
 the transfer uses at once, the sender's link and the receiver's
@@ -98,18 +77,19 @@ A complete program, a deployment and its workload:
 
 ```serq title="model.sq"
 fn main() {
-  device gpu { }
-  engine llm on gpu {
-    tokens cap 8;
-    scheduler { advance running; admit waiting while (running.preempted == 0); }
-    worker {
-      forward (1);
-    }
-  }
-  stage tool : delay;
+  pool kvP { cap 100; }
+  pool kvD { cap 100; }
+  stage prefill : fifo;
+  stage link : ps(1);
+  stage decode : fifo;
   server {
-    llm (8, 3);
-    tool (3);
+    hold kvP (cost(kvP, 8)) {
+      run prefill (cost(prefill, 1));
+    } lease kvP (inf);
+    hold kvD (cost(kvD, 8)) {
+      transfer (0.5) from kvP to kvD (8);
+      run decode (cost(decode, 3));
+    }
     observe finished = now;
   }
 }

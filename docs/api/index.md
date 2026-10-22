@@ -16,7 +16,7 @@ operational semantics, see [The language](../language.md).
 | [Engine](engine.md) | `device`, `engine … on`, `tokens cap`, `connector`, `scheduler`, `worker`, `pool … on`, a request and its admission |
 | [Workload](workload.md) | `arrive`, `trace`, `init`, `turn`, `hidden` |
 | [Statements](statements.md) | the kernel: `hold`, `run`, `grow`, `if`, … |
-| [Serving vocabulary](serving.md) | `transfer`, `tool` |
+| [Serving vocabulary](serving.md) | `transfer`, `sleep` |
 | [Functions](functions.md) | arithmetic functions and observables |
 | [Distributions](distributions.md) | `~exp`, `~det`, `~uniform`, `~erlang`, `~h2`, `~bernoulli` |
 | [Context variables](context.md) | `tokens`, `age`, `remaining`, … and the moment each exists at |
@@ -59,7 +59,7 @@ constructs that say it and a program that uses them.
 | To model… | Read | In a program |
 |---|---|---|
 | a request queue and a server | [`stage`](stage.md) (`fifo`, `ps`, `delay`), [`run`](statements.md#run) | `examples/single-turn/mg1.sq`; [tutorial 1](../tutorial/01-a-queue.md) |
-| arrivals, turns and think time | [`arrive`](workload.md#arrive), [`turn`](workload.md#turn), [`session`](program.md#session); think time as [`tool`](serving.md#tool), on the workload's own [`delay`](stage.md#delay) | [the workloads use case](../use-cases/workloads.md) |
+| arrivals, turns and think time | [`arrive`](workload.md#arrive), [`turn`](workload.md#turn), [`session`](program.md#session); think time as [`sleep`](workload.md#sleep), on the workload's own [`delay`](stage.md#delay) | [the workloads use case](../use-cases/workloads.md) |
 | replaying a production trace | [`trace`](workload.md#trace) | `examples/replay/vllm_replay.sq` ([measured replay](../use-cases/vllm.md#measured-replay)) |
 | memory a request holds while it runs | [`pool`](pool.md), [`hold`](statements.md#hold) | [tutorial 2](../tutorial/02-memory.md) |
 | what the scheduler reads at admission | [`hold`](statements.md#hold)'s header, [moments](context.md) | `examples/multi-turn/vllm.sq` (`request.known`, `request.hit`) |

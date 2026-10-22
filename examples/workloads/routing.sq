@@ -32,7 +32,7 @@ workload {
       turn;
       set first = 0;
       set K = K + n + o;
-      if (~bernoulli(p)) { tool (tool_time()); } else { end; }
+      if (~bernoulli(p)) { sleep (tool_time()); } else { end; }
     }
   }
 }

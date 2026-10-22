@@ -73,7 +73,7 @@ fn a_connector_saves_at_the_end_and_loads_at_the_admission() {
                 "kv (request.known)"
             )
         ),
-        "workload { arrive batch(1); turn { } session { turn; tool (50); turn; end; } }",
+        "workload { arrive batch(1); turn { } session { turn; sleep (50); turn; end; } }",
         1000.0,
     );
     assert_eq!(samples(&r, "loaded"), [0.0, 50.0]);

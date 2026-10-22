@@ -222,8 +222,12 @@ workload, `examples/workloads/vllm_replay.sq`, replays
 `examples/replay/data/short_base.csv` (333 sessions). It uses block size 16,
 token budget 512, 64 request slots and 128 160 tokens of KV capacity.
 Session `i` starts at `i * spacing`; later turns follow their recorded
-think times. This is a separate calibration from the tagged-source survey
-above.
+think times. Both are the client's `sleep`, so the report's `sleep` row
+counts the sessions not yet sent with those between turns, and early in a
+run it is mostly the first. A replay that wants them apart declares
+`stage gate : delay;` in the workload and runs the offset with the
+kernel, `run gate (cost(gate, serial * spacing));`. This is a separate
+calibration from the tagged-source survey above.
 
 ### Cost and calibration
 

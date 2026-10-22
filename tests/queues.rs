@@ -174,13 +174,13 @@ fn a_transfer_between_queues_is_the_flat_transfer() {
         decode (prompt) from P {
           set c = 0;
           hold kv (cost(kv, prompt)) {
-            nic[self].transfer (prompt - c) from P to kv (prompt - 1);
+            net[self].transfer (prompt - c) from P to kv (prompt - 1);
             run D prefill (cost(D, 1)) growing kv; set first = now;
             run D decode (cost(D, o - 1)) growing kv;
           }
         }
       }
-      queue nic[ND] : link { serve ps(1); transfer (n) { run (cost(nic, n / Bw)); } }
+      queue net[ND] : link { serve ps(1); transfer (n) { run (cost(net, n / Bw)); } }
       server (prompt, hidden o, j) { gw.route(); }
       ";
     same_ir_as_flat(
@@ -192,6 +192,7 @@ fn a_transfer_between_queues_is_the_flat_transfer() {
             ("D.kv", "kvD"),
             ("D.c", "c"),
             ("D.first", "first"),
+            ("net", "nic"),
         ],
     );
 }
@@ -426,14 +427,14 @@ fn a_latency_belongs_to_a_link() {
     );
     refused(
         &format!(
-            "queue gw : gateway {{ route {{ }} }} queue nic : link {{ serve ps(1) latency 1; transfer (n) {{ run (cost(nic, n)); }} }} {SERVER}"
+            "queue gw : gateway {{ route {{ }} }} queue net : link {{ serve ps(1) latency 1; transfer (n) {{ run (cost(net, n)); }} }} {SERVER}"
         ),
         WORKLOAD,
         "write the latency in the entry body",
     );
     refused(
         &format!(
-            "queue gw : gateway {{ route {{ }} }} queue nic : link {{ serve ps(1) latency prompt; }} {SERVER}"
+            "queue gw : gateway {{ route {{ }} }} queue net : link {{ serve ps(1) latency prompt; }} {SERVER}"
         ),
         WORKLOAD,
         "`latency` is a number or a constant over `let`s",
@@ -444,13 +445,13 @@ fn a_latency_belongs_to_a_link() {
 #[test]
 fn a_link_has_a_cost() {
     refused(
-        &format!("queue gw : gateway {{ route {{ }} }} queue nic : link {{ }} {SERVER}"),
+        &format!("queue gw : gateway {{ route {{ }} }} queue net : link {{ }} {SERVER}"),
         WORKLOAD,
         "has neither a `serve` nor a `transfer` entry",
     );
     let calls = "
       queue gw : gateway { route { P.prefill (prompt); D.decode (prompt) from P; } }
-      queue nic : link { serve ps(1); }
+      queue net : link { serve ps(1); }
       queue P : prefill { pool kv { cap 100; } serve fifo; prefill (p) { hold kv (cost(kv, p)) { run (cost(P, p)); } cache (cost(kv, p)) lease kv (inf); } }
       queue D : agg, decode { device gpu { kv cap 100; } pool kv on gpu { } engine on gpu { tokens cap inf; scheduler { advance running; admit waiting while (running.preempted == 0); } worker { forward (1); } }
         decode (p) { hold kv (cost(kv, p)) { run D prefill (cost(D, p)) growing kv; } }
@@ -459,21 +460,21 @@ fn a_link_has_a_cost() {
       ";
     let workload = "workload { arrive batch(1); init { set prompt = 32; set o = 4; } send (prompt, o); session { turn; end; } }";
     refused(
-        &calls.replace("BODY", "nic.transfer (p) from P to kv (p);"),
+        &calls.replace("BODY", "net.transfer (p) from P to kv (p);"),
         workload,
-        "its `serve` is its cost: `transfer on nic[…] (n) from S to P (m);`",
+        "its `serve` is its cost: `transfer on net[…] (n) from S to P (m);`",
     );
     // in the entry `P` is the request's lease there: not a number, not
     // even its member's index
     refused(
-        &calls.replace("BODY", "transfer on nic (p + P) from P to kv (p);"),
+        &calls.replace("BODY", "transfer on net (p + P) from P to kv (p);"),
         workload,
         "reads `P` as a number: in an entry `from P`",
     );
     refused(
         &calls
-            .replace("queue nic : link", "queue nic[2] : link")
-            .replace("BODY", "transfer on nic[P] (p) from P to kv (p);"),
+            .replace("queue net : link", "queue net[2] : link")
+            .replace("BODY", "transfer on net[P] (p) from P to kv (p);"),
         workload,
         "reads `P` as a number (an index)",
     );
@@ -873,6 +874,32 @@ fn roles_and_entries_agree() {
     );
 }
 
+/// A queue is called by its name, `Q.verb (…);`, where a statement's word
+/// reads as the statement: `queue run` declared, and `run.prefill (…);`
+/// failed at the call, `expected identifier, found Dot`. Only a queue with
+/// an engine was checked against the words of the language, so the name is
+/// refused at its declaration whatever the queue has, and `sleep` with them.
+#[test]
+fn queue_names_are_no_words_of_the_language() {
+    let queue = "queue Q : prefill { pool kv { cap 1000; } serve fifo;
+      prefill (prompt) { hold kv (cost(kv, prompt)) { run (cost(Q, prompt)); } } }
+    server (prompt) { Q.prefill (prompt); }";
+    let workload = "workload { arrive batch(1); init { set prompt = 4; } send (prompt); session { turn; end; } }";
+    common::compile(
+        &common::main_source(queue),
+        workload,
+        &common::horizon(10.0),
+    )
+    .expect("the queue as named");
+    for word in ["run", "observe", "sleep", "nic"] {
+        refused(
+            &queue.replace('Q', word),
+            workload,
+            &format!("`{word}` is a word of the language: a queue needs another name"),
+        );
+    }
+}
+
 #[test]
 fn a_call_is_checked_against_the_entry() {
     let decls = "
@@ -1050,9 +1077,9 @@ fn a_family_size_is_a_constant() {
 #[test]
 fn server_routes_turns_to_gateways_before_their_declarations() {
     let queues = "
-      server { if (1) { second.route(); } else { first.route(); } }
+      server { if (1) { second.route(); } else { former.route(); } }
       queue unused : gateway { route { observe never = 99; } }
-      queue first : gateway { route { observe selected = 1; } }
+      queue former : gateway { route { observe selected = 1; } }
       queue second : gateway { route { observe selected = 2; } }
       ";
     let flat = "

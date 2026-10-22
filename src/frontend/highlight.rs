@@ -135,7 +135,7 @@ pub const STATEMENTS: [&str; 41] = [
     "prefill",
     "transfer",
     "decode",
-    "tool",
+    "sleep",
 ];
 
 /// Pool and stage options, workload forms, an engine's schedule and

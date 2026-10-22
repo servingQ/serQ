@@ -222,7 +222,7 @@
       }
     },
     {
-      "name": "gate",
+      "name": "sleep",
       "kind": {
         "Ps": {
           "Ctx": "N"

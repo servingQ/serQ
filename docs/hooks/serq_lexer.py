@@ -38,7 +38,7 @@ STATEMENTS = (
     "while", "loop", "fork", "join", "choose", "end", "run", "reserve", "reuse", "cache", "prefix",
     "at", "admission", "growing", "on", "in", "by", "else", "sum",
     # the serving vocabulary: sugar over hold and run
-    "prefill", "transfer", "decode", "tool",
+    "prefill", "transfer", "decode", "sleep",
 )
 
 # Pool and stage options, workload forms, and the resource cost constructor.

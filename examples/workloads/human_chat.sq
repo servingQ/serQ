@@ -6,11 +6,9 @@ let Lambda = 0.3;      // conversations per second
 let p = 0.8;           // the person asks again
 let Z = 20.0;          // reading and typing time (s)
 
-stage user : delay;
-
 // --8<-- [start:workload]
 // Each turn resends the conversation so far (`K`) with a short message;
-// the gap between turns is a person, not a tool.
+// the gap between turns is the person's.
 workload {
   arrive poisson(Lambda);
   init { set K = 0; }
@@ -24,7 +22,7 @@ workload {
     turn;
     while (more) {
       set K = K + n + o;
-      run user (cost(user, ~exp(Z)));
+      sleep (~exp(Z));  // the person reads and types
       turn;
     }
   }

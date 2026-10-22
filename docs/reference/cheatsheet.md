@@ -92,10 +92,10 @@ run S [prefill|decode] (w) [growing P];
 run S, T (cost(S, T, w), share = share.maxmin); // one job holding ps stages S and T at once (use "std/share")
 
 // the serving vocabulary: the same statements, named by the request lifecycle
-tool Z;                            // run on the stage `tool`: Z is time (seconds)
 transfer (X) from P to Q (n);      // run link (X); load Q (n); release P
 transfer on S, T (X) from P to Q (n);   // uses both links for the transfer
-tool[j] Z;  tool on S (Z);         // an instance of an array; an explicit stage
+transfer[j] (X) from P to Q (n);   // an instance of an array of links
+sleep (Z);                         // the workload's session: the client's own time, Z seconds, on its own delay
 
 if (e) { … } [else { … }]          // a test: e is 0 or 1
 if (e) { … } else if (f) { … }     // f is read only when e is 0

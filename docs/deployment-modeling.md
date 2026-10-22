@@ -55,7 +55,7 @@ request at each `turn;`:
 Nothing else crosses: the server reads the parameters, never `K`, and the
 workload reads its own attributes, and the reply when the server declares
 `reply (…)`. The client's tool time
-above runs on a stage of its own, not the server's.
+above, its `sleep`, runs on a delay of its own, not the server's.
 [What crosses](language.md#what-crosses) and
 [Paired files](language.md#paired-files) give the rules.
 
@@ -181,7 +181,7 @@ Work that is not the forward runs on other stages, beside the iteration:
 
 - a KV connector's copies run at the bandwidth of its L2 queue;
 - a transfer between instances runs on the NICs;
-- a tool call runs on its own stage.
+- the client's own time, a tool call, runs on the workload's delay (`sleep`).
 
 ## Invariants
 

@@ -18,8 +18,9 @@ The workload is a file of its own, given when the program runs:
 `serq run model.sq --workload workload.sq` (pyserq:
 `compile("model.sq", workload="workload.sq")`). The file has no `fn main()`;
 it declares its `use`s, constants and inputs (`let`, `args.number` among
-them), definitions (`def`), the stages it runs on itself, the pools it
-holds itself (`pool live { cap 24; }`, no `on`) and one `workload { … }`.
+them), definitions (`def`), the stages it runs on itself (the delay its
+[`sleep`](#sleep) runs on is supplied), the pools it holds itself (`pool
+live { cap 24; }`, no `on`) and one `workload { … }`.
 A `workload` inside a program's `fn main()` is an error
 ([paired files](../language.md#paired-files)). A `trace` is read beside
 the workload file.
@@ -132,10 +133,36 @@ workload whose server takes nothing sends nothing.
 
 Optional: describes the sequence of turns and the time between them.
 Without it, each arriving session makes one turn and finishes. See
-[Program](program.md#session). The time between turns, a tool call or a
-person reading, is [`tool Z;`](serving.md#tool): with no stage `tool`
-declared, it runs on a delay the workload owns (an infinite server, named
-`tool` in the report), so the deployment declares nothing for it.
+[Program](program.md#session). The time between turns is
+[`sleep (Z);`](#sleep).
+
+### `sleep`
+
+```serq
+sleep (Z);
+```
+
+| Argument | Type | Description |
+|---|---|---|
+| `Z` | `expr` | The client's time, in the program's clock (seconds). |
+
+The client's own time between turns, whatever it waits for: a person
+reading and typing, a tool call, the subagents a turn delegated to, a
+trace's gap. The program says which in a comment beside it. It is
+`run sleep (cost(sleep, Z));` on a delay the parser supplies after every
+declared stage, `stage sleep : delay;`, an infinite server where no client
+waits for another; every `sleep` of the workload runs on it, and the
+report shows it as the stage `sleep`. The stage is the workload's, so the
+deployment declares nothing for it and reads none of it.
+
+`sleep` is written in the `session` only: in the server, a queue's entry,
+`init` or `turn` it is refused, since the server's time runs on a stage it
+declares and `init` and `turn` take no time. A declaration or an attribute
+named `sleep` beside it, in either file, is refused, since the word would
+name two things. A wait that wants a row of
+its own in the report, or a capacity clients share (a sandbox pool, a
+rate-limited API), is a stage the workload file declares, run with the
+kernel: `stage sandbox : fifo(4);` and `run sandbox (cost(sandbox, Z));`.
 
 ## `hidden`
 
@@ -228,6 +255,7 @@ workload {
       turn;
       set rounds = rounds - 1;
       if (rounds == 0) { end; }
+      sleep (3);  // the client reads the answer
     }
   }
 }

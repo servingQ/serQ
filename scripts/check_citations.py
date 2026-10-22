@@ -64,6 +64,8 @@ PATHS = {
     "output_processor.py": "vllm/v1/engine/output_processor.py",
     # vLLM's benchmark client: what a client counts of a request
     "benchmarks/serve.py": "vllm/benchmarks/serve.py",
+    # vLLM's multi-turn benchmark client: a conversation's turns, the time between them
+    "multi_turn/benchmark_serving_multi_turn.py": "benchmarks/multi_turn/benchmark_serving_multi_turn.py",
     "sched/interface.py": "vllm/v1/core/sched/interface.py",
     "sched/output.py": "vllm/v1/core/sched/output.py",
     # the model runner's side of a KV connector: load before or after the forward, save after it

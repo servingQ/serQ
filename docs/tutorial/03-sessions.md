@@ -23,7 +23,7 @@ session {
   observe context = K + n + o;
   while (~bernoulli(p)) {
     set K = K + n + o;
-    tool (~exp(Z));
+    sleep (~exp(Z));  // a tool call
     turn;
     observe context = K + n + o;
   }
@@ -51,20 +51,22 @@ set K = K + n + o;
 attribute**, which survives from turn to turn. `K` is the context the session
 has accumulated. It grows with each turn, increasing the memory the session needs.
 
-### `tool`
+### `sleep`
 
 ```serq
-tool (~exp(Z));
+sleep (~exp(Z));  // a tool call
 ```
 
-`tool (Z)` is the client's time between turns: a tool call, a human
-reading, a downstream API. It is outside your system, so the deployment
-declares nothing for it. It runs on a `delay`, an infinite-server station
-the workload owns and the report calls `tool`: every call runs immediately
-at rate 1, nobody waits. It is the same as declaring `stage tool : delay;`
-after your stages. A tool server that sessions share, with a
-capacity, is part of the deployment: declare it as a stage
-(`stage sandbox : fifo;`) and name it, `tool on sandbox (Z);`.
+`sleep (Z)` is the client's time between turns: a tool call, a human
+reading, a downstream API. The comment says which; the language does not.
+It is outside your system, so the deployment declares nothing for it. It
+runs on a `delay`, an infinite-server station the workload owns and the
+report calls `sleep`: every client starts at once at rate 1, nobody
+waits. It is the same as declaring `stage sleep : delay;` after your
+stages and writing `run sleep (cost(sleep, Z));`. A tool server that
+sessions share, with a capacity, is a stage of its own: declare it in the
+workload file (`stage sandbox : fifo(4);`) and run it,
+`run sandbox (cost(sandbox, Z));`.
 
 ## Running it
 
@@ -86,14 +88,14 @@ response  43953  0.1784  ±0.0049  0.465  0.6027
 stage   number   util   done    thru    wait  service  iters
 ------  ------  -----  -----  ------  ------  -------  -----
 engine   0.436  0.330  43953  2.4418  0.0434   0.1351      0
-tool     5.859  0.999  35049  1.9472  0.0000   3.0091      0
+sleep    5.859  0.999  35049  1.9472  0.0000   3.0091      0
 ```
 
 With continuation probability $p = 0.8$, a complete session has an expected
 $1/(1-p) = 5$ turns. The report counts activity within the run's measurement
 window; it is not a sample of complete session lengths.
 
-The tool stage accounts for 5.859 of the 6.295 live sessions on average.
+The `sleep` stage accounts for 5.859 of the 6.295 live sessions on average.
 Keeping their context between turns uses memory even while the engine is
 not serving them. The mean observed context is 4 962 tokens.
 

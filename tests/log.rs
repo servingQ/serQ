@@ -67,7 +67,8 @@ fn story(log: &serq::engine::log::Log, who: Who) -> Vec<(String, String)> {
 /// latency waited at them first, inside the one run); the decoder's
 /// request then waits in `D.reqs`, computes its last token again (a
 /// prefill of one token: `load_ended`) and decodes; the session goes to
-/// its tool. Every step is one event, in order, and nothing is logged twice.
+/// its `sleep` (a tool call). Every step is one event, in order, and nothing
+/// is logged twice.
 #[test]
 fn a_session_is_logged_through_prefiller_link_and_decoder() {
     let (p, _) = load(&serq::program_path("llmd_nixl_pull"), common::horizon(30.0));
@@ -101,7 +102,7 @@ fn a_session_is_logged_through_prefiller_link_and_decoder() {
     .map(|(a, b)| (a.to_string(), b.to_string()))
     .collect();
     assert_eq!(&s[..want.len()], &want[..], "{s:#?}");
-    // then its tool, or its end: the workload's `more` draw
+    // then its `sleep`, or its end: the workload's `more` draw
     assert!(
         matches!(s[want.len()].0.as_str(), "run" | "end"),
         "{:?}",
