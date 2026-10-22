@@ -35,7 +35,7 @@ import sys
 sys.path.insert(0, os.path.dirname(__file__))
 from gen_lean_oracle import (  # noqa: E402
     Expr, Fragment, Lean, affine, chunk_rule, erase_costs, fold, nat, one_ref, COST_VARS, is_delay,
-    is_lifo, only_body,
+    is_lifo, only_body, serve_in_admission_order,
 )
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
@@ -207,8 +207,7 @@ class Program:
         step = st[0]["kind"]["Step"]
         if step.get("granule") is not None:
             raise Fragment("granule: the fragment gives a prefill any amount")
-        if step["serve"] not in ({"By": []}, "DecodeFirst"):
-            raise Fragment(f"serve {step['serve']}: the fragment serves residents in admission order")
+        serve_in_admission_order(step)
         only_expr = only_body(step.get("iteration"))
         cost = cost_fn(step["cost"])
         only = "none"

@@ -5,6 +5,17 @@ admits the request, what the request computes, and what it leaves cached
 when it finishes. The client says what it sends and what it measures. The
 `server` block that sits between them today goes (#501).
 
+**Outcome.** Step 1 landed (#505, #507, #511, #546, #552), and its
+`request (…) { … }` block was then replaced: a request is the engine's
+state, and `taking … reuse … cache` on `admit waiting` says what it holds
+([The scheduler and the worker](scheduler-worker.md), #555, #592). Step 2's
+measurements are the report's `client` section ([What the client
+sees](client-metrics.md), #509). Step 3 went another way: the server stays,
+as the deployment's interface `server (P, …) reply (R, …)`, and the
+workload passes its values with `send (…)` ([The server's request
+interface](request-interface.md), #631). The text below is the design as
+it was argued.
+
 This document is the design for #501's three steps. Step 1 is specified
 completely; it lowers at parse time to the kernel the server writes today,
 and the IR does not move. Steps 2 and 3 are sketched. Every step is checked by the report, not the

@@ -180,6 +180,9 @@ iteration { branch (decoders > 0) { serve only (decoding); } else { serve; admit
 
 `exclusive prefill` and `serve only` become bodies, and V1 and V2 go with
 them: neither is a rule any more, and the opposite of each is a program.
+(Outcome: `serve only` became a body (#370); `exclusive prefill` stayed a
+stage rule, since it takes back decodes already selected and a body cannot,
+`docs/language.md`, Semantics, the step iteration.)
 `state` (V7, #367) is a stage's register, written only in its own `iteration`
 and read by that stage and the pools it admits; SGLang's ratio is one, written after a retraction
 from the residents' totals.

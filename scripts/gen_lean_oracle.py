@@ -84,6 +84,14 @@ def is_lifo(preempt):
 NOT_PREEMPTED = {"Unary": ["Not", {"Ctx": "Preempted"}]}
 
 
+def serve_in_admission_order(step):
+    """The fragment serves a step's residents in admission order: its `serve`
+    is `By([])`. `decode first` and every other order lower to `By` with
+    keys (`src/frontend/link.rs`, `serve`), so this is the one test."""
+    if step["serve"] != {"By": []}:
+        raise Fragment(f"serve {step['serve']}: the fragment serves residents in admission order (`By([])`)")
+
+
 def only_body(body):
     """The `p` of a step stage's body, when the body is the stage's `serve
     only (p)` (`[Serve {only: p}, Admit {only: p, gate: !preempted}]`, which
@@ -744,8 +752,7 @@ class Lean:
         cost = cost_fn(step["cost"])
         if step.get("granule") is not None:
             raise Fragment("granule: the fragment gives a prefill any amount")
-        if step["serve"] != {"By": []}:
-            raise Fragment(f"serve {step['serve']}: the fragment serves residents in admission order (`By([])`)")
+        serve_in_admission_order(step)
         if step.get("iteration") is not None:
             raise Fragment("iteration: the oracle fragment runs vLLM's procedure, not a body "
                            "(a stage's `serve only` is one)")

@@ -10,10 +10,10 @@
 //! (0.30.1rc1.dev215+g0c87a197b) with the running loop patched to visit
 //! requests newest first and to take the latest admitted as the victim:
 //! stock vLLM has no such order (FCFS preempts `running[-1]`, PRIORITY the
-//! largest `(priority, arrival_time)`). The patched scheduler,
-//! `tools/serq_vllm.py`, is on the unpublished branch
-//! `feat/serving-spec-language`, not in this repository. Run on the same
-//! scheduler without the patch it gives the six oracle scenarios' answers.
+//! largest `(priority, arrival_time)`). The patched scheduler is
+//! `tools/serq_vllm.py`, the programmable half of `serq target` (#350);
+//! its recorded runs are `tools/oracle/serve/`. Run on the same scheduler
+//! without the patch it gives the oracle scenarios' answers.
 //!
 //! The scenario does not exercise the budget a served victim returns: the
 //! answer is the same without it.
