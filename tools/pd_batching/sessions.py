@@ -18,7 +18,7 @@ closed one (`arrive closed(U)`: U users, each starting a new session when
 one ends), where a faster answer brings the next turn sooner.
 
     cargo build --release
-    tools/pd_batching/sessions.py      # about fifteen minutes; writes sessions.csv, sessions.md here
+    tools/pd_batching/sessions.py      # about ten minutes; writes sessions.csv, sessions.md here
 
 Simulation of the committed program with the edits below, not a
 measurement. The pods' engines are the program's: vLLM's default mixed

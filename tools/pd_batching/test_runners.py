@@ -29,10 +29,11 @@ class ExecutionSettings(unittest.TestCase):
         self.assertGreater(report["observes"]["P.prefill"]["count"], 0)
 
 
-def disagreements(now, old):
-    """The columns of a rerun row `now` that its recorded row `old` (read
-    back from a csv, so text) does not hold: a float beyond rel_tol 1e-9
-    (NaN skipped), anything else as csv writes it."""
+def disagreements(now, old, csvname):
+    """What a rerun row `now` says that its recorded row `old` (read back
+    from `csvname`, so text) does not, one clause a column, or "" when they
+    agree: a float beyond rel_tol 1e-9 (NaN skipped), anything else as csv
+    writes it."""
     bad = []
     for k, v in now.items():
         if isinstance(v, float):
@@ -40,7 +41,7 @@ def disagreements(now, old):
                 bad.append(k)
         elif ("" if v is None else str(v)) != old[k]:
             bad.append(k)
-    return bad
+    return "; ".join(f"{k} is {now[k]}, {csvname} has {old[k]}" for k in bad)
 
 
 class Results(unittest.TestCase):
@@ -62,9 +63,8 @@ class Results(unittest.TestCase):
             if old is None:
                 self.fail(f"{where}: no row in results.csv; regenerate with sweep.py")
             now = sweep.row(experiment, mode, lam, prompt, 1, sweep.run(program, sets, defs, 1, edits), edits)
-            bad = disagreements(now, old)
-            if bad:
-                said = "; ".join(f"{k} is {now[k]}, results.csv has {old[k]}" for k in bad)
+            said = disagreements(now, old, "results.csv")
+            if said:
                 self.fail(f"{where}: {said}; regenerate with sweep.py")
 
 
@@ -87,9 +87,8 @@ class Sessions(unittest.TestCase):
             if old is None:
                 self.fail(f"{where}: no row in sessions.csv; regenerate with sessions.py")
             now = sessions.row(mode, workload, x, 1, sessions.run(mode, workload, x, 1))
-            bad = disagreements(now, old)
-            if bad:
-                said = "; ".join(f"{k} is {now[k]}, sessions.csv has {old[k]}" for k in bad)
+            said = disagreements(now, old, "sessions.csv")
+            if said:
                 self.fail(f"{where}: {said}; regenerate with sessions.py")
 
 

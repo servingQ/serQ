@@ -10,7 +10,7 @@ measurements.
 ```
 cargo build --release
 tools/pd_batching/sweep.py     # about ten minutes; writes raw.jsonl (not committed), results.csv, summary.md
-tools/pd_batching/sessions.py  # about fifteen minutes; writes sessions.csv, sessions.md
+tools/pd_batching/sessions.py  # about ten minutes; writes sessions.csv, sessions.md
 ```
 
 | File | |
@@ -217,7 +217,14 @@ deployment's edits in `sessions.csv`.
 Not covered here: N, NP, ND as constants a
 run can set (an input may not set a family's size); and how concurrent reads
 share a NIC beyond max-min fairness. The router draws among prefill pods
-tied on prefix and load (`~uniform(0, 1)`, as llm-d's picker rotates;
-#610), so the split's cold prompts spread over its three prefill pods and
-their caches; a tie among decode pods still goes to the lowest index, as
-`choose` breaks one.
+tied on prefix and load (`~uniform(0, 1)`; docs/use-cases/pd.md §The
+router, #610), so the split's cold prompts spread over its three prefill
+pods and their caches; a tie among decode pods still goes to the lowest
+index, as `choose` breaks one (docs/language.md §Ties), where llm-d's
+decode profile rotates too: with a draw there the colocated TTFT at
+1 session/s is 61 ms, not 55 (#747). The router's draw reads the
+session's stream, which its tool time reads too
+(docs/design/stochastic-model.md, Definition 3; #748): on one seed the
+split draws the colocated pods' tokens but other tool times (3.043 s a
+call against 2.999 at 1 session/s, seed 1), so the modes compare by
+their means over the five seeds, not seed by seed.
