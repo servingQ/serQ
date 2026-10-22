@@ -310,20 +310,25 @@ fn a_load_whose_send_expired_computes_the_prompt_itself() {
 /// the program does not already have, as in any expression. Until #561,
 /// `sum prompt in 2 (0.25)` linked with `prompt` an attribute. The
 /// relation's `latency` is a constant of the program, which the linker
-/// asks the same.
+/// asks the same; in either, so is a branch a constant condition does not
+/// take (#561 review: the `latency` linked and the `ttl` did not).
 #[test]
 fn a_relations_aggregate_index_is_its_own() {
     let refusal = "`sum prompt in`: `prompt` is also a session attribute";
-    refused(
-        &leg_outlives_prefill(", ttl = sum prompt in 2 (0.25)"),
-        PROMPT10,
-        refusal,
-    );
-    refused(
-        &leg_outlives_prefill("").replace("latency = 1,", "latency = sum prompt in 2 (0.5),"),
-        PROMPT10,
-        refusal,
-    );
+    for ttl in ["sum prompt in 2 (0.25)", "1 ? 0.5 : sum prompt in 2 (0.25)"] {
+        refused(
+            &leg_outlives_prefill(&format!(", ttl = {ttl}")),
+            PROMPT10,
+            refusal,
+        );
+    }
+    for latency in ["sum prompt in 2 (0.5)", "1 ? 1 : sum prompt in 2 (0.5)"] {
+        refused(
+            &leg_outlives_prefill("").replace("latency = 1,", &format!("latency = {latency},")),
+            PROMPT10,
+            refusal,
+        );
+    }
     // an index of its own: the same `ttl` as `0.5`
     let r = run(&leg_outlives_prefill(", ttl = sum k in 2 (0.25)"), PROMPT10);
     assert_eq!(samples(&r, "done_at"), [13.0]);

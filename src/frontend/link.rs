@@ -1838,27 +1838,6 @@ fn collect_attrs(stmts: &[Stmt], lk: &mut Linker) {
 }
 
 impl Linker<'_> {
-    /// Refuse, at the aggregate, an aggregate in `e` whose index is not a
-    /// name of its own: `e` is a constant the parser folded (an array size,
-    /// a `ttl`), whose indices are asked of the whole program as an
-    /// expression's are. Nothing is evaluated: the value is the parser's,
-    /// over the `let`s above it.
-    fn own_indices(&self, e: &Expr) -> LResult<()> {
-        let refused = Cell::new(None);
-        e.any(&|x| {
-            let (span, x) = match x {
-                Expr::Located(span, inner) => (Some(*span), &**inner),
-                x => (None, x),
-            };
-            let Expr::Over(agg, j, ..) = x else {
-                return false;
-            };
-            let own = self.own_index(*agg, j);
-            own.map_err(|e| refused.set(Some(e.at(span)))).is_err()
-        });
-        refused.into_inner().map_or(Ok(()), Err)
-    }
-
     /// What the bare name `n` means read as a value, if anything: the one
     /// order of the linker's lookups (#538).
     fn resolve(&self, n: &str) -> Option<Meaning> {
@@ -2172,10 +2151,13 @@ impl Linker<'_> {
         Ok(match e {
             Expr::Located(s, a) => self.per_run_cap(a, stage, Some(*s))?,
             // a condition known once linked chooses its branch here, so the
-            // other may be vLLM's 0 for none: `c > 0 ? c : inf`
+            // other may be vLLM's 0 for none: `c > 0 ? c : inf`; its
+            // indices are still its own, as in `eval_const` (#561)
             Expr::Cond(k, a, b) => match self.eval_const(k) {
                 Ok(c) if !c.is_nan() => {
-                    self.per_run_cap(if c != 0.0 { a } else { b }, stage, span)?
+                    let (taken, other) = if c != 0.0 { (a, b) } else { (b, a) };
+                    self.own_indices(other)?;
+                    self.per_run_cap(taken, stage, span)?
                 }
                 _ => CExpr::Cond(
                     Box::new(self.expr(k)?),
@@ -3084,6 +3066,27 @@ pub(crate) trait Constants {
             None => Ok(()),
         }
     }
+    /// [`Self::own_index`] of every aggregate in `e`, refused at the
+    /// aggregate, where `e` is not evaluated: a constant the parser folded
+    /// (an array size, a `ttl`, whose value is the parser's) or a branch a
+    /// constant condition does not take. Either is the program's, and its
+    /// indices are asked as an expression's are (#561). The parser
+    /// wraps every aggregate in its place (`Expr::Located`).
+    fn own_indices(&self, e: &Expr) -> LResult<()> {
+        let refused = Cell::new(None);
+        e.any(&|x| {
+            let Expr::Located(span, inner) = x else {
+                return false;
+            };
+            let Expr::Over(agg, j, ..) = &**inner else {
+                return false;
+            };
+            let own = self.own_index(*agg, j);
+            own.map_err(|e| refused.set(Some(e.at(Some(*span)))))
+                .is_err()
+        });
+        refused.into_inner().map_or(Ok(()), Err)
+    }
     /// The terms aggregates have written out so far, against `MAX_OVER`.
     fn terms_written(&self) -> &Cell<usize>;
 
@@ -3109,11 +3112,15 @@ pub(crate) trait Constants {
             }
             Expr::Binary(op, a, b) => binop(*op, self.eval_const(a)?, self.eval_const(b)?),
             Expr::Cond(c, a, b) => {
-                if self.eval_const(c)? != 0.0 {
-                    self.eval_const(a)?
+                let (taken, other) = if self.eval_const(c)? != 0.0 {
+                    (a, b)
                 } else {
-                    self.eval_const(b)?
-                }
+                    (b, a)
+                };
+                // the branch not taken is not evaluated, but it is the
+                // program's: its indices are its own (#561)
+                self.own_indices(other)?;
+                self.eval_const(taken)?
             }
             Expr::Call(f, _) if f == "blocksize" => {
                 return Err(LinkError::new(

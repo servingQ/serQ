@@ -260,64 +260,84 @@ fn an_aggregates_index_and_count_are_its_own() {
 /// it, and reaches the linker as a number; the linker asks its aggregates'
 /// indices of the whole program, in the words it has for the same
 /// aggregate in an expression (#499, #561). Until #561 a name the parser
-/// did not know (a later `let`, an attribute, a pool, a stage) linked.
+/// did not know (a later `let`, an attribute, a pool, a stage) linked. Each
+/// row sizes `DEPLOYMENT`'s own families, which it uses, at 2: with an
+/// index of its own the program links (the control below).
 #[test]
 fn an_array_sizes_aggregate_index_is_its_own() {
-    for (decl, want) in [
+    let svc = "stage svc[2] : fifo;";
+    for (from, to, want) in [
         (
-            "let N = 4; stage colo[sum N in 2 (1)] : delay;",
-            "`sum N in`: `N` is also a `let` constant",
-        ),
-        (
-            "let N = 4; let M = sum N in 2 (1);",
+            svc,
+            "let N = 4; stage svc[sum N in 2 (1)] : fifo;",
             "`sum N in`: `N` is also a `let` constant",
         ),
         // a `let` declared after the array
         (
-            "stage colo[sum N in 2 (1)] : delay; let N = 4;",
+            svc,
+            "stage svc[sum N in 2 (1)] : fifo; let N = 4;",
             "`sum N in`: `N` is also a `let` constant",
         ),
         // `j` is the session's `choose`
         (
-            "stage colo[sum j in 2 (1)] : delay;",
+            svc,
+            "stage svc[sum j in 2 (1)] : fifo;",
             "`sum j in`: `j` is also a session attribute",
         ),
         (
-            "stage colo[sum kv in 2 (1)] : delay;",
+            svc,
+            "stage svc[sum kv in 2 (1)] : fifo;",
             "`sum kv in`: `kv` is also a pool",
-        ),
-        (
-            "stage colo[sum svc in 2 (1)] : delay;",
-            "`sum svc in`: `svc` is also a stage",
         ),
         // a pool family's size
         (
-            "pool extra[max svc in 2 (1)] { cap 1; }",
+            "pool kv[2]",
+            "pool kv[max svc in 2 (2)]",
             "`max svc in`: `svc` is also a stage",
         ),
         // an aggregate in the body of one with an index of its own
         (
-            "stage colo[sum k in 2 (sum j in 1 (1))] : delay;",
+            svc,
+            "stage svc[sum k in 2 (sum j in 1 (1))] : fifo;",
             "`sum j in`: `j` is also a session attribute",
         ),
         // the branch the size does not take is the program's too
         (
-            "stage colo[1 ? 2 : sum j in 2 (1)] : delay;",
+            svc,
+            "stage svc[1 ? 2 : sum j in 2 (1)] : fifo;",
             "`sum j in`: `j` is also a session attribute",
         ),
+        // and so it is in a `let`, which the linker folds (#561 review)
+        (
+            svc,
+            "let M = 1 ? 2 : sum j in 2 (1); stage svc[M] : fifo;",
+            "`sum j in`: `j` is also a session attribute",
+        ),
+        (
+            svc,
+            "let N = 4; let M = sum N in 2 (1); stage svc[2] : fifo;",
+            "`sum N in`: `N` is also a `let` constant",
+        ),
     ] {
-        let e = link_error(&format!("{DEPLOYMENT}{decl}"), WORKLOAD);
+        let src = DEPLOYMENT.replace(from, to);
+        let e = link_error(&src, WORKLOAD);
         assert!(
             e.contains(want) && e.contains("give the index a name of its own"),
-            "{decl}: {e}"
+            "{to}: {e}"
         );
     }
     // an index of its own is no clash
-    let own = DEPLOYMENT.replace("stage svc[2]", "stage svc[sum k in 2 (1)]");
-    assert!(
-        common::compile(&common::main_source(&own), WORKLOAD, &options()).is_ok(),
-        "{own}"
-    );
+    for to in [
+        "stage svc[sum k in 2 (1)] : fifo;",
+        "stage svc[1 ? 2 : sum k in 2 (1)] : fifo;",
+        "let M = 1 ? 2 : sum k in 2 (1); stage svc[M] : fifo;",
+    ] {
+        let own = DEPLOYMENT.replace(svc, to);
+        assert!(
+            common::compile(&common::main_source(&own), WORKLOAD, &options()).is_ok(),
+            "{own}"
+        );
+    }
 }
 
 /// Aggregate expansion must reach the index diagnostic on a bounded stack.

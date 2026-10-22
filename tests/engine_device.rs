@@ -905,12 +905,46 @@ fn an_aggregate_index_is_no_register() {
     refused(&src, &format!("`sum q in`: `q` {refusal}"));
     // the bug as found: an array size is folded by the parser, which knows
     // no register, and reached the linker as a number, so it linked (#561)
-    let src = format!(
-        "stage colo[sum r in 2 (1)] : delay;\n{}",
-        engine("set r = r; advance running; admit waiting while (running.preempted == 0);")
-            .replace("tokens cap 8;", "tokens cap 8; state r = 0;")
+    let with_r = |size: &str| {
+        format!(
+            "stage colo[{size}] : delay;\n{}",
+            engine("set r = r; advance running; admit waiting while (running.preempted == 0);")
+                .replace("tokens cap 8;", "tokens cap 8; state r = 0;")
+                .replace(
+                    "vllm (prompt, 3);",
+                    "run colo[0] (cost(colo, 1)); vllm (prompt, 3);"
+                )
+        )
+    };
+    refused(
+        &with_r("sum r in 2 (1)"),
+        &format!("`sum r in`: `r` {refusal}"),
     );
-    refused(&src, &format!("`sum r in`: `r` {refusal}"));
+    compiled(&with_r("sum k in 2 (1)"), &common::horizon(20.0));
+    // a branch a constant condition does not take is not evaluated, but it
+    // is the program's: in a constant the linker folds and in a cap it
+    // chooses, as in the size the parser folds (#561 review)
+    let ok = with_r("2");
+    let untaken = |j: &str| {
+        let cap = format!("each at most (1 ? 4 : sum {j} in 2 (1))");
+        [
+            ok.replace(
+                "kv cap 100;",
+                &format!("kv cap 1 ? 100 : sum {j} in 2 (0);"),
+            ),
+            ok.replace("advance running;", &format!("advance running {cap};"))
+                .replace(
+                    "(running.preempted == 0)",
+                    &format!("(running.preempted == 0) {cap}"),
+                ),
+        ]
+    };
+    for src in untaken("r") {
+        refused(&src, &format!("`sum r in`: `r` {refusal}"));
+    }
+    for src in untaken("k") {
+        compiled(&src, &common::horizon(20.0));
+    }
 }
 
 #[test]
