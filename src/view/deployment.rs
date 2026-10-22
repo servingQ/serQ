@@ -9,6 +9,7 @@
 
 use std::collections::BTreeMap;
 
+use crate::engine::dist::Dist;
 use crate::frontend::queue::GATEWAY_VERB;
 use crate::ir::{
     CArrival, CExpr, CRef, CStageKind, CStmt, CtxVar, DistKind, Program, RunMode, Side, UnOp,
@@ -664,9 +665,8 @@ impl Walker<'_> {
                 // inside the glyph, clear of the arrows below it, when it
                 // fits; `route` when the route chooses nothing first
                 let chooses = (!names.is_empty()).then(|| format!("choose {}", names.join(", ")));
-                let fits = |t: &String| TextSize::Normal.width_of(t) <= STATION_W - 12.0;
                 let (inner, note) = match chooses {
-                    Some(c) if fits(&c) => (c, None),
+                    Some(c) if fits_inside(&c) => (c, None),
                     Some(c) => (GATEWAY_VERB.into(), Some(c)),
                     None => (GATEWAY_VERB.into(), None),
                 };
@@ -847,12 +847,13 @@ impl Walker<'_> {
                         // a delay is its duration: the shape of its density
                         // when it is a distribution or a constant, and the
                         // duration written under it when it fits. The shape
-                        // does not wait on the text: no two-parameter draw
-                        // is written in 12 characters (`~erlang(1, 2)`)
+                        // does not wait on the text: no `~erlang` or
+                        // `~uniform` draw fits (`~erlang(1, 2)` is 13
+                        // characters, a station holds 12)
                         let outline = outline_of(work.cost_value());
                         if n.kind == StationKind::Delay && outline.is_some() {
                             n.outline = outline;
-                            if TextSize::Normal.width_of(&n.work) <= STATION_W - 12.0 {
+                            if fits_inside(&n.work) {
                                 n.inner = n.work.clone();
                             }
                         }
@@ -1539,10 +1540,15 @@ fn station_of(p: &Program, stage: usize) -> (StationKind, String, Option<String>
 }
 
 /// The outline of a duration's density: a draw, by its distribution, or a
-/// constant. Anything else is drawn as infinitely many servers.
+/// constant. Anything else is drawn as infinitely many servers. A draw whose
+/// parameters are numbers that make its law an exponential (`~erlang(1, m)`,
+/// `~h2(m, 1)`) is drawn as one.
 fn outline_of(duration: &CExpr) -> Option<Outline> {
     match duration {
         CExpr::Num(_) => Some(Outline::Spike),
+        CExpr::Sample(d, a) if numbers(a).is_some_and(|a| Dist::of(*d, &a).is_exponential()) => {
+            Some(Outline::Decaying)
+        }
         CExpr::Sample(d, _) => match d {
             DistKind::Exp => Some(Outline::Decaying),
             DistKind::H2 => Some(Outline::TwoPhase),
@@ -1554,6 +1560,16 @@ fn outline_of(duration: &CExpr) -> Option<Outline> {
         },
         _ => None,
     }
+}
+
+/// The values of expressions that are all numbers.
+fn numbers(es: &[CExpr]) -> Option<Vec<f64>> {
+    es.iter()
+        .map(|e| match e {
+            CExpr::Num(x) => Some(*x),
+            _ => None,
+        })
+        .collect()
 }
 
 /// The step stage whose `memory` pool `i` is.
@@ -2168,6 +2184,12 @@ const MEMBER_GAP: f64 = 34.0;
 /// what it holds.
 const CLIENT_W: f64 = 64.0;
 const SERVER_PAD: f64 = 16.0;
+
+/// Whether a text is written inside a station, clear of its frame: 12
+/// characters. A delay's duration and a gateway's `choose` read it.
+fn fits_inside(t: &str) -> bool {
+    TextSize::Normal.width_of(t) <= STATION_W - 12.0
+}
 
 /// An instance drawn once per member: `choose i in NP` picks one of `NP`
 /// pods, and the figure draws the `NP`, its box and all in it again a

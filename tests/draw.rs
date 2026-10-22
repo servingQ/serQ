@@ -143,7 +143,9 @@ fn stations_take_their_stage_kind() {
 /// A delay's outline is read from its duration in the IR, by the draw's
 /// distribution (`DistKind`), not from the text the duration is written
 /// as: a constant is a spike, and a scaled draw is no distribution of the
-/// table, whichever side the scale is on.
+/// table, whichever side the scale is on. A draw whose parameters make it
+/// an exponential is drawn as one: `~erlang` of one phase (its count is
+/// rounded down) and `~h2` of CV² at most 1.
 #[test]
 fn a_delays_outline_is_its_durations_distribution() {
     use serq::view::figure::Outline;
@@ -151,6 +153,10 @@ fn a_delays_outline_is_its_durations_distribution() {
         ("~exp(3)", Some(Outline::Decaying)),
         ("~h2(1, 2)", Some(Outline::TwoPhase)),
         ("~erlang(3, 2)", Some(Outline::Hump)),
+        ("~erlang(1, 2)", Some(Outline::Decaying)),
+        ("~erlang(1.5, 2)", Some(Outline::Decaying)),
+        ("~h2(2, 1)", Some(Outline::Decaying)),
+        ("~h2(2, 0.5)", Some(Outline::Decaying)),
         ("~uniform(1, 2)", Some(Outline::Flat)),
         ("~det(2)", Some(Outline::Spike)),
         ("2", Some(Outline::Spike)),
@@ -163,37 +169,29 @@ fn a_delays_outline_is_its_durations_distribution() {
     }
 }
 
-/// A delay's outline does not wait on its text (#732). A station holds 12
-/// characters, and no draw of two parameters is that short
-/// (`~erlang(1, 2)` is 13), so while the outline was drawn only when the
-/// text fitted, no `~erlang` or `~uniform` delay was ever drawn by its
-/// density: each was a row of circles, as an expression that is no
-/// distribution is. The outline is drawn and the text that does not fit is
-/// left out.
+/// A delay's duration is written under its outline when it fits in the
+/// station, and left out when it does not: `~erlang(3, 2)` is 13 characters,
+/// a station holds 12. Its outline is drawn either way
+/// (`every_duration_distribution_has_an_outline`).
 #[test]
-fn a_long_durations_outline_is_drawn_without_its_text() {
-    use serq::view::figure::Outline;
+fn a_durations_text_is_written_when_it_fits() {
     let inner = |duration: &str| {
         let (p, net) = shape(&format!("run A (cost(A, {duration})); end;"));
         let i = net.node_of(stage(&p, "A")).expect("A is on the session");
-        (net.nodes[i].outline, net.nodes[i].inner.clone())
+        net.nodes[i].inner.clone()
     };
-    assert_eq!(inner("~erlang(3, 2)"), (Some(Outline::Hump), String::new()));
-    assert_eq!(
-        inner("~uniform(1, 2)"),
-        (Some(Outline::Flat), String::new())
-    );
-    // a duration that fits is written under its outline
-    assert_eq!(
-        inner("~exp(3)"),
-        (Some(Outline::Decaying), "~exp(3)".to_string())
-    );
+    assert_eq!(inner("~exp(3)"), "~exp(3)");
+    assert_eq!(inner("~erlang(3, 2)"), "");
 }
 
 /// Every distribution of the table (`DistKind`) that is a duration is drawn
-/// by its density at its shortest draw, so that one added to the table, or
-/// a parameter added to one, is drawn or fails here. `~bernoulli` draws 0 or
-/// 1, not a duration.
+/// by its density whatever the length of its text (#732), so each is drawn
+/// here with parameters too long to be written in the station. While the
+/// outline waited on the text, no `~erlang` or `~uniform` delay was drawn by
+/// its density, since none is written in 12 characters: each was a row of
+/// circles, as an expression that is no distribution is. One added to the
+/// table, or a parameter added to one, is drawn or fails here. `~bernoulli`
+/// draws 0 or 1, not a duration.
 #[test]
 fn every_duration_distribution_has_an_outline() {
     use serq::ir::DistKind;
@@ -202,10 +200,14 @@ fn every_duration_distribution_has_an_outline() {
         if d == DistKind::Bernoulli {
             continue;
         }
-        let args: Vec<String> = (1..=d.arity()).map(|k| k.to_string()).collect();
+        let args: Vec<String> = (1..=d.arity()).map(|k| format!("{k}000000000")).collect();
         let duration = format!("~{name}({})", args.join(", "));
         let (p, net) = shape(&format!("run A (cost(A, {duration})); end;"));
         let i = net.node_of(stage(&p, "A")).expect("A is on the session");
+        assert_eq!(
+            net.nodes[i].inner, "",
+            "{duration} is written in the station"
+        );
         assert!(net.nodes[i].outline.is_some(), "{duration}");
     }
 }

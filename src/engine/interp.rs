@@ -6292,18 +6292,7 @@ impl<'p> Interp<'p> {
                     (Which::Session, Some(sid)) => &mut self.sessions[sid].rng,
                     _ => self.rng(w),
                 };
-                let d = match kind {
-                    DistKind::Det => Dist::Deterministic(a[0]),
-                    DistKind::Exp => Dist::exp(a[0]),
-                    DistKind::Uniform => Dist::Uniform { lo: a[0], hi: a[1] },
-                    DistKind::Erlang => Dist::Erlang {
-                        k: a[0].max(1.0) as u32,
-                        mean: a[1],
-                    },
-                    DistKind::H2 => Dist::hyperexp_balanced(a[0], a[1].max(1.0)),
-                    DistKind::Bernoulli => Dist::bernoulli(a[0]),
-                };
-                d.sample(rng)
+                Dist::of(*kind, &a).sample(rng)
             }
             CExpr::Unary(op, a) => {
                 let x = self.eval(a, ctx, w);
