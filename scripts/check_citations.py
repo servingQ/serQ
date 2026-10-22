@@ -61,6 +61,8 @@ PATHS = {
     "kv_cache_utils.py": "vllm/v1/core/kv_cache_utils.py",
     "sched/utils.py": "vllm/v1/core/sched/utils.py",
     "metrics/stats.py": "vllm/v1/metrics/stats.py",
+    # the Prometheus logger: which of the scheduler's stats reach its counters
+    "metrics/loggers.py": "vllm/v1/metrics/loggers.py",
     "output_processor.py": "vllm/v1/engine/output_processor.py",
     # vLLM's benchmark client: what a client counts of a request
     "benchmarks/serve.py": "vllm/benchmarks/serve.py",

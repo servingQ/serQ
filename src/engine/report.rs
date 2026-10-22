@@ -1,5 +1,6 @@
-//! What a run reports: `observe` statistics, per-stage and per-pool
-//! time averages and counters. Printed as text or JSON.
+//! What a run reports: `observe` statistics, per-engine admissions,
+//! per-stage and per-pool time averages and counters. Printed as text or
+//! JSON.
 
 use std::fmt::Write as _;
 
@@ -172,6 +173,31 @@ pub struct StatusReport {
     pub number: f64,
 }
 
+/// An engine's admissions after warm-up, beside its records `E.reused` and
+/// `E.prefill`, which sample the same admissions
+/// (`docs/design/engine-admissions.md`). A family's members are summed, as
+/// its records are one per family.
+#[derive(Clone, Debug)]
+#[cfg_attr(
+    feature = "python",
+    pyo3::pyclass(get_all, frozen, name = "Engine", module = "pyserq")
+)]
+pub struct EngineReport {
+    /// The engine's name (a family's, without an index).
+    pub name: String,
+    /// Its admissions: `E.reused`'s count. A request preempted and admitted
+    /// again is admitted again.
+    pub admissions: u64,
+    /// Of those, the admissions of a request preempted since its call.
+    pub readmissions: u64,
+    /// The share of the admitted tokens the engine's cache gave: `Σ E.reused`
+    /// over `Σ request.known`, each read at an admission, NaN without one.
+    /// A token a connector loaded is among the tokens, not the hits (its
+    /// record is `E.loaded`); without one, the tokens are `E.reused` and
+    /// `E.prefill` together.
+    pub token_hit: f64,
+}
+
 /// A `claim`: what the run found of it on the path it ran.
 #[derive(Clone, Debug)]
 pub struct ClaimReport {
@@ -291,6 +317,10 @@ pub struct Report {
     /// Every engine request status, in `Status::ALL`'s order
     /// (`docs/design/request-state.md`).
     pub statuses: Vec<StatusReport>,
+    /// One per engine that takes requests, in declaration order, beside its
+    /// records `E.reused` and `E.prefill`; empty (and `{}` in the JSON)
+    /// without one.
+    pub engines: Vec<EngineReport>,
     /// The program's claims, in order; empty (and absent from the JSON)
     /// when it has none.
     pub claims: Vec<ClaimReport>,
@@ -352,6 +382,11 @@ impl Report {
 
     pub fn claim(&self, name: &str) -> Option<&ClaimReport> {
         self.claims.iter().find(|c| c.name == name)
+    }
+
+    /// The engine `name`'s admissions (a family's, summed).
+    pub fn engine(&self, name: &str) -> Option<&EngineReport> {
+        self.engines.iter().find(|e| e.name == name)
     }
 
     pub fn stage(&self, name: &str) -> Option<&StageReport> {
@@ -431,6 +466,17 @@ impl Report {
                 &["status", "stays", "mean", "p50", "p99", "number"],
                 rows,
             );
+        }
+        if !self.engines.is_empty() {
+            let rows = self.engines.iter().map(|e| {
+                vec![
+                    e.name.clone(),
+                    e.admissions.to_string(),
+                    e.readmissions.to_string(),
+                    format!("{:.3}", e.token_hit),
+                ]
+            });
+            table(&mut s, &["engine", "admits", "readmits", "token hit"], rows);
         }
         if !self.gauges.is_empty() {
             let rows = self.gauges.iter().map(|g| {
@@ -644,6 +690,21 @@ impl Report {
                 f(x.p50),
                 f(x.p99),
                 f(x.number)
+            );
+        }
+        s.push('}');
+        s.push_str(",\"engines\":{");
+        for (i, e) in self.engines.iter().enumerate() {
+            if i > 0 {
+                s.push(',');
+            }
+            let _ = write!(
+                s,
+                "\"{}\":{{\"admissions\":{},\"readmissions\":{},\"token_hit\":{}}}",
+                e.name,
+                e.admissions,
+                e.readmissions,
+                f(e.token_hit)
             );
         }
         s.push('}');

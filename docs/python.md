@@ -58,6 +58,7 @@ print(response.mean)
 | [`pyserq.Claim`](python/claim.md) | What the run found of a claim. |
 | [`pyserq.Stage`](python/stage.md) | Queue, service, iteration and inter-token statistics. |
 | [`pyserq.Pool`](python/pool.md) | Allocation, cache, admission and preemption statistics. |
+| [`pyserq.Engine`](python/report.md#engine) | An engine's admissions, re-admissions and token hit. |
 
 ### Visualization and inputs
 

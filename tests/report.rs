@@ -67,6 +67,8 @@ fn the_report_has_the_shape_its_version_names() {
         keys(&j["status"]["waiting"]),
         vec!["mean", "number", "p50", "p99", "stays"]
     );
+    // one object per engine that takes requests: none here
+    assert_eq!(j["engines"], serde_json::json!({}));
     let shape = (
         keys(&j),
         keys(&j["observes"]["x"]),
@@ -80,6 +82,7 @@ fn the_report_has_the_shape_its_version_names() {
             "client",
             "end",
             "ended",
+            "engines",
             "events",
             "gauges",
             "horizon",
@@ -621,14 +624,9 @@ fn a_growth_left_waiting_is_noted() {
     );
 }
 
-/// The note is a line of text, not a lint error, because a shipped program
-/// may earn it by design (vllm.sq under `single_turn.sq` earned it for its `hit`,
-/// which it no longer observes: the engine records what each admission
-/// reused, `vllm.reused`, a count and no test). Every example and tutorial
-/// program runs without a note; a new one that earns it shows up here, to
-/// be judged.
-#[test]
-fn the_corpus_earns_one_note() {
+/// Every example and tutorial program under every workload it runs, to
+/// `horizon(100)`, named `program with workload`.
+fn corpus() -> Vec<(String, serq::Report)> {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut programs = vec![];
     for dir in std::fs::read_dir(root.join("examples")).unwrap().flatten() {
@@ -654,17 +652,13 @@ fn the_corpus_earns_one_note() {
     programs.retain(|p| p.extension().is_some_and(|e| e == "sq") && !workloads.contains(p));
     programs.sort();
     assert!(programs.len() >= 25, "{programs:?}");
-    let mut noted = vec![];
-    // nor does any reject a session (the `rej:` note, #271), nor end with an
-    // engine idle with work (the `idle:` note, #355)
-    let mut rejected = vec![];
     // each under every workload it runs
     let runs = programs.iter().flat_map(|p| {
         let ws = serq::paired_workloads(p);
         assert!(!ws.is_empty(), "{}: no workload", p.display());
         ws.into_iter().map(move |w| (p, w))
     });
-    for (p, w) in runs {
+    runs.map(|(p, w)| {
         let r = serq::load_paired(p, &w, &common::horizon(100.0))
             .and_then(|ir| run_ir(&ir, w.parent()))
             .unwrap_or_else(|e| panic!("{} with {}: {e}", p.display(), w.display()));
@@ -673,6 +667,24 @@ fn the_corpus_earns_one_note() {
             p.strip_prefix(root).unwrap().display(),
             w.strip_prefix(root).unwrap().display()
         );
+        (name, r)
+    })
+    .collect()
+}
+
+/// The note is a line of text, not a lint error, because a shipped program
+/// may earn it by design (vllm.sq under `single_turn.sq` earned it for its `hit`,
+/// which it no longer observes: the engine records what each admission
+/// reused, `vllm.reused`, a count and no test). Every example and tutorial
+/// program runs without a note; a new one that earns it shows up here, to
+/// be judged.
+#[test]
+fn the_corpus_earns_one_note() {
+    let mut noted = vec![];
+    // nor does any reject a session (the `rej:` note, #271), nor end with an
+    // engine idle with work (the `idle:` note, #355)
+    let mut rejected = vec![];
+    for (name, r) in corpus() {
         for o in r.observes.iter().filter(|o| o.never_held()) {
             noted.push((name.clone(), o.name.clone()));
         }
@@ -685,4 +697,212 @@ fn the_corpus_earns_one_note() {
     }
     assert_eq!(rejected, Vec::<(String, String)>::new());
     assert_eq!(noted, Vec::<(String, String)>::new());
+}
+
+// ------------------------------------------------- the engine table ----
+// (#594, `docs/design/engine-admissions.md`)
+
+/// The sum of an observation's samples.
+fn total(r: &serq::Report, name: &str) -> f64 {
+    r.observe(name).unwrap().samples.iter().sum()
+}
+
+/// Engine `e` on a GPU of 1000 KV tokens that reads from its cache every
+/// token but the last and caches `cache`, with `connector` as written (to
+/// the L2 `lmc` of 1000, declared with it); one iteration a second.
+fn one_engine(connector: &str, cache: &str) -> String {
+    let l2 = if connector.is_empty() {
+        ""
+    } else {
+        "queue lmc : l2 { pool kv { cap 1000; } serve ps(1); }"
+    };
+    format!(
+        "{l2}
+        device gpu {{ kv cap 1000; }}
+        pool kv on gpu {{ evict lru; }}
+        engine e on gpu {{
+          tokens cap inf;
+          {connector}
+          scheduler {{
+            advance running;
+            admit waiting while (running.preempted == 0)
+              taking kv (request.known) reuse (request.known - 1) cache ({cache});
+          }}
+          worker {{ forward (1); }}
+        }}
+        server (input) {{ e (input, 1); }}
+        "
+    )
+}
+
+/// One session of two turns, of 100 then 150 tokens.
+const TWO_TURNS: &str = "workload {
+          arrive batch(1);
+          init { set K = 0; }
+          send (input: K == 0 ? 100 : 150);
+          session { turn; set K = 1; tool (1); turn; end; }
+        }
+";
+
+/// The first turn reads nothing and computes its 100 tokens; the second
+/// reads the 100 the first cached and computes 50. The engine's row gives
+/// the share of the 250 tokens the cache gave, 100.
+#[test]
+fn an_engine_reports_its_admissions_and_token_hit() {
+    let r = common::run(
+        &common::main_source(&one_engine("", "request.input + request.output")),
+        TWO_TURNS,
+        &common::horizon(100.0),
+    )
+    .unwrap();
+    assert_eq!(r.observe("e.reused").unwrap().samples, [0.0, 100.0]);
+    assert_eq!(r.observe("e.prefill").unwrap().samples, [100.0, 50.0]);
+    let e = r.engine("e").unwrap();
+    assert_eq!((e.admissions, e.readmissions), (2, 0));
+    assert_eq!(e.token_hit, 100.0 / 250.0);
+    let j: serde_json::Value = serde_json::from_str(&r.json()).unwrap();
+    assert_eq!(
+        keys(&j["engines"]["e"]),
+        ["admissions", "readmissions", "token_hit"]
+    );
+    assert_eq!(j["engines"]["e"]["token_hit"], 0.4);
+    let text = r.text();
+    assert!(
+        text.contains("\nengine  admits  readmits  token hit\n")
+            && text
+                .lines()
+                .any(|l| l == "e            2         0      0.400"),
+        "{text}"
+    );
+}
+
+/// The open question of #594: a token a connector loaded is among the
+/// admission's tokens, not its hits. The engine caches 40 of the first
+/// turn's 100 and its L2 all 100: the second turn reads 40, loads 60 and
+/// computes 50. The engine's own cache gave 40 of the 250 tokens, not 40
+/// of the 40 + 150 its records `e.reused` and `e.prefill` hold, which
+/// leave the loaded tokens out (0.21).
+#[test]
+fn a_loaded_token_is_among_the_tokens_not_the_hits() {
+    let r = common::run(
+        &common::main_source(&one_engine(
+            "connector lmc {
+               per_token (0.01);
+               load (max(0, min(cachedin(lmc.kv), request.known - 1) - request.hit));
+               save (request.input);
+             }",
+            "40",
+        )),
+        TWO_TURNS,
+        &common::horizon(100.0),
+    )
+    .unwrap();
+    assert_eq!(r.observe("e.reused").unwrap().samples, [0.0, 40.0]);
+    assert_eq!(r.observe("e.loaded").unwrap().samples, [0.0, 60.0]);
+    assert_eq!(r.observe("e.prefill").unwrap().samples, [100.0, 50.0]);
+    let e = r.engine("e").unwrap();
+    assert_eq!(e.admissions, 2);
+    assert_eq!(e.token_hit, 40.0 / 250.0);
+}
+
+/// Two requests that outgrow 48 tokens of KV (`tests/connector.rs`, without
+/// the connector): one is preempted once and admitted again. The row counts
+/// three admissions, one a re-admission, which ends the one stay in
+/// `preempted`.
+#[test]
+fn a_readmission_is_counted_apart() {
+    let r = common::run(
+        &common::main_source(
+            "device gpu { kv cap 48; }
+             pool kv on gpu { block 16; evict lru; preempt lifo; }
+             engine e on gpu {
+               tokens cap 64;
+               scheduler { advance running; admit waiting while (running.preempted == 0) taking kv (request.known); }
+               worker { forward (1); }
+             }
+             server { e (16, 20); }",
+        ),
+        "workload { arrive batch(2); }",
+        &common::horizon(1000.0),
+    )
+    .unwrap();
+    assert_eq!(r.pool("kv").unwrap().preemptions, 1, "{}", r.text());
+    let e = r.engine("e").unwrap();
+    assert_eq!((e.admissions, e.readmissions), (3, 1));
+    let preempted = r.statuses.iter().find(|x| x.name == "preempted").unwrap();
+    assert_eq!(preempted.stays, 1);
+}
+
+/// The run of #594 as it was filed: the row's admissions are `E.reused`'s
+/// count (1862 then), its re-admissions the stays in `preempted` (10 and
+/// 10), and, without a connector, its token hit what each reader of the
+/// records computed, `Σ E.reused / (Σ E.reused + Σ E.prefill)` (0.795).
+/// Invariants, not values: a change to the run moves the numbers, not
+/// these.
+#[test]
+fn the_issue_594_run_agrees_with_its_records() {
+    let mut ov = Overrides {
+        warmup: Some(300.0),
+        ..common::horizon(3000.0)
+    };
+    for (k, v) in [("N", "96"), ("S", "2048"), ("tr", "1")] {
+        ov.set(k, v).unwrap();
+    }
+    let r = common::run_example("examples/multi-turn/thunderagent.sq", &ov).unwrap();
+    let e = r.engine("E").unwrap();
+    assert_eq!(e.admissions, r.observe("E.reused").unwrap().count);
+    let preempted = r.statuses.iter().find(|x| x.name == "preempted").unwrap();
+    assert!(e.readmissions > 0, "no re-admission to test");
+    assert_eq!(e.readmissions, preempted.stays);
+    let (reused, prefill) = (total(&r, "E.reused"), total(&r, "E.prefill"));
+    let hit = reused / (reused + prefill);
+    assert!((e.token_hit - hit).abs() <= 1e-12, "{} {hit}", e.token_hit);
+}
+
+/// Every engine of the corpus: a row for each engine with records, in
+/// their order; its admissions its records' count; its token hit a share,
+/// NaN only when no admission had a token, and without a connector what
+/// the readers computed from the records.
+#[test]
+fn every_engine_row_agrees_with_its_records() {
+    let mut rows = 0;
+    for (name, r) in corpus() {
+        let recorded: Vec<&str> = r
+            .observes
+            .iter()
+            .filter_map(|o| o.name.strip_suffix(".reused"))
+            .collect();
+        let engines: Vec<&str> = r.engines.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(engines, recorded, "{name}");
+        for e in &r.engines {
+            rows += 1;
+            let record = |what: &str| format!("{}.{what}", e.name);
+            assert_eq!(
+                e.admissions,
+                r.observe(&record("reused")).unwrap().count,
+                "{name}: {}",
+                e.name
+            );
+            assert!(e.readmissions <= e.admissions, "{name}: {}", e.name);
+            let (u, p, h) = (
+                total(&r, &record("reused")),
+                total(&r, &record("prefill")),
+                e.token_hit,
+            );
+            if u + p == 0.0 {
+                assert!(h.is_nan(), "{name}: {} {h}", e.name);
+                continue;
+            }
+            assert!((0.0..=1.0).contains(&h), "{name}: {} {h}", e.name);
+            if r.observe(&record("loaded")).is_none() {
+                assert!(
+                    (h - u / (u + p)).abs() <= 1e-9,
+                    "{name}: {} {h} against {}",
+                    e.name,
+                    u / (u + p)
+                );
+            }
+        }
+    }
+    assert!(rows >= 20, "{rows} rows");
 }

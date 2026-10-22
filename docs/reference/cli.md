@@ -74,7 +74,7 @@ to 0 and `seed` to 1. JSON IR contains all resolved settings already.
 
 ## The JSON report
 
-`observes`, `client`, `status` and `gauges` are objects keyed by name; `stages` and `pools` are arrays.
+`observes`, `client`, `status`, `engines` and `gauges` are objects keyed by name; `stages` and `pools` are arrays.
 
 ```bash
 serq run examples/multi-turn/vllm.sq --workload examples/workloads/chat.sq --horizon 2000 --warmup 200 --seed 1 --json | jq '.client.ttft.mean'
@@ -87,6 +87,7 @@ serq run examples/multi-turn/vllm.sq --workload examples/workloads/chat.sq --hor
 | `observes.<name>` | `count`, `mean`, `ci`, `cv2`, `p99` |
 | `client.ttft`, `client.tpot`, `client.response` | the same fields, of what each turn's client saw, in every program ([what the client sees](../language.md#what-the-client-sees)): `ttft` from the turn to its first output token, `tpot` the time per output token after the first, `response` from the turn to its answer. A turn that commits no token has no `ttft`, and one of a single output token no `tpot` |
 | `status.<status>` | every [engine request status](#request-statuses), visited or not: `stays` (stays in it that ended after warm-up), `mean`, `p50`, `p99` (their durations; `null` without any), `number` (time-average engine requests in it over `[warmup, end]`) |
+| `engines.<name>` | one per engine that takes requests, in declaration order (`{}` without one): `admissions`, `readmissions`, `token_hit` ([engine statistics](#engine-statistics)) |
 | `gauges.<name>` | `mean` (time average over `[warmup, end]`), `ci`, `min`, `max` |
 | `claims[]` | present when the program has a `claim`: `name`, `kind` (`every_iteration`, `some_iteration`, `at_end`), `result` (`holds`, `fails`, `witnessed`, `not_witnessed`, `not_evaluated`, `out_of_scope`), `checked` (iterations read, or 1 for a claim read at the end), `failures` (of those, the ones that read 0), `first` (the first failure, or a `some` claim's first witness; `null` when none), `note` (the sessions live at the end, or the session that failed `given`; `null` otherwise). The whole run, warm-up included |
 | `stages[]` | stage statistics, below |
@@ -142,6 +143,51 @@ average over the same span, so `number ≈ (stays / span) × mean` (Little's
 law) only near a steady state: a run that ends with long stays still open
 leaves them out of `stays` but not of `number` (`fastertransformer.sq` at
 `--horizon 60` is off by 99 %).
+
+### Engine statistics
+
+One row per engine that takes requests: the sums of what it records of
+each admission after warm-up, `E.reused` and `E.prefill`
+([the design](../design/engine-admissions.md)). A family's members are one
+row under its name, as its records are one per family.
+
+| Field | Meaning |
+|---|---|
+| `admissions` | admissions after warm-up, the count of `E.reused`; a request preempted and admitted again is admitted again |
+| `readmissions` | of those, the admissions of a request preempted since its call |
+| `token_hit` | `Σ E.reused / Σ request.known`, each read at an admission: the share of the admitted tokens the engine's cache gave; `null` (`NaN` in the text) when no admission had a token |
+
+The text report prints the table after the statuses:
+
+```text
+engine  admits  readmits  token hit
+------  ------  --------  ---------
+E         1862        10      0.795
+```
+
+(`thunderagent.sq` with `closed_agents.sq`, `--horizon 3000 --warmup 300
+--N 96 --S 2048 --tr 1`.) The 10 re-admissions end the 10 stays in
+`preempted` above it. The counts span the observations' time, after
+warm-up: the `E.kv` pools' `admissions` count the whole run, 1130 and 1042
+here.
+
+Without a connector an admission's tokens are what it read and what it
+computes, and `token_hit` is `Σ E.reused / (Σ E.reused + Σ E.prefill)`. A
+token a connector loaded (`E.loaded`) is among the tokens, not the hits:
+the share is of what the engine's own cache gave, as vLLM's local counter
+is hits over `request.num_tokens` (`kv_cache_manager.py:253-262`), and
+vLLM counts the connector's hits apart, over the tokens its local cache
+did not give (`scheduler.py:1009-1012`). `vllm_lmcache.sq` with `chat.sq`
+at `--horizon 2000` reads 0.394, where the records'
+`reused / (reused + prefill)` would read 0.80.
+
+vLLM's `prefix_cache_hits` and `prefix_cache_queries` count the same
+admissions less the re-admissions. The scheduler records each admission
+(`scheduler.py:1257-1261`), and one of a request with `num_preemptions > 0`
+goes to `preempted_hits` and `preempted_queries` instead
+(`metrics/stats.py:132-143`), which the Prometheus counters do not read
+(`metrics/loggers.py:1052-1057`). `readmissions` is the number of
+admissions that difference covers.
 
 ### Stage statistics
 

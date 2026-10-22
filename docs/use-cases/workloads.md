@@ -105,6 +105,10 @@ a pair, not across the table):
 | `subagents --q 0` | 0.90 | 0.89 | 665 | 13 | 58 | 0.05 |
 | `subagents` | 3.77 | 0.68 | 1 997 | 53 | 112 | 0.29 |
 
+The hit rate is the share of requests whose admission read any cached
+token (`vllm.reused` above 0), not the engine table's `token hit`, the
+share of the admitted tokens the cache gave (0.91 for `chat`).
+
 Delegation increases request traffic and the mean prefill work in this
 approximation. The first turn of each subagent misses its copied context;
 a shared content-addressed cache could reuse that prefix. These are

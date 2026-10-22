@@ -13,8 +13,10 @@ lets a paused program in again.
 `k=v` sets an argument of the program after the preset's. Every number is
 a simulation of the program as committed, not a measurement: a steps/min
 is turns per minute after warm-up, the paper's unit (one reasoning and one
-acting period), and the hit rate is reused prompt tokens over prompt
-tokens, vLLM's prefix_cache_hits over prefix_cache_queries.
+acting period), and the hit rate is the report's token hit, the share
+of the admitted tokens the cache gave (vLLM's prefix_cache_hits over
+prefix_cache_queries counts first admissions only,
+docs/design/engine-admissions.md).
 """
 
 import json
@@ -61,12 +63,11 @@ def run(n, tr, seed, sets):
         args += [f"--{k}", str(v)]
     r = json.loads(subprocess.run(args, capture_output=True, text=True, check=True).stdout)
     o = r["observes"]
-    total = lambda k: o[k]["mean"] * o[k]["count"] if o.get(k) and o[k]["count"] else 0.0
-    reused, fresh = total("E.reused"), total("E.prefill")
+    hit = r["engines"]["E"]["token_hit"]
     resumes = o["resume_wait"]["count"] if o.get("resume_wait") else 0
     return {
         "spm": r["turns"] / (r["end"] - r["warmup"]) * 60,
-        "hit": reused / (reused + fresh) if reused + fresh else 0.0,
+        "hit": hit if hit is not None else 0.0,
         "resumed": resumes / r["turns"] if r["turns"] else 0.0,
     }
 

@@ -19,10 +19,13 @@ done
 | 1.9 | 0.150 | 1.532 | 3,659 | 0 | 0.895 |
 | 2.0 | 0.032 | 25.124 | 6,484 | 0 | 1.000 |
 
-*From cache* is the share of the prompt tokens the cache supplied,
-`llm.reused / (llm.reused + llm.prefill)` (the means of the report's two
-`observe` rows); TTFT is the `client` section's mean, preemptions and
-`stuck` the `kv` pool's, utilisation the `llm` stage's.
+*From cache* is the `llm` row's `token hit` in the report's engine table
+(`engines.llm.token_hit` in the JSON): the share of the admitted tokens the
+cache supplied. A request preempted and admitted again counts its tokens
+again, and `readmits` counts those admissions (5 953 at 2.0)
+([engine statistics](../reference/cli.md#engine-statistics)). TTFT is the
+`client` section's mean, preemptions and `stuck` the `kv` pool's,
+utilisation the `llm` stage's.
 
 A mean from one run is a level only if a longer run gives about the same.
 The same seed at longer horizons:
@@ -56,7 +59,7 @@ without bound.
 
 The cliff is between 1.9 and 2.0 sessions/s, and latency rises steeply
 before it: the level doubles from 1.7 to 1.8 and grows about 3.3 times
-from 1.8 to 1.9. The share of prompt tokens from cache at 320 000 s falls
+from 1.8 to 1.9. The share of admitted tokens from cache at 320 000 s falls
 from 0.44 at 1.5 to 0.13 at 1.9, and to 0.03 at 2.0.
 
 No run here reports a `stuck` session (a request preempted again without
