@@ -267,8 +267,8 @@ impl ClaimReport {
 }
 
 /// Version of `Report::json`'s shape: the names of its fields, which
-/// consumers read by name (serving-queue-theory, pyserq). Bump it on a
-/// renamed, removed or retyped field, by the rules of `docs/ir.md`
+/// consumers read by name (serving-queue-theory, pyserq, serq-lar). Bump it
+/// on a renamed, removed or retyped field, by the rules of `docs/ir.md`
 /// (Stability); `tests/report.rs` holds the shape.
 ///
 /// 2: `pools[].stuck` is `preempted_in_recompute`.
@@ -555,7 +555,7 @@ impl Report {
                 if p.preempted_in_recompute > 0 {
                     let _ = writeln!(
                         s,
-                        "preempted in recompute: {} session(s) preempted again at pool `{}` before passing the position of their previous preemption there; vLLM's recompute does this under overload, and a counted session may still finish",
+                        "preempted in recompute: {} session(s) preempted again at pool `{}` before passing the position of their previous preemption there: a preempted hold recomputes what it dropped, so under overload this is ordinary, and a counted session may still finish",
                         p.preempted_in_recompute,
                         label(&p.name, p.index)
                     );

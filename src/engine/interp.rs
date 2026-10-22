@@ -4485,9 +4485,12 @@ impl<'p> Interp<'p> {
             .expect("victim holds the pool");
         // what the hold has computed on this pool: its position there, which
         // starts at the cached prefix it consumed and advances with its
-        // `growing` runs. Not the allocation: a holder preempted before its
-        // first iteration has computed nothing of what it was allocated
-        // (vLLM: `num_computed_tokens` is 0 for it, and it has no output)
+        // `growing` runs and `load`s (on a pool neither advances, a second
+        // preemption is counted below with nothing recomputed: the count
+        // reads the position, not a recompute). Not the allocation: a holder
+        // preempted before its first iteration has computed nothing of what
+        // it was allocated (vLLM: `num_computed_tokens` is 0 for it, and it
+        // has no output)
         let computed = self.sessions[victim].holds[hi].pools[k].pos;
         if let Some(&prev) = self.sessions[victim].preempt_pos.get(&pl) {
             if computed <= prev + EPS && !self.sessions[victim].preempted_in_recompute {

@@ -15,7 +15,11 @@ cleared when the hold completes). A second preemption at the same pool at
 the same or a lower position sets the session's flag and counts it in that
 pool: once per session in the run, at the first pool where it happens. The
 hold was preempted again before its recompute passed the point the first
-preemption dropped.
+preemption dropped. The position advances only with `growing` runs and
+`load`; on a pool neither advances it is the cached prefix consumed at
+admission, so a second preemption there is counted with nothing
+recomputed, unless the re-admission consumed a longer prefix
+(`docs/language.md`, Statistics).
 
 ## Why `stuck` was the wrong name
 
@@ -102,6 +106,14 @@ code. Deferred, not rejected.
 The price of the full phrase is width: the issue's pool table grows from
 102 to 119 characters, against 117 for the same report's `run:` line.
 Headers with spaces exist already (`prefill only`, `decode batch`).
+
+**A note that names vLLM.** The first wording of the report's note said
+"vLLM's recompute does this under overload". The interpreter prints the
+note for every program, and `examples/engines/sglang.sq` and
+`examples/vendors/rbln.sq` preempt too; the other notes of the report
+speak the program's words (`rej:`, `grow:`, `over:`). Rejected:
+the note says what a preempted hold does, and the vLLM evidence stays in
+`docs/language.md` and the CLI reference.
 
 **Once per session.** A multi-turn session is counted at its first such
 preemption and never again, so the count is a lower bound on the turns it

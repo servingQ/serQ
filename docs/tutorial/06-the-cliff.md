@@ -61,12 +61,12 @@ from 0.44 at 1.5 to 0.13 at 1.9, and to 0.03 at 2.0.
 
 No run here counts a session preempted in recompute (a request preempted
 again before its recompute passed the position of its previous
-preemption); under overload such a session still finishes, and its turn
-has a latency sample. A session that is rejected, or has not finished when
-the run ends, has none, so the means do not describe all offered traffic.
-Inspect these counters, `ended` against `arrivals`, and the run length,
-before using a mean for capacity planning, and repeat the experiment across
-seeds.
+preemption); under overload such a session may still finish, and its turn
+then has a latency sample. A turn that is rejected, or unanswered when the
+run ends, has none, so the means do not describe all offered traffic.
+Inspect these counters, the `response` count against `turns` on the run
+line, and the run length, before using a mean for capacity planning, and
+repeat the experiment across seeds.
 
 Measured 2026-10-15 on serQ afee627 with whole token counts (#661, #700), by
 the commands on this page (seeds 2 and 3:

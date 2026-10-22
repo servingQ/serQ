@@ -449,10 +449,11 @@ fn a_request_preempted_again_in_its_recompute_is_counted_and_finishes() {
 /// At step 18 A takes the free block for its token 33 and C, needing one
 /// for its own, preempts B, the last admitted, at 32. A ends at step 32; at
 /// step 33 B is admitted again with its first block cached and recomputes
-/// the other 17 tokens in two chunks (steps 33 and 34), passing 32. At step
-/// 50 C takes the free block for its token 65, and B, needing a fourth for
-/// its token 49, is the last admitted and is preempted at 48. C ends at
-/// step 64; B is admitted at step 65 and ends at step 79.
+/// the other 17 tokens in two chunks (steps 33 and 34), passing 32, while C
+/// takes the last free block for its token 49. At step 50 C's token 65
+/// needs a fifth block and none is free: B, the last admitted, is preempted
+/// at 48, and C takes one of its blocks. C ends at step 64; B is admitted
+/// at step 65 and ends at step 79.
 #[test]
 fn a_request_preempted_again_past_its_recompute_is_not_counted() {
     let r = vllm_three_requests("7");

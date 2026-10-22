@@ -66,9 +66,9 @@ output token after the first, `response` from sending to the answer
 (requests that can never fit), `preempt`, and `preempted in recompute`
 (sessions preempted again while recomputing what a preemption dropped:
 ordinary under overload, and also how a hold that can never fit shows).
-The means are over completed turns: a session that is rejected, or has
-not finished when the run ends, contributes none, so compare `ended` with
-`arrivals` as well.
+The means are over answered turns: a turn that is rejected, or unanswered
+when the run ends, has no sample; compare `turns` on the run line with the
+`response` count, and read `rej`.
 
 `--json` prints the same report as JSON, and `--dump DIR` writes one CSV per
 `observe` with columns `time,session,turn,value`, for a distribution, a
@@ -92,8 +92,9 @@ done
 
 Compare both TTFT and preemptions across seeds. Near saturation, different
 seeds can produce different congestion histories; a confidence interval
-within one run does not describe that spread. Check rejections and `ended`
-as well before interpreting a lower latency as an improvement.
+within one run does not describe that spread. Check rejections, and the
+`response` count against `turns`, before interpreting a lower latency as an
+improvement.
 
 ### Compare two designs
 

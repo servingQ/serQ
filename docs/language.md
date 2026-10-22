@@ -1611,10 +1611,13 @@ session is counted once in the run, at the first pool where it happens. A
 preempted request keeps its tokens and recomputes their KV
 (`scheduler.py:1561`), and a re-admitted request is the last of `running`,
 the next victim (`scheduler.py:1296`, `scheduler.py:799`): under overload a
-preemption during that recompute is ordinary, and the session goes on to
-finish. A
-hold that can never fit is counted the same way, and its session never
-ends; the count does not tell the two apart.
+preemption during that recompute is ordinary, and the session may still
+finish. A hold that can never fit is counted the same way, and its session
+never ends; the count does not tell the two apart. On a pool that no
+`growing` run or `load` advances, a hold's position there is the cached
+prefix it consumed at admission: a session preempted there again is
+counted, though it had nothing there to recompute, unless its re-admission
+consumed a longer prefix.
 `growing_at_end` counts the holds still waiting to grow when the run ends
 (`grow:` in the text report): under `preempt none`, or with nothing the
 pool's `preempt` may take, a growth waits for room another holder frees.
