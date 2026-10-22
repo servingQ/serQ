@@ -133,6 +133,8 @@ import papers.KongPoisson
 -- (Serq/Recurrence.lean, examples/papers/{Dai,Bari}{Sim,Recurrent}.lean)
 #print axioms SerqLang.Foster.hit_le_of_reach
 #print axioms SerqLang.Foster.positiveRecurrent_of_hit
+#print axioms SerqLang.Exec.shareOf_fillIter_split
+#print axioms SerqLang.Slot.slot_jobs
 #print axioms SerqLang.Papers.DaiSim.simulation
 #print axioms SerqLang.Papers.DaiRecurrent.hit_nil_le
 #print axioms SerqLang.Papers.DaiRecurrent.irreducible

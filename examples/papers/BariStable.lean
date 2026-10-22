@@ -115,10 +115,12 @@ def ε {N : ℕ} (A : Arrivals N) : ℝ := 128 - A.load
 
 /-! ### RAD's batch -/
 
-/-- A running batch is full, or every resident decodes in it. -/
+/-- A running batch is full, or every resident decodes in it; and it is the
+greedy fill of the residents RAD serves. -/
 def Busy (_ : ℕ → ℕ × ℕ) (_ : Ghost) (m : Machine) : Prop :=
   m.last.stats.tokens = tokSum m.iter ∧
-    (tokSum m.iter = 128 ∨ ((∀ j ∈ m.jobs, j.mode = .decode) ∧ tokSum m.iter = m.jobs.length))
+    (tokSum m.iter = 128 ∨ ((∀ j ∈ m.jobs, j.mode = .decode) ∧ tokSum m.iter = m.jobs.length)) ∧
+    m.iter = fillIter D (m.jobs.filter (serves D m)) M.B
 
 /-- The invariant of a slot's end. -/
 abbrev SB := Slot.SB M Busy
@@ -233,7 +235,7 @@ theorem wantOf_le (j : Job) : wantOf D j ≤ j.left := by
 /-- **An iteration starts** on an idle, settled engine. -/
 theorem ci_start : Starts M Busy := by
   intro L g m hI hr hie
-  show SB L g (startIteration D m) ∧ (startIteration D m).sess.size = m.sess.size
+  show SB L g (startIteration D m) ∧ (startIteration D m).jobs = m.jobs ∧ (startIteration D m).sess = m.sess
   have hq : engineQueuesEmpty D m := fun p hp => by simp [pdef, D, Claims.BariRad.deployment] at hp
   have hg : ∀ j ∈ m.jobs, j.growing = none := fun j hj => (hI.jobs j hj).2.2.1
   have ha := assign_eq_fillIter_only D m hq hg m.preempts (m.jobs.length + 100000) 0 128 [] (by omega)
@@ -255,7 +257,8 @@ theorem ci_start : Starts M Busy := by
         iterOwn := fun e he => by simp at he
         share := fun i hi => by simp [shareOf]
         shareP := fun i hi _ => by simp [shareOf]
-        tok := by simp [tokSum] }, hr, fun _ => hjs, fun h => by simp at h⟩, by first | rfl | trivial⟩
+        tok := by simp [tokSum] }, hr, fun _ => hjs, fun h => by simp at h⟩,
+      by first | rfl | trivial, by first | rfl | trivial⟩
   · have hne0 : m.jobs.isEmpty = false := by simpa using hjs
     simp only [hne0, Bool.not_false, ↓reduceIte]
     rw [hb, ha]
@@ -321,7 +324,8 @@ theorem ci_start : Starts M Busy := by
           rw [he1]; exact (hI.jobs j hj).1
         share := hsh
         shareP := hshP
-        tok := htok }, hr, fun h => by simp at h, fun _ => ⟨rfl, hfull⟩⟩, by first | rfl | trivial⟩
+        tok := htok }, hr, fun h => by simp at h, fun _ => ⟨rfl, hfull, rfl⟩⟩,
+      by first | rfl | trivial, by first | rfl | trivial⟩
 
 /-! ### A slot -/
 
@@ -380,7 +384,7 @@ theorem backlog_lt_of_F (x : State) (hx : F x) : backlog x.1 < 128 * 512 := by
       rcases hx with hx | hx
       · rw [hie] at hx; simp at hx
       · exact hx
-    obtain ⟨hb1, hb2⟩ := hB.busy hbusy
+    obtain ⟨hb1, hb2, -⟩ := hB.busy hbusy
     rw [hb1] at htok
     rcases hb2 with h | ⟨hdec, hlen⟩
     · omega

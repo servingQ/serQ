@@ -16,6 +16,8 @@ greedy fill, or RAD's tiles). This module is what they share on the chain of
   (`Starts`).
 * `slot_sb`: a slot keeps `SB`, and its arrivals add their tokens to the
   work left (`WnC`) while a running iteration's tokens leave it.
+* `slot_jobs`: the job list after a slot, for a chain on job lists
+  (`DaiSim`, `BariSim`): each paper only reads its batch on its chain.
 -/
 import Serq.Chain
 import Serq.Steps
@@ -144,10 +146,12 @@ structure SB (Busy : (ℕ → ℕ × ℕ) → Ghost → Machine → Prop) (L : �
   busy : m.iterEnd.isSome = true → Busy L g m
 
 /-- What the engine's batch is: an iteration started on a settled, idle
-engine is a slot's end. Each paper proves it of its own engine. -/
+engine is a slot's end, and starting it leaves the jobs and the sessions as
+they are. Each paper proves it of its own engine. -/
 def Starts (Busy : (ℕ → ℕ × ℕ) → Ghost → Machine → Prop) : Prop :=
   ∀ {L : ℕ → ℕ × ℕ} {g : Ghost} {m : Machine}, CI M L g m → m.ready = [] → m.iterEnd = none →
-    SB M Busy L g (startIteration M.D m) ∧ (startIteration M.D m).sess.size = m.sess.size
+    SB M Busy L g (startIteration M.D m) ∧ (startIteration M.D m).jobs = m.jobs ∧
+      (startIteration M.D m).sess = m.sess
 
 variable {M}
 
@@ -884,9 +888,9 @@ theorem ci_after_idle (hS : Starts M Busy) {L : ℕ → ℕ × ℕ} {g : Ghost} 
     simp [pendingBy, nextEvent, hie', h1.delays]
   have hA : afterEvent M.D m = startIteration M.D (settle M.D m) := by
     unfold afterEvent; simp [hie', hpend]
-  obtain ⟨s1, s2⟩ := hS h1 h2 hie'
+  obtain ⟨s1, -, s3⟩ := hS h1 h2 hie'
   rw [hA]
-  exact ⟨g', s1, s2.trans h4, h5⟩
+  exact ⟨g', s1, (congrArg Array.size s3).trans h4, h5⟩
 
 theorem after_busy (D : Deployment) (m : Machine) {a q : ℕ} (h : (settle D m).iterEnd = some (a, q)) :
     afterEvent D m = settle D m := by
@@ -1050,6 +1054,11 @@ theorem A0_setS {m : Machine} (hA : A0 m) {i : ℕ} (s : Sess) (hs : s.admSeq = 
   split_ifs
   · exact hs
   · exact hA j
+
+/-- `A0` reads only the sessions. -/
+theorem A0_of_sess {m m' : Machine} (h : m'.sess = m.sess) (hA : A0 m) : A0 m' := fun j => by
+  have : getS m' j = getS m j := by unfold getS; rw [h]
+  rw [this]; exact hA j
 
 theorem span_all {α : Type} (p : α → Bool) : ∀ l : List α, (∀ x ∈ l, p x = true) → l.span p = (l, [])
   | [], _ => rfl
@@ -1272,16 +1281,18 @@ theorem range_map {α β : Type} (d : α) (f : ℕ → β) (g : α → β) :
       rw [show n + (t + 1) = n + 1 + t by ring] at this
       simpa using this]
 
+/-- The jobs after an iteration with batch `it`: each loses its share. -/
+def after (it : List (ℕ × ℕ)) (js : List Job) : List Job :=
+  js.map fun j => { j with left := j.left - shareOf it j.owner }
+
 /-- An iteration ends: each job loses its share; the finished ones leave the
 list and become ready, in the list's order. -/
 theorem handle_facts {m : Machine} {a qa : ℕ} (hie : m.iterEnd = some (a, qa))
     (hn : (m.jobs.map (·.owner)).Nodup) (hA : A0 m) (hb : ∀ j ∈ m.jobs, j.owner < m.sess.size) :
-    (handle m a qa).jobs =
-        (m.jobs.map fun j => { j with left := j.left - shareOf m.iter j.owner }).filter (·.left ≠ 0) ∧
-      (handle m a qa).ready = m.ready ++
-        ((m.jobs.map fun j => { j with left := j.left - shareOf m.iter j.owner }).filter (·.left = 0)).map
-          (·.owner) ∧
+    (handle m a qa).jobs = (after m.iter m.jobs).filter (·.left ≠ 0) ∧
+      (handle m a qa).ready = m.ready ++ ((after m.iter m.jobs).filter (·.left = 0)).map (·.owner) ∧
       A0 (handle m a qa) := by
+  unfold after
   set jobs' := m.jobs.map fun j => { j with left := j.left - shareOf m.iter j.owner } with hjobs'
   set done := (jobs'.filter (·.left = 0)).map (·.owner) with hdone
   set M1 : Machine := { m with now := a, iterEnd := none, jobs := jobs'.filter (·.left ≠ 0), iter := [] }
@@ -1304,6 +1315,135 @@ theorem handle_facts {m : Machine} {a qa : ℕ} (hie : m.iterEnd = some (a, qa))
   split_ifs
   · exact hA j
   · exact hA j
+
+/-- **A slot, on the job list.** The arrivals' prefills join behind the jobs;
+on a busy engine every job then loses its share of the running batch, and a
+finished prefill comes back as the decode of its output, behind the
+arrivals, while a finished decode leaves. On an idle engine there is no job,
+and the list is the arrivals' prefills. The old requests keep their lengths,
+and the new ones have their attributes'. -/
+theorem slot_jobs (hS : Starts M Busy) {L : ℕ → ℕ × ℕ} {g : Ghost} {m : Machine} (hB : SB M Busy L g m)
+    (hA : A0 m) (as : List (ℕ → ℕ)) (hf : ∀ a ∈ as, M.Fits (M.len a)) :
+    ∃ L' g', SB M Busy L' g' (slotL M.D (Q1 M) as m) ∧ A0 (slotL M.D (Q1 M) as m) ∧
+      (∀ i < m.sess.size, L' i = L i) ∧
+      (∀ t < as.length, L' (m.sess.size + t) = M.len (as.getD t fun _ => 0)) ∧
+      (slotL M.D (Q1 M) as m).jobs =
+        (after m.iter m.jobs).filter (·.left ≠ 0) ++
+          (List.range' m.sess.size as.length).map (fun i => (⟨i, .prefill, (L' i).1, none⟩ : Job)) ++
+          ((after m.iter m.jobs).filter fun j => j.left = 0 ∧ j.mode = .prefill).map
+            fun j => (⟨j.owner, .decode, (L' j.owner).2, none⟩ : Job) := by
+  obtain ⟨L1, g1, h1, -, -, h4, -⟩ := ci_injects as hB.toCI hf
+  set m1 := injL M as m with hm1
+  change CI M L1 g1 m1 at h1
+  change Keeps m1 m at h4
+  obtain ⟨i1, i2, i3, i4, i5, i6⟩ := injects_facts as m hA
+  rw [← hm1] at i1 i2 i3 i4 i5 i6
+  have hr1 : m1.ready = List.range' m.sess.size as.length := by rw [i2, hB.rdy, List.nil_append]
+  -- the lengths: the old requests keep theirs, the new ones have their attributes'
+  have hLo : ∀ i < m.sess.size, L1 i = L i := fun i hi => by
+    have e1 := (hB.sess i hi).2.2.1
+    have e2 := (h1.sess i (by rw [i3]; omega)).2.2.1
+    rw [i5 i hi] at e2
+    exact e2.symm.trans e1
+  have hLn : ∀ t < as.length, L1 (m.sess.size + t) = M.len (as.getD t fun _ => 0) := fun t ht => by
+    have e2 := (h1.sess (m.sess.size + t) (by rw [i3]; omega)).2.2.1
+    rw [i6 t ht] at e2
+    exact e2.symm
+  set newP := (List.range' m.sess.size as.length).map fun i => (⟨i, .prefill, (L1 i).1, none⟩ : Job)
+    with hnewP
+  have hnew : m1.ready.flatMap (contrib L1 g1) = newP := by
+    rw [hr1]
+    apply flatMap_single
+    intro j hj
+    rw [List.mem_range'_1] at hj
+    obtain ⟨t, rfl⟩ : ∃ t, j = m.sess.size + t := ⟨j - m.sess.size, by omega⟩
+    have hc := cat_r1 h1 (j := m.sess.size + t) (by rw [i3]; omega) (by rw [i6 t (by omega)]; try rfl)
+      (by rw [i6 t (by omega)])
+    simp [contrib, hc]
+  obtain ⟨g2, c1, c2, c3, -, -⟩ := settle_ci h1
+  obtain ⟨sj, sA⟩ := settle_jobs h1 i4
+  set m2 := settle M.D m1 with hm2
+  have hm2j : m2.jobs = m.jobs ++ newP := by rw [sj, i1, hnew]
+  have hsl : slotL M.D (Q1 M) as m =
+      if m.iterEnd.isSome then step M.D (afterEvent M.D m1) else afterEvent M.D m1 := rfl
+  rcases hie : m.iterEnd with _ | ⟨a, qa⟩
+  · -- an idle engine starts on the new prefills
+    have hjobs0 := hB.idle hie
+    have hie2 : m2.iterEnd = none := c3.iterEnd.trans (h4.iterEnd.trans hie)
+    have hpend : pendingBy m2 m2.now = false := by simp [pendingBy, nextEvent, hie2, c1.delays]
+    have hA' : afterEvent M.D m1 = startIteration M.D m2 := by unfold afterEvent; simp [← hm2, hie2, hpend]
+    obtain ⟨s1, s2, s3⟩ := hS c1 c2 hie2
+    have hS' : slotL M.D (Q1 M) as m = startIteration M.D m2 := by
+      rw [hsl, hie]; simp only [Option.isSome_none, Bool.false_eq_true, ↓reduceIte]; exact hA'
+    rw [hS']
+    refine ⟨L1, g2, s1, A0_of_sess s3 sA, hLo, hLn, ?_⟩
+    rw [s2, hm2j, hjobs0]
+    simp [after, hnewP]
+  · -- a busy engine: the arrivals join, then the batch ends and the next starts
+    have hie2 : m2.iterEnd = some (a, qa) := c3.iterEnd.trans (h4.iterEnd.trans hie)
+    have hiter2 : m2.iter = m.iter := c3.iter.trans h4.iter
+    have hA2 : afterEvent M.D m1 = m2 := after_busy M.D m1 hie2
+    have hstep : step M.D m2 = afterEvent M.D (handle m2 a qa) := by
+      unfold step
+      rw [show nextEvent m2 = some (a, qa) by simp [nextEvent, hie2, c1.delays]]
+    obtain ⟨e1, e2, -, e4, -⟩ := ci_end c1 c2 hie2
+    obtain ⟨hj, hrd, hAH⟩ := handle_facts hie2 c1.jobsNodup sA (fun j hj => (c1.jobs j hj).1)
+    unfold after at hj hrd
+    set H := handle m2 a qa with hH
+    obtain ⟨g4, d1, d2, d3, -, -⟩ := settle_ci e1
+    obtain ⟨sj2, sA2⟩ := settle_jobs e1 hAH
+    set m3 := settle M.D H with hm3
+    have hie3 : m3.iterEnd = none := d3.iterEnd.trans e4
+    have hpend3 : pendingBy m3 m3.now = false := by simp [pendingBy, nextEvent, hie3, d1.delays]
+    have hA3 : afterEvent M.D H = startIteration M.D m3 := by unfold afterEvent; simp [← hm3, hie3, hpend3]
+    obtain ⟨s1, s2, s3⟩ := hS d1 d2 hie3
+    have hS' : slotL M.D (Q1 M) as m = startIteration M.D m3 := by
+      rw [hsl, hie]; simp only [Option.isSome_some, ↓reduceIte]; rw [hA2, hstep, hA3]
+    rw [hS']
+    refine ⟨L1, g4, s1, A0_of_sess s3 sA2, hLo, hLn, ?_⟩
+    -- the job list: the running batch holds no new request
+    set it := m2.iter with hit2
+    set sub : Job → Job := fun j => { j with left := j.left - shareOf it j.owner } with hsub
+    have hsubP : newP.map sub = newP := by
+      rw [List.map_congr_left (g := id), List.map_id]
+      intro x hx
+      obtain ⟨j, hj, rfl⟩ := List.mem_map.mp hx
+      rw [List.mem_range'_1] at hj
+      have : shareOf it j = 0 := Exec.shareOf_eq_zero fun e he => by
+        have := hB.iterOwn e (by rw [← hiter2]; exact he); omega
+      simp [hsub, this]
+    have hP0 : ∀ x ∈ newP, x.left ≠ 0 := fun x hx => by
+      obtain ⟨j, hj, rfl⟩ := List.mem_map.mp hx
+      rw [List.mem_range'_1] at hj
+      have := (M.fits _ (h1.sess j (by rw [i3]; omega)).2.2.2).1
+      simp; omega
+    have hHj : H.jobs = (m.jobs.map sub).filter (·.left ≠ 0) ++ newP := by
+      rw [hj, hm2j, List.map_append, hsubP, List.filter_append,
+        (List.filter_eq_self (l := newP)).mpr fun x hx => by simpa using hP0 x hx]
+    -- a finished prefill comes back as its decode
+    have hdone : (H.ready).flatMap (contrib L1 (g2.tick m2.iter)) =
+        (((m.jobs.map sub).filter (·.left = 0)).filter (·.mode = .prefill)).map
+          fun x => (⟨x.owner, .decode, (L1 x.owner).2, none⟩ : Job) := by
+      rw [hrd, c2, List.nil_append, hm2j, List.map_append, hsubP, List.filter_append,
+        (List.filter_eq_nil_iff (l := newP)).mpr fun x hx => by simpa using hP0 x hx, List.append_nil,
+        List.flatMap_map]
+      apply flatMap_ite
+      intro x hx
+      obtain ⟨hx1, hx0⟩ := List.mem_filter.mp hx
+      obtain ⟨x0, hx0m, rfl⟩ := List.mem_map.mp hx1
+      have hx0m2 : x0 ∈ m2.jobs := by rw [hm2j]; exact List.mem_append_left _ hx0m
+      obtain ⟨-, hcat, -, hl⟩ := c1.jobs x0 hx0m2
+      simp only [hsub, decide_eq_true_eq] at hx0
+      have hle : g2.left x0.owner ≤ shareOf it x0.owner := by rw [← hl]; omega
+      rcases hcat with ⟨hc, hm⟩ | ⟨hc, hm⟩
+      · simp [hsub, contrib, Ghost.tick, hc, hm, isJob, hle, ← hit2]
+      · simp [hsub, contrib, Ghost.tick, hc, hm, isJob, hle, ← hit2]
+    have hafter : after m.iter m.jobs = m.jobs.map sub := by
+      unfold after; rw [hsub, hiter2]
+    rw [s2, sj2, hHj, hdone, hafter, List.filter_filter, List.append_assoc, List.append_assoc]
+    refine congrArg (_ ++ ·) (congrArg (newP ++ ·) ?_)
+    refine congrArg (List.map _) (List.filter_congr fun x _ => ?_)
+    simp [Bool.and_comm]
 
 end Slot
 end SerqLang

@@ -114,7 +114,8 @@ def wantG (g : Ghost) (i : ℕ) : ℕ :=
 
 /-- A running iteration is the greedy fill of the residents. -/
 abbrev Busy (_ : ℕ → ℕ × ℕ) (g : Ghost) (m : Machine) : Prop :=
-  m.last.stats.tokens = tokSum m.iter ∧ tokSum m.iter = min 128 (∑ i ∈ Finset.range m.sess.size, wantG g i)
+  m.last.stats.tokens = tokSum m.iter ∧ tokSum m.iter = min 128 (∑ i ∈ Finset.range m.sess.size, wantG g i) ∧
+    m.iter = fillIter D m.jobs M.B
 
 /-- The invariant of a slot's end. -/
 abbrev SB := Slot.SB M Busy
@@ -142,7 +143,7 @@ theorem ci_demand {L : ℕ → ℕ × ℕ} {g : Ghost} {m : Machine} (hI : CI M 
 the residents, or nothing if there is none. -/
 theorem ci_start : Starts M Busy := by
   intro L g m hI hr _
-  show SB L g (startIteration D m) ∧ (startIteration D m).sess.size = m.sess.size
+  show SB L g (startIteration D m) ∧ (startIteration D m).jobs = m.jobs ∧ (startIteration D m).sess = m.sess
   have hq : engineQueuesEmpty D m := fun p hp => by simp [pdef, Claims.DaiSarathi.deployment] at hp
   have hg : ∀ j ∈ m.jobs, j.growing = none := fun j hj => (hI.jobs j hj).2.2.1
   have ha := assign_eq_fillIter D rfl m hq hg m.preempts (m.jobs.length + 100000) 0 128 [] (by omega)
@@ -163,7 +164,8 @@ theorem ci_start : Starts M Busy := by
         iterOwn := fun e he => by simp at he
         share := fun i hi => by simp [shareOf]
         shareP := fun i hi _ => by simp [shareOf]
-        tok := by simp [tokSum] }, hr, fun _ => hjs, fun h => by simp at h⟩, by first | rfl | trivial⟩
+        tok := by simp [tokSum] }, hr, fun _ => hjs, fun h => by simp at h⟩,
+      by first | rfl | trivial, by first | rfl | trivial⟩
   · obtain ⟨j0, js, hjs'⟩ := List.exists_cons_of_ne_nil hjs
     have hne0 : m.jobs.isEmpty = false := by simpa using hjs
     simp only [hne0, Bool.not_false, ↓reduceIte]
@@ -215,7 +217,8 @@ theorem ci_start : Starts M Busy := by
           rw [he1]; exact (hI.jobs j hj).1
         share := hsh
         shareP := fun _ _ _ => one_dvd _
-        tok := by rw [hk]; exact min_le_left _ _ }, hr, fun h => by simp at h, fun _ => ⟨rfl, hk⟩⟩, by first | rfl | trivial⟩
+        tok := by rw [hk]; exact min_le_left _ _ }, hr, fun h => by simp at h, fun _ => ⟨rfl, hk, rfl⟩⟩,
+      by first | rfl | trivial, by first | rfl | trivial⟩
 
 /-! ### A slot -/
 
@@ -293,7 +296,7 @@ theorem backlog_lt_of_sb {L : ℕ → ℕ × ℕ} {g : Ghost} {m : Machine} (hB 
       rcases hx with hx | hx
       · rw [hie] at hx; simp at hx
       · exact hx
-    obtain ⟨hb1, hb2⟩ := hB.busy hbusy
+    obtain ⟨hb1, hb2, -⟩ := hB.busy hbusy
     obtain ⟨hW1, hW2⟩ := ci_wn_le hB.toCI hB.rdy
     have hS : ∑ i ∈ Finset.range m.sess.size, wantG g i < 128 := by
       rw [hb1] at htok; rw [hb2] at htok; omega
