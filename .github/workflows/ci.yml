@@ -49,6 +49,11 @@ jobs:
           python -m pip install --quiet dist/pyserq-*.whl
       - name: pyserq gives what the CLI gives
         run: python pyserq/tests/test_pyserq.py
+      # the wheel is this tree's, so the pages' scripts run against the code they document
+      - name: the docs' pyserq scripts run
+        run: |
+          python scripts/test_check_docs_examples.py
+          python scripts/check_docs_examples.py --python
 
   lean:
     name: Lean model (lean/) and differential testing against the interpreter
