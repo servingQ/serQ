@@ -4,8 +4,17 @@ and print, per request, the step of its first token and of its finish, and
 the number of preemptions: the oracle for `tests/vllm_oracle.rs`.
 
 Usage: vllm_oracle.py SCENARIO.json [TARGET.json]  (see the Rust test for
-the format). Runs inside the testbed venv (`~/vllm-rbln-dynkv/.venv`), whose
-rbln platform plugin forces a 512-token block size.
+the format; `chunk` is `long_prefill_token_threshold`, `adaptive` is
+`long_prefill_token_threshold_adaptive`).
+
+vLLM need not be installed: the scheduler is imported from the source in
+this checkout's `ref/vllm`, which must be the full tree
+(`scripts/fetch_vllm_ref.sh`, not `--sparse`). The Python environment needs
+torch (the CPU build is enough) and `ref/vllm/requirements/common.txt`. Run
+it as `VLLM_TARGET_DEVICE=cpu VLLM_PLUGINS= python tools/vllm_oracle.py …`:
+`VLLM_TARGET_DEVICE=cpu` where there is no GPU (vLLM cannot infer a device
+otherwise), and `VLLM_PLUGINS=` to disable an installed platform plugin
+(rbln's forces a 512-token block size).
 
 TARGET.json is what `serq target` printed for the scenario's program. Its
 configuration must be the scenario's, and when it names the programmable
@@ -18,7 +27,7 @@ import sys
 
 os.environ.setdefault("VLLM_ALLOW_LONG_MAX_MODEL_LEN", "1")
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "ref", "vllm"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "ref", "vllm"))
 
 from tests.v1.core.utils import create_requests, create_scheduler  # noqa: E402
 from vllm.v1.outputs import ModelRunnerOutput  # noqa: E402
@@ -33,6 +42,7 @@ def run(sc, target=None):
         num_blocks=sc["num_blocks"],
         enable_prefix_caching=sc.get("prefix_caching", False),
         long_prefill_token_threshold=sc.get("chunk", 0),
+        long_prefill_token_threshold_adaptive=sc.get("adaptive", False),
         max_model_len=sc.get("max_model_len", 8192),
     )
     if target is not None:
@@ -44,10 +54,13 @@ def run(sc, target=None):
             "num_gpu_blocks": sc["num_blocks"],
             "long_prefill_token_threshold": sc.get("chunk", 0),
             "enable_prefix_caching": sc.get("prefix_caching", False),
+            "long_prefill_token_threshold_adaptive": sc.get("adaptive", False),
         }
+        # `serq target` writes the adaptive flag only when it is set
+        have = {"long_prefill_token_threshold_adaptive": False, **c}
         for k, v in want.items():
-            if c[k] != v:
-                sys.exit(f"target {k} = {c[k]}, the scenario's is {v}")
+            if have[k] != v:
+                sys.exit(f"target {k} = {have[k]}, the scenario's is {v}")
         if c.get("scheduler_cls") == "serq_vllm.SerqScheduler":
             from serq_vllm import SerqScheduler
 
@@ -113,6 +126,7 @@ def run(sc, target=None):
             "budget": s.max_num_scheduled_tokens,
             "max_seqs": s.max_num_running_reqs,
             "chunk": s.scheduler_config.long_prefill_token_threshold,
+            "adaptive": s.scheduler_config.long_prefill_token_threshold_adaptive,
             "block_size": s.block_size,
             "num_blocks": s.kv_cache_config.num_blocks,
         },

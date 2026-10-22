@@ -1747,7 +1747,7 @@ file `examples/pairs.json` gives it, from `examples/workloads/`
 | `multi-turn/vllm_lmcache.sq` | `vllm.sq` with an LMCache server as its L2 (`queue lmc : l2`, the engine's `connector lmc { … }`) | the source (the LMCache connector at vLLM v0.31.0, the scheduler at 0c87a197); `tests/connector.rs`; no scheduler oracle |
 | `multi-turn/vllm_system_prompt.sq` | `vllm.sq` serving the sessions of `M` products, each with its own system prompt, shared across sessions (its admission's `prefix (product: floor(S, bs), serial: inf)`) | the source (vLLM at 0c87a197); `tests/shared_prefix.rs`; no scheduler oracle |
 | `oracle/vllm_shared_prompt.sq` | `vllm_replay.sq` with a system prompt every session shares (its admission's `prefix (system: floor(S, bs), serial: inf)`), on the scenario `tools/oracle/shared_trace` | the upstream oracle, `tests/vllm_cache.rs`; no Lean theorem |
-| `oracle/vllm_request.sq` | one vLLM v1 request on the step clock, compiled per scenario to `tools/oracle/{alone,chunked,hol,longchunk,mixed,preempt,seqcap}.ir.json` | the upstream oracle ([vLLM correspondence](#7-vllm-v1-as-a-serq-program)), `tests/vllm_oracle.rs`, the Lean theorems generated from the same IR |
+| `oracle/vllm_request.sq` | one vLLM v1 request on the step clock, compiled per scenario to `tools/oracle/{adaptive,alone,chunked,hol,longchunk,mixed,preempt,seqcap}.ir.json` | the upstream oracle ([vLLM correspondence](#7-vllm-v1-as-a-serq-program)), `tests/vllm_oracle.rs`, the Lean theorems generated from the same IR |
 | `replay/vllm_replay.sq` | vLLM v1 on the A100 testbed replaying the short-context trace ([A100 testbed](#8-vllm-on-the-a100-testbed)) | the prefix-cache oracle `tools/oracle/cache_trace` (`tests/vllm_cache.rs`, theorem `vllm_cache_trace`) |
 | `pd-disaggregation/llmd_nixl_pull.sq` | llm-d's prefill/decode disaggregation with the NIXL connector, two prefill and two decode instances ([use case](use-cases/pd.md)) | the source (llm-d at 8a2f37d, the router at 13eebdb, vLLM at 0c87a197), `tests/pd_semantics.rs`; no scheduler oracle |
 | `pd-disaggregation/vllm_nixl_push.sq` | vLLM's push proxy in front of one prefill and one decode instance with the NIXL connector's push mode, on the A6000 testbed, replaying the short-context trace ([the push mode](https://github.com/servingQ/serQ/blob/main/docs/design/push-mode.md)) | the source (vLLM at 0c87a197), `tests/fork_join.rs`; no scheduler oracle |
@@ -1795,9 +1795,12 @@ position ([Semantics](#3-semantics)).
 The adaptive long-prefill threshold is off by default; it is expressible as
 `n > 1 ? max(threshold, floor(budget / n)) : inf`, with `n` =
 `running.count + waiting.count` and `budget` the engine's `tokens cap`
-(`scheduler.py:609-622`, [Engine](api/engine.md)), but no program here
-writes it. `serq target` exports that cap as `long_prefill_token_threshold:
-threshold` with `long_prefill_token_threshold_adaptive: true`
+(`scheduler.py:609-622`, [Engine](api/engine.md)).
+`examples/oracle/vllm_request.sq` writes it when its `adaptive` argument is
+1, and the oracle scenario `adaptive` checks it against vLLM's scheduler
+(`tests/vllm_oracle.rs`, theorem `vllm_adaptive`). `serq target` exports
+that cap as `long_prefill_token_threshold: threshold` with
+`long_prefill_token_threshold_adaptive: true`
 (`config/scheduler.py:87-91`), and refuses a cap that computes another
 share.
 
@@ -1845,11 +1848,13 @@ checks the whole sequence before it allocates the first chunk
    `scripts/check_oracle_gpu.py`), the serQ program (`tests/vllm_oracle.rs`)
    and the Lean executable semantics (`Serq/Oracle.lean`, one theorem per
    scenario, `decide +kernel`) give the same first-token and last-token
-   step for every request, and the same number of preemptions (7 scenarios:
+   step for every request, and the same number of preemptions (8 scenarios:
    self-preemption, chunked prefill sharing the budget, the request cap,
    head-of-line blocking, the chunk cap, six mixed requests with staggered
-   arrivals on 39 blocks, and the chunk cap lifted for a request alone; the
-   A100 engine ran the first six). None of them uses the prefix cache.
+   arrivals on 39 blocks, the chunk cap lifted for a request alone, and the
+   chunk cap floored at a fair share of the budget
+   (`long_prefill_token_threshold_adaptive`); the A100 engine ran the first
+   six). None of them uses the prefix cache.
 2. *The prefix cache* (`tools/oracle/cache_trace.*`): three sessions of the
    short-context trace with prefix hits, replayed by the real scheduler and
    KV-cache manager (`tools/vllm_replay_oracle.py`), by

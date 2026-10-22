@@ -8,13 +8,13 @@ and `tools/vllm_replay_oracle.py`, upstream `ref/vllm` at 0c87a197).
 Do not edit. The programs, the deployments and the workloads below are
 translations of that IR, the same IR the serQ tests run.
 
-Six scenarios run one request program, `vllmRequest` (serQ
+The request scenarios run one request program, `vllmRequest` (serQ
 `examples/oracle/vllm_request.sq`): wait until the arrival, hold a slot and the
 KV blocks of the chunk the engine's budget leaves (admission needs room for
 the whole prompt), prefill growing the hold, decode growing it. The
 theorems say that the executable semantics gives, for every request, the
 step of its first token and of its last token, and the number of
-preemptions, that the real scheduler gives. The seventh, `vllmTurn` (serQ
+preemptions, that the real scheduler gives. The last, `vllmTurn` (serQ
 `examples/replay/vllm_replay.sq` on a unit step clock, the trace inlined as the
 sessions' turns), is a multi-turn replay with a prefix cache: hits, a
 partial hit and misses caused by eviction; its theorem gives, for every
@@ -67,6 +67,13 @@ def outcome (D : Deployment) (horizon : ℕ) (w : Workload) :
     List (ℕ × ℕ) × List (ℕ × ℕ) × ℕ :=
   let m := Exec.runW D horizon w vllmRequest
   (observed m 0, observed m 1, m.preempts)
+
+/-- serQ `tools/oracle/adaptive.ir.json`: 2 requests, 1000 blocks of 16, budget 4096, 16 slots, chunk 1000, adaptive; the deployment and the workload are the IR's. -/
+theorem vllm_adaptive :
+    outcome ⟨[⟨16, 1, true, none⟩, ⟨15984, 16, false, none⟩], 4096, 0, some 1, fun _ => 1, none, some fun c => if ((c.residents + (c.queued 0)) > 1) then (max 1000 (4096 / (c.residents + (c.queued 0)))) else 0⟩ 8
+      ⟨[[(9, 3000), (10, 2), (11, 0)], [(9, 3000), (10, 2), (11, 0)]], [], none, 0, some 8, none⟩ =
+    ([(0, 2), (1, 2)], [(0, 3), (1, 3)], 0) := by
+  decide +kernel
 
 /-- serQ `tools/oracle/alone.ir.json`: 4 requests, 10 blocks of 16, budget 32, 8 slots, chunk 24; the deployment and the workload are the IR's. -/
 theorem vllm_alone :

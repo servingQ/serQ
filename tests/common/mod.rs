@@ -74,6 +74,46 @@ pub fn horizon(horizon: f64) -> serq::Overrides {
     }
 }
 
+/// The engine of a vLLM oracle scenario (`tools/oracle/*.json`) as the
+/// arguments of `examples/oracle/vllm_request.sq`: one mapping, which
+/// `tests/vllm_oracle.rs` and `tests/vllm_target_oracle.rs` both read.
+pub fn oracle_engine(sc: &serde_json::Value) -> serq::Overrides {
+    let num = |k: &str| sc.get(k).and_then(serde_json::Value::as_f64).unwrap_or(0.0);
+    let mut ov = horizon(100000.0);
+    for (k, v) in [
+        ("bs", num("block_size")),
+        ("B", num("budget")),
+        ("blocks", num("num_blocks") - 1.0), // the null block
+        ("max_seqs", num("max_seqs")),
+    ] {
+        ov.set_num(k, v).unwrap();
+    }
+    // vLLM's 0 is no cap, which the program's default `inf` already is
+    if num("chunk") > 0.0 {
+        ov.set_num("chunk", num("chunk")).unwrap();
+    }
+    // long_prefill_token_threshold_adaptive (config/scheduler.py:87-91)
+    if sc.get("adaptive").and_then(serde_json::Value::as_bool) == Some(true) {
+        ov.set_num("adaptive", 1.0).unwrap();
+    }
+    ov
+}
+
+/// The vLLM oracle scenarios in `dir`, sorted: each `<name>.json` with the
+/// oracle's answer beside it, `<name>.out.json`.
+pub fn oracle_scenarios(dir: &std::path::Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .unwrap()
+        .filter_map(|e| {
+            let f = e.unwrap().file_name().into_string().unwrap();
+            f.strip_suffix(".out.json").map(str::to_string)
+        })
+        .filter(|n| dir.join(format!("{n}.json")).exists())
+        .collect();
+    names.sort();
+    names
+}
+
 /// What a pair's messages name its files: a deployment error begins
 /// `deployment.sq: L:C:`, a workload error `workload.sq: L:C:`.
 pub const NAMES: (&str, &str) = ("deployment.sq", "workload.sq");

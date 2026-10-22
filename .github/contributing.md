@@ -39,16 +39,19 @@ computes something else.
 ## Add an oracle scenario
 
 1. Write `tools/oracle/<name>.json`: the engine (`budget`, `max_seqs`,
-   `block_size`, `num_blocks`, optionally `chunk`) and the `requests`
-   (`prompt`, `out`, optionally `arrive`).
-2. Run `VLLM_PLUGINS= python tools/vllm_oracle.py tools/oracle/<name>.json`
-   and save its output as `tools/oracle/<name>.out.json`. This is the answer
-   the theorem will state. The script drives the real scheduler: it needs a
-   Python environment with vLLM installed and a full vLLM checkout at the
-   pinned revision beside the serQ checkout (`../ref/vllm`, which it imports
-   `tests.v1.core.utils` from). The sparse `ref/vllm` that
-   `scripts/fetch_vllm_ref.sh --sparse` makes for the citation check is not
-   enough.
+   `block_size`, `num_blocks`, optionally `chunk` and `adaptive`) and the
+   `requests` (`prompt`, `out`, optionally `arrive`).
+2. Run `VLLM_TARGET_DEVICE=cpu VLLM_PLUGINS= python tools/vllm_oracle.py
+   tools/oracle/<name>.json` and save its output as
+   `tools/oracle/<name>.out.json`. This is the answer the theorem will
+   state. The script drives the real scheduler, imported from the full
+   vLLM checkout at the pinned revision in this repository's `ref/vllm`
+   (`scripts/fetch_vllm_ref.sh`; the sparse checkout that `--sparse` makes
+   for the citation check is not enough). vLLM need not be installed: the
+   Python environment needs torch (the CPU build is enough) and
+   `ref/vllm/requirements/common.txt`. `VLLM_TARGET_DEVICE=cpu` is for a
+   machine without a GPU, and `VLLM_PLUGINS=` disables an installed
+   platform plugin.
 3. Add the name to the list in `tests/vllm_oracle.rs::scenarios`, run
    `make oracle-ir`, then `make check` and `make lean`. The interpreter and
    the Lean semantics now have to agree. The generator finds the scenarios

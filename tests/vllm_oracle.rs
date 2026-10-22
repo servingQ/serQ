@@ -20,15 +20,17 @@
 //! head-of-line blocking on memory), `mixed` (mixed lengths and arrivals
 //! on a small pool), `longchunk` (`long_prefill_token_threshold`), `alone`
 //! (the cap is lifted while one request is eligible, scheduler.py:606-616:
-//! the first request takes the whole budget; CPU oracle only, no A100 run).
+//! the first request takes the whole budget; CPU oracle only, no A100 run),
+//! `adaptive` (`long_prefill_token_threshold_adaptive`: `longchunk` with the
+//! cap floored at the fair share 4096 // 2 = 2048, scheduler.py:617-622; CPU
+//! oracle only, no A100 run).
 
 mod common;
 
 use std::path::Path;
 
 use serde_json::Value;
-use serq::frontend::parser;
-use serq::{Overrides, paired_workload, program_path, run_ir};
+use serq::{paired_workload, program_path, run_ir};
 
 fn dir() -> std::path::PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tools/oracle")
@@ -48,21 +50,7 @@ fn oracle_ir(name: &str) -> serq::Program {
     let sc: Value =
         serde_json::from_str(&std::fs::read_to_string(dir().join(format!("{name}.json"))).unwrap())
             .unwrap();
-    let set = |k: &str, v: f64| (k.to_string(), parser::parse_expr(&format!("{v}")).unwrap());
-    let mut lets = vec![
-        set("bs", num(&sc, "block_size")),
-        set("B", num(&sc, "budget")),
-        set("blocks", num(&sc, "num_blocks") - 1.0), // the null block
-        set("max_seqs", num(&sc, "max_seqs")),
-    ];
-    // vLLM's 0 is no cap, which the program's default `inf` already is
-    if num(&sc, "chunk") > 0.0 {
-        lets.push(set("chunk", num(&sc, "chunk")));
-    }
-    let ov = Overrides {
-        lets,
-        ..common::horizon(100000.0)
-    };
+    let ov = common::oracle_engine(&sc);
     let path = program_path("vllm_request");
     let workload =
         std::fs::read_to_string(paired_workload(&path).expect("the example's workload")).unwrap();
@@ -129,18 +117,11 @@ fn check(name: &str) {
 }
 
 fn scenarios() -> Vec<String> {
-    let mut names: Vec<String> = std::fs::read_dir(dir())
-        .unwrap()
-        .filter_map(|e| {
-            let f = e.unwrap().file_name().into_string().unwrap();
-            f.strip_suffix(".out.json").map(str::to_string)
-        })
-        .filter(|n| dir().join(format!("{n}.json")).exists())
-        .collect();
-    names.sort();
+    let names = common::oracle_scenarios(&dir());
     assert_eq!(
         names,
         [
+            "adaptive",
             "alone",
             "chunked",
             "hol",

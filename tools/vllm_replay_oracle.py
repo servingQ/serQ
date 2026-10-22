@@ -15,7 +15,10 @@ finishes.
         --spacing 3.5 --out /tmp/replay.csv
 
 Output CSV: session,turn,sent,first,done,prompt,cached,out
-Runs in the testbed venv (`~/vllm-rbln-dynkv/.venv`) with `VLLM_PLUGINS=`.
+Runs where `tools/vllm_oracle.py` runs: the scheduler imported from this
+checkout's full `ref/vllm`, torch (the CPU build is enough) and
+`ref/vllm/requirements/common.txt`, with `VLLM_PLUGINS=` and, where there is
+no GPU, `VLLM_TARGET_DEVICE=cpu`.
 """
 import argparse
 import heapq
@@ -24,7 +27,7 @@ import os
 import sys
 
 os.environ.setdefault("VLLM_ALLOW_LONG_MAX_MODEL_LEN", "1")
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "ref", "vllm"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "ref", "vllm"))
 
 from tests.v1.core.utils import create_scheduler  # noqa: E402
 from vllm.sampling_params import SamplingParams  # noqa: E402
