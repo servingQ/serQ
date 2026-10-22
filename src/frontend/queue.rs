@@ -636,16 +636,7 @@ const MAX_EXPANDED: usize = 100_000;
 fn size(stmts: &[Stmt]) -> usize {
     stmts
         .iter()
-        .map(|s| {
-            1 + match s {
-                Stmt::Hold { body, .. }
-                | Stmt::Loop(body)
-                | Stmt::While(_, body)
-                | Stmt::Fork(body) => size(body),
-                Stmt::Branch(_, a, b) => size(a) + size(b),
-                _ => 0,
-            }
-        })
+        .map(|s| 1 + s.blocks().map(size).sum::<usize>())
         .sum()
 }
 
@@ -657,66 +648,59 @@ fn expand_at(
 ) -> Result<(), ExpandError> {
     let mut out = Vec::with_capacity(stmts.len());
     for mut s in std::mem::take(stmts) {
-        match &mut s {
-            Stmt::Call {
-                queue,
-                verb,
-                args,
-                from,
-                to,
-            } => {
-                let at = queue.span.expect("parsed queue call has a span");
-                let key = (
-                    queue.name.clone(),
-                    verb.clone(),
-                    from.is_some() && verb != "transfer",
+        if let Stmt::Call {
+            queue,
+            verb,
+            args,
+            from,
+            to,
+        } = &mut s
+        {
+            let at = queue.span.expect("parsed queue call has a span");
+            let key = (
+                queue.name.clone(),
+                verb.clone(),
+                from.is_some() && verb != "transfer",
+            );
+            if stack.contains(&key) {
+                return err(
+                    at,
+                    format!(
+                        "`{}.{verb}`: the entries call each other in a cycle",
+                        queue.name
+                    ),
                 );
-                if stack.contains(&key) {
-                    return err(
-                        at,
-                        format!(
-                            "`{}.{verb}`: the entries call each other in a cycle",
-                            queue.name
-                        ),
-                    );
-                }
-                let mut body = call(queue, verb, args, from.as_ref(), to.as_ref(), queues, at)?;
-                *expanded += size(&body);
-                if *expanded > MAX_EXPANDED {
-                    return err(
-                        at,
-                        format!(
-                            "`{}.{verb}`: the queue calls expand to more than {MAX_EXPANDED} \
-                             statements; an entry that calls others more than once multiplies them",
-                            queue.name
-                        ),
-                    );
-                }
-                stack.push(key);
-                let result = expand_at(&mut body, queues, stack, expanded);
-                stack.pop();
-                result?;
-                // a gateway's route says where it stands, for the figure
-                if verb == GATEWAY_VERB {
-                    out.push(Stmt::Side(crate::ir::Side::Server));
-                    out.push(Stmt::Route(RouteMark::Open(queue.name.clone())));
-                }
-                out.extend(body);
-                if verb == GATEWAY_VERB {
-                    out.push(Stmt::Route(RouteMark::Close));
-                    out.push(Stmt::Side(crate::ir::Side::Workload));
-                }
-                continue;
             }
-            Stmt::Hold { body, .. }
-            | Stmt::Loop(body)
-            | Stmt::While(_, body)
-            | Stmt::Fork(body) => expand_at(body, queues, stack, expanded)?,
-            Stmt::Branch(_, a, b) => {
-                expand_at(a, queues, stack, expanded)?;
-                expand_at(b, queues, stack, expanded)?;
+            let mut body = call(queue, verb, args, from.as_ref(), to.as_ref(), queues, at)?;
+            *expanded += size(&body);
+            if *expanded > MAX_EXPANDED {
+                return err(
+                    at,
+                    format!(
+                        "`{}.{verb}`: the queue calls expand to more than {MAX_EXPANDED} \
+                         statements; an entry that calls others more than once multiplies them",
+                        queue.name
+                    ),
+                );
             }
-            _ => {}
+            stack.push(key);
+            let result = expand_at(&mut body, queues, stack, expanded);
+            stack.pop();
+            result?;
+            // a gateway's route says where it stands, for the figure
+            if verb == GATEWAY_VERB {
+                out.push(Stmt::Side(crate::ir::Side::Server));
+                out.push(Stmt::Route(RouteMark::Open(queue.name.clone())));
+            }
+            out.extend(body);
+            if verb == GATEWAY_VERB {
+                out.push(Stmt::Route(RouteMark::Close));
+                out.push(Stmt::Side(crate::ir::Side::Workload));
+            }
+            continue;
+        }
+        for b in s.blocks_mut() {
+            expand_at(b, queues, stack, expanded)?;
         }
         out.push(s);
     }

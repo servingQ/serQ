@@ -471,6 +471,45 @@ fn the_server_runs_an_engine_only_through_its_request() {
     compiled(&gated);
 }
 
+/// Nor in a block: the check reads every block a statement holds
+/// (`Stmt::blocks`, #280), a `fork`'s, a `while`'s, a `loop`'s, an `if`'s
+/// else-arm and a hold's body; a hold the check refuses is the finding
+/// before the run in its body.
+#[test]
+fn the_server_runs_an_engine_in_no_block_either() {
+    let call = "  llm (n, o);\n";
+    let decode = "run llm decode (cost(llm, 1));";
+    let gate = (
+        "pool reqs on llm { queue fifo; }",
+        "pool reqs on llm { queue fifo; }\npool gate { cap 1; }",
+    );
+    for inner in [
+        format!("fork {{ {decode} }}"),
+        format!("set k = 0; while (k < 1) {{ set k = k + 1; {decode} }}"),
+        format!("loop {{ {decode} end; }}"),
+        format!("if (n > 100) {{ set z = 1; }} else {{ {decode} }}"),
+        format!("hold gate (cost(gate, 1)) {{ {decode} }}"),
+    ] {
+        let src = replaced(
+            &program(),
+            &[gate, (call, &format!("  llm (n, o);\n  {inner}\n"))],
+        );
+        refused(
+            &src,
+            "the server runs engine `llm`'s decode (`run llm decode (…)`): an engine runs only in \
+             its own queue's entries",
+        );
+    }
+    let held = replaced(
+        &program(),
+        &[(
+            call,
+            &format!("  llm (n, o);\n  hold reqs (cost(reqs, 1)) {{ {decode} }}\n"),
+        )],
+    );
+    refused(&held, "the server holds `reqs`, which engine `llm` admits");
+}
+
 #[test]
 fn a_session_does_not_call_an_engine() {
     let workload = replaced(
