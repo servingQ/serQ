@@ -116,7 +116,11 @@ pub fn render(f: &Figure) -> String {
                 );
             }
             Item::Station {
-                rect, kind, text, ..
+                rect,
+                kind,
+                text,
+                outline,
+                ..
             } => {
                 let c = rect.centre();
                 match kind {
@@ -135,7 +139,7 @@ pub fn render(f: &Figure) -> String {
                             p(rect.x, rect.y),
                             p(rect.right(), rect.bottom())
                         );
-                        if let Some(pts) = crate::view::figure::density(text, *rect) {
+                        if let Some(pts) = outline.map(|o| crate::view::figure::density(o, *rect)) {
                             let path: Vec<String> = pts.iter().map(|q| p(q.x, q.y)).collect();
                             let _ = writeln!(s, "  \\draw[seqrail] {};", path.join(" -- "));
                         } else {

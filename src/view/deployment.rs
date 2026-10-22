@@ -10,9 +10,11 @@
 use std::collections::BTreeMap;
 
 use crate::frontend::queue::GATEWAY_VERB;
-use crate::ir::{CArrival, CExpr, CRef, CStageKind, CStmt, CtxVar, Program, RunMode, Side, UnOp};
+use crate::ir::{
+    CArrival, CExpr, CRef, CStageKind, CStmt, CtxVar, DistKind, Program, RunMode, Side, UnOp,
+};
 use crate::view::figure::{
-    Anchor, BoxStyle, CLIENT, CopyMark, EdgeRole, EdgeStyle, Figure, Item, Point, Rect,
+    Anchor, BoxStyle, CLIENT, CopyMark, EdgeRole, EdgeStyle, Figure, Item, Outline, Point, Rect,
     StationKind, TextSize, pt,
 };
 
@@ -56,6 +58,8 @@ pub struct Node {
     pub work: String,
     /// The modes the session runs it in.
     pub modes: Vec<RunMode>,
+    /// A delay's outline, read from its duration (`outline_of`).
+    pub outline: Option<Outline>,
 }
 
 impl FlowNote {
@@ -544,6 +548,7 @@ impl Walker<'_> {
                     pools: vec![],
                     work: String::new(),
                     modes: vec![],
+                    outline: None,
                 });
                 let i = self.net.nodes.len() - 1;
                 self.ticks.push((pool, i));
@@ -594,6 +599,7 @@ impl Walker<'_> {
                     note: kind_note,
                     work: String::new(),
                     modes: vec![],
+                    outline: None,
                     pools: self.holds.iter().fold(vec![], |mut v, &(q, _, e)| {
                         // nested holds of one pool are one enclosure
                         if e && !v.contains(&q) {
@@ -673,6 +679,7 @@ impl Walker<'_> {
                     pools: vec![],
                     work: String::new(),
                     modes: vec![],
+                    outline: None,
                 });
                 let i = self.net.nodes.len() - 1;
                 self.gateways.push((r.gateway.clone(), i));
@@ -841,12 +848,10 @@ impl Walker<'_> {
                         // the shape of its density, when it is a
                         // distribution or a constant and fits
                         let fits = TextSize::Normal.width_of(&n.work) <= STATION_W - 12.0;
-                        if n.kind == StationKind::Delay
-                            && fits
-                            && crate::view::figure::density(&n.work, Rect::new(0.0, 0.0, 1.0, 1.0))
-                                .is_some()
-                        {
+                        let outline = outline_of(work.cost_value());
+                        if n.kind == StationKind::Delay && fits && outline.is_some() {
                             n.inner = n.work.clone();
+                            n.outline = outline;
                         }
                     }
                     if !n.modes.contains(&mode) {
@@ -1373,6 +1378,7 @@ impl Walker<'_> {
                 pools: vec![],
                 work: String::new(),
                 modes: vec![],
+                outline: None,
             });
             let d = self.net.nodes.len() - 1;
             self.decisions.push((body, d));
@@ -1526,6 +1532,24 @@ fn station_of(p: &Program, stage: usize) -> (StationKind, String, Option<String>
                 p.show_expr_with(&s.budget, crate::frontend::parser::tokens_cap_name)
             )),
         ),
+    }
+}
+
+/// The outline of a duration's density: a draw, by its distribution, or a
+/// constant. Anything else is drawn as infinitely many servers.
+fn outline_of(duration: &CExpr) -> Option<Outline> {
+    match duration {
+        CExpr::Num(_) => Some(Outline::Spike),
+        CExpr::Sample(d, _) => match d {
+            DistKind::Exp => Some(Outline::Decaying),
+            DistKind::H2 => Some(Outline::TwoPhase),
+            DistKind::Erlang => Some(Outline::Hump),
+            DistKind::Uniform => Some(Outline::Flat),
+            DistKind::Det => Some(Outline::Spike),
+            // a draw of 0 or 1, not a duration
+            DistKind::Bernoulli => None,
+        },
+        _ => None,
     }
 }
 
@@ -2802,6 +2826,7 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
             rect: r,
             kind: n.kind,
             text: n.inner.clone(),
+            outline: n.outline,
             stage: n.stage.map(|st| p.stages[st].name.clone()),
             node: net.name(p, i),
         });
@@ -3084,6 +3109,7 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
         kind: StationKind::Client,
         // what the reader reads; `CLIENT` is what a page addresses
         text: "client".into(),
+        outline: None,
         stage: None,
         node: CLIENT.into(),
     });
