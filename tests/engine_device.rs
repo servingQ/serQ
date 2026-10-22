@@ -1763,6 +1763,47 @@ fn a_power_is_written_with_a_caret() {
     compile_paired(&prog, &ov).unwrap();
 }
 
+/// `price(s, s_hit, ds)` was one paper's price of a miss as a builtin; a
+/// program writes it as a `def` over the stage's estimates (#67,
+/// `docs/design/miss-price.md`). A call of the builtin is told what to
+/// write. The name is free, so a program that defines `price` keeps its
+/// calls (the companion programs' migration), and the IR reads the three
+/// estimates where it read `Price`, whatever the definition is named.
+#[test]
+fn a_miss_price_is_a_definition_over_the_estimates() {
+    let (src, ov) = example(
+        &root().join("examples/multi-turn/vllm.sq"),
+        &common::horizon(10.0),
+    );
+    // the definition above `fn main()`, as a program writes one that reads
+    // none of main's names (docs/writing-programs.md); the key in the pool
+    let priced = |def: &str, call: &str| {
+        let main = format!("{def}fn main() {{");
+        let key = format!("evict by (waiting, {call} / size);");
+        replaced(&src, &[("fn main() {", &main), ("evict lru;", &key)])
+    };
+    refused_example(
+        &priced("", "price(vllm, c0 + a, a * size)"),
+        &ov,
+        "unknown function `price`: `price(s, s_hit, ds)` is gone",
+    );
+    const PHI: &str = "ds + est_lambda(s) * ((s_hit + ds) * (s_hit + ds) - s_hit * s_hit) \
+                       / (2 * (1 - est_rho(s))) + est_lambda(s) * est_wait(s) * ds / (1 - est_rho(s))";
+    let ir = |name: &str| {
+        let prog = priced(
+            &format!("def {name}(s, s_hit, ds) {{ {PHI} }}\n\n"),
+            &format!("{name}(vllm, c0 + a, a * size)"),
+        );
+        let p = compile_paired(&prog, &ov).unwrap_or_else(|e| panic!("{e}\n{prog}"));
+        serde_json::to_string(&p).unwrap()
+    };
+    let named = ir("price");
+    for (f, n) in [("EstLambda", 2), ("EstRho", 2), ("EstWait", 1)] {
+        assert_eq!(named.matches(&format!("\"{f}\"")).count(), n, "{f}");
+    }
+    assert_eq!(named, ir("miss_price"));
+}
+
 /// A device's resource is a definition too, replaced token by token: its
 /// parameter may not be named like a distribution, as a `def`'s may not.
 #[test]

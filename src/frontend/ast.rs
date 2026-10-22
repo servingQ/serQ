@@ -21,7 +21,7 @@ pub enum Expr {
     Var(String),
     /// `~exp(1.5)`: a fresh draw from a distribution.
     Sample(String, Vec<Expr>),
-    /// `min(a, b)`, `price(stage, s, ds)`, `work(prefill[j])`, ...
+    /// `min(a, b)`, `est_wait(vllm)`, `work(prefill[j])`, ...
     Call(String, Vec<Arg>),
     Unary(UnOp, Box<Expr>),
     Binary(BinOp, Box<Expr>, Box<Expr>),

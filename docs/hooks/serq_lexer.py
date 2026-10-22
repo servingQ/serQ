@@ -87,7 +87,7 @@ ARITHMETIC = ("min", "max", "abs", "floor", "ceil", "sqrt", "exp", "ln")
 BUILTINS = (
     # functions
     "busy", "work", "used", "free", "cachedin", "allocated", "holders", "queued",
-    "price", "budget_left", "est_lambda", "est_rho", "est_wait", "blocksize",
+    "budget_left", "est_lambda", "est_rho", "est_wait", "blocksize",
     # context variables
     "now", "waited", "size", "age", "last", "waiting", "present", "tokens",
     "decoders", "prefilled", "residents", "kv_decode", "kv_prefill",

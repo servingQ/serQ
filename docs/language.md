@@ -1979,7 +1979,8 @@ the A100 cost fit, calibration, comparison runs and their limitations.
   decoder waits is not a construct, and a decoder that comes after the
   `ttl` computes the prompt itself where vLLM's read would fail and be
   recomputed ([one status per request](https://github.com/servingQ/serQ/blob/main/docs/design/request-state.md)).
-* One eviction order per pool; a priced order uses `price(stage, …)` with
-  the stage's online estimates.
+* One eviction order per pool; a priced order is a `def` the program
+  writes over the stage's online estimates
+  ([`est_wait`](api/functions.md#est_wait)).
 * The Lean model covers a fragment, and there is no proof that the
   interpreter implements it ([the Lean model](lean.md#what-is-not-covered-yet)).

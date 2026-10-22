@@ -328,11 +328,12 @@ pub fn quantile(xs: &[f64], q: f64) -> f64 {
     v[idx]
 }
 
-/// Online estimates of the quantities in the price of a miss, as a
-/// replica would observe them (mirrors `libqueuingsim`'s
-/// `PriceEstimator`): exponentially weighted averages of the gap between
-/// service starts (`λ̂` = 1 / mean gap), the service time and the queue
-/// wait, with `ρ̂ = min(λ̂ ŝ, 0.99)`.
+/// Online estimates of a stage's load, as a replica would observe them
+/// (mirrors `libqueuingsim`'s `PriceEstimator`): exponentially weighted
+/// averages of the gap between service starts (`λ̂` = 1 / mean gap), the
+/// service time and the queue wait, with `ρ̂ = min(λ̂ ŝ, 0.99)`. They are
+/// what `est_lambda`, `est_rho` and `est_wait` read; the price of a miss
+/// built from them is a program's `def` (#67).
 #[derive(Clone, Debug, Default)]
 pub struct PriceEstimator {
     last_start: Option<f64>,
@@ -377,15 +378,6 @@ impl PriceEstimator {
             }
             _ => (0.0, 0.0, self.wait),
         }
-    }
-
-    /// Price of a miss that lengthens a hit service `s_h` by `ds`
-    /// (`missPrice` with the measured wait):
-    /// `Φ = ds + λ(s_m² - s_h²)/(2(1-ρ)) + λ W ds/(1-ρ)`.
-    pub fn price(&self, s_h: f64, ds: f64) -> f64 {
-        let (lam, rho, w) = self.estimates();
-        let s_m = s_h + ds;
-        ds + lam * (s_m * s_m - s_h * s_h) / (2.0 * (1.0 - rho)) + lam * w * ds / (1.0 - rho)
     }
 }
 

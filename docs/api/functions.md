@@ -37,7 +37,6 @@ holds the index and each function's section equal to it.
 | [`est_lambda(s: stage)`](#est_lambda) | Measured arrival rate at `s`, per clock unit. |
 | [`est_rho(s: stage)`](#est_rho) | Measured utilization at `s`, capped below 1. |
 | [`est_wait(s: stage)`](#est_wait) | Measured mean wait at `s` from a run's arrival to its start, a run's `latency` included, in clock units. |
-| [`price(s: stage, s_hit: expr, ds: expr)`](#price) | An online estimate of the added cost of a cache miss, in clock units. |
 
 **[Pool](#pool)**
 
@@ -260,25 +259,30 @@ est_wait(s: stage) -> number
 
 **Returns:** Measured mean wait at `s` from a run's arrival to its start, a run's `latency` included, in clock units.
 
-#### `price` {#price}
-
-```text
-price(s: stage, s_hit: expr, ds: expr) -> number
-```
-
-**Returns:** An online estimate of the added cost of a cache miss, in clock units.
-
-For a miss that lengthens a hit service $s_{\mathrm{hit}}$ by $\Delta s$,
-let $s_{\mathrm{miss}} = s_{\mathrm{hit}} + \Delta s$. Using the stage’s measured
-arrival rate $\hat\lambda$, utilisation $\hat\rho$ and mean wait $\hat W$:
+The three estimates are what a priced eviction order reads. For a miss
+that lengthens a hit service $s_{\mathrm{hit}}$ by $\Delta s$, let
+$s_{\mathrm{miss}} = s_{\mathrm{hit}} + \Delta s$. With the stage's
+measured arrival rate $\hat\lambda$, utilization $\hat\rho$ and mean wait
+$\hat W$, the added cost of the miss is
 
 $$
 \Phi = \Delta s
   + \frac{\hat\lambda(s_{\mathrm{miss}}^2-s_{\mathrm{hit}}^2)}{2(1-\hat\rho)}
-  + \frac{\hat\lambda\hat W\Delta s}{1-\hat\rho}.
+  + \frac{\hat\lambda\hat W\Delta s}{1-\hat\rho},
 $$
 
-**Parameters:** `s` names the measured stage; `s_hit` is hit service time, and `ds` is the extra service time of a miss.
+a definition the program writes over the estimates. Here it orders the
+KV pool of `examples/multi-turn/vllm.sq` by price per block, where the
+example evicts the least recently used:
+
+```serq
+// the price of a miss that lengthens a hit service s_hit by ds at stage s
+def miss_price(s, s_hit, ds) {
+  ds + est_lambda(s) * ((s_hit + ds) * (s_hit + ds) - s_hit * s_hit) / (2 * (1 - est_rho(s)))
+    + est_lambda(s) * est_wait(s) * ds / (1 - est_rho(s))
+}
+pool kv on gpu { block bs; evict by (waiting, miss_price(vllm, c0 + a, a * size) / size); preempt lifo; }
+```
 
 ### Pool
 

@@ -93,3 +93,7 @@ not a branch in the program.
 *The one-subject-per-block rule chose `enter` and `admit if` for one construct;
 [One admission](one-admission.md) retired both for the kernel's `hold`, and says
 why in its self-critique.*
+
+*The `price` builtin went in [The price of a miss is the
+program's](miss-price.md) (#67): a priced order is a `def` over
+`est_lambda`, `est_rho` and `est_wait`.*

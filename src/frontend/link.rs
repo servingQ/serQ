@@ -3676,7 +3676,14 @@ impl Constants for Linker<'_> {
 
 /// The functions taken out of the language, with what a program writes
 /// instead. A call is told; the name is free for anything else.
-const RETIRED_FUNCTIONS: [(&str, &str); 1] = [("pow", "`pow(x, y)` is now `x ^ y`")];
+const RETIRED_FUNCTIONS: [(&str, &str); 2] = [
+    ("pow", "`pow(x, y)` is now `x ^ y`"),
+    (
+        "price",
+        "`price(s, s_hit, ds)` is gone: a miss's price is the program's, a `def` over \
+         `est_lambda(s)`, `est_rho(s)` and `est_wait(s)`",
+    ),
+];
 
 /// A call of a name that is no function, with what to write instead when
 /// the language took the function out.
