@@ -90,6 +90,43 @@ theorem regress_cost_ctx :
     ([[(0, 1723), (1, 6934)], [(0, 7074), (1, 7159)], [(0, 0), (1, 0)], [(0, 40), (1, 70)]], 0) := by
   decide +kernel
 
+/-- `tests/lean-regress/first_admission.sq`, translated from its IR. Attributes: 2 = turn_no, 3 = new, 4 = out, 5 = think, 6 = more, 7 = forced, 8 = computed, 9 = p, 10 = o, 11 = llm.admitted, 12 = llm.first, 13 = llm.reused, 14 = llm.prefill, 15 = llm.input, 16 = llm.output, 17 = llm.kept, 18 = llm.known, 19 = llm.again. Observations: 0 = admitted_at, 1 = first, 2 = done, 3 = llm.reused, 4 = llm.prefill. Pools: 0 = kv, 1 = slots. Stages: 0 = llm. -/
+def firstAdmission : Prog := [route|
+  turn;
+  set 15 = x.attr 9;
+  set 16 = (x.attr 10) + 1;
+  set 17 = x.attr 15;
+  set 19 = 0;
+  hold 1 (1), 0 (if ((x.attr 19) ≠ 0) then (max (x.attr 17) ((x.attr 8) + 1)) else (x.attr 17)) {
+    set 18 = if ((x.attr 19) ≠ 0) then (max (x.attr 17) ((x.attr 8) + 1)) else (x.attr 17);
+    set 17 = x.attr 18;
+    set 11 = if ((x.attr 19) = 0) then x.now else (x.attr 11);
+    set 19 = 1;
+    observe 3 = x.cached;
+    observe 4 = (x.attr 18) - x.cached;
+    run 0 prefill ((x.attr 18) - x.cached) growing 0;
+    branch (if ((x.attr 18) = (x.attr 15)) then 1 else 0) {
+      set 12 = x.now;
+      done
+    } else {
+      done
+    };
+    run 0 decode (((x.attr 16) - 1) - ((x.attr 18) - (x.attr 15))) growing 0;
+    done
+  };
+  observe 0 = x.attr 11;
+  observe 1 = x.attr 12;
+  observe 2 = x.now;
+  stop]
+
+/-- `serq run`: admitted_at, first, done, llm.reused, llm.prefill per session, and 1 preemptions. -/
+theorem regress_first_admission :
+    let m := Exec.runW ⟨[⟨64, 16, false, none⟩, ⟨2, 1, true, none⟩], 64, 0, some 0, fun _ => 1, none, none⟩ 1000
+      ⟨[[(9, 24), (10, 20)], [(9, 24), (10, 20)]], [], none, 0, some 8, none⟩ firstAdmission
+    ([observed m 0, observed m 1, observed m 2, observed m 3, observed m 4], m.preempts) =
+    ([[(0, 0), (1, 0)], [(0, 1), (1, 1)], [(0, 21), (1, 33)], [(0, 0), (1, 0), (1, 0)], [(0, 24), (1, 24), (1, 33)]], 1) := by
+  decide +kernel
+
 /-- `tests/lean-regress/preempt_delay.sq`, translated from its IR. Attributes: 2 = turn_no, 3 = new, 4 = out, 5 = think, 6 = more, 7 = forced, 8 = computed, 9 = d. Observations: 0 = resumed, 1 = done. Pools: 0 = llm.kv, 1 = llm.slots. Stages: 0 = llm, 1 = tool. -/
 def preemptDelay : Prog := [route|
   turn;

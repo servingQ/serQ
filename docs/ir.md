@@ -17,7 +17,7 @@ than host-language code, and every input passes `Program::validate`.
 The source model and externally supplied execution settings resolve to one
 complete `Program`; its JSON records the experiment as well as the deployment.
 
-Source: `src/ir.rs`. Current version: `IR_VERSION = 15`.
+Source: `src/ir.rs`. Current version: `IR_VERSION = 16`.
 
 ## Format
 
@@ -110,7 +110,8 @@ decoder's read: vLLM's `delay_free_blocks`). An engine whose requests are
 sent and that no connector's `source` reads is refused, since nothing
 would read the send. The request waits in its first pool's queue. Its
 `records` are the slots the engine writes: the observations `reused` and
-`prefill` for each admission, and the attributes `admitted`, `first`,
+`prefill` for each admission, and the attributes `admitted` (its first
+admission: a readmission after a preemption does not move it), `first`,
 `last_reused` and `last_prefill` (`E.reused`, `E.prefill`) the caller reads
 after the call. A family engine's members each have their own `CStep`,
 whose `CRequest` names the member's pools. A `CConnector` has `load?` and
@@ -129,7 +130,7 @@ request's status is `waiting_for_kv` (a load) or `finished` (a save);
 Grow; Run; Load }`) for the interpreter and the figure, which the IR does
 not hold. One status per request (`docs/design/request-state.md`). `record` is
 the observation of what each admission loaded, `load_done` the attribute
-of when its latest load ended. After a load the interpreter computes the
+of when its latest load ended (an admission whose `load` is 0 leaves it). After a load the interpreter computes the
 request's last token again if every one has KV, and reads the `CRequest`
 again: the pools it took none of and takes now, it waits for, as a part of
 its hold. The blocks are roots of the block tree, not bodies of a

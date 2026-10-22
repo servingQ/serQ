@@ -92,6 +92,26 @@ class FragmentBoundaries(unittest.TestCase):
         with self.assertRaisesRegex(generator.Fragment, "sent"):
             generator.Lean(ir).block(ir["session"], 1)
 
+    def test_admitted_is_the_first_admission_from_ir_16(self):
+        # the kernel's hold runs its body again after a preemption: from IR
+        # 16 `E.admitted` is set while `again` is still 0, before IR 16 at
+        # every admission (the latest)
+        rec = self.ir["stages"][0]["kind"]["Step"]["request"]["records"]
+        written = {}
+        for version in (15, 16):
+            ir = copy.deepcopy(self.ir)
+            ir["version"] = version
+            lean = generator.Lean(ir)
+            lean.read = set(lean.read) | {rec["admitted"]}
+            written[version] = lean.block(ir["session"], 1)
+        latest = f"set {rec['admitted']} = x.now;"
+        first = (rf"set {rec['admitted']} = if \(\(x\.attr \d+\) = 0\) "
+                 rf"then x\.now else \(x\.attr {rec['admitted']}\);")
+        self.assertRegex(written[16], first)
+        self.assertNotIn(latest, written[16])
+        self.assertIn(latest, written[15])
+        self.assertNotRegex(written[15], first)
+
     def test_prefix_chains_are_not_silently_discarded(self):
         # the engine's admission reads a chain of segments
         ir = copy.deepcopy(self.ir)

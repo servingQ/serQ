@@ -1360,8 +1360,12 @@ registers. The input is the scheduler's (a `hidden` attribute may not be
 it), and so is the output when the admission reads `request.output`. The
 engine's records are attributes the caller reads after the call: `E.reused`
 (the cached tokens its latest admission read), `E.prefill` (the tokens its
-prefill computes), `E.admitted` (when) and `E.first` (when its first token
-was sampled); a connector adds `E.loaded`, `E.saved` and `E.load_done`
+prefill computes), `E.admitted` (when it was first admitted: a readmission
+after a preemption does not move it, as vLLM's `scheduled_ts` keeps the
+first scheduling, `metrics/stats.py:524`; for a request that loads, vLLM
+schedules it, and stamps that, once its KV has arrived,
+`scheduler.py:1264-1294, 1300-1303`, nearer `E.load_done`) and `E.first`
+(when its first token was sampled); a connector adds `E.loaded`, `E.saved` and `E.load_done`
 (below). `E.reused`, `E.prefill` and `E.loaded` are observations of the
 report too, one per admission.
 
@@ -1402,7 +1406,11 @@ A request its entry took from no source loads nothing. A read whose send
 has ended before its copy began (its `ttl`, with no leg left to leave
 another) has no KV to read: the source's blocks are gone, `request.loaded`
 is 0, and the request computes those tokens itself, as vLLM recomputes a
-read of invalid blocks; a push's reader that finds no send once its last
+read of invalid blocks: its load ends as it is admitted. A `load` of 0 is
+no read: a decoder preempted after its read and admitted again under
+`request.preempted ? 0 : …` reads nothing, and `E.load_done` keeps its
+read's end, as `E.admitted` keeps its first admission, so `E.load_done -
+E.admitted` is its read. A push's reader that finds no send once its last
 leg has ended first takes the running slot its admission left for after
 the load. A send whose copy has begun stays until the copy is done. Such
 a connector has no `per_token` or `save`.
@@ -1422,7 +1430,9 @@ holds blocks and no running slot while it reads:
 
 (`examples/pd-disaggregation/llmd_nixl_pull.sq`). The engine records
 `E.loaded` for each admission and sets `E.loaded`, `E.saved` and
-`E.load_done` (when its latest load ended) for the caller.
+`E.load_done` (when its latest load ended; an admission whose `load` is
+0 leaves it, while one whose send is gone ends its load as it is admitted)
+for the caller.
 
 ### A hold's header is read at admission
 

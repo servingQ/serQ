@@ -267,7 +267,8 @@ request as `request.input`, `request.output`, `request.known`,
 `request.hit`, `request.loaded` and `request.preempted`; `cache`, read when
 the request gives its pools back, reads `request.finished`. The engine's
 records are attributes the caller reads after the call: `ENGINE.reused`,
-`ENGINE.prefill`, `ENGINE.admitted` and `ENGINE.first` (a connector adds
+`ENGINE.prefill`, `ENGINE.admitted` (its first admission, which a
+readmission after a preemption does not move) and `ENGINE.first` (a connector adds
 `ENGINE.loaded`, `ENGINE.saved` and `ENGINE.load_done`); `ENGINE.reused`,
 `ENGINE.prefill` and `ENGINE.loaded` are observations of the report too,
 one per admission.
@@ -332,7 +333,9 @@ waits for (vLLM's `WAITING_FOR_REMOTE_KVS`, `scheduler.py:1264-1267`), so
 `reqs (request.loaded > 0 ? 0 : 1) reserve (1)` holds no running slot
 while the request loads. The engine records `ENGINE.loaded` and sets
 `ENGINE.loaded`, `ENGINE.saved` and `ENGINE.load_done` (when its latest
-load ended). `examples/multi-turn/vllm_lmcache.sq`:
+load ended; an admission whose `load` is 0, a preempted request's under
+`request.preempted ? 0 : …`, leaves it, while one whose send is gone ends
+its load as it is admitted). `examples/multi-turn/vllm_lmcache.sq`:
 
 ```serq
 connector lmc {

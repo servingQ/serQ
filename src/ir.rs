@@ -40,8 +40,11 @@ use serde::{Deserialize, Serialize};
 /// where they were blocks of statements; an engine that is a KV relation's
 /// source registers a send at each request's end (`CRequest::send`), which
 /// keeps its blocks until the reader's load ends it or its `ttl` does; and
-/// `Join` goes, the push mode's reader waiting for the send instead.
-pub const IR_VERSION: u32 = 15;
+/// `Join` goes, the push mode's reader waiting for the send instead. 16
+/// makes a request's `admitted` record its first admission, which a
+/// readmission after a preemption does not move (the rule of vLLM's
+/// `scheduled_ts`; `docs/design/first-admission.md`): it was the latest.
+pub const IR_VERSION: u32 = 16;
 
 /// A reason `Program::validate` refuses a program, and the statement it is
 /// about (block, index in it) when it is about one.
@@ -980,7 +983,7 @@ pub struct CConnector {
     pub loaded: usize,
     pub saved: usize,
     /// Attribute slot: when its latest load ended, or found its send gone
-    /// (`E.load_done`).
+    /// (`E.load_done`). An admission whose `load` is 0 leaves it.
     pub load_done: usize,
     /// A KV relation's (`kvt.nixl_pull`): the attribute its request's entry
     /// sets to the source's member it took `from`, -1 for none, which loads
@@ -1120,7 +1123,8 @@ pub struct CRequest {
 /// What an engine records of its requests. Every record is an attribute of
 /// the session, which its caller reads after the call: `E.reused` and
 /// `E.prefill` (the cached tokens its latest admission read and the tokens
-/// its prefill computes), `E.admitted` (when it was last admitted) and
+/// its prefill computes), `E.admitted` (when it was first admitted: a
+/// readmission after a preemption does not move it) and
 /// `E.first` (when its first token was sampled). What each admission
 /// records is an observation of the report too (`reused`, `prefill`, slots
 /// of `Program::observes`, named alike).

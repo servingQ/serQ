@@ -1,0 +1,33 @@
+// An engine's request preempted and admitted again: its `admitted` record
+// is its first admission, which the readmission does not move (IR 16,
+// vLLM's `scheduled_ts`; docs/design/first-admission.md). Two requests of
+// 24 tokens take the four blocks between them; the first's growth past its
+// second block preempts the second, the last admitted, which runs again
+// when the first has finished. The Lean semantics sets the record before
+// the kernel's hold marks its body run again (`again`) and must give the
+// interpreter's answer (lean/Serq/Regress.lean, README.md).
+fn main() {
+  device gpu { kv cap 64; }
+  engine llm on gpu {
+    slots cap 2;
+    tokens cap 64;
+    scheduler {
+      advance running;
+      admit waiting while (running.preempted == 0)
+        taking slots (1), kv (request.known);
+    }
+    worker {
+      forward (1);
+    }
+  }
+  pool kv on gpu { block 16; evict lru; preempt lifo; }
+  pool slots on llm { }
+
+  // `o` tokens decoded after the one the prefill samples
+  server (p, o) {
+    llm (p, o + 1);
+    observe admitted_at = llm.admitted;
+    observe first = llm.first;
+    observe done = now;
+  }
+}

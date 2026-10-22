@@ -299,6 +299,24 @@ settings a decoder is admitted when the prefill ends and no `ttl` above
 Option<f64>`), `ttl = inf` is refused as the default spelled twice, and
 two relations from one source with different `ttl`s do not link.
 
+A read is a load the connector's `load` makes above 0. A decoder preempted
+after its read is admitted again, and the examples' connectors load
+nothing then (`request.preempted ? 0 : …`; vLLM reschedules it without a
+second transfer, `nixl/pull_scheduler.py:187-189`, and prefills locally
+what it lost, `scheduler.py:1560-1561`).
+A `load` of 0 is no read, and `E.load_done` keeps its read's end. v0.1.7-alpha.2 tested for a send gone before reading what the
+connector loads, took that readmission for a read of a send gone, and
+ended its load at the readmission: `pd_batching.sq` with decoders short of
+memory (`--blocksD 300 --Bw 2e4 --x0 0.01`, seed 1, `--horizon 100`)
+preempted 89 of 811 decoders after their read, and its `send_held`
+overstated their sends' hold (mean 43.6624 s against the log's 43.6491 s);
+the companion repository's port found it. The examples' observations of
+the read (`admit_wait`, `transfer`, the push's `parked`) subtract
+`D.admitted`, which was the latest admission, the readmission's for
+those decoders: IR 16 makes it the first
+([the first admission](first-admission.md)), so every observation is the
+read's, for every request.
+
 ### 5. One spelling of the source
 
 A connector reads a send, which an engine's request registers. A source

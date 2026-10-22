@@ -162,9 +162,33 @@ fn a_read_is_waiting_for_kv_and_the_prefiller_s_send_keeps_it_finished() {
     assert_eq!((send[1].2, send[2].2), (load[1].2, load[2].2));
     assert!(send[0].2 <= load[0].2);
     // the prefiller's request is finished while its send holds its blocks:
-    // the program's own `lease` observation (taken after the decoder's call
-    // returns) is that time, sample for sample
-    let mut held: Vec<f64> = vec![];
+    // the program's own `send_held` observation (taken after the decoder's
+    // call returns) is that time, sample for sample
+    let held = sends_held(log);
+    let lease = r.observe("send_held").unwrap();
+    assert!(lease.count > 0);
+    assert_eq!(status(&r, Status::Finished).stays as usize, held.len());
+    // one to one: each sample takes a send's time no other sample took
+    let mut left = held.clone();
+    for x in &lease.samples {
+        let i = left.iter().position(|h| (h - x).abs() < 1e-12);
+        let i = i.unwrap_or_else(|| panic!("{x} matches no send left: {left:?}"));
+        left.swap_remove(i);
+    }
+}
+
+/// How long each send held its source's blocks, registered to done, from
+/// the run log, in the order the sends ended.
+fn sends_held(log: &Log) -> Vec<f64> {
+    sends_held_by_session(log)
+        .into_iter()
+        .map(|(_, h)| h)
+        .collect()
+}
+
+/// `sends_held`, with the serial of the session whose request sent.
+fn sends_held_by_session(log: &Log) -> Vec<(u64, f64)> {
+    let mut held: Vec<(u64, f64)> = vec![];
     let mut since = std::collections::HashMap::new();
     for e in &log.events {
         if let EventKind::Transfer {
@@ -179,16 +203,98 @@ fn a_read_is_waiting_for_kv_and_the_prefiller_s_send_keeps_it_finished() {
                 Moved::Registered => {
                     since.insert((who.serial, who.leg, *call), e.t);
                 }
-                Moved::Done => held.push(e.t - since[&(who.serial, who.leg, *call)]),
+                Moved::Done => held.push((who.serial, e.t - since[&(who.serial, who.leg, *call)])),
                 Moved::Start => {}
             }
         }
     }
-    let lease = r.observe("send_held").unwrap();
-    assert!(lease.count > 0);
-    assert_eq!(status(&r, Status::Finished).stays as usize, held.len());
-    for x in &lease.samples {
-        assert!(held.iter().any(|h| (h - x).abs() < 1e-12), "{x} {held:?}");
+    held
+}
+
+/// `pd_batching.sq` with decoders short of memory, as the companion's port
+/// to v0.1.7-alpha.2 found it: a decoder preempted after its read is
+/// admitted again and its connector loads nothing (`request.preempted ? 0
+/// : …`). A `load` of 0 is no read: `D.load_done` keeps its read's end,
+/// so the program's `send_held` is how long the prefiller's send held its
+/// blocks, session by session. It had been read as a read of a send gone,
+/// and its load had ended at the readmission. And `D.admitted` keeps the
+/// first admission (IR 16; it was the latest), so the program's
+/// `admit_wait` and `transfer` are the read's for every request: they
+/// add up to `send_held`, where the readmission had made `transfer`
+/// negative (or 0, before the first fix).
+#[test]
+fn a_decoder_preempted_after_its_read_keeps_its_read_s_end() {
+    let mut ov = common::horizon(10.0);
+    for (name, value) in [("blocksD", "300"), ("Bw", "2e4"), ("x0", "0.01")] {
+        ov.set(name, value).unwrap();
+    }
+    let (p, base) = load(&serq::program_path("pd_batching"), ov);
+    let r = run_ir_logged(&p, Some(&base), usize::MAX).unwrap();
+    let preempted: u64 = r
+        .pools
+        .iter()
+        .filter(|q| q.name == "D.kv")
+        .map(|q| q.preemptions)
+        .sum();
+    assert!(preempted > 0, "no decoder was preempted");
+    // a decoder admitted again after its read loaded nothing
+    let loaded = &r.observe("D.loaded").unwrap().samples;
+    assert!(loaded.contains(&0.0), "no decoder read nothing");
+    // each session's one send, against its own `send_held` (a session of
+    // `pd_batching`'s workload is one turn, one prefill)
+    let held: std::collections::HashMap<u64, f64> = sends_held_by_session(r.log.as_ref().unwrap())
+        .into_iter()
+        .collect();
+    let send_held = r.observe("send_held").unwrap();
+    assert_eq!(send_held.samples.len(), held.len());
+    for (x, (_, serial, _)) in send_held.samples.iter().zip(&send_held.records) {
+        assert!(
+            (held[serial] - x).abs() < 1e-9,
+            "session {serial}: {x} {}",
+            held[serial]
+        );
+    }
+    // every request's read: `admit_wait` is the session's first admission
+    // to the decoder's blocks less its send's registration, from the log
+    // (the latest admission would be the readmission's), and `transfer`
+    // the rest of the send's hold
+    let log = r.log.as_ref().unwrap();
+    let d_kv: Vec<usize> = (0..log.pools.len())
+        .filter(|&k| log.pools[k].0 == "D.kv")
+        .collect();
+    let mut registered = std::collections::HashMap::new();
+    let mut first_admitted = std::collections::HashMap::new();
+    for e in &log.events {
+        match &e.kind {
+            EventKind::Transfer {
+                who,
+                kind: Transfer::Send,
+                moved: Moved::Registered,
+                ..
+            } => {
+                registered.insert(who.serial, e.t);
+            }
+            EventKind::Admit { who, pool } if d_kv.contains(pool) => {
+                first_admitted.entry(who.serial).or_insert(e.t);
+            }
+            _ => {}
+        }
+    }
+    let admit_wait = r.observe("admit_wait").unwrap();
+    let transfer = &r.observe("transfer").unwrap().samples;
+    assert_eq!(transfer.len(), send_held.samples.len());
+    for (a, (_, serial, _)) in admit_wait.samples.iter().zip(&admit_wait.records) {
+        let first = first_admitted[serial] - registered[serial];
+        assert!((a - first).abs() < 1e-9, "session {serial}: {a} {first}");
+    }
+    for ((a, t), h) in admit_wait
+        .samples
+        .iter()
+        .zip(transfer)
+        .zip(&send_held.samples)
+    {
+        assert!(*t >= 0.0, "transfer {t}");
+        assert!((a + t - h).abs() < 1e-9, "{a} + {t} != {h}");
     }
 }
 

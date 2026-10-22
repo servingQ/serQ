@@ -161,7 +161,8 @@ They read the session's attributes too, as a queue's keys do
 What a program observed inside its request, the engine records, and every
 record is an attribute of the session its caller reads after the call:
 `E.reused` (the cached tokens its latest admission read), `E.prefill` (the
-tokens its prefill computes), `E.admitted` (when it was last admitted) and
+tokens its prefill computes), `E.admitted` (when it was last admitted; the
+first since IR 16, [the first admission](first-admission.md)) and
 `E.first` (when its first token was sampled), so that `vllm_replay.sq`
 observes `ttft = vllm.first - t0`. What each admission records, `E.reused`
 and `E.prefill` (and a connector's `E.loaded`), is an observation of the
