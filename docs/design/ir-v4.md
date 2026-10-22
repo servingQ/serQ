@@ -327,9 +327,9 @@ pub struct Scope { pub parent: Option<ScopeId>, pub hold: Option<HoldSpec>, pub 
 called second-best: a preempted hold is re-executed with `computed`, the
 position it had reached, and the vLLM programs resume from it (#49). The
 Lean model sets `computed` on a preemption too (#250), and the oracle
-scenario `alone` preempts a request while it decodes (#323), so the two
-agree on that path (#63). The automaton itself, `states` and `scopes`, is
-open.
+scenario `alone` preempts a request while it decodes (#323), so the
+interpreter, the Lean model (`vllm_alone`) and vLLM's recorded run agree on
+that path (#63). The automaton itself, `states` and `scopes`, is open.
 
 ## 6. Step coalescing
 

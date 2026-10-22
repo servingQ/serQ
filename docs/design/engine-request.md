@@ -10,7 +10,9 @@ when it finishes. The client says what it sends and what it measures. The
 state, and `taking … reuse … cache` on `admit waiting` says what it holds
 ([The scheduler and the worker](scheduler-worker.md), #555, #592). Step 2's
 measurements are the report's `client` section ([What the client
-sees](client-metrics.md), #509). Step 3 went another way: the server stays,
+sees](client-metrics.md), #509); its routing did not move, and a server
+still chooses an instance (`examples/multi-turn/routing.sq`), since step 3
+kept the server. Step 3 went another way: the server stays,
 as the deployment's interface `server (P, …) reply (R, …)`, and the
 workload passes its values with `send (…)` ([The server's request
 interface](request-interface.md), #631). The text below is the design as
