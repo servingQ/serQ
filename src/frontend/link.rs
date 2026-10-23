@@ -770,38 +770,47 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
                     None
                 },
                 memory: sp.memory.as_ref().map(|m| lk.pool_base(m)).transpose()?,
-                iteration: match &sp.schedule {
-                    Schedule::Body(b) => Some(iteration(&lk, lk.stages[&s.name].0, b)?),
-                    // vLLM's procedure sets no register; one the program
-                    // declares would stay at its first value
-                    Schedule::Procedure(_) if !sp.state.is_empty() => {
+                iteration: {
+                    let body = match &sp.schedule {
+                        Schedule::Body(b) => Some(iteration(&lk, lk.stages[&s.name].0, b)?),
+                        Schedule::Procedure(None) => None,
+                        // `only (p)` shared by `advance running` and `admit
+                        // waiting` is the body that serves only `p` and
+                        // admits while the iteration has not preempted, each
+                        // newcomer `p` excludes waiting unserved (#355)
+                        Schedule::Procedure(Some(p)) => {
+                            let p = lk.expr(p)?;
+                            Some(vec![
+                                CIter::Serve {
+                                    only: Some(p.clone()),
+                                    by: None,
+                                },
+                                CIter::Admit {
+                                    only: Some(p),
+                                    gate: Some(CExpr::Unary(
+                                        UnOp::Not,
+                                        Box::new(CExpr::Ctx(CtxVar::Preempted)),
+                                    )),
+                                },
+                            ])
+                        }
+                    };
+                    // a register no `set` of the schedule writes, in an `if`
+                    // or not, stays at its first value: a `let` spelt a
+                    // second way. vLLM's procedure sets none; a body sets
+                    // what it says (#746)
+                    let set = |name: &str| {
+                        let r = lk.reg_index[name];
+                        sets(body.as_deref().unwrap_or(&[]), r)
+                    };
+                    if let Some((name, _)) = sp.state.iter().find(|(n, _)| !set(n)) {
                         return Err(LinkError::new(format!(
-                            "engine `{}`: register `{}` is set by nothing: a schedule that \
-                             sets it is written with `set {} = …;`",
-                            s.name, sp.state[0].0, sp.state[0].0
+                            "engine `{}`: register `{name}` is set by nothing: a schedule that \
+                             sets it is written with `set {name} = …;`",
+                            s.name
                         )));
                     }
-                    Schedule::Procedure(None) => None,
-                    // `only (p)` shared by `advance running` and `admit
-                    // waiting` is the body that serves only `p` and admits
-                    // while the iteration has not preempted, each newcomer
-                    // `p` excludes waiting unserved (#355)
-                    Schedule::Procedure(Some(p)) => {
-                        let p = lk.expr(p)?;
-                        Some(vec![
-                            CIter::Serve {
-                                only: Some(p.clone()),
-                                by: None,
-                            },
-                            CIter::Admit {
-                                only: Some(p),
-                                gate: Some(CExpr::Unary(
-                                    UnOp::Not,
-                                    Box::new(CExpr::Ctx(CtxVar::Preempted)),
-                                )),
-                            },
-                        ])
-                    }
+                    body
                 },
             }),
         };
@@ -1271,6 +1280,15 @@ fn serve(lk: &Linker, s: &Serve) -> LResult<CServe> {
         )]),
         Serve::By(keys) => CServe::By(keys.iter().map(|k| lk.expr(k)).collect::<Result<_, _>>()?),
         Serve::ExclusivePrefill => CServe::ExclusivePrefill,
+    })
+}
+
+/// Whether a statement of `body`, in a branch or not, sets register `r`.
+fn sets(body: &[CIter], r: usize) -> bool {
+    body.iter().any(|s| match s {
+        CIter::Set(q, _) => *q == r,
+        CIter::Branch(_, a, b) => sets(a, r) || sets(b, r),
+        CIter::Serve { .. } | CIter::Admit { .. } => false,
     })
 }
 

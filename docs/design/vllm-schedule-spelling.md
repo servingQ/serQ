@@ -115,7 +115,8 @@ longer links, with the refusal that names the rule's one schedule. And
 one program that did not link now does: `state k = 0;` with no `set k`
 and a gate spelt `!running.preempted` or `0 == running.preempted`,
 refused before (`src/frontend/link.rs:770`, "is set by nothing"), now
-links as a body (#746).
+links as a body (#746, since closed: a register its schedule does not
+`set` is refused, whatever the schedule's form).
 
 ## The two questions
 
