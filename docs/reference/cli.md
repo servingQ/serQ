@@ -238,7 +238,9 @@ read, because vLLM runs the model. A program with another policy is
 refused, and the error names the construct:
 
 - a schedule other than vLLM's, `advance running [order]; admit waiting
-  while (running.preempted == 0);`, and so an `only` and a register;
+  while (running.preempted == 0);` with its gate spelt so ([Engines on
+  devices](../language.md#engines-on-devices)), and so an `only` and a
+  register;
 - `exclusive prefill`, or `advance running by` keys that read anything but
   `decoding`, `admission`, numbers and arithmetic on them;
 - a selection key, an eviction key or a spill on a pool, a `preempt` other

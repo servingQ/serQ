@@ -321,34 +321,75 @@ fn the_newer_constructs_are_refused_and_vllms_schedule_taken() {
     }
 }
 
-/// An IR may carry vLLM's schedule as the body that writes it out, which the
-/// frontend lowers to no body: the target takes that body as vLLM's too.
+/// vLLM's schedule has one spelling, `running.preempted == 0` (#721): the
+/// frontend recognised `!running.preempted` and `0 == running.preempted`
+/// as the procedure too but not `running.preempted < 1`, so the target took
+/// or refused one program by how its gate was written. Every other spelling
+/// is now a body of the program's own, which the target refuses with the
+/// gate it read and the spelling, the body that writes the procedure out
+/// among them (#350 took it as vLLM's). The spelling is the gate's once each
+/// `def` is written out, so a `def` that writes it is the procedure.
 #[test]
-fn vllms_schedule_written_out_as_a_body_is_vllm() {
-    use serq::ir::{CExpr, CIter, CStageKind, CtxVar, UnOp};
-    let mut p = load(VLLM).unwrap();
-    let want = serq::target::vllm(&p).unwrap();
-    let st = p
-        .stages
-        .iter_mut()
-        .find_map(|s| match &mut s.kind {
-            CStageKind::Step(st) => Some(st),
-            _ => None,
-        })
+fn vllms_schedule_is_spelt_one_way() {
+    use serq::ir::{CExpr, CIter, CStageKind, CtxVar, Program, UnOp};
+    fn iteration(p: &Program) -> Option<Vec<CIter>> {
+        p.stages
+            .iter()
+            .find_map(|s| match &s.kind {
+                CStageKind::Step(st) => Some(st.iteration.clone()),
+                _ => None,
+            })
+            .unwrap()
+    }
+    let src = std::fs::read_to_string(root().join(VLLM)).unwrap();
+    let gate = "(running.preempted == 0)";
+    assert!(src.contains(gate), "the program's gate moved");
+    let named = src
+        .replace(
+            "fn main() {",
+            "def none_preempted() { running.preempted == 0 }\n\nfn main() {",
+        )
+        .replace(gate, "(none_preempted())");
+    for src in [&src, &named] {
+        let p = compile_vllm(&common::main_source(src), &common::horizon(10.0)).unwrap();
+        assert_eq!(iteration(&p), None);
+        serq::target::vllm(&p).unwrap();
+    }
+    for spelt in [
+        "(!running.preempted)",
+        "(0 == running.preempted)",
+        "(running.preempted < 1)",
+    ] {
+        let p = compile_vllm(
+            &common::main_source(&src.replace(gate, spelt)),
+            &common::horizon(10.0),
+        )
         .unwrap();
-    assert_eq!(st.iteration, None);
-    st.iteration = Some(vec![
-        CIter::Serve {
-            only: None,
-            by: None,
-        },
-        CIter::Admit {
-            only: None,
-            gate: Some(CExpr::Unary(
-                UnOp::Not,
-                Box::new(CExpr::Ctx(CtxVar::Preempted)),
-            )),
-        },
-    ]);
-    assert_eq!(serq::target::vllm(&p).unwrap(), want);
+        let body = iteration(&p).unwrap_or_else(|| panic!("{spelt} lowers to no body"));
+        if spelt == "(!running.preempted)" {
+            assert_eq!(
+                body,
+                vec![
+                    CIter::Serve {
+                        only: None,
+                        by: None,
+                    },
+                    CIter::Admit {
+                        only: None,
+                        gate: Some(CExpr::Unary(
+                            UnOp::Not,
+                            Box::new(CExpr::Ctx(CtxVar::Preempted)),
+                        )),
+                    },
+                ]
+            );
+        }
+        let e = serq::target::vllm(&p).unwrap_err();
+        let read = &spelt[1..spelt.len() - 1];
+        assert!(
+            e.contains(&format!("`vllm` has its own schedule, gated by `{read}`;"))
+                && e.contains("admit waiting while (running.preempted == 0);`, its gate spelt so"),
+            "{spelt}: {e}"
+        );
+    }
 }

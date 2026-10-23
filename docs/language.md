@@ -1174,10 +1174,11 @@ cannot be combined with it.
 vLLM's `schedule()` is the schedule `advance running; admit waiting while
 (running.preempted == 0);`: serve the running requests, then, unless the
 iteration preempted (`scheduler.py:869`), admit the waiting with the
-budget left. Any other schedule is written the same way. Its statements
-run once each in order: `advance running [only (p)] [order]` gives the
-running requests not yet served their tokens, skipping and leaving
-unserved those `p` excludes; `admit waiting [only (p)] [while (e)]` admits
+budget left; it is recognised by its gate's spelling ([Engines on
+devices](#engines-on-devices)). Any other schedule is written the same
+way. Its statements run once each in order: `advance running [only (p)]
+[order]` gives the running requests not yet served their tokens,
+skipping and leaving unserved those `p` excludes; `admit waiting [only (p)] [while (e)]` admits
 the heads of the queues the engine admits one at a time, each served at
 once unless `p` excludes it, while budget is left, the head fits and `e`
 is 1; and `if (e) { … } else { … }`. A guard and a `while` read the
@@ -1254,7 +1255,12 @@ read is named with a `def` (`def in_phase() { running.decoding > 0 ? decoding : 
 request; a schedule's `let` is read once as the iteration starts and only
 in `each at most`, so it cannot name one. `exclusive prefill; admit
 waiting while (running.preempted == 0);` is the `ExclusivePrefill` order.
-Any other schedule is the step's iteration body; `exclusive prefill`
+Both are recognised by their gate, `running.preempted == 0` once each
+`def` is written out; a gate that computes the same written otherwise
+(`!running.preempted`, `0 == running.preempted`) makes the schedule a
+body, which runs as the procedure does and which `serq target` refuses,
+and with `exclusive prefill` does not link. Any other schedule is the
+step's iteration body; `exclusive prefill`
 appears only in the form above, since it takes back decodes a body cannot.
 `each at most` chooses among constants (its condition may read the
 iteration) or `max(k, e)`, `e` read as the condition is and `k` a

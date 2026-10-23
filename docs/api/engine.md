@@ -115,6 +115,10 @@ while nothing was preempted (`scheduler.py:624`, `scheduler.py:869`):
 scheduler { advance running; admit waiting while (running.preempted == 0); }
 ```
 
+This spelling of the gate is the engine's built-in procedure and the one
+`serq target` takes; the same test written otherwise is a schedule of the
+program's own ([Engines on devices](../language.md#engines-on-devices)).
+
 Guards and `while` conditions read the running requests as they stand, the
 tokens scheduled so far (`batch.tokens`, `batch.prefilled`),
 `waiting.admitted`, `running.preempted`, pool and stage queries, and
