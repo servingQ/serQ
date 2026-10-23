@@ -219,7 +219,9 @@ A program can rely on the following invariants. Each one says what holds it:
    a `run` with work, a `hold` whose body does, or `end`. A schedule that can
    neither advance nor admit does not link. What the linker cannot see is
    reported at run time: `stuck` sessions and `idle: engine …`
-   ([the report](reference/cli.md)). *Linker and run-time check.*
+   ([the report](reference/cli.md)), and a session that can never complete
+   ends the run blocked, exit 3 ([exit status](reference/cli.md#exit-status)).
+   *Linker and run-time check.*
 
 ### Resources
 

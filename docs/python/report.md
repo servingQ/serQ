@@ -17,6 +17,7 @@ Its attributes are read-only.
 | `ended` | `int` | Sessions that ended. |
 | `turns` | `int` | Turns counted by the run. |
 | `mean_live` | `float` | Time-average number of live sessions after warm-up. |
+| `blocked` | `bool` | The run ended with a session that never completes: some pool's `outgrown` or `deadlocked` is above 0 (`serq run` [exits 3](../reference/cli.md#exit-status)). |
 | `observes` | `dict[str, Observe]` | Observations in program order. A new dictionary on each access. |
 | `client` | `dict[str, Observe]` | What each turn's client saw: `ttft`, `tpot` and `response`, in that order, whatever the program observes ([client metrics](../language.md#what-the-client-sees)). A new dictionary on each access. |
 | `gauges` | `dict[str, Gauge]` | Gauges in program order. A new dictionary on each access. |

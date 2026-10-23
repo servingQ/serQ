@@ -99,6 +99,12 @@ impl Report {
     fn mean_live(&self) -> f64 {
         self.0.mean_live
     }
+    /// The run ended with a session that never completes
+    /// (`serq::Report::blocked`; `serq run` exits 3).
+    #[getter]
+    fn blocked(&self) -> bool {
+        self.0.blocked()
+    }
     /// The serq that ran (`__version__`), as `serq run --json` records it.
     #[getter]
     fn serq_version(&self) -> &'static str {

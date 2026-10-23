@@ -48,6 +48,24 @@ server { set t0 = now; hold reqs (cost(reqs, 1)) { run svc (cost(svc, 2)); } obs
 claim none : at end (count(response) == 0);
  }"""
 
+# a request that grows past its pool's cap and preempts itself for ever (#64,
+# tests/pool_semantics.rs::a_hold_that_can_never_fit_is_reported_outgrown);
+# with `tokens cap 32`, three of 60 + 60 that thrash and all end
+LIVELOCK = """fn main() { device gpu { kv cap 160; }
+engine llm on gpu { reqs cap 4; tokens cap 1000;
+  scheduler { advance running; admit waiting while (running.preempted == 0) taking reqs (1), kv (100) reserve (100); }
+  worker { forward (1); } }
+pool reqs on llm { } pool kv on gpu { block 16; evict lru; preempt lifo; }
+server { llm (100, 101); }
+ }"""
+THRASH = """fn main() { device gpu { kv cap 160; }
+engine llm on gpu { reqs cap 4; tokens cap 32;
+  scheduler { advance running; admit waiting while (running.preempted == 0) taking reqs (1), kv (min(request.known, budget_left(llm))) reserve (16); }
+  worker { forward (1); } }
+pool reqs on llm { } pool kv on gpu { block 16; evict lru; preempt lifo; }
+server { llm (60, 60); }
+ }"""
+
 
 def cli(path, *args, workload=None):
     d = tempfile.mkdtemp(prefix="pyserq-")
@@ -123,7 +141,8 @@ def test_the_report_is_its_json_by_name():
     fails = pyserq.run(pyserq.compile(source=CLAIMED, workload_source="workload { arrive batch(2); }", horizon=100))
     assert live.claim("none").result == "not_evaluated" and "live" in live.claim("none").note
     assert fails.claim("none").result == "fails" and fails.claim("none").first == fails.end
-    for r in [pyserq.run(pyserq.compile(MG1, workload=PAIRS[MG1], seed=4, horizon=20000.0, warmup=1000.0)), arrays, replay, kong, live, fails]:
+    blocked = pyserq.run(pyserq.compile(source=LIVELOCK, workload_source="workload { arrive batch(1); }", horizon=400))
+    for r in [pyserq.run(pyserq.compile(MG1, workload=PAIRS[MG1], seed=4, horizon=20000.0, warmup=1000.0)), arrays, replay, kong, live, fails, blocked]:
         js = json.loads(r.json())
         scalars = {k: v for k, v in js.items() if k not in ("observes", "client", "status", "gauges", "claims", "stages", "pools")}
         # every field, both ways: nothing JSON has is missing, nothing it lacks is added
@@ -171,6 +190,22 @@ def test_the_report_is_its_json_by_name():
     assert type(replay.pools[0]).__module__ == "pyserq" and type(replay.client["ttft"]).__module__ == "pyserq"
     assert kong.claim("queueing_bound").result == "holds" and type(kong.claim("queueing_bound")).__module__ == "pyserq"
     assert pyserq.run(pyserq.compile(MG1, workload=PAIRS[MG1], horizon=5.0, warmup=0.0)).client["response"].ci == math.inf
+
+
+def test_a_blocked_run_says_so():
+    # the verdict `serq run` exits 3 on, as a property and as the JSON's field
+    r = pyserq.run(pyserq.compile(source=LIVELOCK, workload_source="workload { arrive batch(1); }", horizon=400))
+    assert r.blocked is True and json.loads(r.json())["blocked"] is True
+    assert r.pool("kv").outgrown == 1 and r.pool("kv").stuck == 1 and r.ended == 0
+    # thrash counts `stuck` and ends: no verdict
+    r = pyserq.run(pyserq.compile(source=THRASH, workload_source="workload { arrive batch(3); }", horizon=2000))
+    assert r.blocked is False and r.pool("kv").stuck > 0 and r.ended == 3
+    d = Path(tempfile.mkdtemp(prefix="pyserq-"))
+    (d / "deployment.sq").write_text(LIVELOCK)
+    (d / "workload.sq").write_text("workload { arrive batch(1); }")
+    out = subprocess.run([CLI, "run", str(d / "deployment.sq"), "--workload", str(d / "workload.sq"), "--horizon", "400", "--json"],
+                         capture_output=True, text=True)
+    assert out.returncode == 3 and json.loads(out.stdout)["blocked"] is True
 
 
 def test_program_text_with_run_options():

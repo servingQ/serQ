@@ -21,10 +21,12 @@ One pool's report row. Obtain it from [`Report.pool`](report.md#pool),
 | `preemptions` | `int` | Preemptions counted by this pool. |
 | `spills` | `int` | Spills of evicted prefixes to another pool. |
 | `rejected` | `int` | Requests rejected because static demand could never fit. |
-| `stuck` | `int` | Repeated preemptions without progress past the previous preemption. |
+| `stuck` | `int` | Sessions preempted again without progress past the previous preemption; thrash counts too. |
+| `outgrown` | `int` | Live sessions at run end whose open hold asked to grow this pool past its capacity. |
+| `deadlocked` | `int` | Sessions waiting at this pool, at run end, for room that only sessions waiting like them hold. |
 | `over_cap` | `tuple[str, float]` or `None` | At run end, the waiting queue name and demand exceeding this pool's capacity; `None` when absent. |
 | `growing_at_end` | `int` | Holds waiting to grow in this pool when the run ends. |
-| `growing_stalled` | `bool` | Every session with an allocation in this pool waits to grow in it: none will free room. |
+| `growing_stalled` | `bool` | One of those growths is `deadlocked`: no event will free room for it. |
 
 Pool counters include warm-up; time averages and admission wait samples
 use the measured interval.

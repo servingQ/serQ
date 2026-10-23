@@ -131,8 +131,21 @@ pub struct PoolReport {
     pub spills: u64,
     pub rejected: u64,
     /// Sessions preempted a second time without progress past their
-    /// previous preemption: a livelock the run would otherwise hide.
+    /// previous preemption. A livelock does this, and so does a re-prefill
+    /// preempted again under overload, which completes (#480): a measure of
+    /// thrash, not a verdict. The livelock is `outgrown`.
     pub stuck: u64,
+    /// Sessions live at the end with an open hold that asked to grow this
+    /// pool past its cap, counting what their holds of it keep: no
+    /// preemption makes room, so the hold waits for ever or, preempted, runs
+    /// again to the same growth (a livelock). One of the two witnesses of
+    /// `blocked` (`docs/design/blocked-run.md`).
+    pub outgrown: u64,
+    /// Sessions that wait at this pool, in its queue or to grow in it, for
+    /// room that only sessions waiting like them hold, with no lease to
+    /// expire, no tick over the cap and no preemption to come: a deadlock.
+    /// One of the two witnesses of `blocked`.
+    pub deadlocked: u64,
     /// The run ended with the head of a queue asking this pool for more
     /// than its cap: the queue's pool and what the head asks. A hold whose
     /// units or `reserve` read the deployment's state is not rejected when
@@ -142,11 +155,23 @@ pub struct PoolReport {
     /// did not fit and that the pool's `preempt` did not make room for
     /// waits, for room another holder may free (#238).
     pub growing_at_end: u64,
-    /// Every session with an allocation in this pool is one of those
-    /// waiting to grow in it: none will free room, so they wait for ever
-    /// (a hold around one on the same pool, or holders waiting on each
-    /// other).
+    /// One of those growths is among the `deadlocked`: no event will free
+    /// room for it (a hold around it on the same pool, or holders waiting
+    /// on each other, and no lease of the pool that expires).
     pub growing_stalled: bool,
+}
+
+impl PoolReport {
+    /// The run ended with a session at this pool that never completes:
+    /// `outgrown` or `deadlocked` (`docs/design/blocked-run.md`).
+    pub fn blocked(&self) -> bool {
+        self.outgrown > 0 || self.deadlocked > 0
+    }
+
+    /// The pool's name in a report: `kvD[0]` for an array member.
+    pub fn label(&self) -> String {
+        label(&self.name, self.index)
+    }
 }
 
 /// An engine request's status (`engine::state::Status`) over the run: the
@@ -302,6 +327,16 @@ pub struct Report {
 }
 
 impl Report {
+    /// The run ended blocked: at some pool, a session that no event of the
+    /// run would complete (`PoolReport::blocked`). The one predicate `serq
+    /// run` reads, exiting 3 after the report, and pyserq's
+    /// `Report.blocked` and the JSON's `blocked` with it; a slow run, a
+    /// thrashing one (`stuck`) or an overloaded one is not blocked
+    /// (`docs/design/blocked-run.md`).
+    pub fn blocked(&self) -> bool {
+        self.pools.iter().any(PoolReport::blocked)
+    }
+
     /// Write every observation as `<name>.csv` with columns
     /// `time,session,turn,value` into `dir`, the client's metrics as
     /// `client/<name>.csv` alike, and every gauge's change points as
@@ -551,11 +586,30 @@ impl Report {
                         label(&p.name, p.index)
                     );
                 }
+                if p.outgrown > 0 {
+                    let _ = writeln!(
+                        s,
+                        "outgrown: {} session(s) live at the end asked to grow pool `{}` past its \
+                         cap in a hold they keep open: no preemption makes room, and the hold \
+                         never completes",
+                        p.outgrown,
+                        label(&p.name, p.index)
+                    );
+                }
+                if p.deadlocked > 0 {
+                    let _ = writeln!(
+                        s,
+                        "deadlock: {} session(s) wait at pool `{}` for room that only sessions \
+                         waiting like them hold, and no event will free it",
+                        p.deadlocked,
+                        label(&p.name, p.index)
+                    );
+                }
                 if p.growing_at_end > 0 {
                     let pool = label(&p.name, p.index);
                     let why = if p.growing_stalled {
                         format!(
-                            "and every holder of `{pool}` is one of them, so none will free room \
+                            "and every holder of `{pool}` waits too, so none will free room \
                              (a hold around one on the same pool, or holders waiting on each \
                              other)"
                         )
@@ -600,7 +654,7 @@ impl Report {
         let _ = write!(s, "\"serq_version\":\"{}\",", crate::VERSION);
         let _ = write!(
             s,
-            "\"horizon\":{},\"end\":{},\"warmup\":{},\"seed\":{},\"events\":{},\"arrivals\":{},\"ended\":{},\"turns\":{},\"mean_live\":{}",
+            "\"horizon\":{},\"end\":{},\"warmup\":{},\"seed\":{},\"events\":{},\"arrivals\":{},\"ended\":{},\"turns\":{},\"mean_live\":{},\"blocked\":{}",
             f(self.horizon),
             f(self.end),
             f(self.warmup),
@@ -609,7 +663,8 @@ impl Report {
             self.arrivals,
             self.ended,
             self.turns,
-            f(self.mean_live)
+            f(self.mean_live),
+            self.blocked()
         );
         for (key, list) in [("observes", &self.observes), ("client", &self.client)] {
             let _ = write!(s, ",\"{key}\":{{");
@@ -719,7 +774,7 @@ impl Report {
             }
             let _ = write!(
                 s,
-                "{{\"name\":\"{}\",\"index\":{},\"mean_used\":{},\"mean_cached\":{},\"mean_queue\":{},\"mean_holders\":{},\"mean_wait\":{},\"admissions\":{},\"evicted_entries\":{},\"evicted_units\":{},\"preemptions\":{},\"spills\":{},\"rejected\":{},\"stuck\":{},\"over_cap\":{},\"growing_at_end\":{},\"growing_stalled\":{}}}",
+                "{{\"name\":\"{}\",\"index\":{},\"mean_used\":{},\"mean_cached\":{},\"mean_queue\":{},\"mean_holders\":{},\"mean_wait\":{},\"admissions\":{},\"evicted_entries\":{},\"evicted_units\":{},\"preemptions\":{},\"spills\":{},\"rejected\":{},\"stuck\":{},\"outgrown\":{},\"deadlocked\":{},\"over_cap\":{},\"growing_at_end\":{},\"growing_stalled\":{}}}",
                 p.name,
                 index(p.index),
                 f(p.mean_used),
@@ -734,6 +789,8 @@ impl Report {
                 p.spills,
                 p.rejected,
                 p.stuck,
+                p.outgrown,
+                p.deadlocked,
                 match &p.over_cap {
                     Some((queue, need)) =>
                         format!("{{\"queue\":\"{queue}\",\"need\":{}}}", f(*need)),

@@ -765,7 +765,8 @@ lease. A run that ends with sessions and legs waiting only for each other,
 one waiting for a send and none for a send or lease that will expire, is
 an error: the leg waits for memory a send holds, and the send's session
 waits inside a hold the leg's session needs (a hold-and-wait cycle; a
-finite `ttl` breaks it).
+finite `ttl` breaks it). Without a send among them, the report counts
+them as `deadlocked` and the run ends blocked (Statistics, below).
 
 ### Pools
 
@@ -1133,7 +1134,8 @@ victim. It lasts `worker`'s time at zero tokens, which is a modelling
 choice: the real engine skips the forward pass of an empty step, so the
 fixed part of the time overstates it. A hold whose body can never fit then
 preempts itself forever (vLLM refuses such a KV cache at start-up, above);
-the `stuck` counter below reports it. A hold that reserves what it will
+the report counts it as `outgrown` and `serq run` exits 3 (Statistics,
+below). A hold that reserves what it will
 need (`reserve (known)` after a preemption) is rejected instead, once the
 reservation is above the cap.
 
@@ -1622,13 +1624,33 @@ time, session and turn. `--dump DIR` exports these samples. The
 resource counters.
 
 `stuck` counts sessions preempted again without advancing past their previous
-preemption. Such sessions do not contribute completed response samples.
-`growing_at_end` counts the holds still waiting to grow when the run ends
-(`grow:` in the text report): under `preempt none`, or with nothing the
-pool's `preempt` may take, a growth waits for room another holder frees.
-When every session holding the pool is one of those waiting
-(`growing_stalled`), none will: a hold around one on the same pool keeps
-what it needs, or the holders wait on each other (#238).
+preemption. A request re-prefilled after a preemption may be preempted
+again lower down and still complete, so under overload `stuck` measures
+thrash. `growing_at_end` counts the holds still waiting to grow when the
+run ends (`grow:` in the text report): under `preempt none`, or with
+nothing the pool's `preempt` may take, a growth waits for room another
+holder frees.
+
+A run ends *blocked* when the report finds a session that no event of the
+run would complete, at some pool:
+
+- `outgrown`: the session's open hold asked to grow the pool past its
+  cap, counting what its holds of the pool keep. No preemption makes
+  room: the hold waits for ever, or is preempted and runs again to the
+  same growth (the self-preemption above).
+- `deadlocked`: the session waits at the pool, in its queue or to grow
+  in it, for room that only sessions waiting like it hold, and no lease
+  of the pool expires, no tick ends a lease over its cap, and no growth
+  there may preempt one of them (a hold around a growth on the same pool,
+  or holds taken in opposite orders). A hold whose units read the clock,
+  a draw or the state may ask less later, and is not counted. A growth
+  among them is `growing_stalled`.
+
+The report says `blocked`, and `serq run` prints it and exits 3
+([exit status](reference/cli.md#exit-status)). Sessions live at the end, a
+long queue, `stuck`, `over_cap` and an engine `idle:` are results, not
+this verdict: each of them can still move.
+
 A boolean observation that remains zero for at least 40 samples produces
 a report note, not an error.
 

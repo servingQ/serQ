@@ -335,15 +335,6 @@ fn grows_in(s: &Session, pool: usize) -> bool {
     matches!(s.status, Status::Growing(q, ..) if q == pool)
 }
 
-/// Whether the session has an allocation in pool `pool`: a hold of it, or
-/// a lease, which frees it when it ends.
-fn allocates_in(s: &Session, pool: usize) -> bool {
-    s.holds
-        .iter()
-        .any(|h| h.pools.iter().any(|held| held.pool == pool))
-        || s.leases.iter().any(|l| l.pool == pool)
-}
-
 /// The sessions among a pool's `holders`, which has an entry per hold and
 /// per lease: a session holding the pool twice is one.
 fn sessions_in(holders: &[usize]) -> usize {
@@ -436,9 +427,17 @@ struct Session<'p> {
     /// Per pool, the position the session's hold had reached on that pool
     /// when it was last preempted for it; cleared when a hold completes. A
     /// second preemption for the same pool at the same or a lower position
-    /// is no progress there: the session is `stuck`.
+    /// is counted (`stuck`): under overload a re-prefill is preempted
+    /// lower down and still completes (#480), so it is no verdict.
     preempt_pos: HashMap<usize, f64>,
     stuck: bool,
+    /// The pools on which an open hold of the session asked to grow past
+    /// the cap, counting what its holds there keep (`grow`); cleared, as
+    /// `preempt_pos` is, when a hold of that pool completes, so it outlives
+    /// the hold's preemptions and re-executions. A session live at the end
+    /// with one is a hold no schedule completes (`outgrown`,
+    /// `docs/design/blocked-run.md`).
+    outgrown: Vec<usize>,
     /// Per pool, the chain along which the session or one of its legs last
     /// cached there: the key `cachedin` reads the pool by when no hold of
     /// the session names it (#595: a `prefix` keys only the pools its hold
@@ -609,7 +608,9 @@ struct PoolState {
     spills: u64,
     rejected: u64,
     /// Sessions preempted again without having advanced past the position
-    /// of their previous preemption (a self-preemption livelock, typically).
+    /// of their previous preemption: a livelock does this, and so does a
+    /// re-prefill thrashing under overload, which completes (#480). The
+    /// livelock is told by its growth past the cap (`Session::outgrown`).
     stuck: u64,
 }
 
@@ -1265,12 +1266,12 @@ impl<'p> Interp<'p> {
         if let Some(error) = self.error.take() {
             return Err(error);
         }
-        let stuck = self.waiting_for_each_other();
-        if stuck
+        let waiting = self.waiting_for_each_other();
+        if waiting
             .iter()
             .any(|&s| matches!(self.sessions[s].status, Status::AwaitingSend(_)))
         {
-            let who: Vec<String> = stuck.iter().map(|&s| self.waiting_at(s)).collect();
+            let who: Vec<String> = waiting.iter().map(|&s| self.waiting_at(s)).collect();
             return Err(format!(
                 "the run ends with sessions that wait for each other: {}. A leg waits for \
                  memory that a send holds until its session's copy, and the session waits \
@@ -1301,7 +1302,7 @@ impl<'p> Interp<'p> {
         } else {
             self.now = p.horizon;
         }
-        Ok(self.report())
+        Ok(self.report(&waiting))
     }
 
     /// Evaluate every gauge on the state an instant's last event left (the
@@ -1675,6 +1676,7 @@ impl<'p> Interp<'p> {
             script: script.map(|k| (k, 0)),
             adm_seq: u64::MAX,
             preempt_pos: HashMap::new(),
+            outgrown: Vec::new(),
             cached_chain: HashMap::new(),
             stuck: false,
             leases: vec![],
@@ -1996,6 +1998,7 @@ impl<'p> Interp<'p> {
             script: None,
             adm_seq: u64::MAX,
             preempt_pos: HashMap::new(),
+            outgrown: Vec::new(),
             cached_chain: HashMap::new(),
             stuck: false,
             leases: vec![],
@@ -2101,10 +2104,16 @@ impl<'p> Interp<'p> {
     }
 
     /// The sessions and legs that wait for each other and nothing else: a
-    /// hold that does not fit a pool every holder of which is one of them
-    /// (a lease's or a send's holder is its session), and a load waiting
-    /// for a send whose live legs all are. No event will release what they
-    /// wait for.
+    /// hold with a part that can never fit its pool, every holder of which
+    /// is one of them (a lease's or a send's holder is its session); a
+    /// growth that does not fit such a pool; and a load waiting for a send
+    /// whose live legs all are. No event will release what they wait for:
+    /// a pool none of whose holders moves frees room only by a lease's
+    /// expiry, a tick over the cap, or a growth that preempts one of them,
+    /// and a pool where one of those may come is not counted
+    /// (`docs/design/blocked-run.md`). `run` fails on a load among them (a
+    /// send's hold-and-wait cycle, #372) and the report counts the rest
+    /// (`deadlocked`, `growing_stalled`).
     fn waiting_for_each_other(&self) -> Vec<usize> {
         let n = self.sessions.len();
         let live_legs = |s: usize| {
@@ -2116,10 +2125,32 @@ impl<'p> Interp<'p> {
                 })
                 .map(|(l, _)| l)
         };
+        // room that comes without an event of the pool's holders: a lease
+        // that expires, a tick that ends leases over the cap, or the growth
+        // of a later admission, which may preempt a holder (`candidates`,
+        // `lessees`; an engine's are its residents, none of these sessions)
+        let frees_by_itself = |pl: usize| {
+            let pool = &self.pools[pl];
+            self.sessions.iter().any(|x| {
+                x.leases
+                    .iter()
+                    .any(|l| l.pool == pl && l.expires.is_finite())
+            }) || (pool.next_tick.is_some() && pool.used > pool.cap + EPS)
+                || match &self.p.pools[pl].preempt {
+                    Preempt::None => false,
+                    Preempt::By { .. } => !self.candidates(pl).is_empty(),
+                    Preempt::Leases { .. } => !self.lessees(pl).is_empty(),
+                }
+        };
         let mut stuck: Vec<bool> = self
             .sessions
             .iter()
-            .map(|x| matches!(x.status, Status::Queued(_) | Status::AwaitingSend(_)))
+            .map(|x| {
+                matches!(
+                    x.status,
+                    Status::Queued(_) | Status::Growing(..) | Status::AwaitingSend(_)
+                )
+            })
             .collect();
         loop {
             let mut changed = false;
@@ -2127,37 +2158,30 @@ impl<'p> Interp<'p> {
                 if !stuck[s] {
                     continue;
                 }
+                let held_still = |pl: usize| {
+                    let holders = &self.pools[pl].holders;
+                    !holders.is_empty() && holders.iter().all(|&h| stuck[h]) && !frees_by_itself(pl)
+                };
                 let keep = match &self.sessions[s].status {
                     // no live leg will leave the send it waits for
                     Status::AwaitingSend(_) => live_legs(s).all(|l| stuck[l]),
+                    // a part that does not fit a pool held still is never
+                    // admitted, whatever the other parts ask
                     Status::Queued(_) => {
                         let pending = self.sessions[s].pending.as_ref().expect("queued");
-                        let short: Vec<usize> = pending
-                            .pools
-                            .iter()
-                            // `need` as admission last read it, or the units
-                            // as the hold asked for them
-                            .filter(|w| {
-                                !self.fits(w.pool, self.round_up(w.pool, w.need.max(w.units)))
-                            })
-                            .map(|w| w.pool)
-                            .collect();
-                        // a lease that expires frees its pool without an event
-                        // of theirs
-                        let expiring = |pl: usize| {
-                            self.sessions.iter().any(|x| {
-                                x.leases
-                                    .iter()
-                                    .any(|l| l.pool == pl && l.expires.is_finite())
-                            })
-                        };
-                        !short.is_empty()
-                            && short.iter().all(|&pl| {
-                                let holders = &self.pools[pl].holders;
-                                !holders.is_empty()
-                                    && holders.iter().all(|&h| stuck[h])
-                                    && !expiring(pl)
-                            })
+                        pending.pools.iter().any(|w| {
+                            self.least_ask(s, pending, w)
+                                .is_some_and(|ask| !self.fits(w.pool, ask))
+                                && held_still(w.pool)
+                        })
+                    }
+                    // the growth asks what it asked (`retry_growers`)
+                    &Status::Growing(pl, units, _) => {
+                        self.grown(s, pl).is_some_and(|g| {
+                            let alloc = self.grown_alloc(s, g);
+                            let need = self.round_up(pl, alloc + units) - alloc;
+                            !self.fits_grown(pl, need, s, g)
+                        }) && held_still(pl)
                     }
                     _ => false,
                 };
@@ -2173,6 +2197,29 @@ impl<'p> Interp<'p> {
         (0..n).filter(|&s| stuck[s]).collect()
     }
 
+    /// The least a queued hold's part `w` can ask of its pool at a later
+    /// try while the sessions it waits for stand still, or `None` when its
+    /// units read the clock, a draw or the state (`ir::moves`), which a
+    /// later try may read lower: the rule `enqueue_hold` rejects by. Its
+    /// cached prefix that other live holds keep allocated is not asked for
+    /// again (`fits_all`), and all of it is taken off, whatever `reuse`
+    /// bounds it by.
+    fn least_ask(&self, s: usize, pending: &Pending<'p>, w: &Wanted<'p>) -> Option<f64> {
+        if crate::ir::moves(w.expr) {
+            return None;
+        }
+        let shared = if pending.cache.is_some() {
+            let serial = self.sessions[s].serial;
+            let chain = self.pool_chain(w.pool, &pending.chain, serial);
+            self.pools[w.pool]
+                .cache
+                .locked_along(&chain, f64::INFINITY, serial)
+        } else {
+            0.0
+        };
+        Some(self.round_up(w.pool, w.units) - shared)
+    }
+
     /// What a stuck session waits at, for an error.
     fn waiting_at(&self, s: usize) -> String {
         let x = &self.sessions[s];
@@ -2183,6 +2230,9 @@ impl<'p> Interp<'p> {
         };
         match x.status {
             Status::Queued(pl) => format!("{who} waits at `{}`", self.p.pools[pl].name),
+            Status::Growing(pl, ..) => {
+                format!("{who} waits to grow in `{}`", self.p.pools[pl].name)
+            }
             _ => format!("{who} waits for the send its load reads"),
         }
     }
@@ -2250,11 +2300,9 @@ impl<'p> Interp<'p> {
                             .pop()
                             .expect("hold frame has a hold");
                         self.end_hold(sid, &h);
-                        // this hold completed: its pools' preemption positions
-                        // are history (an enclosing hold keeps its own), and
-                        // there is nothing to resume from
+                        // this hold completed: there is nothing to resume from
                         for e in &h.pools {
-                            self.sessions[sid].preempt_pos.remove(&e.pool);
+                            self.hold_done(sid, e.pool);
                         }
                         let slot_computed = self.p.slot_computed;
                         self.sessions[sid].attrs[slot_computed] = 0.0;
@@ -2993,7 +3041,7 @@ impl<'p> Interp<'p> {
             let sent = (self.sessions[sid].leases.len() > leases).then_some(leases);
             self.request_finished(sid, sent);
             for e in &h.pools {
-                self.sessions[sid].preempt_pos.remove(&e.pool);
+                self.hold_done(sid, e.pool);
             }
             let slot_computed = self.p.slot_computed;
             self.sessions[sid].attrs[slot_computed] = 0.0;
@@ -4099,7 +4147,17 @@ impl<'p> Interp<'p> {
             cache,
             (&chain, e.shared, &e.path),
         );
-        self.sessions[sid].preempt_pos.remove(&pl);
+        self.hold_done(sid, pl);
+    }
+
+    /// A hold of `sid` on `pl` completed (its scope's end, its request's
+    /// end, or its `release`): what the session recorded on `pl`, the
+    /// position of its last preemption there and a growth past the cap, is
+    /// history (an enclosing hold on another pool keeps its own).
+    fn hold_done(&mut self, sid: usize, pl: usize) {
+        let s = &mut self.sessions[sid];
+        s.preempt_pos.remove(&pl);
+        s.outgrown.retain(|&q| q != pl);
     }
 
     /// `load P (n)`: the KV of `n` tokens arrived from outside the engine;
@@ -4239,6 +4297,22 @@ impl<'p> Interp<'p> {
         let need = target - alloc_now;
         if need <= 0.0 {
             return true;
+        }
+        if matches!(g, Grown::Hold(..)) && !self.sessions[sid].outgrown.contains(&pl) {
+            // what the session's holds of `pl` keep allocated while this one
+            // is open, a prefix one reads through another's allocation left
+            // out: past the cap with the growth, no preemption makes room
+            // and no schedule completes the hold (`outgrown`)
+            let kept: f64 = self.sessions[sid]
+                .holds
+                .iter()
+                .flat_map(|h| h.pools.iter())
+                .filter(|e| e.pool == pl)
+                .map(|e| e.alloc - e.shared)
+                .sum();
+            if kept + need > self.pools[pl].cap + EPS {
+                self.sessions[sid].outgrown.push(pl);
+            }
         }
         if matches!(g, Grown::Lease(_)) && target > self.pools[pl].cap + EPS {
             // ending every lease would not make room: the growth would end
@@ -6524,7 +6598,9 @@ impl<'p> Interp<'p> {
         }
     }
 
-    fn report(&mut self) -> Report {
+    /// The report of the run, `waiting` the sessions that wait for each
+    /// other at its end (`waiting_for_each_other`).
+    fn report(&mut self, waiting: &[usize]) -> Report {
         if std::env::var_os("SERQ_DUMP_POOLS").is_some() {
             self.debug_pools();
         }
@@ -6606,6 +6682,19 @@ impl<'p> Interp<'p> {
             Some(i) => format!("{}[{i}]", p.pools[q].name),
             None => p.pools[q].name.clone(),
         };
+        // the pool a session waits at: its queue's, or where it grows (a
+        // load among them failed the run)
+        let waits_at = |s: usize| match self.sessions[s].status {
+            Status::Queued(q) | Status::Growing(q, ..) => Some(q),
+            _ => None,
+        };
+        let deadlocked = |i: usize| waiting.iter().filter(|&&s| waits_at(s) == Some(i)).count();
+        let outgrown = |i: usize| {
+            self.sessions
+                .iter()
+                .filter(|s| s.status != Status::Ended && s.outgrown.contains(&i))
+                .count()
+        };
         let pools = self
             .pools
             .iter()
@@ -6626,17 +6715,14 @@ impl<'p> Interp<'p> {
                 spills: pl.spills,
                 rejected: pl.rejected,
                 stuck: pl.stuck,
+                outgrown: outgrown(i) as u64,
+                deadlocked: deadlocked(i) as u64,
                 over_cap: over
                     .iter()
                     .find(|(asked, _, _)| *asked == i)
                     .map(|&(_, q, need)| (label(q), need)),
                 growing_at_end: self.sessions.iter().filter(|s| grows_in(s, i)).count() as u64,
-                growing_stalled: self.sessions.iter().any(|s| grows_in(s, i))
-                    && self
-                        .sessions
-                        .iter()
-                        .filter(|s| allocates_in(s, i))
-                        .all(|s| grows_in(s, i)),
+                growing_stalled: waiting.iter().any(|&s| grows_in(&self.sessions[s], i)),
             })
             .collect();
         Report {

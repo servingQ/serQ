@@ -77,6 +77,7 @@ fn the_report_has_the_shape_its_version_names() {
     let want = (
         vec![
             "arrivals",
+            "blocked",
             "client",
             "end",
             "ended",
@@ -118,6 +119,7 @@ fn the_report_has_the_shape_its_version_names() {
         ],
         vec![
             "admissions",
+            "deadlocked",
             "evicted_entries",
             "evicted_units",
             "growing_at_end",
@@ -129,6 +131,7 @@ fn the_report_has_the_shape_its_version_names() {
             "mean_used",
             "mean_wait",
             "name",
+            "outgrown",
             "over_cap",
             "preemptions",
             "rejected",
@@ -581,7 +584,10 @@ fn a_test_observe_that_never_held_is_noted() {
 /// A growth that waits for room a hold around it on the same pool keeps
 /// (#238): the outer hold takes 1008 of 2015, the inner one grows from 16
 /// to 1008, and with `preempt none` and no cache it waits for ever. The
-/// report said `stuck 0` and an `idle:` note that blamed the schedule.
+/// report said `stuck 0` and an `idle:` note that blamed the schedule. Its
+/// last growth asks 1008 + 1008 > 2015 of what the session's holds keep
+/// (`outgrown`), and it waits for room only it holds (`deadlocked`): the
+/// run is `blocked` (#64).
 #[test]
 fn a_growth_left_waiting_is_noted() {
     let src = "device gpu { kv cap 2015; }
@@ -611,14 +617,54 @@ fn a_growth_left_waiting_is_noted() {
     .unwrap();
     assert_eq!(r.pools[0].growing_at_end, 1);
     assert!(r.pools[0].growing_stalled);
+    assert_eq!((r.pools[0].outgrown, r.pools[0].deadlocked), (1, 1));
+    assert!(r.blocked());
+    for note in [
+        "grow: 1 hold(s) wait to grow in pool `kv` when the run ends, and every holder of \
+         `kv` waits too",
+        "outgrown: 1 session(s) live at the end asked to grow pool `kv` past its cap",
+        "deadlock: 1 session(s) wait at pool `kv`",
+    ] {
+        assert!(r.text().contains(note), "{note}\n{}", r.text());
+    }
+}
+
+/// A growth that waits for room its own lease will free: the first hold
+/// of 100 of 160 ends into a lease of 50 s, the second holds 16 and grows
+/// by 64, which does not fit beside the lease (100 + 16 + 64 > 160) and
+/// waits. The lease is the session's, and the session waits, but the lease
+/// expires at t = 51 without an event of its: at horizon 40 the growth is
+/// waiting and not stalled, nothing is `deadlocked`, and 16 + 64 is no
+/// growth past the cap; at horizon 100 the session has ended. The rule
+/// before #64 called it stalled (every session with an allocation in the
+/// pool waited to grow there), which the lease's expiry made false.
+#[test]
+fn a_growth_an_expiring_lease_will_free_is_not_stalled() {
+    let src = "pool kv { cap 160; }
+        stage d : delay;
+        server {
+          hold kv (cost(kv, 100)) { run d (cost(d, 1)); } lease kv (50);
+          hold kv (cost(kv, 16)) { grow kv (cost(kv, 64)); run d (cost(d, 1)); }
+        }
+        ";
+    let at = |horizon: f64| {
+        let p = common::compile(&common::main_source(src), ONE, &common::horizon(horizon)).unwrap();
+        run_ir(&p, None).unwrap()
+    };
+    let r = at(40.0);
+    let kv = &r.pools[0];
+    assert_eq!(kv.growing_at_end, 1, "{}", r.text());
+    assert!(!kv.growing_stalled, "{}", r.text());
+    assert_eq!((kv.outgrown, kv.deadlocked), (0, 0), "{}", r.text());
+    assert!(!r.blocked(), "{}", r.text());
     assert!(
-        r.text().contains(
-            "grow: 1 hold(s) wait to grow in pool `kv` when the run ends, and every holder of \
-             `kv` is one of them"
-        ),
+        r.text().contains("for room another holder may free"),
         "{}",
         r.text()
     );
+    let r = at(100.0);
+    assert_eq!(r.ended, 1, "{}", r.text());
+    assert_eq!(r.pools[0].growing_at_end, 0, "{}", r.text());
 }
 
 /// The note is a line of text, not a lint error, because a shipped program
@@ -655,8 +701,8 @@ fn the_corpus_earns_one_note() {
     programs.sort();
     assert!(programs.len() >= 25, "{programs:?}");
     let mut noted = vec![];
-    // nor does any reject a session (the `rej:` note, #271), nor end with an
-    // engine idle with work (the `idle:` note, #355)
+    // nor does any reject a session (the `rej:` note, #271), end with an
+    // engine idle with work (the `idle:` note, #355), or end blocked (#64)
     let mut rejected = vec![];
     // each under every workload it runs
     let runs = programs.iter().flat_map(|p| {
@@ -681,6 +727,9 @@ fn the_corpus_earns_one_note() {
         }
         for q in r.pools.iter().filter(|q| q.rejected > 0) {
             rejected.push((name.clone(), q.name.clone()));
+        }
+        for q in r.pools.iter().filter(|q| q.blocked()) {
+            rejected.push((name.clone(), format!("blocked {}", q.label())));
         }
     }
     assert_eq!(rejected, Vec::<(String, String)>::new());

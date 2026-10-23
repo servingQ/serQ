@@ -404,8 +404,12 @@ while holding a finite pool", and if the linker rejects a `Join` inside a
 
 **Outcome.** The cheap half landed as the `stuck` count: a session
 preempted again without passing the position of its previous preemption is
-counted per pool and written in the report (#43). It does not fail a run
-yet (#64). The theorem is open.
+counted per pool and written in the report (#43). It does not fail a run:
+a re-prefill under overload counts too and completes (#480). What fails a
+run is the negation of the theorem's hypothesis, seen when it happens: a
+hold that asks its pool for more than the cap (`outgrown`), with the
+deadlocks a wait-for fixpoint finds, and `serq run` exits 3
+([A run that ends blocked](blocked-run.md), #64). The theorem is open.
 
 ## Value and cost
 

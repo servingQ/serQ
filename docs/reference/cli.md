@@ -83,7 +83,7 @@ serq run examples/multi-turn/vllm.sq --workload examples/workloads/chat.sq --hor
 
 | Path | |
 |---|---|
-| top level | `serq_version` (the interpreter that ran, `serq --version`), `horizon` (the configured deadline), `end` (when the run ended: `horizon`, or earlier with `--arrivals`), `warmup`, `seed`, `events`, `arrivals` (sessions that arrived, warm-up included), `ended` (sessions that ended after warm-up), `turns` (`turn;` statements run after warm-up: each is one request to the `server`), `mean_live` (time-average sessions alive) |
+| top level | `serq_version` (the interpreter that ran, `serq --version`), `horizon` (the configured deadline), `end` (when the run ended: `horizon`, or earlier with `--arrivals`), `warmup`, `seed`, `events`, `arrivals` (sessions that arrived, warm-up included), `ended` (sessions that ended after warm-up), `turns` (`turn;` statements run after warm-up: each is one request to the `server`), `mean_live` (time-average sessions alive), `blocked` (the run ended with a session that never completes: some pool's `outgrown` or `deadlocked` is above 0, and `run` [exits 3](#exit-status)) |
 | `observes.<name>` | `count`, `mean`, `ci`, `cv2`, `p99` |
 | `client.ttft`, `client.tpot`, `client.response` | the same fields, of what each turn's client saw, in every program ([what the client sees](../language.md#what-the-client-sees)): `ttft` from the turn to its first output token, `tpot` the time per output token after the first, `response` from the turn to its answer. A turn that commits no token has no `ttft`, and one of a single output token no `tpot` |
 | `status.<status>` | every [engine request status](#request-statuses), visited or not: `stays` (stays in it that ended after warm-up), `mean`, `p50`, `p99` (their durations; `null` without any), `number` (time-average engine requests in it over `[warmup, end]`) |
@@ -178,14 +178,33 @@ exact; quantiles are within 0.5 %, and exact for a single value.
 | `mean_used`, `mean_cached`, `mean_queue`, `mean_holders` | time-average allocated units, cached units, waiting holds, and sessions holding it (one holding it twice, by a nested hold or a lease, is one; a hold of two pools counts in both) |
 | `mean_wait` | mean wait from a hold joining this pool's queue to its admission, after warm-up; a hold waits in the queue of its first pool, so a later pool of the hold has none |
 | `admissions`, `evicted_entries`, `evicted_units`, `preemptions`, `spills`, `rejected` | admission, eviction, preemption, spill and rejection counters |
-| `stuck` | sessions preempted again without progress past their previous preemption |
+| `stuck` | sessions preempted again without progress past their previous preemption. A request re-prefilled after a preemption and preempted again lower down counts, and still completes: under overload it measures thrash, not a failure |
+| `outgrown` | sessions live at the end whose open hold asked to grow this pool past its capacity, counting what their holds of it keep. No preemption makes room: the hold waits for ever, or is preempted and runs again to the same growth. The text report prints `outgrown:` |
+| `deadlocked` | sessions waiting at this pool, in its queue or to grow in it, for room that only sessions waiting like them hold, where no lease expires, no tick ends a lease over the capacity and no growth may preempt a holder. A hold whose units read the clock, a draw or the deployment's state is not counted: it may ask less later. The text report prints `deadlock:` |
 | `over_cap` | `null`, or `{queue, need}` when that queue's head asks for more than this pool's capacity at the end of the run |
 | `growing_at_end` | holds waiting to grow in this pool when the run ends; the text report prints `grow:` |
-| `growing_stalled` | every session with an allocation in this pool is waiting to grow in it, so none will free room |
+| `growing_stalled` | one of those growths is `deadlocked`: no event will free room for it |
 
 A hold whose units or `reserve` depend on deployment state is not rejected
 when it joins the queue. If its demand remains above capacity at the end,
 `over_cap` records it and the text report prints `over:`.
+
+## Exit status
+
+| Code | |
+|---|---|
+| 0 | done |
+| 1 | no result: the program does not load or validate, or the run fails (a run-time error, an [`--arrivals`](../api/program.md#a-finite-run) run that does not drain) |
+| 2 | a usage error ([below](#input-errors)) |
+| 3 | `run` printed its report, wrote `--dump` and `--log`, and the run ended blocked |
+
+A run ends blocked when its report's `blocked` is true: at some pool,
+`outgrown` or `deadlocked` counts a session that no event of the run would
+complete. `run` then names the pools on stderr. A slow, overloaded or
+thrashing run is not blocked: sessions live at the end, a positive `stuck`,
+`over_cap`, `idle_with_work` or a growth waiting for room another holder may
+free are results to read, and the run exits 0. A script under `set -e` or
+`check=True` stops at a blocked run, after its report.
 
 ## Input errors
 
@@ -199,7 +218,7 @@ problem and a correction hint to stderr and exits with code 2. Options belonging
 to another command are rejected rather than ignored. `--seed` takes an unsigned
 integer, `--horizon` a finite positive number, `--warmup` a finite nonnegative
 number, and `--arrivals` a positive integer. Program loading, validation, and runtime errors exit with code 1. Failed commands
-do not write a report to stdout.
+do not write a report to stdout; a blocked run writes its report and exits with code 3.
 
 Trace CSV errors identify the actual trace path, row, and column name, followed
 by a correction hint. Paths declared in the workload file are relative to its directory;

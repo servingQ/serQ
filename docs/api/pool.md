@@ -91,7 +91,11 @@ What a [`grow`](statements.md#grow) (or a `growing` run) does when the pool has 
 
 Candidates are holders resident in the stage whose `memory` is this pool.
 If no stage names it as memory, candidates are holders with an active hold
-scope. Leases are not candidates; the grower can be its own victim.
+scope. Leases are not candidates; the grower can be its own victim. A
+growth past the cap, counting what the session's holds of the pool keep,
+finds no room under any form: its hold waits for ever, or preempts itself
+and runs again to the same growth. The report counts the session as
+[`outgrown`](../reference/cli.md#pool-statistics) and `serq run` exits 3.
 
 Under `leases by`, the candidates are the sessions that lease the pool and
 hold it in no scope, in the order the pool admitted them. The victim's

@@ -93,7 +93,9 @@ stages.
 Per pool: the time-average units used and cached, queue length, holders, mean
 queue wait, and counters for admissions, evictions, preemptions, spills,
 rejections and `stuck` (sessions preempted again without progress since
-their previous preemption, which a run would otherwise hide).
+their previous preemption). A run that ends with a session that never
+completes notes it under the pool table (`outgrown:`, `deadlock:`), and
+`serq run` exits 3 ([exit status](reference/cli.md#exit-status)).
 
 `--json` prints the same report as JSON, and `--dump DIR` writes every
 observation as `DIR/<name>.csv` with `time,session,turn,value` — one row per

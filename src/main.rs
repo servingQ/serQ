@@ -11,6 +11,10 @@
 //! FILE is a deployment (`.sq`), run with the workload file W, or IR (`.json`,
 //! as written by `serq ir`), which holds its workload and takes no
 //! `--workload`. A `.sq` file with no server runs no workload either.
+//!
+//! Exit status: 0, done; 1, no result (the program does not load, or the
+//! run fails); 2, a usage error; 3, `serq run` printed its report and the
+//! run ended blocked (`Report::blocked`).
 
 use std::path::Path;
 use std::process::exit;
@@ -343,6 +347,28 @@ fn main() {
                 println!("{}", r.json());
             } else {
                 print!("{}", r.text());
+            }
+            if r.blocked() {
+                let at: Vec<String> = r
+                    .pools
+                    .iter()
+                    .filter(|q| q.blocked())
+                    .map(|q| format!("`{}`", q.label()))
+                    .collect();
+                // the text report says why in notes, the JSON in fields
+                let why = if json {
+                    "its pools' `outgrown` and `deadlocked`"
+                } else {
+                    "its `outgrown:` and `deadlock:` notes"
+                };
+                eprintln!(
+                    "{}: the run ended blocked: a session never completes at pool{} {} (the \
+                     report says why in {why})",
+                    file.display(),
+                    if at.len() == 1 { "" } else { "s" },
+                    at.join(", ")
+                );
+                exit(3)
             }
         }
         _ => unreachable!("validated command"),

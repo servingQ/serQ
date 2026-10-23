@@ -64,8 +64,10 @@ a measurement.
 output token after the first, `response` from sending to the answer
 ([what the client sees](language.md#what-the-client-sees)). Before reading the means, check the pool columns: `rej`
 (requests that can never fit), `stuck` (sessions preempted again without
-progress, a livelock) and `preempt`. A run with non-zero `stuck` has a
-mean over the sessions that got through, not over the traffic.
+progress: thrash) and `preempt`, and the notes under the pool table. An
+`outgrown:` or `deadlock:` note means the run ended blocked, with a session
+that never completes: `serq run` exits 3 after the report, and the means
+leave that session out ([exit status](reference/cli.md#exit-status)).
 
 `--json` prints the same report as JSON, and `--dump DIR` writes one CSV per
 `observe` with columns `time,session,turn,value`, for a distribution, a
@@ -90,7 +92,9 @@ done
 Compare both TTFT and preemptions across seeds. Near saturation, different
 seeds can produce different congestion histories; a confidence interval
 within one run does not describe that spread. Check rejections and `stuck`
-as well before interpreting a lower latency as an improvement.
+as well before interpreting a lower latency as an improvement. A point
+that ends blocked exits 3 after printing its report, which stops a script
+under `set -e` or Python's `check=True` there.
 
 ### Compare two designs
 

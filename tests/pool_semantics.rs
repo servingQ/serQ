@@ -583,55 +583,224 @@ fn admit_via_names_a_step_stage() {
     }
 }
 
+/// The engine of the livelock below, with the pool's `preempt` clause.
+fn outgrowing(preempt: &str) -> String {
+    format!(
+        r#"
+        device gpu {{ kv cap 160; }}
+        engine llm on gpu {{
+          reqs cap 4;
+          tokens cap 1000;
+          scheduler {{
+            advance running;
+            admit waiting while (running.preempted == 0) taking reqs (1), kv (100) reserve (100);
+          }}
+          worker {{ forward (1); }}
+        }}
+        pool reqs on llm {{ }}
+        pool kv on gpu {{ block 16; evict lru;{preempt} }}
+        server {{ llm (100, 101); }}
+"#
+    )
+}
+
 /// A request that fits at admission but can never grow to what it needs
 /// preempts itself, re-enters at the head of the queue, and does it again:
 /// a livelock the run would otherwise hide behind a preemption count. The
-/// report counts the session once as `stuck` (preempted again without
-/// passing its position) and says so.
+/// report counts the session as `outgrown` (its hold asked the pool for
+/// more than the cap), and the run is `blocked`; it is `stuck` too
+/// (preempted again without passing its position), which is not the
+/// verdict (#64: thrash is stuck as well, `a_thrashing_run_is_not_blocked`).
 ///
 /// On 10 blocks of 16 (160 tokens) with a 1000-token budget: step 1
 /// prefills the 100-token prompt (7 blocks), steps 2..61 decode tokens
 /// 101..160 (block 8 at 113, 9 at 129, 10 at 145), step 62 needs an 11th
-/// block, none is free, the request is `running[-1]` and preempts itself:
-/// the step schedules nothing and is not skipped (vLLM's `schedule()` runs
-/// it and admits nothing, scheduler.py:869). The request keeps the 61
-/// tokens it generated (scheduler.py:1561): it has 161, more than the
-/// pool, so from step 63 every step re-admits it and its prefill preempts
-/// it at once: 340 preemptions and admissions before the horizon of 400.
+/// block: 160 + 16 > 160, the growth past the cap that `outgrown` counts.
+/// None is free, the request is `running[-1]` and preempts itself: the
+/// step schedules nothing and is not skipped (vLLM's `schedule()` runs it
+/// and admits nothing, scheduler.py:869). The request keeps the 61 tokens
+/// it generated (scheduler.py:1561): it has 161, more than the pool, so
+/// from step 63 every step re-admits it and its prefill preempts it at
+/// once: 340 preemptions and admissions before the horizon of 400. It
+/// waits for nobody, so nothing is `deadlocked`.
 #[test]
-fn a_hold_that_can_never_fit_is_reported_stuck() {
-    let src = r#"
-        device gpu { kv cap 160; }
-        engine llm on gpu {
-          reqs cap 4;
-          tokens cap 1000;
-          scheduler {
-            advance running;
-            admit waiting while (running.preempted == 0) taking reqs (1), kv (100) reserve (100);
-          }
-          worker { forward (1); }
-        }
-        pool reqs on llm { }
-        pool kv on gpu { block 16; evict lru; preempt lifo; }
-        server { llm (100, 101); }
-
-"#;
-    let workload = "workload { arrive batch(1);
-          session { turn;
-            end;
-
-          }
-        }";
-    let r = run(src, workload, &common::horizon(400.0));
+fn a_hold_that_can_never_fit_is_reported_outgrown() {
+    let r = run(&outgrowing(" preempt lifo;"), ONE, &common::horizon(400.0));
     let kv = r.pool("kv").unwrap();
     assert_eq!(kv.preemptions, 340, "{}", r.text());
     assert_eq!(kv.admissions, 340, "{}", r.text());
     assert_eq!(kv.stuck, 1, "{}", r.text());
+    assert_eq!((kv.outgrown, kv.deadlocked), (1, 0), "{}", r.text());
+    assert!(kv.blocked() && r.blocked(), "{}", r.text());
+    assert!(r.text().contains("outgrown: 1 session(s)"), "{}", r.text());
     assert!(r.text().contains("stuck: 1 session(s)"), "{}", r.text());
     assert_eq!(r.ended, 0, "{}", r.text());
     // one step per unit of time, and the step that starts at the horizon
     // is counted when it starts
     assert_eq!(r.stage("llm").unwrap().iterations, 401, "{}", r.text());
+}
+
+/// The same request under `preempt none`: at step 62 its growth waits, for
+/// room only its own hold keeps. It is `outgrown` and `deadlocked` both,
+/// its growth `growing_stalled`; nothing is preempted, so nothing is
+/// `stuck`, which the run's verdict never read.
+#[test]
+fn a_hold_that_can_never_fit_waits_for_ever_without_preempt() {
+    let r = run(&outgrowing(""), ONE, &common::horizon(400.0));
+    let kv = r.pool("kv").unwrap();
+    assert_eq!(kv.preemptions, 0, "{}", r.text());
+    assert_eq!(kv.stuck, 0, "{}", r.text());
+    assert_eq!((kv.outgrown, kv.deadlocked), (1, 1), "{}", r.text());
+    assert_eq!(kv.growing_at_end, 1, "{}", r.text());
+    assert!(kv.growing_stalled, "{}", r.text());
+    assert!(r.blocked(), "{}", r.text());
+    assert!(r.text().contains("deadlock: 1 session(s)"), "{}", r.text());
+    assert_eq!(r.ended, 0, "{}", r.text());
+}
+
+/// Two sessions take two pools of one unit each in opposite orders: at
+/// t = 1 each holds one and queues for the other, which the other holds. No
+/// event releases either (no lease, no preemption): both are `deadlocked`,
+/// one at each pool, and the run is `blocked`. Before #64 the run ended
+/// with `ended 0`, no note and exit 0. With two units each, the same
+/// program ends both sessions: a linker could not tell the two apart
+/// (`docs/design/push-mode.md`, the same call for a send's cycle).
+#[test]
+fn holds_taken_in_opposite_orders_deadlock() {
+    let src = |cap: u32| {
+        format!(
+            "pool a {{ cap {cap}; }}
+        pool b {{ cap {cap}; }}
+        stage svc : delay;
+        server (x) {{
+          if (x) {{
+            hold a (cost(a, 1)) {{ run svc (cost(svc, 1)); hold b (cost(b, 1)) {{ run svc (cost(svc, 1)); }} }}
+          }} else {{
+            hold b (cost(b, 1)) {{ run svc (cost(svc, 1)); hold a (cost(a, 1)) {{ run svc (cost(svc, 1)); }} }}
+          }}
+        }}"
+        )
+    };
+    let workload = "workload { arrive batch(2);
+          init { set x = serial == 0 ? 1 : 0; }
+          send (x);
+        }";
+    let r = run(&src(1), workload, &common::horizon(100.0));
+    assert_eq!(r.ended, 0, "{}", r.text());
+    for name in ["a", "b"] {
+        let q = r.pool(name).unwrap();
+        assert_eq!((q.deadlocked, q.outgrown), (1, 0), "{name}: {}", r.text());
+    }
+    assert!(r.blocked(), "{}", r.text());
+    assert!(
+        r.text().contains("deadlock: 1 session(s) wait at pool `a`"),
+        "{}",
+        r.text()
+    );
+    let r = run(&src(2), workload, &common::horizon(100.0));
+    assert_eq!(r.ended, 2, "{}", r.text());
+    assert!(!r.blocked(), "{}", r.text());
+}
+
+/// The crossing holds of `holds_taken_in_opposite_orders_deadlock`, the
+/// first two ways of `server (x)`; `third` is the way of `x == 2`.
+fn crossing(a: &str, ask_a: &str, third: &str) -> String {
+    format!(
+        "pool a {{ cap 1; {a} }}
+        pool b {{ cap 1; }}
+        stage svc : delay;
+        server (x) {{
+          if (x == 2) {{ {third} }} else {{
+            if (x) {{
+              hold a (cost(a, 1)) {{ run svc (cost(svc, 1)); hold b (cost(b, 1)) {{ run svc (cost(svc, 1)); }} }}
+            }} else {{
+              hold b (cost(b, 1)) {{ run svc (cost(svc, 1)); hold a (cost(a, {ask_a})) {{ run svc (cost(svc, 1)); }} }}
+            }}
+          }}
+        }}"
+    )
+}
+
+/// A deadlock only as the hold first asked: session 1 asks `a` for
+/// `now < 50 ? 1 : 0`, which reads the clock, and the queue's ticks try it
+/// again every 10 s. Session 0 holds `a` from the tick at 10 and waits for
+/// `b`, which session 1 holds; at the tick at 50 session 1's hold asks 0,
+/// is admitted, and both end. At horizon 40 both wait, but no run is
+/// blocked: an ask that reads the clock, a draw or the state may be lower
+/// at a later try (`ir::moves`, the rule a rejection reads), so it is not
+/// judged. Judged by what it asked when it queued, the run was called
+/// deadlocked at 40.
+#[test]
+fn a_hold_whose_ask_moves_is_not_deadlocked() {
+    let src = crossing("queue fifo every (10);", "now < 50 ? 1 : 0", "");
+    let workload = "workload { arrive batch(2);
+          init { set x = serial == 0 ? 1 : 0; }
+          send (x);
+        }";
+    let r = run(&src, workload, &common::horizon(40.0));
+    assert_eq!(r.ended, 0, "{}", r.text());
+    assert!(!r.blocked(), "{}", r.text());
+    let r = run(&src, workload, &common::horizon(100.0));
+    assert_eq!(r.ended, 2, "{}", r.text());
+}
+
+/// A deadlock a later admission breaks: `a` preempts the first it admitted
+/// (`preempt by (admission)`), whose hold queues again as a newcomer, and
+/// serves its queue by the highest serial. At t = 1 sessions 0 and 1 wait
+/// for each other as above; at t = 50 session 2 is admitted to `a` with
+/// nothing, grows by 1 and preempts session 0's hold of `a`, whose wait
+/// for `b` ends with it. At 51 session 2 ends, session 1 takes `a` and
+/// ends at 52, and session 0 takes both pools and ends. So at horizon 40
+/// the run is not blocked: a pool whose `preempt` may take one of its
+/// holders (`candidates`, `lessees`) may free room at a growth there.
+#[test]
+fn a_deadlock_a_later_growth_may_break_is_not_blocked() {
+    let src = crossing(
+        "queue by (-serial); preempt by (admission) requeue tail;",
+        "1",
+        "run svc (cost(svc, 50)); hold a (cost(a, 0)) { grow a (cost(a, 1)); run svc (cost(svc, 1)); }",
+    );
+    let workload = "workload { arrive batch(3);
+          init { set x = serial == 0 ? 1 : (serial == 1 ? 0 : 2); }
+          send (x);
+        }";
+    let r = run(&src, workload, &common::horizon(40.0));
+    assert_eq!(r.ended, 0, "{}", r.text());
+    assert!(!r.blocked(), "{}", r.text());
+    let r = run(&src, workload, &common::horizon(100.0));
+    assert_eq!(r.ended, 3, "{}", r.text());
+    assert_eq!(r.pool("a").unwrap().preemptions, 1, "{}", r.text());
+}
+
+/// Three requests of 60 + 60 tokens on one 160-token pool, admitted with
+/// what the step's budget of 32 tokens takes of their prompt: they preempt
+/// one another, two of them again below their previous position (`stuck`
+/// 2), and all three end. Each needs 8 blocks of the 10 at most, so none
+/// is `outgrown`: thrash is no verdict (`tests/cli.rs`, exit 0).
+#[test]
+fn a_thrashing_run_is_not_blocked() {
+    let src = r#"
+        device gpu { kv cap 160; }
+        engine llm on gpu {
+          reqs cap 4;
+          tokens cap 32;
+          scheduler {
+            advance running;
+            admit waiting while (running.preempted == 0)
+              taking reqs (1), kv (min(request.known, budget_left(llm))) reserve (16);
+          }
+          worker { forward (1); }
+        }
+        pool reqs on llm { }
+        pool kv on gpu { block 16; evict lru; preempt lifo; }
+        server { llm (60, 60); }
+"#;
+    let r = run(src, THREE, &common::horizon(2000.0));
+    let kv = r.pool("kv").unwrap();
+    assert_eq!(r.ended, 3, "{}", r.text());
+    assert_eq!(kv.stuck, 2, "{}", r.text());
+    assert_eq!((kv.outgrown, kv.deadlocked), (0, 0), "{}", r.text());
+    assert!(!r.blocked(), "{}", r.text());
 }
 
 /// The step that only preempted lasts `C` at zero tokens. With `cost tokens`
