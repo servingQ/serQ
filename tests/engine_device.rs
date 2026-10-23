@@ -1819,10 +1819,13 @@ fn a_miss_price_is_a_definition_over_the_estimates() {
         .map(|(b, _)| b.trim_end())
         .unwrap();
     let (def, pool) = block.rsplit_once('\n').unwrap();
-    let documented = |def: &str| {
+    let lru = "pool kv on gpu { block bs; evict lru; preempt lifo; }";
+    let with = |def: &str, pool: &str| {
         let main = format!("{def}\n\nfn main() {{");
-        let lru = "pool kv on gpu { block bs; evict lru; preempt lifo; }";
-        let prog = replaced(&src, &[("fn main() {", &main), (lru, pool)]);
+        replaced(&src, &[("fn main() {", &main), (lru, pool)])
+    };
+    let documented = |def: &str| {
+        let prog = with(def, pool);
         let p = compile_paired(&prog, &ov).unwrap_or_else(|e| panic!("{e}\n{prog}"));
         serde_json::to_string(&p).unwrap()
     };
@@ -1832,6 +1835,25 @@ fn a_miss_price_is_a_definition_over_the_estimates() {
         "(s_hit + ds) * (s_hit + ds) - s_hit * s_hit",
     )];
     assert_eq!(documented(&replaced(def, &squares)), ir("miss_price"));
+    // run as docs/design/miss-price.md ran it. Every entry is priced at one
+    // stage with the same estimates, and its price per token,
+    // a + λ̂ (2 s_hit a + a² size) / 2(1 - ρ̂) + λ̂ Ŵ a / (1 - ρ̂), grows with
+    // `size` once λ̂ > 0: the documented order is the order by size, the
+    // same report whatever the estimates' values, and not the tie of a
+    // constant key
+    let mut run = common::horizon(600.0);
+    run.set("blocks", "800").unwrap();
+    let report = |prog: &str| {
+        let r = common::run(prog, &ov.workload, &run).unwrap_or_else(|e| panic!("{e}\n{prog}"));
+        r.json()
+    };
+    let by = |k: &str| {
+        let key = "miss_price(vllm, c0 + a, a * size) / size";
+        report(&with("", &replaced(pool, &[(key, k)])))
+    };
+    let by_price = report(&with(def, pool));
+    assert_eq!(by_price, by("size"));
+    assert_ne!(by_price, by("a"));
 }
 
 /// A device's resource is a definition too, replaced token by token: its

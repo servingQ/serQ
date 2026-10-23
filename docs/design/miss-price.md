@@ -81,7 +81,14 @@ serq run X.sq --workload examples/workloads/chat.sq --horizon 600 --blocks 800 -
 The JSON reports are the same byte for byte: 896 entries evicted from
 `kv` (5401488 units). The pool's own `evict lru` evicts 848, and
 `evict by (waiting, a)`, the price replaced by a constant, 847, so the
-key the estimates give is live, not a tie. Every `def` tried gives that
+key is not a tie. Nor do the estimates' values order it. Every entry is
+priced at `vllm` with the same λ̂, ρ̂ and Ŵ, and with
+s_hit = `c0 + a` and Δs = `a * size` its price per token is
+a + λ̂(2·s_hit·a + a²·size) / (2(1 − ρ̂)) + λ̂·Ŵ·a / (1 − ρ̂), which grows
+with `size` once λ̂ > 0 (ρ̂ is capped at 0.99): `evict by (waiting, size)`
+gives the same JSON byte for byte, and so does the estimator with a
+smoothing of 0.02 in place of 0.01. The builtin's order was the same
+order by size. Every `def` tried gives that
 report: the one above, which squares with `^`; the companion's line
 (below), which squares with products and is named `price`; a one-line
 `def` over `vllm` alone; and a `def` inside `main` as well as above it.
@@ -108,7 +115,10 @@ builtin's call is refused with the message; the companion's
 1 times (λ̂ in Φ's two fractions, ρ̂ in their two denominators, Ŵ once);
 the same `def` named `miss_price` gives the same IR; and the documented
 block, read from `docs/api/functions.md` into `vllm.sq`, links, reads
-them as often, and with its squares written as products is that `def`.
+them as often, and with its squares written as products is that `def`;
+run as above, it gives the report of `evict by (waiting, size)` and not
+that of `evict by (waiting, a)`. A count of evictions pinned in the test
+would not check the estimates' values, which this order does not read.
 
 ## What went
 
