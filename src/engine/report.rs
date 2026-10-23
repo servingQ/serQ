@@ -141,10 +141,12 @@ pub struct PoolReport {
     /// again to the same growth (a livelock). One of the two witnesses of
     /// `blocked` (`docs/design/blocked-run.md`).
     pub outgrown: u64,
-    /// Sessions that wait at this pool, in its queue or to grow in it, for
-    /// room that only sessions waiting like them hold, with no lease to
-    /// expire, no tick over the cap and no preemption to come: a deadlock.
-    /// One of the two witnesses of `blocked`.
+    /// Sessions that wait for room in this pool, to be admitted or to grow,
+    /// that only sessions waiting like them hold, with no lease to expire,
+    /// no tick over the cap and no preemption to come: a deadlock. A hold
+    /// of several pools counts at the first one it can never fit, not at
+    /// the pool whose queue it is in. One of the two witnesses of
+    /// `blocked`.
     pub deadlocked: u64,
     /// The run ended with the head of a queue asking this pool for more
     /// than its cap: the queue's pool and what the head asks. A hold whose
@@ -599,7 +601,7 @@ impl Report {
                 if p.deadlocked > 0 {
                     let _ = writeln!(
                         s,
-                        "deadlock: {} session(s) wait at pool `{}` for room that only sessions \
+                        "deadlock: {} session(s) wait for room in pool `{}` that only sessions \
                          waiting like them hold, and no event will free it",
                         p.deadlocked,
                         label(&p.name, p.index)

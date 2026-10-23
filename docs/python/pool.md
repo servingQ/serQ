@@ -23,7 +23,7 @@ One pool's report row. Obtain it from [`Report.pool`](report.md#pool),
 | `rejected` | `int` | Requests rejected because static demand could never fit. |
 | `stuck` | `int` | Sessions preempted again without progress past the previous preemption; thrash counts too. |
 | `outgrown` | `int` | Live sessions at run end whose open hold asked to grow this pool past its capacity. |
-| `deadlocked` | `int` | Sessions waiting at this pool, at run end, for room that only sessions waiting like them hold. |
+| `deadlocked` | `int` | Sessions waiting at run end for room in this pool that only sessions waiting like them hold. |
 | `over_cap` | `tuple[str, float]` or `None` | At run end, the waiting queue name and demand exceeding this pool's capacity; `None` when absent. |
 | `growing_at_end` | `int` | Holds waiting to grow in this pool when the run ends. |
 | `growing_stalled` | `bool` | One of those growths is `deadlocked`: no event will free room for it. |

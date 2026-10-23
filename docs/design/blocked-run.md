@@ -143,8 +143,8 @@ livelock.sq: the run ended blocked: a session never completes at pool `kv` (the 
 $ echo $?
 3
 $ serq run dl.sq --workload dlw.sq --horizon 100
-deadlock: 1 session(s) wait at pool `a` for room that only sessions waiting like them hold, and no event will free it
-deadlock: 1 session(s) wait at pool `b` for room that only sessions waiting like them hold, and no event will free it
+deadlock: 1 session(s) wait for room in pool `a` that only sessions waiting like them hold, and no event will free it
+deadlock: 1 session(s) wait for room in pool `b` that only sessions waiting like them hold, and no event will free it
 dl.sq: the run ended blocked: a session never completes at pools `a`, `b` (the report says why in its `outgrown:` and `deadlock:` notes)
 $ echo $?
 3
@@ -207,9 +207,12 @@ pool that is no engine's memory, a holder in a scope is one, so a later
 admission's growth may break a deadlock there (the test
 `a_deadlock_a_later_growth_may_break_is_not_blocked`).
 
-The report counts, per pool, the sessions of the set waiting there (in its
-queue or to grow in it). A load among them still fails the run with #372's
-message, which names the sessions and the fix (a finite `ttl`).
+The report counts, per pool, the sessions of the set waiting for its room:
+a growth at its pool, a queued hold at the pool of its first part that
+stays short, which need not be the pool whose queue it is in (an engine's
+request queues at its first pool, `reqs`, and may wait for `kv`). A load
+among them still fails the run with #372's message, which names the
+sessions and the fix (a finite `ttl`).
 
 ### `growing_stalled`
 
@@ -319,6 +322,24 @@ way.
 **Every short part held still.** #372's rule asked every pool the hold did
 not fit to be held still. One suffices: the hold is admitted only when
 every part fits.
+
+**A `reserve` above the units.** Admission waits for the units or the
+reservation above them, and the least ask reads the units only: a hold
+short only by its `reserve` is judged by less than it asks, and a deadlock
+there is missed (the run exits 0 with the sessions live, as before this
+change). A reservation that does not move could be read, but only by
+evaluating it, which `amount` does with the run's state to change (a
+draw, an error), where the fixpoint only reads; the queued hold keeps its
+units and not its reservation. A miss costs a verdict and never makes one
+up, so this is left to a program that needs it.
+
+**Counted at the queue's pool.** A first version counted a queued hold at
+the pool whose queue it is in. An engine's request queues at its first
+pool: behind a request that outgrew `kv` under `preempt none`, the note
+said two sessions waited at `reqs` for room only waiting sessions hold,
+and `serq run` named `reqs` blocked, with 3 of its 4 free
+(`a_hold_short_of_a_later_pool_is_deadlocked_there`). The fixpoint now
+says, for each session it keeps, the pool whose room it waits for.
 
 **`outgrown` across re-executions.** The record outlives the hold's
 preemption, which is what catches the livelock. A hold whose units or

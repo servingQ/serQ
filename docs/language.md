@@ -1638,8 +1638,8 @@ run would complete, at some pool:
   cap, counting what its holds of the pool keep. No preemption makes
   room: the hold waits for ever, or is preempted and runs again to the
   same growth (the self-preemption above).
-- `deadlocked`: the session waits at the pool, in its queue or to grow
-  in it, for room that only sessions waiting like it hold, and no lease
+- `deadlocked`: the session waits for room in the pool, to be admitted
+  or to grow, that only sessions waiting like it hold, and no lease
   of the pool expires, no tick ends a lease over its cap, and no growth
   there may preempt one of them (a hold around a growth on the same pool,
   or holds taken in opposite orders). A hold whose units read the clock,

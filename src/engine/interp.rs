@@ -1269,9 +1269,9 @@ impl<'p> Interp<'p> {
         let waiting = self.waiting_for_each_other();
         if waiting
             .iter()
-            .any(|&s| matches!(self.sessions[s].status, Status::AwaitingSend(_)))
+            .any(|&(s, _)| matches!(self.sessions[s].status, Status::AwaitingSend(_)))
         {
-            let who: Vec<String> = waiting.iter().map(|&s| self.waiting_at(s)).collect();
+            let who: Vec<String> = waiting.iter().map(|&(s, _)| self.waiting_at(s)).collect();
             return Err(format!(
                 "the run ends with sessions that wait for each other: {}. A leg waits for \
                  memory that a send holds until its session's copy, and the session waits \
@@ -2103,18 +2103,20 @@ impl<'p> Interp<'p> {
         }
     }
 
-    /// The sessions and legs that wait for each other and nothing else: a
-    /// hold with a part that can never fit its pool, every holder of which
-    /// is one of them (a lease's or a send's holder is its session); a
-    /// growth that does not fit such a pool; and a load waiting for a send
-    /// whose live legs all are. No event will release what they wait for:
-    /// a pool none of whose holders moves frees room only by a lease's
-    /// expiry, a tick over the cap, or a growth that preempts one of them,
-    /// and a pool where one of those may come is not counted
+    /// The sessions and legs that wait for each other and nothing else,
+    /// each with the pool it waits at: a hold with a part that can never
+    /// fit its pool, every holder of which is one of them (a lease's or a
+    /// send's holder is its session), at the first such part's pool, which
+    /// need not be the pool whose queue it is in; a growth that does not
+    /// fit such a pool, at that pool; and a load waiting for a send whose
+    /// live legs all are, at the send's pool. No event will release what
+    /// they wait for: a pool none of whose holders moves frees room only by
+    /// a lease's expiry, a tick over the cap, or a growth that preempts one
+    /// of them, and a pool where one of those may come is not counted
     /// (`docs/design/blocked-run.md`). `run` fails on a load among them (a
     /// send's hold-and-wait cycle, #372) and the report counts the rest
     /// (`deadlocked`, `growing_stalled`).
-    fn waiting_for_each_other(&self) -> Vec<usize> {
+    fn waiting_for_each_other(&self) -> Vec<(usize, usize)> {
         let n = self.sessions.len();
         let live_legs = |s: usize| {
             self.sessions
@@ -2142,68 +2144,79 @@ impl<'p> Interp<'p> {
                     Preempt::Leases { .. } => !self.lessees(pl).is_empty(),
                 }
         };
-        let mut stuck: Vec<bool> = self
+        // per session, the pool it waits at while it is in the set; read
+        // again at every pass, so the last, which drops nobody, reads it
+        // against the set as it ends
+        let mut at: Vec<Option<usize>> = self
             .sessions
             .iter()
-            .map(|x| {
-                matches!(
-                    x.status,
-                    Status::Queued(_) | Status::Growing(..) | Status::AwaitingSend(_)
-                )
+            .map(|x| match x.status {
+                Status::Queued(pl) | Status::Growing(pl, ..) | Status::AwaitingSend(pl) => Some(pl),
+                _ => None,
             })
             .collect();
         loop {
             let mut changed = false;
             for s in 0..n {
-                if !stuck[s] {
+                if at[s].is_none() {
                     continue;
                 }
                 let held_still = |pl: usize| {
                     let holders = &self.pools[pl].holders;
-                    !holders.is_empty() && holders.iter().all(|&h| stuck[h]) && !frees_by_itself(pl)
+                    !holders.is_empty()
+                        && holders.iter().all(|&h| at[h].is_some())
+                        && !frees_by_itself(pl)
                 };
-                let keep = match &self.sessions[s].status {
+                let keep = match self.sessions[s].status {
                     // no live leg will leave the send it waits for
-                    Status::AwaitingSend(_) => live_legs(s).all(|l| stuck[l]),
+                    Status::AwaitingSend(pl) => live_legs(s).all(|l| at[l].is_some()).then_some(pl),
                     // a part that does not fit a pool held still is never
                     // admitted, whatever the other parts ask
                     Status::Queued(_) => {
                         let pending = self.sessions[s].pending.as_ref().expect("queued");
-                        pending.pools.iter().any(|w| {
-                            self.least_ask(s, pending, w)
-                                .is_some_and(|ask| !self.fits(w.pool, ask))
-                                && held_still(w.pool)
-                        })
+                        pending
+                            .pools
+                            .iter()
+                            .find(|w| {
+                                self.least_ask(s, pending, w)
+                                    .is_some_and(|ask| !self.fits(w.pool, ask))
+                                    && held_still(w.pool)
+                            })
+                            .map(|w| w.pool)
                     }
                     // the growth asks what it asked (`retry_growers`)
-                    &Status::Growing(pl, units, _) => {
-                        self.grown(s, pl).is_some_and(|g| {
+                    Status::Growing(pl, units, _) => {
+                        let short = self.grown(s, pl).is_some_and(|g| {
                             let alloc = self.grown_alloc(s, g);
                             let need = self.round_up(pl, alloc + units) - alloc;
                             !self.fits_grown(pl, need, s, g)
-                        }) && held_still(pl)
+                        });
+                        (short && held_still(pl)).then_some(pl)
                     }
-                    _ => false,
+                    _ => None,
                 };
-                if !keep {
-                    stuck[s] = false;
-                    changed = true;
-                }
+                changed |= keep.is_none();
+                at[s] = keep;
             }
             if !changed {
                 break;
             }
         }
-        (0..n).filter(|&s| stuck[s]).collect()
+        at.iter()
+            .enumerate()
+            .filter_map(|(s, pl)| pl.map(|pl| (s, pl)))
+            .collect()
     }
 
     /// The least a queued hold's part `w` can ask of its pool at a later
     /// try while the sessions it waits for stand still, or `None` when its
     /// units read the clock, a draw or the state (`ir::moves`), which a
-    /// later try may read lower: the rule `enqueue_hold` rejects by. Its
-    /// cached prefix that other live holds keep allocated is not asked for
-    /// again (`fits_all`), and all of it is taken off, whatever `reuse`
-    /// bounds it by.
+    /// later try may read lower: the rule `enqueue_hold` rejects the units
+    /// by. Its cached prefix that other live holds keep allocated is not
+    /// asked for again (`fits_all`), and all of it is taken off, whatever
+    /// `reuse` bounds it by. A `reserve` above the units is not read: the
+    /// part is judged by less than it asks, which may miss a deadlock and
+    /// never makes one up.
     fn least_ask(&self, s: usize, pending: &Pending<'p>, w: &Wanted<'p>) -> Option<f64> {
         if crate::ir::moves(w.expr) {
             return None;
@@ -6599,8 +6612,9 @@ impl<'p> Interp<'p> {
     }
 
     /// The report of the run, `waiting` the sessions that wait for each
-    /// other at its end (`waiting_for_each_other`).
-    fn report(&mut self, waiting: &[usize]) -> Report {
+    /// other at its end, each with the pool it waits at
+    /// (`waiting_for_each_other`).
+    fn report(&mut self, waiting: &[(usize, usize)]) -> Report {
         if std::env::var_os("SERQ_DUMP_POOLS").is_some() {
             self.debug_pools();
         }
@@ -6682,13 +6696,8 @@ impl<'p> Interp<'p> {
             Some(i) => format!("{}[{i}]", p.pools[q].name),
             None => p.pools[q].name.clone(),
         };
-        // the pool a session waits at: its queue's, or where it grows (a
-        // load among them failed the run)
-        let waits_at = |s: usize| match self.sessions[s].status {
-            Status::Queued(q) | Status::Growing(q, ..) => Some(q),
-            _ => None,
-        };
-        let deadlocked = |i: usize| waiting.iter().filter(|&&s| waits_at(s) == Some(i)).count();
+        // a load among them failed the run
+        let deadlocked = |i: usize| waiting.iter().filter(|&&(_, q)| q == i).count();
         let outgrown = |i: usize| {
             self.sessions
                 .iter()
@@ -6722,7 +6731,7 @@ impl<'p> Interp<'p> {
                     .find(|(asked, _, _)| *asked == i)
                     .map(|&(_, q, need)| (label(q), need)),
                 growing_at_end: self.sessions.iter().filter(|s| grows_in(s, i)).count() as u64,
-                growing_stalled: waiting.iter().any(|&s| grows_in(&self.sessions[s], i)),
+                growing_stalled: waiting.iter().any(|&(s, _)| grows_in(&self.sessions[s], i)),
             })
             .collect();
         Report {

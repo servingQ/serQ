@@ -623,7 +623,7 @@ fn a_growth_left_waiting_is_noted() {
         "grow: 1 hold(s) wait to grow in pool `kv` when the run ends, and every holder of \
          `kv` waits too",
         "outgrown: 1 session(s) live at the end asked to grow pool `kv` past its cap",
-        "deadlock: 1 session(s) wait at pool `kv`",
+        "deadlock: 1 session(s) wait for room in pool `kv`",
     ] {
         assert!(r.text().contains(note), "{note}\n{}", r.text());
     }
