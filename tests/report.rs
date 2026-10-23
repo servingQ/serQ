@@ -596,7 +596,7 @@ fn a_growth_left_waiting_is_noted() {
           scheduler {
             advance running;
             admit waiting while (running.preempted == 0)
-              taking kv (request.hit + 8) reuse (992) cache (1000);
+              taking kv (request.hit + 8) reuse (992) cache kv (1000);
           }
           worker { forward (1e-4 + 1e-5 * batch.tokens); }
         }
@@ -724,7 +724,7 @@ fn one_engine(connector: &str, cache: &str) -> String {
           scheduler {{
             advance running;
             admit waiting while (running.preempted == 0)
-              taking kv (request.known) reuse (request.known - 1) cache ({cache});
+              taking kv (request.known) reuse (request.known - 1) cache kv ({cache});
           }}
           worker {{ forward (1); }}
         }}

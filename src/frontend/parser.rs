@@ -1004,11 +1004,11 @@ pub(crate) fn retired(word: &str) -> Option<&'static str> {
 const RETIRED: [(&str, &str); 7] = [
     (
         "enter",
-        "`enter` is now `hold`: `hold P (u) … { … } cache (ℓ);`",
+        "`enter` is now `hold`: `hold P (u) … { … } cache P (ℓ);`",
     ),
     (
         "admit",
-        "`admit if … fit where x = e { … } keep (ℓ)` is now `hold … { … } cache (ℓ)`, \
+        "`admit if … fit where x = e { … } keep (ℓ)` is now `hold P … { … } cache P (ℓ)`, \
          `e` written in the header where `x` stood",
     ),
     ("keep", "`keep` is now `cache`"),
@@ -1121,6 +1121,36 @@ fn stage_as_number(queue: &str, verb: &str) -> String {
 /// (`queued(E.kv)` inside `E`).
 fn own_pool_dotted(queue: &str, verb: &str, name: &str, pool: &str) -> String {
     format!("`{queue}.{verb}` reads `{name}`, its own pool: inside the queue write `{pool}`")
+}
+
+/// The error of `cache (ℓ)` written without its pool, the spelling before
+/// #366, when the clause cached every pool of a hold's (`engine`: of an
+/// engine's `taking`), `pools`: the pool to write, named when there is one.
+pub(super) fn cache_names_no_pool(pools: &[&str], engine: bool) -> String {
+    let listed = pools
+        .iter()
+        .map(|p| format!("`{p}`"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let help = match (pools, engine) {
+        ([p], false) => format!(
+            "a hold's `cache` names the pool whose computed prefix stays cached: write \
+             `cache {p} (ℓ)`"
+        ),
+        (_, false) => format!(
+            "a hold's `cache` names the pool whose computed prefix stays cached: write \
+             `cache P (ℓ)`, P the one of {listed} that is; the others are memory alone"
+        ),
+        ([p], true) => format!(
+            "an engine's `cache` names its memory, the pool its requests' KV is in: write \
+             `cache {p} (ℓ)`"
+        ),
+        (_, true) => format!(
+            "an engine's `cache` names its memory, the pool its requests' KV is in: write \
+             `cache P (ℓ)`, P the one of {listed} on the engine's device"
+        ),
+    };
+    format!("`cache (ℓ)` names no pool\nhelp: {help} (#366)")
 }
 
 /// The part of `name` after `queue.`, when `name` is written through the queue.
@@ -1453,7 +1483,8 @@ fn split_reads<'a>(
                 if let Some(r) = reuse {
                     headers.push((r, above.clone()));
                 }
-                if let Some(c) = cache {
+                if let Some((r, c)) = cache {
+                    index(r, indices);
                     bodies.push(c);
                 }
                 if let Some((r, t)) = lease {
@@ -1571,8 +1602,8 @@ fn always_leaves_kv(stmts: &[Stmt], request_kv: bool) -> bool {
     false
 }
 
-/// The pools an entry's statements name: its holds', leases', and those of
-/// `grow`, `drop`, `release`, `load`, `growing` and a call's `to`.
+/// The pools an entry's statements name: its holds', leases', caches', and
+/// those of `grow`, `drop`, `release`, `load`, `growing` and a call's `to`.
 fn pools_named<'a>(stmts: &'a [Stmt], out: &mut Vec<&'a Ref>) {
     for s in stmts {
         match s {
@@ -1581,9 +1612,17 @@ fn pools_named<'a>(stmts: &'a [Stmt], out: &mut Vec<&'a Ref>) {
             | Stmt::Load(r, _)
             | Stmt::Drop(r)
             | Stmt::Release(r) => out.push(r),
-            Stmt::Hold { pools, lease, .. } => {
+            Stmt::Hold {
+                pools,
+                lease,
+                cache,
+                ..
+            } => {
                 out.extend(pools.iter().map(|(r, _, _)| r));
                 if let Some((r, _)) = lease {
+                    out.push(r);
+                }
+                if let Some((r, _)) = cache {
                     out.push(r);
                 }
             }
@@ -5887,8 +5926,15 @@ impl Parser {
         {
             return self.err(retired("keep").unwrap());
         }
+        // `cache P (ℓ)`: the pool whose computed prefix stays cached, one of
+        // the hold's, and how much of it (#366)
         let cache = if self.eat_kw("cache") {
-            Some(self.paren_expr()?)
+            if *self.peek() == Tok::LParen {
+                let held: Vec<&str> = pools.iter().map(|(r, _, _)| r.name.as_str()).collect();
+                return self.err(cache_names_no_pool(&held, false));
+            }
+            let r = self.own_pool("cache")?;
+            Some((r, self.paren_expr()?))
         } else {
             None
         };
@@ -6865,7 +6911,7 @@ mod tests {
             run prefill (cost(prefill, a * (K + n - cached)));
             observe ttft = now - t0;
             run decode (cost(decode, o * 2e-4));
-          } cache (cost(kv, K + n + o));
+          } cache kv (cost(kv, K + n + o));
         }
 
 "#;
@@ -7124,7 +7170,7 @@ mod tests {
         same(
             (
                 "pool kv[2] { cap 100; } stage S[2] : fifo;
-        def put(p, s, n) { hold p (cost(p, n)) { run s (cost(s, n)); } cache (cost(p, n)); }
+        def put(p, s, n) { hold p (cost(p, n)) { run s (cost(s, n)); } cache p (cost(p, n)); }
         server { choose j in 2 by (used(kv[j])); put(kv[j], S[j], k + 1);
         }",
                 WL,
@@ -7133,7 +7179,7 @@ mod tests {
                 "pool kv[2] { cap 100; } stage S[2] : fifo;
         server {
           choose j in 2 by (used(kv[j]));
-          hold kv[j] (cost(kv[j], (k + 1))) { run S[j] (cost(S[j], (k + 1))); } cache (cost(kv[j], (k + 1)));
+          hold kv[j] (cost(kv[j], (k + 1))) { run S[j] (cost(S[j], (k + 1))); } cache kv[j] (cost(kv[j], (k + 1)));
         }",
                 WL,
             ),
@@ -7460,7 +7506,7 @@ mod tests {
             admit waiting while (running.preempted == 0)
               taking reqs (1), kv (min(request.known, request.hit + budget_left(llm)))
               reuse (request.known - 1)
-              cache (request.input + request.output);
+              cache kv (request.input + request.output);
           }
           worker { forward (1); }
         }
@@ -7645,7 +7691,7 @@ mod tests {
             ("\nserver { enter kv (1) { }\n}", "`enter` is now `hold`"),
             (
                 "server { admit if kv (1) fit { } }",
-                "is now `hold … { … } cache (ℓ)`, `e` written in the header",
+                "is now `hold P … { … } cache P (ℓ)`, `e` written in the header",
             ),
             (
                 "\nserver { hold kv (cost(kv, 1)) { } keep (1);\n}",
@@ -7683,7 +7729,7 @@ mod tests {
         }
         // `hold` is written on either side
         pair(
-            "pool kv { cap 1; } server { hold kv (cost(kv, 1)) { } cache (cost(kv, 1)); }",
+            "pool kv { cap 1; } server { hold kv (cost(kv, 1)) { } cache kv (cost(kv, 1)); }",
             WL,
         )
         .unwrap();

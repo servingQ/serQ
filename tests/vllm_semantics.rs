@@ -714,7 +714,7 @@ fn next_turn_reuses_full_blocks_of_the_cached_prefix() {
             admit waiting while (running.preempted == 0)
               taking reqs (1), kv (request.hit + min(request.input - request.hit, 8192))
               reuse (floor((request.input - 1) / bs) * bs)
-              cache (request.input + request.output);
+              cache kv (request.input + request.output);
           }
           worker { forward (1); }
         }
@@ -765,7 +765,7 @@ fn lru_eviction_drops_tail_blocks_first() {
             admit waiting while (running.preempted == 0)
               taking reqs (1), kv (request.hit + min(request.input - request.hit, 8192))
               reuse (floor((request.input - 1) / bs) * bs)
-              cache (request.input);
+              cache kv (request.input);
           }
           worker { forward (1); }
         }

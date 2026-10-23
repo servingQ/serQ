@@ -47,7 +47,7 @@ fn push(route: &str, kv: u32, per_token: f64) -> String {
           engine on gpu {{
             reqs cap 4;
             tokens cap inf;
-            scheduler {{ advance running; admit waiting while (running.preempted == 0) taking reqs (1), kv (request.known) cache (request.input); }}
+            scheduler {{ advance running; admit waiting while (running.preempted == 0) taking reqs (1), kv (request.known) cache kv (request.input); }}
             worker {{ forward (batch.tokens * {per_token}); }}
           }}
           pool reqs on P {{ }}
@@ -61,7 +61,7 @@ fn push(route: &str, kv: u32, per_token: f64) -> String {
             reqs cap 4;
             tokens cap inf;
             connector P {{ load (request.input - request.hit); }}
-            scheduler {{ advance running; admit waiting while (running.preempted == 0) taking kv (request.known), reqs (request.loaded > 0 ? 0 : 1) cache (request.input); }}
+            scheduler {{ advance running; admit waiting while (running.preempted == 0) taking kv (request.known), reqs (request.loaded > 0 ? 0 : 1) cache kv (request.input); }}
             worker {{ forward (1); }}
           }}
           pool reqs on D {{ }}
@@ -408,7 +408,7 @@ fn two_relations_from_one_source_name_one_ttl() {
             reqs cap 4;
             tokens cap inf;
             connector P {{ load (request.input - request.hit); }}
-            scheduler {{ advance running; admit waiting while (running.preempted == 0) taking kv (request.known), reqs (request.loaded > 0 ? 0 : 1) cache (request.input); }}
+            scheduler {{ advance running; admit waiting while (running.preempted == 0) taking kv (request.known), reqs (request.loaded > 0 ? 0 : 1) cache kv (request.input); }}
             worker {{ forward (1); }}
           }}
           pool reqs on {name} {{ }}

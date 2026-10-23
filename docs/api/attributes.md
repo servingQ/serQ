@@ -84,7 +84,7 @@ See [`cost`](functions.md#cost) for resource families and evaluation timing.
 |---|---|---|
 | `serial` | arrival | arrival order, counted from 0 |
 | `turn_no` | `turn;` | turns taken so far: 0 before the first `turn;`, 1 after it |
-| `cached` | admission | units of the cached prefix of its hold's chain (the session's own without `prefix`) read at its last admission (`reuse`); 0 after the admission of a hold without `cache`, which reads none |
+| `cached` | admission | units of the cached prefix of its hold's chain (the session's own without `prefix`) read at its last admission (`reuse`) on the pool its `cache` names, the only pool that reads one; 0 after the admission of a hold without `cache`, which reads none |
 | `computed` | preemption | the position the hold had computed when it was preempted; 0 on a first execution and after a hold completes |
 
 With a [`trace`](workload.md#trace), `turn;` also sets:

@@ -82,7 +82,7 @@ fn main() {
           kv (min(request.known, request.hit + (request.loaded > 0 ? request.loaded : budget_left(vllm))))
           reserve (request.known)
         reuse (floor(request.known - 1, blocksize(kv)))
-        cache (request.input + request.output);
+        cache kv (request.input + request.output);
     }
     worker {
       forward (c0 + max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));

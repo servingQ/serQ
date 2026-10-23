@@ -51,7 +51,7 @@ fn main() {
           reserve (request.known)
         reuse (floor(request.known - 1, blocksize(kv)))
         prefix (product: floor(S, bs), serial: inf)
-        cache (request.input + request.output);
+        cache kv (request.input + request.output);
     }
     worker {
       forward (c0 + max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));

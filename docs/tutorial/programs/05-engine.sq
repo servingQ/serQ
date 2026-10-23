@@ -37,7 +37,7 @@ fn main() {
         taking reqs (1), kv (min(request.known, request.hit + budget_left(llm)))
           reserve (request.known)
         reuse (floor(request.known - 1, bs))
-        cache (request.input + request.output);
+        cache kv (request.input + request.output);
     }
     // an iteration costs whichever is larger: reading the weights and the
     // running requests' KV, or computing the tokens it scheduled

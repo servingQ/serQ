@@ -1,5 +1,5 @@
 {
-  "IR_VERSION": 15,
+  "IR_VERSION": 16,
   "ir": {
     "CStmt": 17,
     "CExpr": 11,
@@ -15,8 +15,8 @@
     "admit waiting while (running.preempted == 0)",
     "admit waiting while (running.preempted == 0) each at most (threshold)",
     "advance running each at most (threshold);",
-    "cache (request.input + request.output - 1);",
-    "cache (request.input + request.output);",
+    "cache kv (request.input + request.output - 1);",
+    "cache kv (request.input + request.output);",
     "device gpu { compute (t) = a * ceil(t / b0); }",
     "device gpu { compute (t) = t * a; hbm (k) = omega + beta * k; kv cap blocks * bs; }",
     "device gpu { kv cap blocks * bs; }",

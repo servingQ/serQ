@@ -18,9 +18,10 @@ order (as serQ reads explicit sessions of its IR, or an ordered trace).
   (per session, tail blocks evicted first, least recently released entry
   first, ties by release order), admit the head of their queue when every
   pool of its hold has room for its `fits` units (allocated units never
-  count the cache), with a `cache` clause consume at most `reuse` of the
-  own prefix (the rest stays cached, dead, with its age; a hold without the
-  clause leaves the entry where it is, serQ IR 10), and on a failed growth preempt the
+  count the cache), on the pool a `cache` clause names consume at most
+  `reuse` of the own prefix (the rest stays cached, dead, with its age; a
+  hold without the clause, and the hold's other pools, leave the entry
+  where it is, serQ IR 10 and 16), and on a failed growth preempt the
   most recently admitted holder, whose hold is released (its computed
   prefix cached) and re-queued at the head. A pool marked `viaEngine`
   (`admit via engine`) is admitted by the engine at the start of an
@@ -150,8 +151,15 @@ structure Entry where
 structure HoldRec where
   /-- (pool, allocated units, position: consumed prefix + tokens computed) -/
   pools : List (ℕ × ℕ × ℕ)
+  /-- whether the position on the cached pool advanced (a growth of it, or
+  a preemption): then the position, not the allocation, is what that pool
+  computed. Only the cached pool's is ever read, so one flag is that pool's
+  (serQ #366: a flag any pool's growth set made a pool that never grew
+  cache position 0) -/
   grown : Bool
-  cache : Option (Env → ℕ)
+  /-- `cache p (ℓ)`: the pool, one of `pools`, that consumes and keeps the
+  session's cached prefix, and `ℓ` -/
+  cache : Option (ℕ × (Env → ℕ))
   /-- the statement, to re-execute after a preemption -/
   stmt : Prog
 
@@ -737,20 +745,25 @@ def fitsAll (m : Machine) (ns : List (ℕ × ℕ × ℕ)) : Bool :=
   ns.all fun (p, _, need) => decide ((pst m p).used + roundUp (pdef D p).block need ≤ (pdef D p).cap)
 
 /-- One pool `(p, u, _)` of session `i`'s admission: the own cached prefix it
-consumes (at most `r?`, with a `cache` clause only), the dead rest, the
-eviction that makes room, the allocation. The accumulator carries the
-machine, the pools held so far and the most consumed. -/
-def admitPool (i serial : ℕ) (cache : Option (Env → ℕ)) (r? : Option ℕ)
+consumes (at most `r?`, on the pool the `cache` clause names only), the dead
+rest, the eviction that makes room, the allocation. The accumulator carries
+the machine, the pools held so far and the most consumed (the cached pool's:
+the others consume nothing). -/
+def admitPool (i serial : ℕ) (cache : Option (ℕ × (Env → ℕ))) (r? : Option ℕ)
     (acc : Machine × List (ℕ × ℕ × ℕ) × ℕ) (x : ℕ × ℕ × ℕ) : Machine × List (ℕ × ℕ × ℕ) × ℕ :=
   let m := acc.1
   let p := x.1
   let u := x.2.1
   let pd := pdef D p
   let s := pst m p
-  -- a hold takes from the prefix cache only if it will give back to
-  -- it: without a `cache` clause the entry stays where it is (IR 10)
-  let own := if cache.isSome then ownEntry s serial else 0
-  let s := if cache.isSome then removeEntry s serial else s
+  -- a hold takes from the prefix cache only where it will give back to
+  -- it: without a `cache` clause (IR 10), or on a pool the clause does not
+  -- name (IR 16), the entry stays where it is
+  let mine := match cache with
+    | some (q, _) => decide (q = p)
+    | none => false
+  let own := if mine then ownEntry s serial else 0
+  let s := if mine then removeEntry s serial else s
   let keepR := match r? with
     | some r => roundDown pd.block (min r own)
     | none => own
@@ -781,7 +794,8 @@ def admit (m : Machine) (i : ℕ) (left : ℕ) : Machine :=
     { m with nextAdm := m.nextAdm + 1, ready := m.ready ++ [i] }
   | _ => m
 
-/-- Release a hold of session `i`: free the units, cache what was computed. -/
+/-- Release a hold of session `i`: free the units, cache what was computed on
+the pool its `cache` clause names. -/
 def release (m : Machine) (i : ℕ) (h : HoldRec) : Machine :=
   h.pools.foldl (fun m (p, alloc, pos) =>
     let pd := pdef D p
@@ -790,9 +804,9 @@ def release (m : Machine) (i : ℕ) (h : HoldRec) : Machine :=
     let s := { s with used := s.used - alloc, holders := s.holders.filter (· ≠ i) }
     match h.cache with
     | none => setPool m p s
-    | some c =>
+    | some (q, c) =>
       let keep := roundDown pd.block (min (evalE m i c) (if h.grown then pos else alloc))
-      if keep = 0 then setPool m p s
+      if q ≠ p ∨ keep = 0 then setPool m p s
       else
         let s := removeEntry s serial
         let s := { s with entries := ⟨serial, keep, m.now, m.nextRel⟩ :: s.entries }
@@ -959,7 +973,9 @@ def mapHold (s : Sess) (p : ℕ) (g : ℕ × ℕ → ℕ × ℕ) : Sess :=
     | [], _ => []
     | .hold h k :: fs, false =>
       if h.pools.any (·.1 = p) then
-        .hold { h with grown := true, pools := h.pools.map fun (q, a, x) =>
+        -- the cached pool's position advanced, if `p` is that pool
+        .hold { h with grown := h.grown || decide (h.cache.map Prod.fst = some p),
+                       pools := h.pools.map fun (q, a, x) =>
           if q = p then (q, (g (a, x)).1, (g (a, x)).2) else (q, a, x) } k :: go fs true
       else .hold h k :: go fs false
     | f :: fs, done => f :: go fs done

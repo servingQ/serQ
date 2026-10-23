@@ -7,7 +7,7 @@
         stage nic[2] : ps(1);
         server {
           set t0 = now;
-          hold kvP (cost(kvP, prompt)) { run P (cost(P, prompt)); } cache (cost(kvP, prompt)) lease kvP (inf);
+          hold kvP (cost(kvP, prompt)) { run P (cost(P, prompt)); } cache kvP (cost(kvP, prompt)) lease kvP (inf);
           set c = 0;
           hold kvD[j] (cost(kvD, prompt)) {
             transfer on nic[j] ((prompt - c) / Bw) from kvP to kvD[j] (prompt - 1);

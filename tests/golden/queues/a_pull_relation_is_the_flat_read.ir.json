@@ -1,5 +1,5 @@
 {
-  "version": 15,
+  "version": 16,
   "attrs": [
     "cached",
     "serial",
@@ -270,19 +270,28 @@
           ],
           "reuse": null,
           "body": 3,
-          "cache": {
-            "Cost": [
-              {
-                "Pool": {
-                  "base": 0,
-                  "count": 2
-                }
-              },
-              {
-                "Attr": 9
+          "cache": [
+            {
+              "base": 0,
+              "count": 2,
+              "index": {
+                "Attr": 11
               }
-            ]
-          },
+            },
+            {
+              "Cost": [
+                {
+                  "Pool": {
+                    "base": 0,
+                    "count": 2
+                  }
+                },
+                {
+                  "Attr": 9
+                }
+              ]
+            }
+          ],
           "lease": [
             {
               "base": 0,

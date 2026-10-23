@@ -550,7 +550,10 @@ impl Ctx<'_> {
                     .collect::<Result<_, _>>()?,
                 reuse: reuse.as_ref().map(|e| self.expr(e)).transpose()?,
                 body: self.stmts(body)?,
-                cache: cache.as_ref().map(|e| self.expr(e)).transpose()?,
+                cache: match cache {
+                    None => None,
+                    Some((r, e)) => Some((self.reference(r)?, self.expr(e)?)),
+                },
                 prefix: prefix
                     .as_ref()
                     .map(|segs| {

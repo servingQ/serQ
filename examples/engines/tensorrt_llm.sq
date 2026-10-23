@@ -43,7 +43,7 @@ fn main() {
       admit waiting while (running.preempted == 0)
         taking reqs (1), kv (request.input) reserve (request.input + mt)
         reuse (floor(request.input - 1, blocksize(kv)))
-        cache (request.input + request.output - 2);
+        cache kv (request.input + request.output - 2);
     }
     worker {
       forward (max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));

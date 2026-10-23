@@ -477,13 +477,15 @@ pub struct Relation {
 }
 
 /// An engine's `taking P (u) [reserve (r)], … [reuse (e)] [prefix (…)]
-/// [cache (e)]`, read for each request (`ir::CRequest`).
+/// [cache P (e)]`, read for each request (`ir::CRequest`).
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct RequestSpec {
     pub pools: Vec<(Ref, Expr, Option<Expr>)>,
     pub reuse: Option<Expr>,
     pub prefix: Option<Vec<(Expr, Expr)>>,
-    pub cache: Option<Expr>,
+    /// `cache P (e)`: the pool whose computed prefix stays cached (the
+    /// engine's memory), and how much.
+    pub cache: Option<(Ref, Expr)>,
 }
 
 /// An engine's `scheduler` as the kernel runs it.
@@ -612,7 +614,9 @@ pub enum Stmt {
         /// the rest stays cached, unusable, until evicted.
         reuse: Option<Expr>,
         body: Vec<Stmt>,
-        cache: Option<Expr>,
+        /// `cache P (ℓ)`: the pool (one of the hold's) whose computed prefix
+        /// stays cached at the scope's end, and how much (#366).
+        cache: Option<(Ref, Expr)>,
         /// `prefix (k₁: n₁, …)`: the hold's sequence as keyed segments.
         prefix: Option<Vec<(Expr, Expr)>>,
         /// `lease P (t)`: at the scope's end the allocation on `P` (one of
@@ -791,7 +795,10 @@ where
                     (parts.expr)(n);
                 }
                 reuse.iter_mut().for_each(&mut parts.expr);
-                cache.iter_mut().for_each(&mut parts.expr);
+                if let Some((r, ell)) = cache {
+                    (parts.reference)(r);
+                    (parts.expr)(ell);
+                }
                 if let Some((r, duration)) = lease {
                     (parts.reference)(r);
                     (parts.expr)(duration);

@@ -12,7 +12,7 @@ const PREFILL: &str = "kv (request.input)";
 /// The engine's admission when it also leaves the whole sequence cached:
 /// the output, which the server passes by the hidden `o`, is read at the
 /// release.
-const BOTH: &str = "kv (request.input) cache (request.input + request.output)";
+const BOTH: &str = "kv (request.input) cache kv (request.input + request.output)";
 
 /// The engine admits a request by `taking` (the prompt's blocks in most
 /// tests); the server calls it.

@@ -36,7 +36,7 @@ fn main() {
         admit waiting
           taking kv (request.input + mnt - 1)
           reuse (request.input - 1)
-          cache (request.input);
+          cache kv (request.input);
       }
       set just = waiting.admitted > 0;
     }

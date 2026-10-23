@@ -31,7 +31,7 @@ fn main() {
           reserve (request.known)
         reuse (max(hitmax, floor(max(request.known > request.input ? request.known - 1 : 0, computed), bs)))
         prefix (system: floor(S, bs), serial: inf)    // vLLM shares full blocks
-        cache (request.input + request.output - 1);  // every computed token, full blocks (kv_cache_manager.py:602)
+        cache kv (request.input + request.output - 1);  // every computed token, full blocks (kv_cache_manager.py:602)
     }
     worker {
       forward (c_it);

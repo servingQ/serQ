@@ -9,7 +9,7 @@
         engine D[2] on gpu { tokens cap inf; scheduler { advance running; admit waiting while (running.preempted == 0); } worker { forward (1); } }
         use "std/share";
         server {
-          hold kvP[i] (cost(kvP, prompt)) { run P[i] (cost(P, prompt)); } cache (cost(kvP, prompt)) lease kvP[i] (inf);
+          hold kvP[i] (cost(kvP, prompt)) { run P[i] (cost(P, prompt)); } cache kvP[i] (cost(kvP, prompt)) lease kvP[i] (inf);
           hold kvD[j] (cost(kvD, prompt)) {
             run setup (cost(setup, 1));
             transfer on egress, ingress[j] (prompt, share = share.maxmin) from kvP[i] to kvD[j] (prompt - 1);

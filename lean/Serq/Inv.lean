@@ -125,7 +125,7 @@ theorem skey_release (m : Machine) (i : ℕ) (hr : HoldRec) : skey (release D m 
   repeat' split
   all_goals rfl
 
-theorem skey_admitPool (i serial : ℕ) (cache : Option (Env → ℕ)) (r? : Option ℕ)
+theorem skey_admitPool (i serial : ℕ) (cache : Option (ℕ × (Env → ℕ))) (r? : Option ℕ)
     (acc : Machine × List (ℕ × ℕ × ℕ) × ℕ) (x : ℕ × ℕ × ℕ) :
     skey (admitPool D i serial cache r? acc x).1 = skey acc.1 := by
   unfold admitPool

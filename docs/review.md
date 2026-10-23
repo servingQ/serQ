@@ -95,7 +95,8 @@ What it misses or gets wrong:
   the eviction are written once. `hold m₁(c₁), m₂(c₂) { … }` admits
   atomically on several pools, which is how vLLM checks slots and
   blocks together.
-* **Scoped holds.** `hold … { body } cache (ℓ)` replaces `admit`/`free`.
+* **Scoped holds.** `hold … { body } cache P (ℓ)` replaces `admit`/`free`
+  (#366: `cache` names the pool that keeps the prefix).
   Balance becomes syntactic, and preemption is "abort the scope and
   re-execute the statement", which is exactly `_preempt_request`
   (`num_computed_tokens = 0`, `waiting.prepend_request`): the prefix the

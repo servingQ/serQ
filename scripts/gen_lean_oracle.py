@@ -55,8 +55,18 @@ OUT = os.path.join(ROOT, "lean", "Serq", "Oracle.lean")
 # statement `Join`. A connector was outside the fragment and stays so (below),
 # a send is, and no oracle program had a `Join`: a 14 file and a 15 file
 # translate alike.
-IR_VERSION = 15
-SUPPORTED_IR_VERSIONS = (7, 8, 9, 10, 11, 12, 13, 14, IR_VERSION)
+# 16 (serQ #366, docs/design/cache-names-its-pool.md) makes `Hold.cache` and
+# `CRequest.cache` name the one pool they keep cached, `[pool, ℓ]` where they
+# were `ℓ` for every pool of the hold: only that pool consumes and keeps the
+# session's prefix, `cached` is what it consumed, and its `computed` is its
+# own. The model's hold names the pool too (`Route.hold`, `Exec.admitPool`).
+# A 15 file translates by the old meaning where the two agree (`cache_of`): a
+# hold of one pool caches that pool, and a request its engine's memory, the
+# only pool that kept anything (its prefill grows the memory before it ends,
+# and a preemption caches positions, so its other pools cached 0); a hold of
+# several pools kept a prefix in each, which the model cannot say.
+IR_VERSION = 16
+SUPPORTED_IR_VERSIONS = (7, 8, 9, 10, 11, 12, 13, 14, 15, IR_VERSION)
 
 
 def is_delay(kind):
@@ -548,7 +558,10 @@ class Lean:
                     f = f" fits ({self.top(fits)})" if fits is not None else ""
                     ps.append(f"{one_ref(r, 'hold')} ({self.top(u)}){f}")
                 ru = f" reuse ({self.top(v['reuse'])})" if v["reuse"] is not None else ""
-                ca = f" cache ({self.top(v['cache'])})" if v["cache"] is not None else ""
+                ca = ""
+                if v["cache"] is not None:
+                    q, ell = self.cache_of(v["cache"], [r for r, _, _ in v["pools"]], None)
+                    ca = f" cache {q} ({self.top(ell)})"
                 out.append(f"{pad}hold {', '.join(ps)}{ru} {{")
                 out.append(self.block(v["body"], ind + 1))
                 out.append(f"{pad}}}{ca};")
@@ -573,6 +586,24 @@ class Lean:
                 raise Fragment(f"statement {kind}")
         out.append(pad + "done")
         return "\n".join(out)
+
+    def cache_of(self, cache, pools, memory):
+        """A hold's `cache` (an engine's, with its `memory`) as the model
+        writes it: the pool it keeps cached and `ℓ`. From IR 16 the clause
+        names its pool, `[pool, ℓ]`, an engine's its memory; up to 15 it was
+        `ℓ` alone, for every pool of the hold (see IR_VERSION above)."""
+        if self.ir["version"] >= 16:
+            r, ell = cache
+            q = one_ref(r, "cache")
+            if memory is not None and q != memory:
+                raise Fragment(f"an engine's `cache` on pool {q}, not its memory {memory}")
+            return q, ell
+        if memory is not None:
+            return memory, cache
+        if len(pools) != 1:
+            raise Fragment("a hold of several pools with `cache` (IR 15 or before): each kept a "
+                           "prefix, and the model's hold caches one pool (serQ #366)")
+        return one_ref(pools[0], "cache"), cache
 
     def fresh(self, name):
         """A slot past the IR's attributes, for the state the interpreter
@@ -668,7 +699,10 @@ class Lean:
             ps.append(f"{one_ref(r, 'taking')} ({u}){f}")
         ru = f" reuse ({self.top(reuse)})" if reuse is not None else ""
         cache = spec.get("cache")
-        ca = f" cache ({self.top(subst(cache, None))})" if cache is not None else ""
+        ca = ""
+        if cache is not None:
+            q, ell = self.cache_of(cache, [r for r, _, _ in spec["pools"]], mem)
+            ca = f" cache {q} ({self.top(subst(ell, None))})"
         rec = spec["records"]
         inner = "  " * (ind + 1)
         n, c = f"(x.attr {known})", "x.cached"

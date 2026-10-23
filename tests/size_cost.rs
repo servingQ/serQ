@@ -177,13 +177,13 @@ fn client_tool_cost_does_not_grant_server_resource_access() {
 #[test]
 fn cache_cost_is_ready_even_when_a_hold_exits_early() {
     let e = compile(
-        "hold mem (cost(mem, 1)) { release mem; set c = cost(mem, 1); } cache(c);",
+        "hold mem (cost(mem, 1)) { release mem; set c = cost(mem, 1); } cache mem (c);",
         "",
     )
     .unwrap_err();
     assert!(e.contains("read before every path"), "{e}");
     compile(
-        "set c = cost(mem, 1); hold mem (cost(mem, 1)) { release mem; } cache(c);",
+        "set c = cost(mem, 1); hold mem (cost(mem, 1)) { release mem; } cache mem (c);",
         "",
     )
     .unwrap();

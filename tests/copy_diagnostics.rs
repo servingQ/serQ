@@ -74,7 +74,7 @@ fn a_push_read_by_transfer_without_a_fork_runs() {
         pool kv { cap 1000; }
         serve fifo;
         nic ps(100);
-        prefill (prompt) { hold kv (cost(kv, prompt)) { run (cost(P, prompt)); } cache (cost(kv, prompt)) lease kv (inf); }
+        prefill (prompt) { hold kv (cost(kv, prompt)) { run (cost(P, prompt)); } cache kv (cost(kv, prompt)) lease kv (inf); }
       }
       queue D[2] : agg, decode {
         device gpu { kv cap 1000; } pool kv on gpu { block 16; }

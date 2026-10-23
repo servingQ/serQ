@@ -38,7 +38,7 @@ fn main() {{
           taking kv (min(request.known, request.hit + (request.loaded > 0 ? request.loaded : budget_left(E)))) reserve (request.known),
                  reqs (1)
           reuse (floor(request.known - 1, 16))
-          cache (request.input + request.output);
+          cache kv (request.input + request.output);
       }}
       worker {{ forward (hbm(0) + compute(batch.tokens)); }}
     }}

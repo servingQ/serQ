@@ -24,7 +24,7 @@ fn main() {
       // decided at the moment the hold is admitted
       set warm = cached >= K;
       run engine (cost(engine, (warm ? a * n : a * (K + n)) + d * o));
-    } cache (cost(kv, K + n + o));
+    } cache kv (cost(kv, K + n + o));
     if (K > 0) { observe hit = warm; }
     // a session's last turn leaves nothing worth keeping
     if (final) { drop kv; }

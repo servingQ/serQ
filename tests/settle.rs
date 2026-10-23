@@ -216,7 +216,7 @@ fn the_marks_of_a_session_turn_do_not_depend_on_the_machine() {
           scheduler {{
             advance running;
             admit waiting while (running.preempted == 0) taking reqs (1), kv (request.input)
-              reuse (0) cache (request.input + request.output);
+              reuse (0) cache kv (request.input + request.output);
           }}
           worker {{ forward (1e-4 + 1e-5 * batch.tokens); }}
         }}
@@ -416,7 +416,7 @@ fn a_hold_header_may_not_draw() {
         let e = check(
             &format!(
                 "pool kv {{ cap 1000; }} stage tool : delay;
-        server {{ hold {header} {{ run tool (cost(tool, 1)); }} cache (5);
+        server {{ hold {header} {{ run tool (cost(tool, 1)); }} cache kv (5);
         }} "
             ),
             "workload { arrive batch(1);

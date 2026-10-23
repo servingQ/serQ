@@ -92,7 +92,7 @@ admit waiting while (running.preempted == 0)
   taking reqs (1), kv (min(request.known, request.hit + budget_left(llm)))
     reserve (request.known)
   reuse (floor(request.known - 1, bs))
-  cache (request.input + request.output);
+  cache kv (request.input + request.output);
 ```
 
 `taking` sits on `admit waiting` because that is when the scheduler sizes
@@ -120,9 +120,10 @@ first chunk is allocated. This is vLLM's default
 its first chunk and its later chunks preempt other requests; at the loads
 of the next chapter, that raises the preemption count about tenfold.
 
-**`cache (request.input + request.output)`** leaves the request's
-sequence cached when it ends, for the session's next turn, as in chapter
-4.
+**`cache kv (request.input + request.output)`** leaves the request's
+sequence cached in `kv` when it ends, for the session's next turn, as in
+chapter 4. It names `kv`, the engine's memory, where the request's KV is:
+the slot in `reqs` holds no prefix.
 
 With `preempt lifo`, a growth that does not fit preempts the most recently
 admitted running request. It goes back to the head of the queue keeping

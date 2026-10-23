@@ -24,7 +24,7 @@ const REQUEST: &str = "      scheduler {
           taking reqs (1),
                  kv (min(request.known, request.hit + budget_left(P))) reserve (request.known)
           reuse (floor(request.known - 1, bs))
-          cache (request.input);
+          cache kv (request.input);
       }";
 
 const ENTRY: &str = "    prefill (prompt) {
@@ -41,7 +41,7 @@ const HOLD_ENTRY: &str = "    prefill (prompt) {
            reserve (cost(kv, prompt)) {
         set c = cached;
         run P prefill (cost(P, prompt - c)) growing kv;
-      } cache (cost(reqs, kv, prompt)) lease kv (inf);
+      } cache kv (cost(kv, prompt)) lease kv (inf);
     }";
 
 fn compiled(src: &str, workload: &Path, ov: &serq::Overrides) -> Result<serq::Report, String> {

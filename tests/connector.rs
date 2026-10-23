@@ -275,7 +275,7 @@ fn cachedin_reads_each_pool_by_the_chain_it_was_cached_along() {
                    scheduler {{
                      advance running;
                      admit waiting taking kv (request.known) prefix (0: {system}, serial: inf)
-                       cache (request.input);
+                       cache kv (request.input);
                    }}
                    worker {{ forward (1); }}
                  }}

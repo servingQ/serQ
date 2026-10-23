@@ -19,16 +19,19 @@ The prefix can be evicted while the session thinks or waits for admission.
 hold kv (cost(kv, K + n + o)) {
   set warm = cached >= K;
   run engine (cost(engine, (warm ? a * n : a * (K + n)) + d * o));
-} cache (cost(kv, K + n + o));
+} cache kv (cost(kv, K + n + o));
 ```
 
-**`cache (ℓ)`** at the end of a hold: when the scope ends the units are
-released, but up to `ℓ` of them stay in the pool as this session's cached
+**`cache kv (ℓ)`** at the end of a hold: when the scope ends the units are
+released, but up to `ℓ` of them stay in `kv` as this session's cached
 prefix. Cached units do not block anybody — a request that needs room evicts
 them — but they occupy the pool. The clause is also
 what makes the hold *take* from the cache: a hold without it leaves this
 session's cached prefix where it is (`cached` is 0 in its body), and
-`cache (0)` consumes the prefix and keeps nothing.
+`cache kv (0)` consumes the prefix and keeps nothing. It names its pool
+because a hold may take several, and only one holds the prefix: a hold of
+a request slot and the KV (`hold reqs (…), kv (…)`) caches `kv`, and the
+slot is memory alone.
 
 **`cached`** is how much of the session's own prefix survived, read at the
 moment the hold is **admitted**. Not when it queued: while it waits, its

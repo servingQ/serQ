@@ -89,10 +89,10 @@ eitem    := NAME [ '[' N ']' ] cap expr ;    -- a capacity the engine holds (`re
 sstmt    := advance running [only ( expr )] [admission | by ( expr , ... ) | decode first] [each at most ( expr )] ;
           | admit waiting [only ( expr )] [while ( expr )] [each at most ( expr )]
                 [taking POOL ( expr ) [reserve ( expr )] , ... [reuse ( expr )]
-                        [prefix ( expr : expr , ... )] [cache ( expr )]] ;
+                        [prefix ( expr : expr , ... )] [cache POOL ( expr )]] ;
                                              -- what the admission takes of a request, reads of its
-                                             -- cache, and what its release leaves cached
-                                             -- (*An engine's request*)
+                                             -- cache, and what its release leaves cached in POOL,
+                                             -- the engine's memory (*An engine's request*)
           | exclusive prefill [each at most ( expr )] ;
           | if ( expr ) { sstmt* } [else ( { sstmt* } | if … )]
           | set NAME = expr ;
@@ -110,7 +110,9 @@ stmt     := turn ;                           -- draw attributes, submit, wait fo
           | hold POOL ( expr ) [reserve ( expr )] [, POOL ( expr ) [reserve ( expr )]]*
                  [prefix ( expr : expr , ... )]   -- the sequence as keyed segments
                  [reuse ( expr )]
-                 block [ cache ( expr ) ] [ lease POOL ( expr ) ] [ ; ]
+                 block [ cache POOL ( expr ) ] [ lease POOL ( expr ) ] [ ; ]
+                                             -- cache: the one pool of the hold that consumes and
+                                             -- keeps the session's cached prefix
                                              -- lease: that pool's allocation outlives the scope,
                                              -- until a release/transfer takes it, expr seconds, or the end
           | grow POOL ( expr ) ;             -- the enclosing hold's allocation on POOL grows, or the session's lease of it
@@ -208,7 +210,8 @@ The rules that are the language's, not the catalogue's:
   evaluates to NaN does not link.
 - **Attributes.** Every name a `set` or a `choose` assigns is a session
   attribute. The built-in ones are `serial`, `turn_no`, `cached` (the prefix
-  consumed at the last admission; 0 after a hold without `cache`),
+  the pool a `cache` names consumed at the last admission; 0 after a hold
+  without `cache`),
   `computed` (the position a preempted hold had reached, 0 otherwise; [Semantics](#3-semantics)),
   and with a trace `new`, `out`, `think`, `more`, `forced`.
 
@@ -486,7 +489,7 @@ ownership. The parser and IR validator enforce these boundaries:
 | Turn lifecycle | `turn;`, optional early `end;` | `turn;` refused; completion is the end of its block; `end;` refuses the request and ends the session, outside a `hold` or a `fork` |
 | Repetition | `while (condition) { … }`, `loop { … }` | The same, without session lifecycle statements |
 | Queue entry calls | Refused | `gw.route();`, `D[j].decode (prompt);`, … |
-| Admission | `hold … { … } cache (…)` | The same |
+| Admission | `hold … { … } cache P (…)` | The same |
 
 There is one `server` per workload. An explicit session must contain a
 turn, and `session` belongs inside `workload`. Gateway selection and
@@ -513,7 +516,7 @@ queue P[NP] : prefill {
         taking reqs (1),
                kv (min(request.known, request.hit + budget_left(P))) reserve (request.known)
         reuse (floor(request.known - 1, bs))
-        cache (request.input);
+        cache kv (request.input);
     }
     worker { forward (…); }
   }
@@ -797,7 +800,7 @@ finite `ttl` breaks it).
 
 ### Pools
 
-`hold m₁(cost(m₁, u₁)) reserve(cost(m₁, r₁)), m₂(cost(m₂, u₂)) … reuse(cost(m₁, m₂, ρ)) { body } cache(cost(m₁, m₂, ℓ))`
+`hold m₁(cost(m₁, u₁)) reserve(cost(m₁, r₁)), m₂(cost(m₂, u₂)) … reuse(cost(m₂, ρ)) { body } cache m₂ (cost(m₂, ℓ))`
 joins the queue of `m₁`. The unit expressions are evaluated *when the
 session is admitted* (observables such as the cache or an engine's budget
 change while a session waits), and re-evaluated at every attempt, so the units, `reserve`
@@ -812,10 +815,13 @@ hold reserved and has not allocated stays reserved while it lasts: a later
 admission needs `used + Σ max(0, rᵢ − allocᵢ) + r ≤ cap`, and the holder
 grows into its own reservation;
 cached prefixes still never block. The first that does not
-fit blocks the rest (head-of-line blocking). The `cache` clause is what
-makes a hold take part in the prefix cache. With it, on admission the
+fit blocks the rest (head-of-line blocking). The `cache m (ℓ)` clause is
+what makes a hold take part in the prefix cache, on the one pool `m` it
+names, one of the hold's; the hold's other pools are memory alone, as a
+hold without the clause is, and keep nothing (a slot pool has no prefix:
+#366). `reuse` and `ℓ` are units of `m`. With the clause, on admission the
 session reads at most `ρ` units of the cached prefix of its hold's chain
-(`cached :=` what it read) and keeps them allocated while the hold lasts;
+on `m` (`cached :=` what it read) and keeps them allocated while the hold lasts;
 what the session's entry held past them stays in the cache as a *dead*
 entry with the same age, unusable, until evicted. A hold's chain is its
 `prefix (k₁: n₁, …)`: the sequence as segments, each a key and a length,
@@ -837,23 +843,23 @@ session's `reuse`, `cache`, `drop` or consumption takes it. A hold with
 `prefix` reads at most what it allocates; a hold without consumes its
 entry whole, and what its allocation does not hold of it is gone. A
 chain is cached on pools with `block`; on a slot pool the hold's chain is
-the session's own, and a hold with `prefix` and no pool with `block`
-does not link. A prefix several holds read is allocated once, and an
+the session's own, and a hold with `prefix` whose `cache` names a pool
+without `block` does not link. A prefix several holds read is allocated once, and an
 admission does not ask again for what another hold already reads; the
 session's entry its own hold reads is consumed: the session's other holds
 do not see it. Without
 `cache` the hold is
 memory alone: it leaves the session's cached blocks where they are,
 evictable as before, and `cached` is 0 in its body (the linker rejects a
-body that reads it there, and a `reuse` there; `cache (0)` is the hold
-that consumes the prefix and keeps nothing). `reuse (0) cache (ℓ)` skips reuse while retaining caching on release.
+body that reads it there, and a `reuse` there; `cache m (0)` is the hold
+that consumes the prefix and keeps nothing). `reuse (0) cache m (ℓ)` skips reuse while retaining caching on release.
 Other entries are evicted in the
 pool's order until allocations and cache fit; `u` units are allocated and
 the body runs. At the end of the body the units are released and
-`min(ℓ, computed)` units stay cached along the chain, rounded down to
-blocks (`computed`
-is the allocation, or the position a `growing` run or a `load` reached; a
-`growing` run ends at the position it started at plus its work).
+`min(ℓ, computed)` units of `m` stay cached along the chain, rounded down
+to blocks (`computed` is `m`'s own: its allocation, or the position a
+`growing` run or a `load` reached on `m`, whatever the hold's other pools
+did; a `growing` run ends at the position it started at plus its work).
 `release m` inside the body does the same for `m` alone, at that point:
 the innermost enclosing hold on `m` gives its allocation there back,
 caching per its clause, and holds `m` no longer. A hold's `lease m (t)`
@@ -1360,7 +1366,7 @@ engine vllm on gpu {
       taking reqs (1), kv (min(request.known, request.hit + budget_left(vllm)))
         reserve (request.known)
       reuse (floor(request.known - 1, blocksize(kv)))
-      cache (request.input + request.output);
+      cache kv (request.input + request.output);
   }
   worker {
     forward (c0 + max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
@@ -1381,7 +1387,9 @@ request with no input decodes from its first iteration. A preempted request
 gives its pools back, caching what it computed, keeps its tokens and what
 it generated (`scheduler.py:1561`), and waits at the head of the queue (or
 the tail, `requeue tail`); its `known` is then `max(known, computed + 1)`.
-When it has generated `output` it gives its pools back with `cache`, and
+When it has generated `output` it gives its pools back, its `cache` keeping
+what it computed in the engine's memory, the pool the clause names (the
+request's position is there; a `cache` on another pool does not link), and
 the session goes on. An engine that is a KV relation's source
 (`kvt.nixl_pull (P, D, …)`, *Queues*) keeps instead its allocation of its
 memory past the request's end: the request registers a *send*, and its
@@ -1850,7 +1858,7 @@ from the cache alone rather than from the previous prompt, and caches `request.i
 | preemption of `running[-1]`, `waiting.prepend_request`, `num_computed_tokens = 0`, no admission in a step that preempted | `preempt lifo`, re-queued at the head, admitted again; `admit waiting while (running.preempted == 0)` | `scheduler.py:742-813, 869, 1539-1582` |
 | a preempted request keeps its output tokens: it is rescheduled with `num_tokens = prompt + outputs`, reserves and recomputes that many, and generates the rest | the engine keeps the request's tokens: `request.known` is `max(known, computed + 1)` after a preemption, it computes what the cache does not hold of them and generates the rest | `scheduler.py:1560-1561`, `request.py:295-296`, `kv_cache_manager.py:515-531` |
 | the scheduler reserves by `num_tokens` (prompt and generated so far), never by the final length: it knows `max_tokens` and learns the length when `check_stop` sees EOS or the cap | `server (input, hidden output)`: no header, key or budget reads `output` | `kv_cache_manager.py:517, 533-534`, `config/scheduler.py:191`, `scheduler.py:639, 2426`, `sched/utils.py:98-119` |
-| the prefix cache holds every *computed* full block, generated tokens included; a hit is the longest run of cached full blocks, at most `num_tokens − 1` | `cache (request.input + request.output − 1)`; `reuse (floor(min(prev prompt, prompt − 1), bs))`; the unmatched blocks stay cached, dead | `kv_cache_manager.py:289-300, 602-606`, `single_type_kv_cache_manager.py:743-838` |
+| the prefix cache holds every *computed* full block, generated tokens included; a hit is the longest run of cached full blocks, at most `num_tokens − 1` | `cache kv (request.input + request.output − 1)`; `reuse (floor(min(prev prompt, prompt − 1), bs))`; the unmatched blocks stay cached, dead | `kv_cache_manager.py:289-300, 602-606`, `single_type_kv_cache_manager.py:743-838` |
 | the free queue: freed blocks appended tail first (LRU), in the order requests finish | `evict lru` per block from the tail, ties by release order | `block_pool.py:776-805`, `single_type_kv_cache_manager.py:557-585` |
 | a finished session's blocks stay in the free queue | `end` keeps the cache | `block_pool.py:776-805` |
 | a forced miss (a nonce at the head of the prompt) matches nothing; the old blocks stay | `reuse (0)` | trace |

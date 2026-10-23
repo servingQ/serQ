@@ -159,23 +159,28 @@ struct Held {
     /// it keeps locked.
     shared: f64,
     path: Vec<usize>,
+    /// Whether a `growing` run or a `load` advanced `pos` on this pool
+    /// (then `pos`, not the allocation, is what it has computed). The
+    /// pool's own: another pool of the hold growing says nothing of what
+    /// this one computed (#366).
+    grown: bool,
 }
 
 impl Held {
     /// What has been computed, and so may be cached: the position, once a
-    /// `growing` run of the hold advanced it, else the whole allocation.
-    fn computed(&self, grown: bool) -> f64 {
-        if grown { self.pos } else { self.alloc }
+    /// `growing` run or a `load` advanced it on this pool, else the whole
+    /// allocation.
+    fn computed(&self) -> f64 {
+        if self.grown { self.pos } else { self.alloc }
     }
 }
 
 #[derive(Clone, Debug)]
 struct Hold<'p> {
     pools: Vec<Held>,
-    /// Whether a `growing` run advanced `pos` (then `pos`, not the
-    /// allocation, is what has been computed).
-    grown: bool,
-    cache: Option<&'p CExpr>,
+    /// `cache P (ℓ)`: the pool, one of `pools`, whose computed prefix stays
+    /// cached, and the clause. The other pools are memory alone.
+    cache: Option<(usize, &'p CExpr)>,
     chain: Chain,
     /// The pool whose allocation outlives the scope, and for how long.
     lease: Option<(usize, Expiry<'p>)>,
@@ -188,6 +193,18 @@ struct Hold<'p> {
     /// slot, vLLM's waiting request once its remote KV has arrived). No body
     /// frame; it goes with the request's hold.
     part: bool,
+}
+
+impl<'p> Hold<'p> {
+    /// The hold's `cache` clause if it caches `pl`, the pool it names.
+    fn cache_on(&self, pl: usize) -> Option<&'p CExpr> {
+        cache_on(self.cache, pl)
+    }
+}
+
+/// A `cache P (ℓ)` clause, resolved: ℓ if `P` is `pl`.
+fn cache_on(cache: Option<(usize, &CExpr)>, pl: usize) -> Option<&CExpr> {
+    cache.and_then(|(q, e)| (q == pl).then_some(e))
 }
 
 /// A request to an engine (`CStmt::Request`), as vLLM keeps a `Request`:
@@ -382,7 +399,8 @@ type Chain = Rc<[Seg]>;
 struct Pending<'p> {
     pools: Vec<Wanted<'p>>,
     reuse: Option<&'p CExpr>,
-    cache: Option<&'p CExpr>,
+    /// The pool the hold caches, resolved, and its clause (`Hold::cache`).
+    cache: Option<(usize, &'p CExpr)>,
     chain: Chain,
     lease: Option<(usize, Expiry<'p>)>,
     body: BlockId,
@@ -2383,11 +2401,12 @@ impl<'p> Interp<'p> {
                     let lease = lease
                         .as_ref()
                         .map(|(r, t)| (self.session_index(r, sid), Expiry::After(t)));
+                    let cache = cache.as_ref().map(|(r, l)| (self.session_index(r, sid), l));
                     let chain = self.chain_of(prefix.as_deref(), sid);
                     let pending = Pending {
                         pools: wanted,
                         reuse: reuse.as_ref(),
-                        cache: cache.as_ref(),
+                        cache,
                         chain,
                         lease,
                         body: *body,
@@ -2554,10 +2573,14 @@ impl<'p> Interp<'p> {
                 .map(|(sd, m)| (m, Expiry::Fixed(sd.ttl.unwrap_or(f64::INFINITY)))),
             _ => None,
         };
+        let cache = spec
+            .cache
+            .as_ref()
+            .map(|(r, l)| (self.session_index(r, sid), l));
         let pending = Pending {
             pools,
             reuse: spec.reuse.as_ref(),
-            cache: spec.cache.as_ref(),
+            cache,
             chain,
             lease,
             body: 0,
@@ -3439,10 +3462,10 @@ impl<'p> Interp<'p> {
                 None => u,
             };
         }
-        if pending.cache.is_some() {
+        if let Some((cp, _)) = pending.cache {
             let reuse = self.reuse_now(&pending, sid);
             let serial = self.sessions[sid].serial;
-            for w in &mut pending.pools {
+            for w in pending.pools.iter_mut().filter(|w| w.pool == cp) {
                 let chain = self.pool_chain(w.pool, &pending.chain, serial);
                 let alloc = self.round_up(w.pool, w.units);
                 let (limit, _) = self.read_limit(w.pool, &chain, (reuse, alloc), serial);
@@ -3636,25 +3659,26 @@ impl<'p> Interp<'p> {
     fn admit(&mut self, sid: usize, pending: Pending<'p>) {
         let p = self.p;
         let serial = self.sessions[sid].serial;
-        let mut cached_first = None;
+        let mut cached = 0.0;
         let mut held = vec![];
         let reuse = self.reuse_now(&pending, sid);
         for w in &pending.pools {
             let q = w.pool;
             let need = self.round_up(q, w.units);
-            // A hold with a `cache` clause takes part in the prefix cache:
-            // it consumes the own prefix, at most `reuse` of it; the rest
+            // The pool a hold's `cache` names takes part in the prefix
+            // cache: it consumes the own prefix, at most `reuse` of it; the rest
             // stays cached as a dead entry of the same age (vLLM: the hit is
             // the longest run of cached blocks and the blocks past it are not
             // touched, so they keep their place in the free queue,
             // single_type_kv_cache_manager.py:743-838).
-            // One without the clause is memory alone and leaves the
-            // session's cached blocks where they are (#230: an outer hold
+            // Another pool of the hold, or a hold without the clause, is
+            // memory alone and leaves the session's cached blocks where they
+            // are (#366: a slot pool kept a slot per session; #230: an outer hold
             // around the request's used to consume them at its admission,
             // so the request found none, and had no clause to put them back).
             // The prefix it reads is locked: allocated while it lasts, and
             // counted once however many holds read it (vLLM's `ref_cnt`).
-            let (own, moved, path) = if pending.cache.is_some() {
+            let (own, moved, path) = if cache_on(pending.cache, q).is_some() {
                 let chain = self.pool_chain(q, &pending.chain, serial);
                 let (limit, full) = self.read_limit(q, &chain, (reuse, need), serial);
                 let (own, moved, path) = self.pools[q].cache.lock(&chain, limit, serial);
@@ -3673,9 +3697,10 @@ impl<'p> Interp<'p> {
             // with the units it takes
             let read_already = own - moved;
             self.pools[q].cached -= moved;
-            // `cached`: the consumed prefix (the largest, if several pools
-            // of the hold had one)
-            cached_first = Some(cached_first.map_or(own, |c: f64| c.max(own)));
+            // `cached`: the consumed prefix, on the one pool that consumes
+            if cache_on(pending.cache, q).is_some() {
+                cached = own;
+            }
             self.make_room(q, need - read_already);
             self.pools[q].used += need - read_already;
             self.pools[q].holders.push(sid);
@@ -3689,6 +3714,7 @@ impl<'p> Interp<'p> {
                 reserved: self.round_up(q, w.need),
                 shared: own,
                 path,
+                grown: false,
             });
         }
         let pl = first_pool(&pending);
@@ -3703,13 +3729,12 @@ impl<'p> Interp<'p> {
         s.adm_seq = seq;
         // a request's part reads no cache: `cached` stays its admission's
         if !pending.part {
-            s.attrs[p.slot_cached] = cached_first.unwrap_or(0.0);
+            s.attrs[p.slot_cached] = cached;
         }
         s.pending = None;
         s.status = Status::Ready;
         s.holds.push(Hold {
             pools: held,
-            grown: false,
             cache: pending.cache,
             chain: pending.chain,
             lease: pending.lease,
@@ -3923,7 +3948,8 @@ impl<'p> Interp<'p> {
     fn release_hold(&mut self, sid: usize, h: &Hold<'p>) {
         for e in &h.pools {
             let read = (&h.chain[..], e.shared, &e.path[..]);
-            self.release_units(sid, e.pool, e.alloc, e.computed(h.grown), h.cache, read);
+            let cache = h.cache_on(e.pool);
+            self.release_units(sid, e.pool, e.alloc, e.computed(), cache, read);
         }
     }
 
@@ -3933,7 +3959,8 @@ impl<'p> Interp<'p> {
     /// end.
     fn end_hold(&mut self, sid: usize, h: &Hold<'p>) {
         for e in &h.pools {
-            let (q, alloc, computed) = (e.pool, e.alloc, e.computed(h.grown));
+            let (q, alloc, computed) = (e.pool, e.alloc, e.computed());
+            let cache = h.cache_on(q);
             match h.lease {
                 Some((lp, t)) if lp == q => {
                     let t = match t {
@@ -3942,8 +3969,7 @@ impl<'p> Interp<'p> {
                         }
                         Expiry::Fixed(t) => t,
                     };
-                    let keep = h
-                        .cache
+                    let keep = cache
                         .filter(|_| h.request)
                         .map(|c| self.eval(c, &Ctx::session(sid), Which::Session).max(0.0));
                     let id = self.next_lease;
@@ -3962,7 +3988,7 @@ impl<'p> Interp<'p> {
                         pool: q,
                         alloc,
                         computed,
-                        cache: h.cache,
+                        cache,
                         chain: h.chain.clone(),
                         shared: e.shared,
                         path: e.path.clone(),
@@ -3981,7 +4007,7 @@ impl<'p> Interp<'p> {
                 }
                 _ => {
                     let read = (&h.chain[..], e.shared, &e.path[..]);
-                    self.release_units(sid, q, alloc, computed, h.cache, read)
+                    self.release_units(sid, q, alloc, computed, cache, read)
                 }
             }
         }
@@ -4108,8 +4134,8 @@ impl<'p> Interp<'p> {
         };
         let h = &mut self.sessions[sid].holds[hi];
         let e = h.pools.remove(k);
-        let computed = e.computed(h.grown);
-        let cache = h.cache;
+        let computed = e.computed();
+        let cache = h.cache_on(pl);
         let chain = h.chain.clone();
         self.release_units(
             sid,
@@ -4143,7 +4169,7 @@ impl<'p> Interp<'p> {
             return;
         }
         e.pos += n;
-        h.grown = true;
+        e.grown = true;
     }
 
     /// The session's lease of `pl` that `release`, `grow` and `preempt
@@ -4476,9 +4502,9 @@ impl<'p> Interp<'p> {
         let (hi, k) = self.sessions[sid]
             .innermost(pl)
             .expect("a growing run is inside a hold of its pool");
-        let h = &mut self.sessions[sid].holds[hi];
-        h.pools[k].pos = pos;
-        h.grown = true;
+        let e = &mut self.sessions[sid].holds[hi].pools[k];
+        e.pos = pos;
+        e.grown = true;
     }
 
     /// Units of `pl` held by `sid` (all its holds).
@@ -4541,7 +4567,8 @@ impl<'p> Interp<'p> {
             let h = self.sessions[victim].holds.remove(hi);
             for e in &h.pools {
                 let read = (&h.chain[..], e.shared, &e.path[..]);
-                self.release_units(victim, e.pool, e.alloc, e.pos, h.cache, read);
+                let cache = h.cache_on(e.pool);
+                self.release_units(victim, e.pool, e.alloc, e.pos, cache, read);
             }
             self.pools[pl].preemptions += 1;
             self.preempted = true;
@@ -4563,7 +4590,8 @@ impl<'p> Interp<'p> {
             let h = self.sessions[victim].holds.pop().unwrap();
             for e in &h.pools {
                 let read = (&h.chain[..], e.shared, &e.path[..]);
-                self.release_units(victim, e.pool, e.alloc, e.pos, h.cache, read);
+                let cache = h.cache_on(e.pool);
+                self.release_units(victim, e.pool, e.alloc, e.pos, cache, read);
             }
             // pop frames down to and including that hold's frame
             while let Some(f) = self.sessions[victim].frames.pop() {
@@ -4612,6 +4640,7 @@ impl<'p> Interp<'p> {
             }
         };
         let (cache, reuse) = cache;
+        let cache = cache.map(|(r, l)| (self.session_index(r, victim), l));
         let chain = self.chain_of(prefix, victim);
         self.pools[pl].preemptions += 1;
         self.preempted = true;

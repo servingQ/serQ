@@ -46,7 +46,7 @@ fn main() {
         taking reqs (1), kv (request.hit + min(request.known - request.hit, budget_left(vllm)))
           reserve (request.known)
         reuse (max(hitmax, floor(max(request.known > request.input ? request.known - 1 : 0, computed), bs)))
-        cache (request.input + request.output - 1);  // every computed token, full blocks (kv_cache_manager.py:602)
+        cache kv (request.input + request.output - 1);  // every computed token, full blocks (kv_cache_manager.py:602)
     }
     worker {
       forward (c_it + d * batch.decoding + e * batch.kv_decode + a * batch.prefilled + b * batch.attention);

@@ -17,7 +17,7 @@ than host-language code, and every input passes `Program::validate`.
 The source model and externally supplied execution settings resolve to one
 complete `Program`; its JSON records the experiment as well as the deployment.
 
-Source: `src/ir.rs`. Current version: `IR_VERSION = 15`.
+Source: `src/ir.rs`. Current version: `IR_VERSION = 16`.
 
 ## Format
 
@@ -97,8 +97,10 @@ delay stage is `Ps(Ctx(N))`, `ps(present)` (`CStageKind::delay`).
 | `connector?` | `CConnector`: its KV connector, to an L2 or from its queue's KV source, below. Omitted when it has none. |
 
 A `CRequest` is a hold's header read for a request: `pools: [(pool,
-units, reserve?)]`, `reuse?`, `prefix?` (read at `Request`), `cache?` and
-`send?`. `send: {ttl?}` marks the engine a KV
+units, reserve?)]`, `reuse?`, `prefix?` (read at `Request`), `cache?:
+(pool, ℓ)` and `send?`. Its `cache` names the engine's `memory`, a pool it
+takes, where the request's position is: no other pool consumes or keeps a
+prefix (16, #366). `send: {ttl?}` marks the engine a KV
 relation's source: each request registers a send of its allocation of the
 engine's `memory` (a pool it takes) when it ends, which keeps it, as a
 hold's `lease` keeps one, until a reader's load ends the send, `ttl`
@@ -175,7 +177,7 @@ between simulation checks and proofs.
 |---|---|
 | `Turn` | draw the next turn's attributes (workload `turn` block or trace); the source `turn;` also expands the server statements immediately after this node |
 | `Set(slot, e)`, `Observe(k, e)` | assign an attribute, record an observation |
-| `Hold {pools: [(pool, units, reserve?)], reuse?, body, cache?, prefix?, lease?}` | acquire units of every pool (admission gate `reserve` if given), run `body`, release; with `cache` the admission reads the cached prefix of the hold's chain and keeps it allocated while the hold lasts, `reuse` bounds how much, and `cache` is the units left cached along the chain; without `cache` the hold leaves the cache where it is; `prefix: [(key, length)]` is the chain, keyed segments shared with every hold whose leading keys are equal (a key is equal when it is the same `Attr` slot, or a structurally equal expression, with the same value, -0 = 0; a segment of length 0 is left out), absent `[(serial, ∞)]`, the session's own; a prefix several holds read is allocated once; with `prefix` the read is at most the allocation, without it the session's entry is consumed whole; what the session's entry held past a `reuse` bound stays cached, dead; on a pool without `block` the chain is the session's own; `lease: (pool, t)` keeps that pool's allocation past the scope, neither evictable nor a preemption victim except under the pool's `Leases`, until the session's `Release` of it, `t` seconds, or its end (vLLM's `delay_free_blocks`) |
+| `Hold {pools: [(pool, units, reserve?)], reuse?, body, cache?: (pool, ℓ), prefix?, lease?}` | acquire units of every pool (admission gate `reserve` if given), run `body`, release; `cache` names one of `pools` (16, #366), on which alone the admission reads the cached prefix of the hold's chain and keeps it allocated while the hold lasts, `reuse` bounds how much, and `ℓ` is the units of it left cached along the chain, at most what that pool computed (its allocation, or the position a growing run or a `Load` reached on it); the other pools, and every pool of a hold without `cache`, leave the cache where it is; `prefix: [(key, length)]` is the chain, keyed segments shared with every hold whose leading keys are equal (a key is equal when it is the same `Attr` slot, or a structurally equal expression, with the same value, -0 = 0; a segment of length 0 is left out), absent `[(serial, ∞)]`, the session's own; a prefix several holds read is allocated once; with `prefix` the read is at most the allocation, without it the session's entry is consumed whole; what the session's entry held past a `reuse` bound stays cached, dead; on a pool without `block` the chain is the session's own; `lease: (pool, t)` keeps that pool's allocation past the scope, neither evictable nor a preemption victim except under the pool's `Leases`, until the session's `Release` of it, `t` seconds, or its end (vLLM's `delay_free_blocks`) |
 | `Grow(pool, e)`, `Shrink(pool, e)`, `Drop(pool)` | grow, or give `e` back from, the current hold, or outside every hold of the pool the session's lease of it (a hold keeps what it computed); drop the session's own cached entry |
 | `Release(pool)` | give the innermost enclosing hold's allocation on the pool back now, or end the session's lease of it, caching per the hold's `cache`; nothing held or leased there is a no-op. A KV transfer between instances is `Run` (the link), `Load` (the destination) and `Release` (the source's lease) |
 | `Load(pool, e)` | the KV of `e` tokens arrived from outside the engine (a NIXL read): the innermost enclosing hold's computed position on the pool advances by `e`, within its allocation |
@@ -200,8 +202,8 @@ interpreter's client turn ends, and what the deployment view draws.
 `CostTarget` is `Pool {base, count}`, `Stage {base, count}`, or
 `Joint([targets])`. A joint target has at least two distinct, sorted,
 non-nested targets. A cost's resource span must match its consumer: a run's
-stage(s), a hold's individual pool, or all held pools for common
-`reuse`/`cache`. `Grow` and `Load` require their pool cost. A lease duration
+stage(s), a hold's individual pool, the pool its `cache` names for its
+`cache` and `reuse`, or all held pools for a `reuse` without `cache`. `Grow` and `Load` require their pool cost. A lease duration
 remains an ordinary scalar in seconds. No raw number or size implicitly
 becomes a cost in these statements.
 
@@ -251,15 +253,19 @@ text and directly constructed IR meet the same rules. Validation covers:
   segment's key and length read no state, no clock, no draw, and not
   `cached` or `computed`: they are read while the hold waits and when it
   is admitted, and the trie they index must not move under them. A hold
-  with `prefix` has a segment, only its last one endless, takes at least
-  one pool with `block`, and none that spills
-  or is spilled to. No statement sets `serial`, the session's number:
+  with `prefix` has a segment, only its last one endless; the pools its
+  chain keys, the one its `cache` names (#366) or else every pool it
+  takes, include one with `block`, and none of them spills or is spilled
+  to. A pool of the hold that `cache` does not name keys no chain, and
+  may spill. No statement sets `serial`, the session's number:
   a session's cache entry is what hangs under the key of its serial.
   `BudgetLeft` references only step stages, including every member of an
   indexed family.
 - **Ownership.** `Grow`, `Shrink`, `Load`, `Release` and a run's `growing` require an
   enclosing hold with the same `CRef` (base, count and index expression);
-  `Grow`, `Shrink` and `Release` may instead act on a lease of it. A hold leases only its own pool, names
+  `Grow`, `Shrink` and `Release` may instead act on a lease of it. A hold
+  leases and caches only its own pool (its `cache` and its `lease` each
+  name one of the pools it takes, index included), names
   each reference once, and cannot change attributes its index reads.
   An index read again inside the hold cannot depend on state or time.
   Preemptible holds cannot use such indices or `cached`/`computed` in
@@ -284,9 +290,9 @@ text and directly constructed IR meet the same rules. Validation covers:
   pool, and a `Grow` or `Shrink` of one; a `CConnector`'s `load` and
   `save`; a KV pool's `cap` (`inf` too) and `block`. A *KV pool* is one
   whose units are positions of a token sequence: it has a `block`, is a
-  step stage's `memory`, is taken by a hold or a `CRequest` with `cache`,
-  `reuse` or `prefix`, is a `Load`'s or a `growing` run's, or is spilled
-  to by one. Every such expression must be provably whole: an integer
+  step stage's `memory`, is the pool a hold's or a `CRequest`'s `cache`
+  names, is taken by one with `reuse` or `prefix` and no `cache`, is a
+  `Load`'s or a `growing` run's, or is spilled to by one. Every such expression must be provably whole: an integer
   constant or `inf`, `Floor`, `Ceil`, `Queue`, `Busy`, `Holders`,
   `Queued`, a comparison or a logical operator; `Add`, `Sub`, `Mul`,
   `Neg`, `Min`, `Max`, `Abs` and both branches of a `Cond` of whole

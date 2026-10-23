@@ -248,9 +248,10 @@ fn reason(p: &Program, part: &CExpr) -> String {
 
 impl Program {
     /// Which pools are KV pools, and why: one with a `block`, an engine's
-    /// memory, every pool of a hold or an engine's admission with `cache`,
-    /// `reuse` or `prefix` (the prefix cache's), a `load`'s and a growing
-    /// run's, and a pool a KV pool spills to.
+    /// memory, the pool a hold's or an engine's `cache` names (the prefix
+    /// cache's, #366), every pool of one with `reuse` or `prefix` and no
+    /// `cache`, a `load`'s and a growing run's, and a pool a KV pool spills
+    /// to.
     fn kv_pools(&self) -> Vec<Option<Kv>> {
         let mut kv: Vec<Option<Kv>> = self
             .pools
@@ -264,7 +265,8 @@ impl Program {
                 }
             }
         };
-        // the clause that makes a hold's pools the prefix cache's
+        // the clause that makes a hold's pools the prefix cache's; the pools
+        // it marks are `cache_pools`
         let clause = |reuse: bool, cache: bool, prefix: bool| {
             [("cache", cache), ("reuse", reuse), ("prefix", prefix)]
                 .into_iter()
@@ -280,7 +282,7 @@ impl Program {
                     && let Some(c) =
                         clause(r.reuse.is_some(), r.cache.is_some(), r.prefix.is_some())
                 {
-                    for (q, _, _) in &r.pools {
+                    for q in cache_pools(&r.pools, &r.cache) {
                         mark(&mut kv, q, Kv::Taking(c, s));
                     }
                 }
@@ -298,7 +300,7 @@ impl Program {
                     } => {
                         if let Some(c) = clause(reuse.is_some(), cache.is_some(), prefix.is_some())
                         {
-                            for (q, _, _) in pools {
+                            for q in cache_pools(pools, cache) {
                                 mark(&mut kv, q, Kv::Clause(c, b, k));
                             }
                         }
@@ -589,7 +591,7 @@ impl Program {
                     request,
                 )?;
                 check(
-                    r.cache.as_ref(),
+                    r.cache.as_ref().map(|(_, e)| e),
                     u(format!("engine `{n}`'s `cache`"), None),
                     request,
                 )?;
@@ -635,7 +637,8 @@ impl Program {
                             }
                         }
                         check(reuse.as_ref(), u("a hold's `reuse`".into(), None), plain)?;
-                        check(cache.as_ref(), u("a hold's `cache`".into(), None), plain)?;
+                        let cache = cache.as_ref().map(|(_, e)| e);
+                        check(cache, u("a hold's `cache`".into(), None), plain)?;
                         for (_, len) in prefix.iter().flatten() {
                             check(Some(len), u("a `prefix` segment".into(), None), plain)?;
                         }

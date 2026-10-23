@@ -15,7 +15,7 @@ fn formatting_preserves_program_and_comments_and_is_idempotent() {
           hold kv (cost(kv, 1))\n\
           reserve (cost(kv, 2)) {\n\
             llm (1, 1);\n\
-          } cache (cost(kv, 1));\n\
+          } cache kv (cost(kv, 1));\n\
         }\n\
         \n";
     let formatted = format(&common::main_source(source)).unwrap();
