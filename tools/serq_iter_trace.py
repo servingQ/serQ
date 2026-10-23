@@ -12,8 +12,10 @@ order, the session's serial, its turn, its mode (`p` prefill, `d` decode)
 and its tokens (the event's `each`); then the engine's memory in blocks of
 `--block` units, left out for an engine with no memory. The turn is the
 session's last `turn` (a leg takes its session's when it is forked), the
-mode its request's last `status`. Every engine's iterations are listed, in
-time order.
+mode its last `run`'s: a run's mode is fixed from its start, and a session
+is in one run at a time, so it is the mode of the run in the batch, a `run
+E decode (...)` outside any engine request too, which has no `status`.
+Every engine's iterations are listed, in time order.
 
 It prints what the `SERQ_TRACE_ITER` switch printed until #728, line for
 line, but for two things the switch took from the program: an engine with
@@ -41,7 +43,7 @@ def iter_lines(log, block=1.0):
             turn[who] = e["turn"]
         elif e["ev"] == "fork":
             turn[who] = turn.get((e["s"], None), 0)
-        elif e["ev"] == "status":
+        elif e["ev"] == "run":
             mode[who] = e.get("mode")
         elif e["ev"] == "iter":
             parts = []

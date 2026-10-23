@@ -122,7 +122,8 @@ has neither.
 An engine's iterations, one line each: the batch, each request's tokens
 and the memory's use. A prefill in chunks is the same `[s]` in successive
 iterations with its chunk in `each`; whether a request prefills or decodes
-is its last `status`'s `mode`.
+is its last `run`'s `mode`, which a `run E decode (…)` outside any engine
+request has too, with no `status`.
 
 ```bash
 jq -c '.events[] | select(.ev == "iter") | [.t, .stage, .reqs, .each, .used, .cached]' log.json

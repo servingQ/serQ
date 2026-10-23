@@ -261,6 +261,54 @@ fn the_budget_is_read_per_iteration() {
     assert!(lo < hi, "{lo} .. {hi}");
 }
 
+/// A run's mode is in its `run` event, whether or not an engine request
+/// holds it: a queue's entry that runs `llm decode` with no `request` has
+/// no `status`, and `tools/serq_iter_trace.py` still prints its decodes as
+/// `d`, as the removed `SERQ_TRACE_ITER` switch did (it read the job's mode)
+/// and as main's binary prints these four lines. The tool once took the
+/// mode from `status` alone and printed them `p1` (#737).
+#[test]
+fn a_decode_outside_an_engine_request_is_traced_as_a_decode() {
+    let src = "let bs = 16;
+        queue llm : agg {
+          pool kv { cap 64 * bs; block bs; }
+          device gpu { }
+          engine on gpu {
+            tokens cap 1000;
+            scheduler { advance running; admit waiting while (running.preempted == 0); }
+            worker { forward (1); }
+          }
+          decode (prompt) {
+            hold kv (cost(kv, prompt)) {
+              run llm prefill (cost(llm, prompt)) growing kv;
+              run llm decode (cost(llm, o - 1)) growing kv;
+            }
+          }
+        }
+        server (prompt, hidden o) { llm.decode (prompt); }";
+    let workload = "workload { arrive batch(2); init { set prompt = 32; set o = 4; }
+          send (prompt, o);
+          session { turn; end; } }";
+    let p = common::compile(&common::main_source(src), workload, &common::horizon(50.0)).unwrap();
+    let r = run_ir_logged(&p, None, usize::MAX).unwrap();
+    let log = r.log.unwrap();
+    assert!(
+        !log.events
+            .iter()
+            .any(|e| matches!(e.kind, EventKind::Status { .. })),
+        "no engine request, no status"
+    );
+    assert_eq!(
+        common::iter_lines(&log),
+        [
+            "ITER 0.0000 0:1:p32 1:1:p32",
+            "ITER 1.0000 0:1:d1 1:1:d1",
+            "ITER 2.0000 0:1:d1 1:1:d1",
+            "ITER 3.0000 0:1:d1 1:1:d1",
+        ]
+    );
+}
+
 /// A leg (`fork`) shares its session's serial: the log tells them apart
 /// by the leg's number, in the events about it and in an engine's batch.
 /// `vllm_nixl_push.sq` forks the prefill: its first session's leg 0 is
