@@ -42,7 +42,7 @@ theorem idle_backlog {m : Exec.Machine} (h : DaiSim.σ m = []) : backlog m = 0 :
 hold: every reached machine does (`DaiSim.reach_inv`; `DaiPoisson.reach_inv`
 on `DaiPoisson`'s chain). -/
 theorem good_σ {m : Exec.Machine} (h : DaiSim.Inv m) : DaiRecurrent.Good (DaiSim.σ m) := by
-  obtain ⟨L, g, hB, -, -⟩ := h
+  obtain ⟨L, g, hB, -⟩ := h
   intro a ha
   obtain ⟨j, hj, rfl⟩ := List.mem_map.mp ha
   obtain ⟨ho, hc, -, hl⟩ := hB.toCI.jobs j hj

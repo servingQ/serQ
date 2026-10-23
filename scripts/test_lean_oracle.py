@@ -299,6 +299,17 @@ class IterationCost(unittest.TestCase):
                             {"Num": 24.0}, {"Num": 0.0}]}
         self.assertEqual(generator.chunk_rule(swapped)[1],
                          "some fun c => if (((c.queued 0) + c.residents) > 2) then 24 else 0")
+        # vLLM's adaptive threshold: the cap floored at a fair share of the
+        # budget (scheduler.py:617-622), as `vllm_request.sq` writes it
+        n = {"Binary": ["Add", {"Ctx": "Nres"}, q]}
+        share = {"Call": ["Floor", [{"Expr": {"Binary": ["Div", {"Num": 32.0}, n]}}]]}
+        adaptive = {"Cond": [rule["Cond"][0],
+                             {"Call": ["Max", [{"Expr": {"Num": 24.0}}, {"Expr": share}]]},
+                             {"Num": 0.0}]}
+        self.assertEqual(
+            generator.chunk_rule(adaptive),
+            (0, "some fun c => if ((c.residents + (c.queued 0)) > 1) then "
+                "(max 24 (32 / (c.residents + (c.queued 0)))) else 0"))
         # what an iteration's start does not supply is outside the fragment
         with self.assertRaises(generator.Fragment):
             generator.chunk_rule({"Ctx": "Ntok"})

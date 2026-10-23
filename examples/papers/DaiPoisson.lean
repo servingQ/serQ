@@ -56,7 +56,7 @@ theorem reach_dur {m : Machine} (h : Reach m) : Slot.Dur D m := by
   | @slot m k hm _ =>
     obtain ⟨L, g, hB⟩ := reach_sb hm
     rw [slot_eq]
-    exact Slot.slot_dur ci_start hB _ fun _ _ => rfl
+    exact Slot.slot_dur hB _ fun _ _ => rfl
 
 /-- The engine is idle, or its batch is not full. -/
 def F (x : State) : Prop := x.1.iterEnd = none ∨ x.1.last.stats.tokens < 128

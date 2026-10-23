@@ -127,7 +127,10 @@ jobs, the batch is the greedy fill in admission order, a finished prefill
 returns as a decode behind the rest. `DaiSim.simulation` and
 `BariSim.simulation` prove that the projection of a machine to its job list
 commutes with a slot, for every machine the chain reaches: the machine
-chain is lumpable, and the empty list is one state.
+chain is lumpable, and the empty list is one state. The job list after a
+slot is one theorem of `Slot` (`slot_jobs`), and the greedy fill job by job
+one of `Exec` (`shareOf_fillIter_split`); each paper only reads its batch
+on its chain's `shares` (`fill_sub`).
 
 **From a set to a state** (`lean/Serq/Recurrence.lean`). If the chain drifts
 to `F`, and from every state of `F` reaches a target `T ⊆ F` within `L`

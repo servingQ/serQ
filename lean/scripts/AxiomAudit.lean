@@ -39,6 +39,8 @@ import papers.KongPoisson
 #print axioms SerqLang.Exec.makeRoom_room
 #print axioms SerqLang.Exec.evictOne_lt
 #print axioms SerqLang.Oracle.vllmRequest_wf
+#print axioms SerqLang.Oracle.vllm_adaptive
+#print axioms SerqLang.Oracle.vllm_alone
 #print axioms SerqLang.Oracle.vllm_chunked
 #print axioms SerqLang.Oracle.vllm_hol
 #print axioms SerqLang.Oracle.vllm_longchunk
@@ -133,6 +135,8 @@ import papers.KongPoisson
 -- (Serq/Recurrence.lean, examples/papers/{Dai,Bari}{Sim,Recurrent}.lean)
 #print axioms SerqLang.Foster.hit_le_of_reach
 #print axioms SerqLang.Foster.positiveRecurrent_of_hit
+#print axioms SerqLang.Exec.shareOf_fillIter_split
+#print axioms SerqLang.Slot.slot_jobs
 #print axioms SerqLang.Papers.DaiSim.simulation
 #print axioms SerqLang.Papers.DaiRecurrent.hit_nil_le
 #print axioms SerqLang.Papers.DaiRecurrent.irreducible

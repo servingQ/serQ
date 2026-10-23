@@ -43,7 +43,7 @@ const VLLM: &str = "examples/multi-turn/vllm.sq";
 
 #[test]
 fn each_oracle_program_synthesises_to_the_configuration_its_scenario_ran() {
-    for name in ["chunked", "hol", "longchunk", "mixed", "preempt", "seqcap"] {
+    for name in common::oracle_scenarios(&root().join("tools/oracle")) {
         let sc: Value = serde_json::from_str(
             &std::fs::read_to_string(root().join(format!("tools/oracle/{name}.json"))).unwrap(),
         )
@@ -62,9 +62,19 @@ fn each_oracle_program_synthesises_to_the_configuration_its_scenario_ran() {
                 "enable_prefix_caching",
                 sc.get("prefix_caching").cloned().unwrap_or(false.into()),
             ),
+            (
+                "long_prefill_token_threshold_adaptive",
+                sc.get("adaptive").cloned().unwrap_or(false.into()),
+            ),
         ];
         for (key, v) in want {
-            assert_eq!(c[key], v, "{name}: {key}");
+            // `serq target` writes the adaptive flag only when it is set;
+            // every other key it always writes
+            let have = match (key, c.get(key)) {
+                ("long_prefill_token_threshold_adaptive", None) => false.into(),
+                (_, v) => v.cloned().unwrap_or(Value::Null),
+            };
+            assert_eq!(have, v, "{name}: {key}");
         }
     }
 }

@@ -131,7 +131,7 @@ stmt     := turn ;                           -- draw attributes, submit, wait fo
           | end ;
           | QUEUE [ '[' expr ']' ] . VERB ( expr, ... ) [ from QUEUE [ '[' expr ']' ] ] [ to POOL ( expr ) ] ;
                                              -- a queue's entry, in its place (*Queues*)
-          | ENGINE ( expr , expr ) ;         -- in a server: a request to the engine, its input and output tokens
+          | ENGINE ( expr , expr ) ;         -- in a server or a queue's entry: a request to the engine, its input and output tokens
           | serving                          -- the serving vocabulary, sugar for run
 serving  := transfer [ '[' expr ']' | on STAGE [, STAGE]* ] expr from POOL to POOL ( expr ) ;
                                              -- the KV moves: run link; load; release
@@ -257,12 +257,13 @@ The serving forms name a part of the request's lifecycle that is more than
 one run (a KV transfer) or that is not the engine's (a tool call). They are
 sugar: the parser rewrites each to the kernel statement it stands for, so
 the IR (`serq ir` prints the kernel), the interpreter and the Lean model
-know nothing of them. Prefill and decode are not forms: on a step engine
-they are the mode of the run, written only where the engine's own work is.
-An engine keeps a request's state and runs its prefill and decode itself
-(*An engine's request*); a queue's entry runs its queue's engine as `run P
-prefill (cost(P, T))`. The server, a gateway's `route` and the session
-call the engine (`E (input, output);`) and do not run an engine themselves.
+know nothing of them. Prefill and decode are not forms: an engine keeps a
+request's state and runs its prefill and decode itself (*An engine's
+request*). The server, a gateway's `route` and a queue's entry call it,
+`E (input, output);`, a queue's engine only from the queue's own entries,
+and the session reaches it by its turns. On a step engine prefill and
+decode are the mode of a `run`, which only a queue's entry writes, on its
+own engine, for what a request cannot say (*An engine's request*).
 
 | Serving form | Kernel |
 |---|---|
@@ -530,8 +531,8 @@ does with one request, with the role's parameters (`prefill (prompt)`). A
 queue declares its device and pools, then its stage (its engine, or a
 `serve` of `fifo`, `ps` or `delay`), then its entries, each reading what is
 above it; a pool `on` the queue's device or engine may follow the engine. The body is the server's statements; `run (cost(P, X))` with
-no stage names the queue's own, and a step engine's run names it with its mode (`run P prefill (cost(P, T))`);
-the stages that are not a step engine (a link's, a delay) the body may name
+no stage names the queue's own, and the body calls the queue's engine, `P (prompt, 1);`
+(*An engine's request*); the stages that are not a step engine (a link's, a delay) the body may name
 as a `server` does. `self` is the member's index in a family; nothing may be
 declared `self`, which an entry reads before a parameter or local. A family's
 size may be a `let` constant (`queue D[ND]`), and a family of one is still
@@ -1004,8 +1005,9 @@ by keys re-read before every admission attempt (after each admission under
 an engine, where `budget_left` is that attempt's budget); `waited` is
 the seconds since the hold joined the queue, reset on re-entry. The chosen
 head that does not fit blocks the rest, a preempted hold re-enters ahead of
-the keys, a key may not draw or read a `hidden` attribute, and selection
-sets no timer. See [Pool](api/pool.md).
+the keys, a key may not draw or read a `hidden` attribute (nor, before a
+run reveals it, one set from it), and selection sets no timer. See
+[Pool](api/pool.md).
 
 `queue … every (dt)` admits only at the pool's ticks, every multiple of
 `dt` seconds (a constant, and positive). At a tick the holds that waited
@@ -1377,17 +1379,23 @@ not as hits ([engine statistics](reference/cli.md#engine-statistics)).
 
 The server, a gateway's `route` and the session may not run an engine's
 prefill or decode, nor hold a pool an engine admits (`pool P on E`, `pool
-kv on E.gpu`, an engine's capacity); each is refused with the `taking` and
-the call to write instead (#539). A pool no engine admits (a top-level
-pool, one `on DEVICE`) is held anywhere, around the call too, as
+kv on E.gpu`, an engine's capacity); each is refused with what to write
+instead: the `taking` and the call, or in the workload the session's turn
+(#539). A pool no engine admits (a top-level pool, one `on DEVICE`) is
+held anywhere, around the call too, as
 `examples/single-turn/fastertransformer.sq` holds its `reqs`. A queue's
 entries run their own engine and no other. A queue's engine admits by
 its `taking` as any engine does, and the queue's entries call it, `E
 (input, output);` (`examples/multi-turn/thunderagent.sq`); the server and
 the gateway call the entry (`E[j].decode (prompt);`), not the engine. A
 family's `taking` names its pools without an index, and each member takes
-its own. An entry may still run its engine in the kernel's words (`run E
-prefill (…)`), which no program here does any more.
+its own. An entry may still run its own engine in the kernel's words, `run
+E prefill (…) growing kv` in a `hold` of the queue's pools, for what a
+request cannot say: a delay between its prefill and its decode, or a grow,
+lease or release of a pool the request did not take ([the
+design](design/engine-request.md#self-critique)). No example does
+(`tools/unused.json` lists the modes); `tests/lean-regress/preempt_delay.sq`
+does, for the delay.
 
 An engine's `connector C { per_token (r); load (n); save (n); }` copies a
 request's KV through the L2 queue `C` (vLLM's KV connector; *Queues*). At
@@ -1461,7 +1469,10 @@ In a `server`, hidden attributes may control run work, cache release and
 observations. Decisions and allocations may read them only after a run
 whose work reads them has ended. This also applies to attributes derived
 from hidden ones; both branch arms must reveal an attribute before it is
-known after the branch. See [the full rule](api/workload.md#hidden).
+known after the branch. A pool's or an engine's key never reads a hidden
+attribute, and reads one derived from it only where the scheduler reads
+the session after the run (`set y = o;` then `queue by (y)` does not
+link). See [the full rule](api/workload.md#hidden).
 
 A `hidden` parameter, `server (input, hidden output)`, prevents scheduler
 expressions, such as a hold's header, queue keys or a budget, from reading
@@ -1757,7 +1768,7 @@ file `examples/pairs.json` gives it, from `examples/workloads/`
 | `multi-turn/vllm_lmcache.sq` | `vllm.sq` with an LMCache server as its L2 (`queue lmc : l2`, the engine's `connector lmc { … }`) | the source (the LMCache connector at vLLM v0.31.0, the scheduler at 0c87a197); `tests/connector.rs`; no scheduler oracle |
 | `multi-turn/vllm_system_prompt.sq` | `vllm.sq` serving the sessions of `M` products, each with its own system prompt, shared across sessions (its admission's `prefix (product: floor(S, bs), serial: inf)`) | the source (vLLM at 0c87a197); `tests/shared_prefix.rs`; no scheduler oracle |
 | `oracle/vllm_shared_prompt.sq` | `vllm_replay.sq` with a system prompt every session shares (its admission's `prefix (system: floor(S, bs), serial: inf)`), on the scenario `tools/oracle/shared_trace` | the upstream oracle, `tests/vllm_cache.rs`; no Lean theorem |
-| `oracle/vllm_request.sq` | one vLLM v1 request on the step clock, compiled per scenario to `tools/oracle/{alone,chunked,hol,longchunk,mixed,preempt,seqcap}.ir.json` | the upstream oracle ([vLLM correspondence](#7-vllm-v1-as-a-serq-program)), `tests/vllm_oracle.rs`, the Lean theorems generated from the same IR |
+| `oracle/vllm_request.sq` | one vLLM v1 request on the step clock, compiled per scenario to `tools/oracle/{adaptive,alone,chunked,hol,longchunk,mixed,preempt,seqcap}.ir.json` | the upstream oracle ([vLLM correspondence](#7-vllm-v1-as-a-serq-program)), `tests/vllm_oracle.rs`, the Lean theorems generated from the same IR |
 | `replay/vllm_replay.sq` | vLLM v1 on the A100 testbed replaying the short-context trace ([A100 testbed](#8-vllm-on-the-a100-testbed)) | the prefix-cache oracle `tools/oracle/cache_trace` (`tests/vllm_cache.rs`, theorem `vllm_cache_trace`) |
 | `pd-disaggregation/llmd_nixl_pull.sq` | llm-d's prefill/decode disaggregation with the NIXL connector, two prefill and two decode instances ([use case](use-cases/pd.md)) | the source (llm-d at 8a2f37d, the router at 13eebdb, vLLM at 0c87a197), `tests/pd_semantics.rs`; no scheduler oracle |
 | `pd-disaggregation/vllm_nixl_push.sq` | vLLM's push proxy in front of one prefill and one decode instance with the NIXL connector's push mode, on the A6000 testbed, replaying the short-context trace ([the push mode](https://github.com/servingQ/serQ/blob/main/docs/design/push-mode.md)) | the source (vLLM at 0c87a197), `tests/fork_join.rs`; no scheduler oracle |
@@ -1805,9 +1816,14 @@ position ([Semantics](#3-semantics)).
 The adaptive long-prefill threshold is off by default; it is expressible as
 `n > 1 ? max(threshold, floor(budget / n)) : inf`, with `n` =
 `running.count + waiting.count` and `budget` the engine's `tokens cap`
-(`scheduler.py:609-622`, [Engine](api/engine.md)), but no program here
-writes it. `serq target` exports that cap as `long_prefill_token_threshold:
-threshold` with `long_prefill_token_threshold_adaptive: true`
+(`scheduler.py:609-622`, [Engine](api/engine.md)).
+`examples/oracle/vllm_request.sq` writes it when its `adaptive` argument is
+1, and the oracle scenario `adaptive` checks it against vLLM's scheduler
+on a run where first the fair share binds and then the threshold, so that
+no constant cap gives vLLM's answer (`tests/vllm_oracle.rs`, theorem
+`vllm_adaptive`). `serq target` exports that cap as
+`long_prefill_token_threshold: threshold` with
+`long_prefill_token_threshold_adaptive: true`
 (`config/scheduler.py:87-91`), and refuses a cap that computes another
 share.
 
@@ -1855,11 +1871,13 @@ checks the whole sequence before it allocates the first chunk
    `scripts/check_oracle_gpu.py`), the serQ program (`tests/vllm_oracle.rs`)
    and the Lean executable semantics (`Serq/Oracle.lean`, one theorem per
    scenario, `decide +kernel`) give the same first-token and last-token
-   step for every request, and the same number of preemptions (7 scenarios:
+   step for every request, and the same number of preemptions (8 scenarios:
    self-preemption, chunked prefill sharing the budget, the request cap,
    head-of-line blocking, the chunk cap, six mixed requests with staggered
-   arrivals on 39 blocks, and the chunk cap lifted for a request alone; the
-   A100 engine ran the first six). None of them uses the prefix cache.
+   arrivals on 39 blocks, the chunk cap lifted for a request alone, and the
+   chunk cap floored at a fair share of the budget
+   (`long_prefill_token_threshold_adaptive`); the A100 engine ran the first
+   six). None of them uses the prefix cache.
 2. *The prefix cache* (`tools/oracle/cache_trace.*`): three sessions of the
    short-context trace with prefix hits, replayed by the real scheduler and
    KV-cache manager (`tools/vllm_replay_oracle.py`), by

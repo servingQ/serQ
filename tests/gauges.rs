@@ -256,20 +256,110 @@ fn an_aggregates_index_and_count_are_its_own() {
     }
 }
 
-/// An array size is folded by the parser and never reaches the linker, so
-/// the parser refuses an index that is also a `let` there, with the
-/// linker's words for the same aggregate in a `let` (#499).
+/// An array size is folded by the parser, which knows only the `let`s above
+/// it, and reaches the linker as a number; the linker asks its aggregates'
+/// indices of the whole program, in the words it has for the same
+/// aggregate in an expression (#499, #561). Until #561 a name the parser
+/// did not know (a later `let`, an attribute, a pool, a stage) linked. Each
+/// row sizes `DEPLOYMENT`'s own families, which it uses, at 2: with an
+/// index of its own the program links (the control below).
 #[test]
 fn an_array_sizes_aggregate_index_is_its_own() {
-    for decl in [
-        "let N = 4; stage colo[sum N in 2 (1)] : delay;",
-        "let N = 4; let M = sum N in 2 (1);",
+    let svc = "stage svc[2] : fifo;";
+    for (from, to, want) in [
+        (
+            svc,
+            "let N = 4; stage svc[sum N in 2 (1)] : fifo;",
+            "`sum N in`: `N` is also a `let` constant",
+        ),
+        // a `let` declared after the array
+        (
+            svc,
+            "stage svc[sum N in 2 (1)] : fifo; let N = 4;",
+            "`sum N in`: `N` is also a `let` constant",
+        ),
+        // `j` is the session's `choose`
+        (
+            svc,
+            "stage svc[sum j in 2 (1)] : fifo;",
+            "`sum j in`: `j` is also a session attribute",
+        ),
+        (
+            svc,
+            "stage svc[sum kv in 2 (1)] : fifo;",
+            "`sum kv in`: `kv` is also a pool",
+        ),
+        // a pool family's size
+        (
+            "pool kv[2]",
+            "pool kv[max svc in 2 (2)]",
+            "`max svc in`: `svc` is also a stage",
+        ),
+        // an aggregate in the body of one with an index of its own
+        (
+            svc,
+            "stage svc[sum k in 2 (sum j in 1 (1))] : fifo;",
+            "`sum j in`: `j` is also a session attribute",
+        ),
+        // the branch the size does not take is the program's too
+        (
+            svc,
+            "stage svc[1 ? 2 : sum j in 2 (1)] : fifo;",
+            "`sum j in`: `j` is also a session attribute",
+        ),
+        // and so it is in a `let`, which the linker folds (#561 review)
+        (
+            svc,
+            "let M = 1 ? 2 : sum j in 2 (1); stage svc[M] : fifo;",
+            "`sum j in`: `j` is also a session attribute",
+        ),
+        (
+            svc,
+            "let N = 4; let M = sum N in 2 (1); stage svc[2] : fifo;",
+            "`sum N in`: `N` is also a `let` constant",
+        ),
+        // an argument a `def` does not read is not evaluated either, and is
+        // the program's too (#753 review): written, as a reference's index,
+        // inside another unread argument, in a branch not taken
+        (
+            svc,
+            "def one(x) { 2 } stage svc[one(sum svc in 2 (1))] : fifo;",
+            "`sum svc in`: `svc` is also a stage",
+        ),
+        (
+            svc,
+            "def one(x) { 2 } let M = 1 ? 2 : one(kv[sum j in 2 (0)]); stage svc[M] : fifo;",
+            "`sum j in`: `j` is also a session attribute",
+        ),
+        (
+            svc,
+            "def one(x) { 2 } stage svc[one(one(sum j in 2 (1)))] : fifo;",
+            "`sum j in`: `j` is also a session attribute",
+        ),
+        (
+            svc,
+            "def one(x) { 2 } let M = 1 ? 2 : one(sum j in 2 (1)); stage svc[M] : fifo;",
+            "`sum j in`: `j` is also a session attribute",
+        ),
     ] {
-        let e = link_error(&format!("{DEPLOYMENT}{decl}"), WORKLOAD);
+        let src = DEPLOYMENT.replace(from, to);
+        let e = link_error(&src, WORKLOAD);
         assert!(
-            e.contains("`sum N in`: `N` is also a `let` constant")
-                && e.contains("give the index a name of its own"),
-            "{decl}: {e}"
+            e.contains(want) && e.contains("give the index a name of its own"),
+            "{to}: {e}"
+        );
+    }
+    // an index of its own is no clash
+    for to in [
+        "stage svc[sum k in 2 (1)] : fifo;",
+        "stage svc[1 ? 2 : sum k in 2 (1)] : fifo;",
+        "let M = 1 ? 2 : sum k in 2 (1); stage svc[M] : fifo;",
+        "def one(x) { 2 } stage svc[one(sum k in 2 (1))] : fifo;",
+    ] {
+        let own = DEPLOYMENT.replace(svc, to);
+        assert!(
+            common::compile(&common::main_source(&own), WORKLOAD, &options()).is_ok(),
+            "{own}"
         );
     }
 }
