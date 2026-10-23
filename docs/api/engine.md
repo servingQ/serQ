@@ -324,7 +324,9 @@ The engine's KV connector (vLLM's `KVConnector`). `QUEUE` is one of two:
   `per_token` a token, into its hold on the engine's memory before its
   prefill. A finished request copies to its entry in the queue the part of
   `n` tokens it lacks before it gives its pools back. `per_token` is
-  required, and at least one of `load` and `save`;
+  required, and at least one of `load` and `save`. Under
+  [`kvt.l2_link`](std/kvt.md#kvtl2_link) both copies also cross the
+  engine's own `nic`, at once;
 - the source of the engine's queue's KV relation (`kvt.nixl_pull (QUEUE,
   Q, …)` or `kvt.nixl_push`; NIXL's). A request its entry was called `from
   QUEUE[i]` with reads `n` tokens' KV over the two NICs the relation

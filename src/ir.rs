@@ -814,7 +814,8 @@ pub enum CStmt {
         /// NIXL pull, the source's in a push (`kvt.nixl_pull`,
         /// `kvt.nixl_push`). It says who starts the copy, which the figure
         /// draws; the run is the same either way. Absent: no side is named
-        /// (a `transfer on` written by hand).
+        /// (a `transfer on` written by hand, or an L2 connector's copy over
+        /// `kvt.l2_link`, whose loads and saves go opposite ways).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         poster: Option<usize>,
     },
@@ -1039,7 +1040,8 @@ pub struct CTransfer {
     pub amount: CExpr,
     /// The copy: a run on `stage`, and on `also` held at once, of `work`,
     /// after `latency`, its fabric's `share`, `poster` the side that posts
-    /// it (`CStmt::Run`'s fields).
+    /// it (`CStmt::Run`'s fields). `also` is a KV relation's reader's NIC,
+    /// or, for an L2's copy under `kvt.l2_link`, the engine's own NIC.
     pub stage: CRef,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub also: Vec<CRef>,
@@ -2401,7 +2403,8 @@ impl Program {
             Some(queue) => format!(
                 "{}\nhelp: remove the `nic` of `{queue}` (and what reads `{name}`), or copy the \
                  KV over it: `kvt.nixl_pull` or `kvt.nixl_push` between `{queue}` and another \
-                 queue with a `nic`",
+                 queue with a `nic`, or, for an engine whose connector copies through an L2, \
+                 `kvt.l2_link (L2, {queue}, share = …)`",
                 crate::frontend::diagnostic::Code::NicUnused.message(format_args!(
                     "the NIC `{name}` carries no copy: no relation or `transfer` runs on it, so \
                      no request reaches it and the deployment view would leave it out"

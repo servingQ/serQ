@@ -9,7 +9,7 @@ operational semantics, see [The language](../language.md).
 |---|---|
 | [Program](program.md) | `let`, `def`, `use`, `pool`, `stage`, `workload`, `session`, `server`, `gauge`, `claim` |
 | [std/args](std/args.md) | `args.number`, the program's inputs |
-| [std/kvt](std/kvt.md) | `kvt.nixl_pull`, `kvt.nixl_push` |
+| [std/kvt](std/kvt.md) | `kvt.nixl_pull`, `kvt.nixl_push`, `kvt.l2_link` |
 | [std/share](std/share.md) | `share.maxmin`, `share.bottleneck`, how the flows of a fabric divide it |
 | [Pool](pool.md) | the options of `pool` |
 | [Stage](stage.md) | `fifo`, `ps`, `delay` |
@@ -71,6 +71,6 @@ constructs that say it and a program that uses them.
 | the scheduler's waiting loop and its budget | [`pool … on`](engine.md#pools-on-a-device-or-an-engine), [`admit waiting`](engine.md#scheduler), [`budget_left`](functions.md#engine) | `examples/multi-turn/vllm.sq` (`pool reqs on vllm`, `budget_left`) |
 | what the scheduler may not read | [`hidden`](workload.md#hidden) | every vLLM program hides the output length (`o`; `out` in the replay) |
 | prefill/decode disaggregation | [`lease`](statements.md#hold), [`release`](statements.md#release), [`load`](statements.md#load), [`transfer … from … to`](serving.md#transfer-from-to), [`kvt.nixl_pull`, `kvt.nixl_push`](std/kvt.md#kvtnixl_pull-and-kvtnixl_push), [`share.maxmin`](std/share.md) | [the P/D use case](../use-cases/pd.md) |
-| an L2 KV cache outside the engine (LMCache, Mooncake) | the engine's [`connector`](engine.md#connector), the `l2` role ([Queues](../language.md#queues)) | `examples/multi-turn/vllm_lmcache.sq` |
+| an L2 KV cache outside the engine (LMCache, Mooncake) | the engine's [`connector`](engine.md#connector), the `l2` role ([Queues](../language.md#queues)), each engine's own link [`kvt.l2_link`](std/kvt.md#kvtl2_link) | `examples/multi-turn/vllm_lmcache.sq`, `vllm_lmcache_replicas.sq` |
 | a routing policy | [`choose`](statements.md#choose), [observables](functions.md#observables) | `examples/multi-turn/routing.sq` |
 | what to measure or check | [`observe`](statements.md#observe), [`gauge`](program.md#gauge), [`claim`](program.md#claim) | [the Kong use case](../use-cases/kong.md) |
