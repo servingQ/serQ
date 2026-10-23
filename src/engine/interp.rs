@@ -210,10 +210,10 @@ struct Req<'p> {
     hit: f64,
     /// What its connector loads, read at its latest admission after `hit`.
     loaded: f64,
-    /// Which of its connector's loads its latest admission chose
-    /// (`CConnector::loads`): the first above 0, or a read that found its
-    /// send gone.
-    via: Option<usize>,
+    /// The load its latest admission chose, its place among its
+    /// connector's (`CConnector::loads`): the first above 0, a read that
+    /// found its send gone included.
+    chosen: Option<usize>,
     /// Whether it has been preempted since its call.
     preempted: bool,
     /// The session's frames when a connector's block was pushed: the block
@@ -2469,7 +2469,7 @@ impl<'p> Interp<'p> {
                         generated: 0.0,
                         hit: 0.0,
                         loaded: 0.0,
-                        via: None,
+                        chosen: None,
                         preempted: false,
                         depth: 0,
                         finished: false,
@@ -2603,8 +2603,9 @@ impl<'p> Interp<'p> {
             let what = match loads.len() {
                 1 => format!("connector of {} load", self.p.stages[st].name),
                 _ => format!(
-                    "connector of {} load at {}",
-                    self.p.stages[st].name, self.p.stages[t.stage.base].name
+                    "connector {} of {} load",
+                    self.p.load_queue(t),
+                    self.p.stages[st].name
                 ),
             };
             let n = self.amount(&t.amount, sid, &what);
@@ -2620,7 +2621,7 @@ impl<'p> Interp<'p> {
             chosen = Some(if gone { (i, 0.0, true) } else { (i, n, false) });
         }
         let r = self.sessions[sid].req.as_mut().expect("a request");
-        r.via = chosen.map(|(i, _, _)| i);
+        r.chosen = chosen.map(|(i, _, _)| i);
         r.loaded = chosen.map_or(0.0, |(_, n, _)| n);
         r.unread = chosen.is_some_and(|(_, _, u)| u);
     }
@@ -2712,7 +2713,7 @@ impl<'p> Interp<'p> {
     /// The load `sid`'s request's latest admission chose, with its place.
     fn chosen_load(&self, sid: usize) -> Option<(usize, &'p CTransfer)> {
         let r = self.sessions[sid].req.as_ref()?;
-        let i = r.via?;
+        let i = r.chosen?;
         Some((i, self.connector(r.stage)?.loads.get(i)?))
     }
 

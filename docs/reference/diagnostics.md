@@ -62,7 +62,7 @@ the pair compiles as `serq check` compiles it, else a
 
 | Code | The rule | Fix-it |
 |---|---|---|
-| `E-copy-no-connector` | A KV relation (`kvt.nixl_pull (S, R, …)` or `kvt.nixl_push`) copies only through `R`'s engine's `connector S`, which loads each copy, or an entry of `R` that `transfer`s it; an L2 link (`kvt.l2_link (C, Q, …)`) is crossed only by `Q`'s engine's `connector C` | none (what a request loads, and where the connector stands among the engine's connectors, are the program's) |
+| `E-copy-no-connector` | A KV relation (`kvt.nixl_pull (S, R, …)` or `kvt.nixl_push`) copies only through `R`'s engine's `connector S`, which loads each copy, or an entry of `R` that `transfer`s it; an L2 link (`kvt.l2_link (C, Q, …)`) is crossed only by `Q`'s engine's `connector C` | none (what a request loads is the program's; the help names the connectors a source's goes before) |
 | `E-connector-untaken` | What an engine's connector loads goes into the engine's memory, the KV pool on its device, so its `taking` takes that pool | none (how much of it a request takes is the program's) |
 | `E-nic-unused` | A queue's `nic` carries a copy: a KV relation, an L2 link (`kvt.l2_link`) or a `transfer` runs on it | none (removing it leaves what reads `Q.nic`, and a relation names another queue) |
 | `E-reserved-word` | A name the language uses for itself (a keyword, a function, a distribution) is not a name the program can give a constant, a parameter, a queue, a device or a pool | none (the name is the program's) |

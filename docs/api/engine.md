@@ -364,10 +364,12 @@ An engine may have several connectors (vLLM's `MultiConnector`,
 most with `save`. At the admission each `load` is read in the order
 written, and the first above 0 is the request's load, `request.loaded`;
 the others load nothing (`multi_connector.py:429-448`). The source's
-connector is not asked for a request its entry took from no source. A
-finished request runs the one `save`. In a push, the source's connector
-is written first, or the program does not link: one before it that has
-tokens would pass the leg's send over. The decoder of
+connector is not asked for a request its entry took from no source, and
+one with no `load` not at all. A finished request runs the one `save`.
+The source's connector is written first, or the program does not link:
+one before it that has tokens would pass the read over, which would keep
+the source's blocks, or in a push end the session while its leg runs. The
+decoder of
 `examples/pd-disaggregation/llmd_nixl_lmcache.sq` reads a remote request
 from its prefiller and a local one from the L2, and saves to the L2:
 

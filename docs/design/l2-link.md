@@ -218,8 +218,9 @@ the swap fix-it's label read it.
 ## Interaction with #599
 
 #599 lets an engine have several connectors. The relation names the pair
-(`C`, `Q`), so it picks the connector to `C` among them; today it finds the
-one connector and checks it names `C`.
+(`C`, `Q`), so it picks the connector to `C` among them, and a `Q` whose
+engine has none is `E-copy-no-connector`, whatever other connectors it
+has.
 
 ## Self-critique
 

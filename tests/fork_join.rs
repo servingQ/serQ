@@ -80,9 +80,11 @@ fn push(route: &str, kv: u32, per_token: f64) -> String {
 /// before the source's that has tokens is the request's load, which passes
 /// the read over (multi_connector.py:445-447): the session would end while
 /// the leg runs. The decoder's connectors are then refused in that order
-/// (#599), and link the other way round, where the L2's, which holds
-/// nothing yet, loads nothing and the read is the push's: the KV arrives at
-/// 12, as `the_decoder_waits_for_the_leg_s_send` has it.
+/// (#599), as a pull's are (`tests/connector.rs`
+/// `a_source_s_connector_is_asked_first`), and link the other way round,
+/// where the L2's, which holds nothing yet, loads nothing and the read is
+/// the push's: the KV arrives at 12, as
+/// `the_decoder_waits_for_the_leg_s_send` has it.
 #[test]
 fn a_leg_s_send_read_after_another_connector_is_refused() {
     let route = "set t0 = now;
@@ -104,8 +106,10 @@ fn a_leg_s_send_read_after_another_connector_is_refused() {
     refused(
         &src(format!("{l2} {source}")),
         workload,
-        "a leg's send of `P.kv` is read by a connector after another, which a request that \
-         loads from the other passes over",
+        "engine `D`: `connector P` is asked after `connector lmc`: a request `lmc` loads passes \
+         its read of `P` over, which keeps `P`'s blocks until the send's `ttl` or the session's \
+         end, where vLLM frees them at once (nixl/pull_scheduler.py:145-147), and in a push ends \
+         the session while its leg runs; write `connector P` first",
     );
     let r = run(&src(format!("{source} {l2}")), workload);
     assert_eq!(samples(&r, "loaded_at"), [12.0]);

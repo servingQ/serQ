@@ -114,26 +114,27 @@ would read the send. The request waits in its first pool's queue. Its
 `last_reused` and `last_prefill` (`E.reused`, `E.prefill`) the caller reads
 after the call. A family engine's members each have their own `CStep`,
 whose `CRequest` names the member's pools. A `CConnector` has `loads`, in
-the program's order, and `save?`, each a `CTransfer` of one shape: `amount`, read at `Request`
-(after `Hit`) or at `Release` and stored in the attribute `loaded` or
-`saved`; the copy, a run on `stage` (and `also`, held at once: a KV
-relation's reader's NIC, or the engine's own NIC under `kvt.l2_link`) of
-`work` after `latency?`, with `share?` and `poster?` as a `Run`'s; `into` and
-`units`, where the KV lands (a `Load`); `room?: {held, grow, cache}`, a
-save's room in an L2's pool, held first, grown by what the L2's entry
-lacks, cached whole; and `source?`, a KV relation's read: the source's
-memory, its member the attribute `from?` (which the request's entry sets;
--1: no source, nothing loaded), whose registered send the load waits for
-and ends. At the admission each load's `amount` is read in order (one with
+the program's order, and `save?`, each a `CTransfer` of one shape:
+`amount`, read at `Request` (after `Hit`) or at `Release` and stored in
+the attribute `loaded` or `saved`; the copy, a run on `stage` (and `also`,
+held at once: a KV relation's reader's NIC, or the engine's own NIC under
+`kvt.l2_link`) of `work` after `latency?`, with `share?` and `poster?` as
+a `Run`'s; `into` and `units`, where the KV lands (a `Load`); `room?:
+{held, grow, cache}`, a save's room in an L2's pool, held first, grown by
+what the L2's entry lacks, cached whole; and `source?`, a KV relation's
+read: the source's memory, its member the attribute `from?` (which the
+request's entry sets; -1: no source, nothing loaded), whose registered
+send the load waits for and ends. At the admission each load's `amount` is read in order (one with
 a `source` only when `from` is not -1), and the first above 0 is the
 request's load, its amount in `loaded`; the others load nothing (vLLM's
 `MultiConnector`, `multi_connector.py:429-448`). One whose `source`'s send
 has ended is still chosen when its amount is above 0, and loads nothing.
-At most one load has a `source`. The engine runs a transfer as its own action while the
-request's status is `waiting_for_kv` (a load) or `finished` (a save);
-`Program::kernel` writes the statements it is (`Run; Load`, or `Hold {
-Grow; Run; Load }`) for the interpreter and the figure, which the IR does
-not hold. One status per request (`docs/design/request-state.md`). `record` is
+At most one load has a `source`, and it is the first: one before it that
+has tokens would pass the read over and leave the send to its `ttl`. The
+engine runs a transfer as its own action while the request's status is
+`waiting_for_kv` (a load) or `finished` (a save); `Program::kernel`
+writes the statements it is (`Run; Load`, or `Hold { Grow; Run; Load }`)
+for the interpreter and the figure, which the IR does not hold. One status per request (`docs/design/request-state.md`). `record` is
 the observation of what each admission loaded, `load_done` the attribute
 of when its latest load ended. After a load the interpreter computes the
 request's last token again if every one has KV, and reads the `CRequest`
@@ -274,8 +275,7 @@ text and directly constructed IR meet the same rules. Validation covers:
   sit inside a hold whose pool may preempt. Its body calls, once on every
   path, an engine whose requests are sent (`CRequest.send`), and every
   path of the session after the fork reaches a `Request` whose connector's
-  first load reads that source before the session ends (a load before it
-  that has tokens would be chosen and pass the read over).
+  load reads that source before the session ends.
 - **Progress and amounts.** Every `Loop` or `While` body path reaches a `Run` with positive
   or nonconstant work, a hold whose body does so, or `End`.
   Constant work and resource amounts cannot be negative or NaN. A

@@ -563,10 +563,9 @@ impl Parser {
                     return self.err_at(
                         c_at,
                         format!(
-                            "`connector {}` saves, and so does `connector {}`: a finished \
-                             request runs one save, and vLLM saves to every connector at \
-                             once, which one save after the other would not be; keep `save` \
-                             in one",
+                            "`connector {}` saves, and so does `connector {}`: a request \
+                             here runs one save, where vLLM runs every connector's at once \
+                             (multi_connector.py:334-346); keep `save` in one",
                             c.queue, d.queue
                         ),
                     );

@@ -378,7 +378,8 @@ fn an_engine_s_connectors_name_a_queue_once_and_save_once() {
             "connector lmc { per_token (1); save (1); } connector lmc2 { per_token (1); load (1); \
              save (1); }",
         ),
-        "`connector lmc2` saves, and so does `connector lmc`: a finished request runs one save",
+        "`connector lmc2` saves, and so does `connector lmc`: a request here runs one save, where \
+         vLLM runs every connector's at once",
     );
     // one saves, both load: it links
     let ok = with(
@@ -389,20 +390,9 @@ fn an_engine_s_connectors_name_a_queue_once_and_save_once() {
         .unwrap_or_else(|e| panic!("{e}\n{ok}"));
 }
 
-/// A P/D pair with a shared L2, as `llmd_nixl_lmcache.sq`: the decoder asks
-/// its prefiller's connector first, then the L2's. The first turn (10
-/// tokens) is remote: the prefiller's iteration ends at 1, the decoder
-/// `D[0]` reads the 10 over the NICs (the wait of 1, then 10 tokens at 10
-/// a second: 3), computes its last token again (4) and decodes its second
-/// (5), then saves the 12 it has at 0.01 s a token: the turn takes 5.12 and
-/// the L2 holds 12. The second (20) is local to `D[1]`, whose memory holds
-/// nothing: its entry took its KV from no prefiller (`D.from` -1), so the
-/// L2 is asked, and loads the 12 it holds (0.12), the decoder prefills the
-/// other 8 (1.12) and decodes (2.12), and saves the 10 the L2 lacks of its
-/// 22 (0.1): 2.22. One copy over the NICs, three at the L2.
-#[test]
-fn a_decoder_reads_a_remote_request_from_its_source_and_a_local_one_from_the_l2() {
-    let src = r#"
+/// A prefiller, two decoders and the L2 they share: the decoders'
+/// connectors the prefiller's, then the L2's.
+const PD_L2: &str = r#"
         queue gw : gateway {
           route {
             set t0 = now;
@@ -447,13 +437,26 @@ fn a_decoder_reads_a_remote_request_from_its_source_and_a_local_one_from_the_l2(
         }
         use "std/kvt"; use "std/share"; kvt.nixl_pull (P, D, latency = 1, share = share.maxmin);
         server (prompt) { gw.route(); }
-    "#;
-    let r = run(
-        src,
-        "workload { arrive batch(1); init { set prompt = 10; } send (prompt); \
-         session { turn; set prompt = 20; turn; end; } }",
-        1000.0,
-    );
+"#;
+
+/// Two turns: a remote one of 10 tokens, a local one of 20.
+const PD_TURNS: &str = "workload { arrive batch(1); init { set prompt = 10; } send (prompt); \
+                        session { turn; set prompt = 20; turn; end; } }";
+
+/// A P/D pair with a shared L2, as `llmd_nixl_lmcache.sq`: the decoder asks
+/// its prefiller's connector first, then the L2's. The first turn (10
+/// tokens) is remote: the prefiller's iteration ends at 1, the decoder
+/// `D[0]` reads the 10 over the NICs (the wait of 1, then 10 tokens at 10
+/// a second: 3), computes its last token again (4) and decodes its second
+/// (5), then saves the 12 it has at 0.01 s a token: the turn takes 5.12 and
+/// the L2 holds 12. The second (20) is local to `D[1]`, whose memory holds
+/// nothing: its entry took its KV from no prefiller (`D.from` -1), so the
+/// L2 is asked, and loads the 12 it holds (0.12), the decoder prefills the
+/// other 8 (1.12) and decodes (2.12), and saves the 10 the L2 lacks of its
+/// 22 (0.1): 2.22. One copy over the NICs, three at the L2.
+#[test]
+fn a_decoder_reads_a_remote_request_from_its_source_and_a_local_one_from_the_l2() {
+    let r = run(PD_L2, PD_TURNS, 1000.0);
     assert_eq!(samples(&r, "D.loaded"), [10.0, 12.0]);
     assert_eq!(samples(&r, "D.prefill"), [1.0, 8.0]);
     assert_eq!(samples(&r, "held"), [12.0, 22.0]);
@@ -465,6 +468,40 @@ fn a_decoder_reads_a_remote_request_from_its_source_and_a_local_one_from_the_l2(
     let done = |name: &str| -> u64 { r.stages_named(name).iter().map(|s| s.completed).sum() };
     assert_eq!(done("D.nic"), 1);
     assert_eq!(done("lmc"), 3);
+}
+
+/// The same pair with the L2's connector asked first (#599's review): a
+/// remote request the L2 has tokens for would pass its read of `P` over,
+/// and `P`'s send would keep its blocks until the session ends, where
+/// vLLM's NIXL, told 0 tokens, frees them at once
+/// (nixl/pull_scheduler.py:145-147). So the source's connector is the
+/// first, in a pull as in a push. A connector that only saves is not asked:
+/// written before `P`'s, it is the same program.
+#[test]
+fn a_source_s_connector_is_asked_first() {
+    let p = "connector P { load (request.input - request.hit); }\n";
+    let sched = "            scheduler { advance running; admit waiting while (running.preempted == 0) \
+                 taking kv (request.known), reqs";
+    let lmc_load =
+        "              load (max(0, min(cachedin(lmc.kv), request.known - 1) - request.hit));\n";
+    assert!(PD_L2.contains(p) && PD_L2.contains(sched) && PD_L2.contains(lmc_load));
+    let p_last = |s: &str| {
+        s.replace(p, "")
+            .replace(sched, &format!("            {p}{sched}"))
+    };
+    let compile =
+        |s: &str| common::compile(&common::main_source(s), PD_TURNS, &common::horizon(100.0));
+    let e = compile(&p_last(PD_L2)).map(|_| ()).unwrap_err();
+    assert!(
+        e.contains(
+            "engine `D`: `connector P` is asked after `connector lmc`: a request `lmc` loads \
+             passes its read of `P` over"
+        ),
+        "{e}"
+    );
+    let save_only = PD_L2.replace(lmc_load, "");
+    let ir = |s: &str| compile(s).unwrap_or_else(|e| panic!("{e}\n{s}")).to_json();
+    assert_eq!(ir(&p_last(&save_only)), ir(&save_only));
 }
 
 /// The bug as found (#599): in `llmd_nixl_pull.sq` with `blocksD` 1000 the

@@ -601,14 +601,11 @@ impl Program {
             if let Some(c) = &sp.connector {
                 let what = |x: &str| u(format!("engine `{n}`'s connector's `{x}`"), None);
                 for l in &c.loads {
-                    // of several, the one through its stage
+                    // of several, the one the text names
                     let what = match c.loads.len() {
                         1 => what("load"),
                         _ => u(
-                            format!(
-                                "engine `{n}`'s connector's `load` at `{}`",
-                                self.stages[l.stage.base].name
-                            ),
+                            format!("engine `{n}`'s `connector {}`'s `load`", self.load_queue(l)),
                             None,
                         ),
                     };

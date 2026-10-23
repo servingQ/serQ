@@ -239,8 +239,9 @@ fn a_swapped_second_relation_is_not_swapped() {
 }
 
 /// The reader's engine with an L2's connector and a relation: it lacks the
-/// source's connector, and where that goes among its connectors is a choice
-/// (#599: an engine has several), so a help that says so and no fix-it.
+/// source's connector, which goes before the L2's (#599: an engine has
+/// several, the source's asked first), and what it loads is a choice, so a
+/// help that says so and no fix-it.
 #[test]
 fn a_reader_whose_connector_is_an_l2s_has_no_fix() {
     let l2 = "  queue lmc : l2 {\n    device host { kv cap 1e6; }\n    pool kv on host { block bs; \
@@ -258,8 +259,8 @@ fn a_reader_whose_connector_is_an_l2s_has_no_fix() {
     assert!(
         e.contains(
             "help: in `D`'s engine, write `connector P { load (…); }`, the tokens a request \
-             loads from `P` (`request.input - request.hit`), before or after `connector lmc`: \
-             a request loads from the first that has tokens"
+             loads from `P` (`request.input - request.hit`), before `connector lmc`: a request \
+             loads from the first connector that has tokens, and passes a read after it over"
         ),
         "{e}"
     );

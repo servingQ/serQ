@@ -2428,8 +2428,9 @@ impl Parser {
             let connector = format!("connector {} {{ load (…); }}", t.source);
             let (has, help) = match engine {
                 Some(sp) if sp.connectors.iter().any(|c| c.queue == t.source) => continue,
-                // where it stands among the engine's other connectors, the
-                // order a request's admission asks them in, is a choice too
+                // before the engine's connectors that load: a request loads
+                // from the first that has tokens, and passes a read after it
+                // over (`Validator::connector`)
                 Some(sp) => (
                     format!("`{}`'s engine has no `connector {}`", q.name, t.source),
                     format!(
@@ -2437,15 +2438,18 @@ impl Parser {
                          from `{}` (`request.input - request.hit`){}",
                         q.name,
                         t.source,
-                        match &sp.connectors[..] {
+                        match sp
+                            .connectors
+                            .iter()
+                            .filter(|c| c.load.is_some())
+                            .map(|c| format!("`connector {}`", c.queue))
+                            .collect::<Vec<_>>()[..]
+                        {
                             [] => String::new(),
-                            cs => format!(
-                                ", before or after {}: a request loads from the first that \
-                                 has tokens",
-                                cs.iter()
-                                    .map(|c| format!("`connector {}`", c.queue))
-                                    .collect::<Vec<_>>()
-                                    .join(", ")
+                            ref cs => format!(
+                                ", before {}: a request loads from the first connector that \
+                                 has tokens, and passes a read after it over",
+                                cs.join(", ")
                             ),
                         }
                     ),

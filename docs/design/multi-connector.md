@@ -78,8 +78,9 @@ At `ref/vllm` `0c87a197`:
 
 An engine has zero or more `connector Q { … }` clauses, each an L2 queue's
 or the source of its queue's KV relation, as before. They are asked in the
-order written. Each queue is named once: one connector holds its `load`
-and its `save`. One connector at most has `save`.
+order written, the source's first; one with no `load` is not asked, and
+where it stands does not matter. Each queue is named once: one connector
+holds its `load` and its `save`. One connector at most has `save`.
 
 ### What a request does
 
@@ -117,33 +118,40 @@ which stays), and the generated IR moves its version only.
 - **The parser**: a queue named by two connectors ("`connector lmc` twice:
   one connector names its queue, with its `load` and its `save`"); a
   second `save` ("`connector b` saves, and so does `connector a`: a
-  finished request runs one save, and vLLM saves to every connector at
-  once, which one save after the other would not be; keep `save` in
-  one"). A connector named for a queue the engine's queue does not read
-  from, where the engine has the source's connector already, is
+  request here runs one save, where vLLM runs every connector's at once
+  (multi_connector.py:334-346); keep `save` in one"). A connector named
+  for a queue the engine's queue does not read from, where the engine has
+  the source's connector already, is
   `E-connector-misnamed` with no fix-it: the rename would name the source
   twice. A relation whose reader's engine lacks the source's connector is
-  `E-copy-no-connector`, its help now to write it among the others, where
-  it told the program to replace the one it had.
+  `E-copy-no-connector`, its help now to write it before the others that
+  load, where it told the program to replace the one it had.
 - **`Program::validate`**: at most one load reads a source ("two of a
   connector's loads read a source: a request's entry names one (`from`),
   which one load reads"); the text cannot write two (one relation per
   reader, one connector per queue), IR from JSON can.
-- **A push's leg**: the session waits for a leg only by reading its send,
-  and a connector before the source's that has tokens passes the read over
-  (`multi_connector.py:445-447`), so the session would end while the leg
-  runs, which was a run-time error. It is refused when the program links:
-  "a leg's send of `P.kv` is read by a connector after another, which a
-  request that loads from the other passes over: the session waits for a
-  leg only by reading its send; write the source's connector first". A
-  pull keeps its order free: nothing waits on its read.
+- **The source's connector first** (`Validator::connector`): a connector
+  before it that has tokens is the request's load and passes the read over
+  (`multi_connector.py:445-447`). In a push the session would end while
+  its leg runs, which was a run-time error. In a pull the send would keep
+  the prefiller's blocks until its `ttl` or the session's end, where
+  vLLM's NIXL, told 0 tokens, frees them at once
+  (`nixl/pull_scheduler.py:145-147`): a wrong answer, and a large one
+  (below, *A free order in a pull*). Both are refused when the program
+  links: "engine `D`: `connector P` is asked after `connector lmc`: a
+  request `lmc` loads passes its read of `P` over, which keeps `P`'s
+  blocks until the send's `ttl` or the session's end, where vLLM frees
+  them at once (nixl/pull_scheduler.py:145-147), and in a push ends the
+  session while its leg runs; write `connector P` first". F1, a read
+  passed over ending its send, would lift it for a pull.
 
-### Criterion 2: the order is the program's
+### Criterion 2: the order and the amounts are the program's
 
 "The first that has tokens" is vLLM's rule, and a program cannot state
 "load from the one that has more". It does not need to: the rule is a
-mechanism the program parameterises with the order and every amount, and
-the opposite rule is written in the amounts. "Load from the prefiller
+mechanism the program parameterises with the order of its L2s, after the
+source's, and every amount, and the opposite rule is written in the
+amounts. "Load from the prefiller
 unless the L2 holds the whole prompt" is
 
 ```serq
@@ -151,7 +159,9 @@ connector P { load (request.preempted || floor(cachedin(lmc.kv), chunk) >= reque
 ```
 
 before `connector lmc`, which links and runs. A selection clause (`load
-by (…)`) would be a second spelling of what that guard says.
+by (…)`) would be a second spelling of what that guard says. Its read of 0
+for a remote request leaves the prefiller's send to its `ttl`, as a load
+of 0 does with one connector (F1).
 
 ## After
 
@@ -230,12 +240,14 @@ it.
 
 1. **One `CConnector` with ordered `loads`**, not a list of connectors:
    the request's records are one set.
-2. **The order is the program's, the rule vLLM's** (criterion 2, above).
+2. **The order of the L2s and the amounts are the program's, the rule
+   vLLM's** (criterion 2, above).
 3. **One `save`**, refused in the text otherwise.
 4. **A queue named once**: its `load` and `save` in one connector.
 5. **`E.from` -1 passes over the source's load only**, and the next is
    asked.
-6. **A push's read is the first load**, checked when the program links.
+6. **The source's read is the first load**, in a pull as in a push,
+   checked when the program links.
 7. **No fix-it** for a missing source connector: where it stands among
    the others is the program's.
 
@@ -257,13 +269,22 @@ vLLM's documented setups the point-to-point side is the relation's send,
 not a save. The limit is the parser's message; a program that needs two
 L2s saving lifts it with concurrent transfers.
 
-**The relation's connector always first**, in pull as in push. In a pull
-nothing waits on the read, and which store is asked first is policy.
+**A free order in a pull.** Nothing waits on a pull's read, and which
+store is asked first looked like policy. But a read passed over keeps
+the prefiller's send, and with it its blocks, until the send's `ttl` or
+the session's end, where vLLM frees them at once (F1). The Before with
+`connector lmc` written before `connector P` (horizon 300, warmup 30,
+the check switched off): `ttft` 0.02633 (±0.00153) becomes 0.08848
+(±0.04739): `P.kv[0]`'s use averages 71672 tokens where it was 368, its
+cache falls from 148524 to 75286, and the prefiller's mean
+reuse falls from 4505 tokens to 1806, its prefill rising from 1428 to
+4118. One order of two clauses would give that answer silently
+(criterion 0), so the order is a push's until F1.
 
 **Ending an unchosen pull read's send at once**, as NIXL notifies the
 prefiller when it is told 0 tokens. It is the right rule, but a change of
 its own for one connector too (a load of 0 tokens keeps the send today):
-follow-up F1.
+follow-up F1, after which a pull's order can be free.
 
 **Keeping the test for a send gone before the amount**, so that every
 single-connector run stays byte for byte. It keeps a wrong `E.load_done`
@@ -271,14 +292,22 @@ and would skip the L2 for a preempted request; above.
 
 ## Follow-ups
 
-- **F1.** A pull read that is not chosen, or whose amount is 0, keeps the
-  prefiller's send until its `ttl` or the session's end; vLLM's NIXL
-  frees it by notification (`nixl/pull_scheduler.py:145-147`). A push's
-  keeps it until its lease ends, which serQ matches.
+- **F1.** A pull read whose amount is 0 keeps the prefiller's send until
+  its `ttl` or the session's end; vLLM's NIXL frees it by notification
+  (`nixl/pull_scheduler.py:145-147`). A push's keeps it until its lease
+  ends, which serQ matches. With it, a read that is not chosen ends its
+  send too, and a pull's connectors can stand in any order.
 - **F2.** A save keeps its request, and the session, waiting until it is
-  done; vLLM counts it as asynchronous and returns the response at once
-  (`multi_connector.py:525-554`). `llmd_nixl_pull.sq` with `connector lmc
+  done; vLLM returns the response in the step the request stops
+  (`scheduler.py:2153-2159, 2199-2216`) and keeps only the blocks until
+  the save is done (`scheduler.py:2653-2655`, the saves counted by
+  `multi_connector.py:525-554`). `llmd_nixl_pull.sq` with `connector lmc
   { per_token (5e-6); load (…); save (floor(request.input, 256)); }` on
   the prefiller, which links: `ttft` 0.02553 becomes 0.03012 (horizon
   300, warmup 30), and the prefiller's `finished` stay 0.0121 becomes
   0.0197. `llmd_nixl_lmcache.sq` therefore saves on the decoder only.
+- **F3.** Two connectors that save. #599 asked that every connector with
+  `save` save, as vLLM does (`multi_connector.py:334-346`); here one
+  saves, and a second `save` is refused (*Every saving connector
+  saving*, above). Lifting it needs a request to run its saves at once,
+  a second transfer per request (`docs/design/request-state.md`).

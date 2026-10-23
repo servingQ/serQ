@@ -1480,16 +1480,21 @@ Each names its queue once, with its `load` and its `save`, and one of
 them at most has `save`. At the admission each `load` is read in the
 order the connectors are written, and the first above 0 is the request's
 load: `request.loaded`, and the copy through that connector alone; the
-others load nothing (`multi_connector.py:429-448`). The source's connector
-is not asked for a request its entry took from no source, and a read whose
-send has ended is the request's load, of nothing, when its `load` is above
-0. A finished request runs the one `save`. `E.loaded` and `E.load_done`
-are the chosen load's. A push's leg is read only by a source's connector
-written first: one before it that has tokens would pass the read over, and
-the session would end while its leg runs, so the program does not link.
-The rule is vLLM's, the order and the amounts the program's: a `load`
-guarded by what another connector holds (`cachedin(lmc.kv)`) chooses
-otherwise. The decoder of `examples/pd-disaggregation/llmd_nixl_lmcache.sq`
+others load nothing (`multi_connector.py:429-448`). A connector with no
+`load` is not asked, and where it stands does not matter. The source's
+connector is not asked for a request its entry took from no source, and a
+read whose send has ended is the request's load, of nothing, when its
+`load` is above 0. A finished request runs the one `save`. `E.loaded` and
+`E.load_done` are the chosen load's. The source's connector is written
+first, or the program does not link: one before it that has tokens would
+pass the read over, and the send would keep the source's blocks until its
+`ttl` or the session's end, where vLLM's NIXL frees them at once
+(`nixl/pull_scheduler.py:145-147`), or in a push the session would end
+while its leg runs. The rule is vLLM's, the order of the others and every
+amount the program's: the source's `load` guarded by what another
+connector holds (`cachedin(lmc.kv)`) chooses otherwise, though its read of
+0 leaves the send to its `ttl`, as with one connector. The decoder of
+`examples/pd-disaggregation/llmd_nixl_lmcache.sq`
 reads a remote request's prompt from its prefiller and a local one's
 context from the L2, and saves to the L2:
 

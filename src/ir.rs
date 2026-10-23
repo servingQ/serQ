@@ -1009,7 +1009,7 @@ pub struct CConnector {
     /// request's load, the rest load nothing (multi_connector.py:429-448).
     /// A load that reads a source (`CTransfer::source`) is read only when
     /// the request's entry took its KV `from` one (`from` not -1); at most
-    /// one load reads a source.
+    /// one load reads a source, and it is the first (`Validator::connector`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub loads: Vec<CTransfer>,
     /// What an L2 is to hold of its requests (`amount` read at
@@ -1040,7 +1040,7 @@ impl CConnector {
     }
 
     /// The load that reads a KV relation's source, with its place among the
-    /// loads: at most one (`Validator::connector`).
+    /// loads: at most one, the first (`Validator::connector`).
     pub fn source_load(&self) -> Option<(usize, &CTransfer)> {
         self.loads
             .iter()
@@ -3442,6 +3442,24 @@ impl Validator<'_> {
                     .into(),
             );
         }
+        // a load before the read that has tokens is the request's, and the
+        // read is passed over (multi_connector.py:445-447): the source would
+        // keep its blocks until the send's `ttl` or the session's end, where
+        // vLLM's NIXL frees them at once (nixl/pull_scheduler.py:145-147),
+        // and a push's session would end while its leg runs. Until a read
+        // passed over ends its send, the read is asked first.
+        if let Some((i, t)) = c.source_load()
+            && i > 0
+        {
+            let (read, first) = (self.p.load_queue(t), self.p.load_queue(&c.loads[0]));
+            return Err(format!(
+                "`connector {read}` is asked after `connector {first}`: a request `{first}` \
+                 loads passes its read of `{read}` over, which keeps `{read}`'s blocks until the \
+                 send's `ttl` or the session's end, where vLLM frees them at once \
+                 (nixl/pull_scheduler.py:145-147), and in a push ends the session while its leg \
+                 runs; write `connector {read}` first"
+            ));
+        }
         for t in &c.loads {
             let e = &t.amount;
             if !takes_memory {
@@ -3988,28 +4006,14 @@ impl Validator<'_> {
                 CStmt::Request { stage, .. } => {
                     if let CStageKind::Step(sp) = &self.p.stages[stage.base].kind
                         && let Some(c) = sp.connector.as_ref()
-                        && let Some((first, src)) = c
-                            .source_load()
-                            .and_then(|(i, t)| Some((i == 0, t.source.as_ref()?)))
+                        // the engine's first load (`Validator::connector`)
+                        && let Some(src) = c.source_load().and_then(|(_, t)| t.source.as_ref())
                     {
                         let sourceless = c
                             .from
                             .is_some_and(|f| set.iter().any(|&(k, v)| k == f && v < 0.0));
                         if !sourceless && let Some(i) = pending.iter().position(|&m| m == src.base)
                         {
-                            // a load before it that has tokens is the
-                            // request's, and the read is passed over
-                            // (multi_connector.py:445-447): the session
-                            // would end while the leg runs
-                            if !first {
-                                return Err(format!(
-                                    "a leg's send of `{}` is read by a connector after another, \
-                                     which a request that loads from the other passes over: the \
-                                     session waits for a leg only by reading its send; write the \
-                                     source's connector first",
-                                    self.p.pools[src.base].name
-                                ));
-                            }
                             pending.remove(i);
                         }
                     }
@@ -4486,6 +4490,24 @@ impl Program {
             CStageKind::Step(st) => st.connector.as_deref().map(|c| (st, c)),
             _ => None,
         })
+    }
+
+    /// The queue a connector's load names in the text (`connector Q`): the
+    /// engine that keeps the source a read reads, else the L2 the load
+    /// copies through.
+    pub fn load_queue(&self, t: &CTransfer) -> &str {
+        let keeps = |src: &CRef| {
+            self.stages.iter().find(|x| match &x.kind {
+                CStageKind::Step(sp) => sp
+                    .memory
+                    .is_some_and(|m| m >= src.base && m < src.base + src.count.max(1)),
+                _ => false,
+            })
+        };
+        match t.source.as_ref().and_then(keeps) {
+            Some(st) => &st.name,
+            None => &self.stages[t.stage.base].name,
+        }
     }
 
     /// A pool reference: `kv`, `rep[j]`.
