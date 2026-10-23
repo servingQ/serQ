@@ -259,11 +259,13 @@ est_wait(s: stage) -> number
 
 **Returns:** Measured mean wait at `s` from a run's arrival to its start, a run's `latency` included, in clock units.
 
-The three estimates are what a priced eviction order reads. For a miss
-that lengthens a hit service $s_{\mathrm{hit}}$ by $\Delta s$, let
-$s_{\mathrm{miss}} = s_{\mathrm{hit}} + \Delta s$. With the stage's
-measured arrival rate $\hat\lambda$, utilization $\hat\rho$ and mean wait
-$\hat W$, the added cost of the miss is
+#### A priced eviction order {#priced-order}
+
+`est_lambda`, `est_rho` and `est_wait` are what a priced eviction order
+reads. For a miss that lengthens a hit service $s_{\mathrm{hit}}$ by
+$\Delta s$, let $s_{\mathrm{miss}} = s_{\mathrm{hit}} + \Delta s$. With
+the stage's measured arrival rate $\hat\lambda$, utilization $\hat\rho$
+and mean wait $\hat W$, the added cost of the miss is
 
 $$
 \Phi = \Delta s
@@ -272,13 +274,14 @@ $$
 $$
 
 a definition the program writes over the estimates. Here it orders the
-KV pool of `examples/multi-turn/vllm.sq` by price per block, where the
-example evicts the least recently used:
+KV pool of `examples/multi-turn/vllm.sq` by price per token, where the
+example evicts the least recently used: a hit costs an iteration's fixed
+cost and one token (`c0 + a`), a miss recomputes the entry (`a * size`).
 
 ```serq
 // the price of a miss that lengthens a hit service s_hit by ds at stage s
 def miss_price(s, s_hit, ds) {
-  ds + est_lambda(s) * ((s_hit + ds) * (s_hit + ds) - s_hit * s_hit) / (2 * (1 - est_rho(s)))
+  ds + est_lambda(s) * ((s_hit + ds) ^ 2 - s_hit ^ 2) / (2 * (1 - est_rho(s)))
     + est_lambda(s) * est_wait(s) * ds / (1 - est_rho(s))
 }
 pool kv on gpu { block bs; evict by (waiting, miss_price(vllm, c0 + a, a * size) / size); preempt lifo; }

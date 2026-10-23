@@ -3681,7 +3681,8 @@ const RETIRED_FUNCTIONS: [(&str, &str); 2] = [
     (
         "price",
         "`price(s, s_hit, ds)` is gone: a miss's price is the program's, a `def` over \
-         `est_lambda(s)`, `est_rho(s)` and `est_wait(s)`",
+         `est_lambda(s)`, `est_rho(s)` and `est_wait(s)` (the formula: \
+         docs/api/functions.md#priced-order)",
     ),
 ];
 

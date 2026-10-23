@@ -7,8 +7,8 @@ test of criterion 2 (#8) is whether a program can state the opposite: the
 language may supply a mechanism a program selects and parameterises, not
 a rule the program would otherwise write. The mechanism here is the
 stage's online estimates, `est_lambda(s)`, `est_rho(s)` and `est_wait(s)`,
-and they stay. The formula over them is a rule, and a program now writes
-it as a `def`.
+and they stay (their smoothing and cap, still the language's, are #756).
+The formula over them is a rule, and a program now writes it as a `def`.
 
 The IR loses the function `Fun::Price`, so `IR_VERSION` goes from 15
 (tagged, `v0.1.7-alpha.2`) to 16. No program of this repository called
@@ -48,12 +48,12 @@ A call, `serving-queue-theory`'s `programs/replay_vllm.sq:81`:
 ```
 
 After, the same formula is the program's, as `docs/api/functions.md`
-shows it beside `est_wait`:
+shows it after `est_wait`, under its own heading (`#priced-order`):
 
 ```serq
 // the price of a miss that lengthens a hit service s_hit by ds at stage s
 def miss_price(s, s_hit, ds) {
-  ds + est_lambda(s) * ((s_hit + ds) * (s_hit + ds) - s_hit * s_hit) / (2 * (1 - est_rho(s)))
+  ds + est_lambda(s) * ((s_hit + ds) ^ 2 - s_hit ^ 2) / (2 * (1 - est_rho(s)))
     + est_lambda(s) * est_wait(s) * ds / (1 - est_rho(s))
 }
 pool kv on gpu { block bs; evict by (waiting, miss_price(vllm, c0 + a, a * size) / size); preempt lifo; }
@@ -62,7 +62,7 @@ pool kv on gpu { block bs; evict by (waiting, miss_price(vllm, c0 + a, a * size)
 A call of the builtin is refused with what to write:
 
 ```text
-link error: unknown function `price`: `price(s, s_hit, ds)` is gone: a miss's price is the program's, a `def` over `est_lambda(s)`, `est_rho(s)` and `est_wait(s)`
+link error: unknown function `price`: `price(s, s_hit, ds)` is gone: a miss's price is the program's, a `def` over `est_lambda(s)`, `est_rho(s)` and `est_wait(s)` (the formula: docs/api/functions.md#priced-order)
 ```
 
 The message is an entry of `RETIRED_FUNCTIONS` (`src/frontend/link.rs`),
@@ -72,35 +72,43 @@ beside `pow`. A call is told; the name is free for anything else.
 
 `examples/multi-turn/vllm.sq` with its KV pool's `evict lru` replaced by
 `evict by (waiting, price(vllm, c0 + a, a * size) / size)` was run before
-the change (`1cb55ea`), and with the `def` above in its place after it:
+the change (`1cb55ea`), and with a `def` in its place after it:
 
 ```text
 serq run X.sq --workload examples/workloads/chat.sq --horizon 600 --blocks 800 --json
 ```
 
-The two JSON reports are the same byte for byte: 896 entries evicted from
+The JSON reports are the same byte for byte: 896 entries evicted from
 `kv` (5401488 units). The pool's own `evict lru` evicts 848, and
 `evict by (waiting, a)`, the price replaced by a constant, 847, so the
-key the estimates give is live, not a tie. The same `def` named `price`, the
-companion's spelling, gives the same report, and so do a one-line `def`
-over `vllm` alone and the three-line one above. In the IR the call
-`Price` becomes `EstLambda` twice, `EstRho` twice and `EstWait` once;
-the `def` leaves no trace of its name.
+key the estimates give is live, not a tie. Every `def` tried gives that
+report: the one above, which squares with `^`; the companion's line
+(below), which squares with products and is named `price`; a one-line
+`def` over `vllm` alone; and a `def` inside `main` as well as above it.
+In the IR the call `Price` becomes `EstLambda` twice, `EstRho` twice and
+`EstWait` once; the `def` leaves no trace of its name.
 
-The sameness is by construction, not luck. The `def` performs the
-builtin's floating-point operations in the builtin's order: `s_hit + ds`
-is computed twice and gives the same value both times, `x * x` is written
-out (`^` is `powf`, which need not round as a product does), and each
-`est_*` reads the same `estimates()` the builtin read. The eviction key
-stays one whose entries are keyed once for a pass that evicts several
-(`static_key`, `src/engine/interp.rs`), which already counted the three
-estimates among what such a key may read.
+Only the product spelling is the builtin's report by construction. It
+performs the builtin's floating-point operations in the builtin's order:
+`s_hit + ds` is computed twice and gives the same value both times,
+`x * x` is the builtin's `s_m * s_m`, and each `est_*` reads the same
+`estimates()` the builtin read. The documented `def` writes `^`, which is
+`powf`, and IEEE 754 does not require `pow(x, 2)` to round as `x * x`
+does: its sameness is observed, not owed. A program that prices a miss
+its own way owes the builtin nothing; the companion's programs, whose
+numbers must not move, write the product. The eviction key stays one whose entries are keyed
+once for a pass that evicts several (`static_key`,
+`src/engine/interp.rs`), which already counted the three estimates among
+what such a key may read.
 
 `tests/engine_device.rs`,
 `a_miss_price_is_a_definition_over_the_estimates`, keeps this: the
-builtin's call is refused with the message, a `def price(s, s_hit, ds)`
-links and its IR reads the estimates 2, 2 and 1 times, and the `def`
-named `miss_price` gives the same IR.
+builtin's call is refused with the message; the companion's
+`def price(s, s_hit, ds)` links, and its IR reads the estimates 2, 2 and
+1 times (λ̂ in Φ's two fractions, ρ̂ in their two denominators, Ŵ once);
+the same `def` named `miss_price` gives the same IR; and the documented
+block, read from `docs/api/functions.md` into `vllm.sq`, links, reads
+them as often, and with its squares written as products is that `def`.
 
 ## What went
 
@@ -138,6 +146,8 @@ of main's names goes (`docs/writing-programs.md`):
 def price(s, s_hit, ds) { ds + est_lambda(s) * ((s_hit + ds) * (s_hit + ds) - s_hit * s_hit) / (2 * (1 - est_rho(s))) + est_lambda(s) * est_wait(s) * ds / (1 - est_rho(s)) }
 ```
 
+The line squares with products, not with `^` as the documented `def`
+does, so that their reports stay the builtin's by construction (above).
 Their calls stay as written, because a retired function's name is free.
 From then on they are the programs that use `est_lambda`, `est_rho` and
 `est_wait`, which `tools/unused.json` lists today: `scripts/unused.py`
@@ -167,18 +177,29 @@ libqueuingsim's shortest-first eviction. A program written so that a
 construct counts as used is the path only tests reach under another
 name. The companion's programs are the users.
 
-**Removing `est_*` too, since no program here uses them.** They are
-measurements a program selects and parameterises, a mechanism criterion
-2 allows; the formula over them was the rule. The companion needs them.
+**Removing `est_*` too, since no program here uses them.** A program
+selects them, by stage, and the formula over them was the rule; the
+companion needs them. They are not yet a mechanism the program
+parameterises: their smoothing (α = 0.01) and the cap ρ̂ ≤ 0.99 are still
+the language's (`src/engine/stats.rs:347-348`), and by the test of
+criterion 2 a program cannot state another. That is #756, not this
+change.
 
 **Renaming `PriceEstimator`.** It mirrors libqueuingsim's estimator of
 the same name, which its comment cites, and
 `docs/design/stochastic-model.md` refers to it. A rename moves no
 meaning.
 
-**`^` in the documented `def`.** `(s_hit + ds) ^ 2` reads better than the
-product, but `^` is `powf`, and the report would no longer be the
-builtin's byte for byte; the product keeps the experiment exact.
+**The product in the documented `def`.** A first draft wrote
+`(s_hit + ds) * (s_hit + ds) - s_hit * s_hit` there, on the reason that
+with `^` the report would no longer be the builtin's byte for byte. Run,
+it is (896, the same JSON). What holds is weaker: `^` is `powf`, and
+IEEE 754 does not require `pow(x, 2)` to round as `x * x` does, so the
+sameness is observed rather than by construction. That matters to a
+program whose numbers must not move, the companion's, and its line keeps
+the product. A reader copies the documented `def`, and there
+`(s_hit + ds) ^ 2 - s_hit ^ 2` reads as the formula's difference of
+squares (criterion 1).
 
 **Dated records.** `whole-tokens.md`, `stochastic-model.md` and
 `ir-v4.md` name `price` among the functions of their day. They record
