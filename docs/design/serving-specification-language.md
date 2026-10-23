@@ -171,7 +171,8 @@ interpreter, and a control in admission order checks the PRIORITY plumbing.
 Decode-first is not among them: in this engine, whose requests hold their
 KV blocks and join the running list as prefills, it is admission order
 already while every decoding request is ahead of every prefilling one
-(`Serq/Serve.lean`, `serve_eq_decode_first`; for an iteration of `Exec`,
+(`Serq/Serve.lean`, `serve_eq_decode_first`; for an iteration of `Exec`
+that crosses no block boundary and admits no one,
 `Exec.assign_decode_first`), and no random case found it differ.
 
 Run on vLLM at the pin (`0.30.1rc1.dev215+g0c87a197b`, CPU scheduler, the
@@ -327,7 +328,8 @@ them.
   until an architecture can be declared in serQ itself.
 - **Decode-first is not a 4b scenario.** It was the first order tried. In
   this engine it equals admission order while the decoders are ahead of
-  the prefills (`serve_eq_decode_first`, `Exec.assign_decode_first`), and 4000
+  the prefills (`serve_eq_decode_first`; `Exec.assign_decode_first` for an
+  iteration that crosses no block boundary and admits no one), and 4000
   random cases found no difference, so it would test nothing the FCFS
   oracle does not.
 - **Not yet the interface, nor an architecture without a backend.** Both
