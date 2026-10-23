@@ -278,9 +278,11 @@ KV pool of `examples/multi-turn/vllm.sq` by price per token, where the
 example evicts the least recently used: a hit costs an iteration's fixed
 cost and one token (`c0 + a`), a miss recomputes the entry (`a * size`).
 Every entry is priced at `vllm` with the same estimates, and its price
-per token grows with `size` once $\hat\lambda > 0$, so in this program
-the order is that of `evict by (waiting, size)`, whatever the estimates'
-values.
+per token grows with `size` while $\hat\lambda > 0$, whatever $\hat\rho$
+and $\hat W$ are: an eviction then is in the order of
+`evict by (waiting, size)`. While $\hat\lambda = 0$, before the stage has
+measured a gap between two starts, every entry's price per token is `a`,
+and the key ties to release order.
 
 ```serq
 // the price of a miss that lengthens a hit service s_hit by ds at stage s

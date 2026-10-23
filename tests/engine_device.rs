@@ -1838,9 +1838,9 @@ fn a_miss_price_is_a_definition_over_the_estimates() {
     // run as docs/design/miss-price.md ran it. Every entry is priced at one
     // stage with the same estimates, and its price per token,
     // a + λ̂ (2 s_hit a + a² size) / 2(1 - ρ̂) + λ̂ Ŵ a / (1 - ρ̂), grows with
-    // `size` once λ̂ > 0: the documented order is the order by size, the
-    // same report whatever the estimates' values, and not the tie of a
-    // constant key
+    // `size` while λ̂ > 0, whatever ρ̂ and Ŵ are (at λ̂ = 0 every entry's is
+    // `a`, a tie): the documented order is the order by size, and not the
+    // tie of a constant key
     let mut run = common::horizon(600.0);
     run.set("blocks", "800").unwrap();
     let report = |prog: &str| {
