@@ -619,14 +619,16 @@ fn a_connector_s_load_is_its_engine_s_admission() {
     .unwrap();
 }
 
-/// A lease outlives the hold that took it: its keys read the session it is
-/// of wherever the session is, here in a run that has not revealed `o`.
+/// A lease outlives the hold that took it: its keys and its `counting` read
+/// the session it is of wherever the session is, here in a run that has not
+/// revealed `o`.
 #[test]
 fn a_lease_s_keys_read_the_lessee_wherever_it_is() {
     use serq::ir::Moment;
     for clause in [
         "preempt leases by (y);",
-        "preempt leases by (1) every (1) suspend by (y);",
+        "preempt leases by (1) every (1) suspend by (y) counting (allocated(kv));",
+        "preempt leases by (1) every (1) suspend by (1) counting (y);",
     ] {
         key_refused(
             &pool_program(

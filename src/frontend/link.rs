@@ -1418,8 +1418,9 @@ struct SchedulerReads<'a> {
     /// (`Interp::next_waiter_among`).
     requeue: BTreeSet<String>,
     /// Eviction keys and spill clauses, which read the session that wrote
-    /// a cache entry, and `preempt leases by` and `suspend by` keys, which
-    /// read the session a lease is of: wherever the session is.
+    /// a cache entry, and `preempt leases by` and `suspend by` keys and a
+    /// `counting`, which read the session a lease is of: wherever the
+    /// session is.
     anywhere: Vec<Key<'a>>,
     engines: BTreeMap<String, EngineReads<'a>>,
 }
@@ -1454,9 +1455,14 @@ fn scheduler_reads(prog: &Program) -> SchedulerReads<'_> {
                     reads.requeue.insert(p.name.clone());
                 }
             }
+            // the victim keys, the `suspend` keys and the `counting`
             PreemptOrder::Leases { keys, suspend, .. } => reads.anywhere.extend(
                 keys.iter()
-                    .chain(suspend.iter().flatten())
+                    .chain(
+                        suspend
+                            .iter()
+                            .flat_map(|(ks, count)| ks.iter().chain([count])),
+                    )
                     .map(|e| key(Moment::Victim, e)),
             ),
         }
