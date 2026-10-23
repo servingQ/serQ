@@ -8,9 +8,11 @@ its own given when the program runs (`serq run DEPLOYMENT --workload
 WORKLOAD`); `examples/pairs.json` names each program's. Client delays (`tool`, `user`, `delegate`) represent time
 outside the engine.
 
-One deployment, `examples/multi-turn/vllm.sq`, runs under all four
-workloads: `examples/pairs.json` lists them for it, its own `chat.sq` first
+One deployment, `examples/multi-turn/vllm.sq`, runs under each of them:
+`examples/pairs.json` lists six workloads for it, its own `chat.sq` first
 (`serq run examples/multi-turn/vllm.sq --workload examples/workloads/single_turn.sq`).
+The table compares the first four; the last two put a burst on the prefix
+cache ([below](#bursts-and-the-prefix-cache)).
 Its server hides the output length from scheduling expressions. See the
 [vLLM use case](vllm.md) for the engine's validation scope.
 
@@ -124,3 +126,60 @@ The language's `fork` runs a leg of one turn that calls a KV relation's
 source (the push P/D proxy's prefill), which the session waits for only by
 reading its send; it does not create the independent child sessions this
 workload approximates, nor wait for them.
+
+## Bursts and the prefix cache
+
+A turn that waits can lose its prefix before it runs; it then computes the
+prefix again, and the turns behind it wait longer. Two workloads put that
+loop on `vllm.sq`. Every conversation has one fixed context of
+`K0 = 16 000` tokens, and each turn adds a message of 500 tokens and an
+answer of 200 on average. A turn either finds its context in the cache (a
+*full hit*, `vllm.reused` at least `K0`) or computes about 16 700 tokens.
+With `--blocks 34000` the KV holds about 32.6 such contexts.
+
+```serq title="examples/workloads/closed_burst.sq"
+--8<-- "examples/workloads/closed_burst.sq:workload"
+```
+
+`closed_burst.sq` keeps `N = 40` people in a closed loop. Its burst is a
+shorter think time: `--burst_start 1000 --burst_len 300` thinks
+`Z_burst = 1.5` s instead of `Z = 4` s for 300 s. `--Z_warm` and
+`--warm_until` set the start. Until `warm_until`, a person thinks `Z_warm`
+seconds: a short think time sends all first turns at once into an empty
+cache, and a long one fills the cache a turn at a time.
+
+```serq title="examples/workloads/open_burst.sq"
+--8<-- "examples/workloads/open_burst.sq:workload"
+```
+
+`open_burst.sq` lets conversations arrive at `Lambda` a second. A
+conversation continues with probability `p = 0.9` after each turn, so it
+has 10 turns on average. The burst raises the arrival rate to
+`Lambda_burst`. An arrival's rate may not read the clock (`arrive` takes
+constants and draws), so the stream runs at the larger rate `top`, and an
+arrival is a conversation with probability `rate() / top`; the others
+leave without a turn. A thinned Poisson stream is Poisson at the rate it
+keeps, as in [the subagent workload](#agent-with-subagents). `--max_live`
+caps the conversations in at once with the pool `live`, as
+`examples/workloads/replica.sq` does; the others wait to enter.
+
+serQ's cache matches positions, not content. A turn also counts as hit
+the new tokens that sit where the previous turn's message and answer were,
+up to the smaller of the two: about 3 % of the context. A full hit does
+not depend on it.
+
+`tools/metastability/` runs both workloads under three eviction orders and
+four changes to the deployment, five seeds each; its
+[README](https://github.com/servingQ/serQ/blob/main/tools/metastability/README.md)
+gives the results. They are simulations, not measurements, with
+`--blocks 34000`:
+
+- The closed loop recovers. After a 300 s burst its full hits and waiting
+  turns are back at their level before the burst within 25–275 s. At each
+  think time from 2 to 4 s, the full hits after the burst are those of a
+  warm start and of a flushed start over the same windows.
+- The open conversations do not. Without a burst no seed collapses up to
+  `Lambda = 0.50` in 8000 s. With a burst of 1.5 conversations/s for 60 s,
+  every seed from 0.45 up, and four of five at 0.35 and 0.40, stay
+  collapsed to the end. A collapsed engine computes every turn whole, so
+  it serves about 3 turns/s; 0.30 conversations/s bring 3 turns/s.

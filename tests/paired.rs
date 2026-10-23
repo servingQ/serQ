@@ -67,7 +67,17 @@ fn one_deployment_runs_under_each_of_its_workloads() {
         .iter()
         .map(|w| w.file_stem().unwrap().to_string_lossy().into_owned())
         .collect();
-    assert_eq!(names, ["chat", "human_chat", "single_turn", "subagents"]);
+    assert_eq!(
+        names,
+        [
+            "chat",
+            "human_chat",
+            "single_turn",
+            "subagents",
+            "closed_burst",
+            "open_burst"
+        ]
+    );
     let ov = common::horizon(100.0);
     for w in &workloads {
         let p = serq::load_paired(deployment, w, &ov)

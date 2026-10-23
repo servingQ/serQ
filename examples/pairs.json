@@ -15,7 +15,9 @@
     "examples/workloads/chat.sq",
     "examples/workloads/human_chat.sq",
     "examples/workloads/single_turn.sq",
-    "examples/workloads/subagents.sq"
+    "examples/workloads/subagents.sq",
+    "examples/workloads/closed_burst.sq",
+    "examples/workloads/open_burst.sq"
   ],
   "examples/multi-turn/vllm_lmcache.sq": "examples/workloads/chat.sq",
   "examples/multi-turn/vllm_system_prompt.sq": "examples/workloads/chat_products.sq",

@@ -526,7 +526,9 @@ Proposition 4 (iii)'s hypotheses and quotient with bounded marks, a finite
 state space; irreducibility is then the program's to establish. The
 metastability note's exact passage times are computed on a projection
 chosen by hand, not on this space
-(`serving-queue-theory/research/metastability.md`).
+(`serving-queue-theory/research/metastability.md`). serQ's own runs of the
+burst protocol, on `vllm.sq` under a closed and an open workload, are
+simulations of the process, not of a projection (`tools/metastability/`).
 
 **Three kinds of theorem.** Propositions 2–3 hold on every path; the
 oracle theorems (`lean/Serq/Oracle.lean`) hold on one $\xi$ each; the

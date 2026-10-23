@@ -1,0 +1,52 @@
+// Conversations that arrive from outside, each over a fixed context of K0
+// tokens that its next turn reuses if its blocks survive, plus a new
+// message a turn; a person thinks between a reply and the next turn, and
+// continues with probability p. They arrive at Lambda a second, and at
+// Lambda_burst in a burst: an arrival of the larger rate is a conversation
+// with probability rate() / top (an arrival's gap may not read the clock).
+// At most max_live conversations are in at once; the rest wait to enter.
+// tools/metastability/ runs examples/multi-turn/vllm.sq under it
+// (docs/use-cases/workloads.md).
+use "std/args";
+
+let K0 = 16000;  // the conversation's context (tokens)
+let nnew = 500;  // new tokens a turn, mean
+let nout = 200;  // output tokens a turn, mean
+let p = 0.9;  // continue after a turn
+let Z = 4.0;  // think time, mean (s)
+
+let Lambda = args.number("Lambda", 0.5);  // conversations per second
+let Lambda_burst = args.number("Lambda_burst", Lambda);  // conversations per second in the burst
+let burst_start = args.number("burst_start", inf);  // (s)
+let burst_len = args.number("burst_len", 0);  // (s)
+let max_live = args.number("max_live", inf);  // conversations in at once
+let top = max(Lambda, Lambda_burst);
+
+def rate() { now >= burst_start && now < burst_start + burst_len ? Lambda_burst : Lambda }
+
+stage user : delay;
+pool live { cap max_live; }
+
+// --8<-- [start:workload]
+workload {
+  arrive poisson(top);
+  init { set real = ~bernoulli(rate() / top); }
+  turn {
+    set n = ceil(~exp(nnew));
+    set o = floor(~exp(nout)) + 1;
+    set more = ~bernoulli(p);
+  }
+  send (input: K0 + n, output: o);
+  session {
+    if (real) {
+      hold live (cost(live, 1)) {
+        turn;
+        while (more) {
+          run user (cost(user, ~exp(Z)));
+          turn;
+        }
+      }
+    }
+  }
+}
+// --8<-- [end:workload]

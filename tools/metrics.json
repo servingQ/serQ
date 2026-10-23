@@ -29,6 +29,7 @@
     "reuse (floor(request.known - 1, blocksize(kv)))",
     "reuse (floor(request.known - 1, bs))",
     "run gate (cost(gate, serial * spacing));",
+    "run user (cost(user, ~exp(Z)));",
     "send (input: K + n, output: o);",
     "server (input, hidden output) {",
     "set n = ceil(K == 0 ? ~uniform(1000, 3000) : ~exp(500));"

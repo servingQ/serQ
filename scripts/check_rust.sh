@@ -57,6 +57,8 @@ for f in docs/tutorial/programs/*.sq; do
 done
 # Experimental runners must explicitly select their execution conditions too.
 python3 tools/pd_batching/test_runners.py
+# The metastability study's edits link, its measures, and two recorded rows.
+python3 tools/metastability/test_study.py
 python3 scripts/check_oracle_gpu.py
 # The docs' `file.py:line` evidence for the vLLM correspondence. Skips loudly
 # where ref/vllm is absent (scripts/fetch_vllm_ref.sh --sparse: 4 MB, 2 s).

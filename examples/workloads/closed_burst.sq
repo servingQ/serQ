@@ -1,0 +1,43 @@
+// N people in a closed loop, each a conversation over a fixed context of K0
+// tokens that the next turn reuses if its blocks survive, plus a new
+// message a turn; a person thinks between a reply and the next turn, for a
+// while at a burst's pace. Z_warm, until warm_until, sets the start: short,
+// all N first turns arrive together into an empty cache (flushed); long,
+// they arrive one by one and fill it (warm). tools/metastability/ runs
+// examples/multi-turn/vllm.sq under it (docs/use-cases/workloads.md).
+use "std/args";
+
+let K0 = 16000;  // the conversation's context (tokens)
+let nnew = 500;  // new tokens a turn, mean
+let nout = 200;  // output tokens a turn, mean
+
+let N = args.number("N", 40);  // people
+let Z = args.number("Z", 4.0);  // think time, mean (s)
+let Z_burst = args.number("Z_burst", 1.5);  // think time in the burst (s)
+let burst_start = args.number("burst_start", inf);  // (s)
+let burst_len = args.number("burst_len", 0);  // (s)
+let Z_warm = args.number("Z_warm", 0.001);  // think time before warm_until (s)
+let warm_until = args.number("warm_until", 0);  // (s)
+
+def think_time() {
+  now < warm_until ? Z_warm : (now >= burst_start && now < burst_start + burst_len ? Z_burst : Z)
+}
+
+stage user : delay;
+
+// --8<-- [start:workload]
+workload {
+  arrive closed(N);
+  turn {
+    set n = ceil(~exp(nnew));
+    set o = floor(~exp(nout)) + 1;
+  }
+  send (input: K0 + n, output: o);
+  session {
+    loop {
+      run user (cost(user, ~exp(think_time())));
+      turn;
+    }
+  }
+}
+// --8<-- [end:workload]
