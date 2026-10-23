@@ -278,7 +278,8 @@ impl<'a> Paired<'a> {
         // each file's own constants and definitions: the workload's at its
         // top level, the deployment's at its top level and in `fn main()`
         // a word of the language keeps its spelling, so the parser refuses
-        // it as it would in one file (`def min`)
+        // it as it would in one file (`def min`), and a `let` of one that
+        // both files declare (`let cap`), which would be one constant
         let named = |toks: &[Token], depth| {
             let mut own = names(toks, &["let", "def"], depth);
             own.retain(|(_, n)| !word(n));

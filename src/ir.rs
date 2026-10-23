@@ -571,7 +571,9 @@ pub enum CArg {
 }
 
 /// The side executing a statement; requests lower to statements without
-/// losing the authority under which each statement runs.
+/// losing the authority under which each statement runs. For a constant
+/// (`Const.side`), the file that declares it: `Server` the deployment's,
+/// `Workload` the workload file's.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Side {
     Workload,
@@ -1407,7 +1409,9 @@ pub struct Const {
     pub name: String,
     /// Whose it is: `Server` for the deployment file's, `Workload` for the
     /// workload file's (`serq draw DEPLOYMENT --workload WORKLOAD`). Both
-    /// may declare one name, each meaning its own.
+    /// may declare one name, each meaning its own, but a word of the
+    /// language, which the pair does not rename apart: the parser refuses
+    /// that.
     pub side: Side,
     /// The value every expression that reads it has, folded.
     #[serde(with = "real")]

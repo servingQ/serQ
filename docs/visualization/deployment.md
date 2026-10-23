@@ -187,8 +187,11 @@ constant written as one number, and otherwise:
 | `= C / 2 (--x)` | an input whose default is computed, left at it |
 | `(--max_seqs; 16 in the program)` | an input the run supplied: the value is not what the program writes |
 
-A name both files declare is one row under each, and a name one file
-declares twice is its last declaration, the one the labels after it print.
+A name both files declare is one row under each (but a word of the
+language, such as `cap`, which the pair does not rename apart: the parser
+refuses it in both). A name one file declares twice is its last
+declaration, which every label prints, before it or after; only an array
+size, folded at parse time, reads an earlier one.
 The legend reads `consts` in the IR ([IR](../ir.md)), so a program and its
 JSON IR draw the same legend. It names the numbers, and does not say which
 of them a label was computed from: `vllm.sq`'s `cap 16` is `max_seqs` and

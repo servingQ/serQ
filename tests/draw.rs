@@ -1595,12 +1595,25 @@ fn the_client_sends_and_the_server_replies() {
         }
         assert!(arrivals > 0 && exits > 0, "{name}");
         // what is written past the server's wall is the server's, its
-        // title over the frame aside and the legend under it: a guard on an
-        // exit is written where the exit leaves, inside
+        // title over the frame aside and the legend under it (from its
+        // first heading down): a guard on an exit is written where the exit
+        // leaves, inside
+        let legend_top = f
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                Item::Text { at, text, .. }
+                    if at.y > server.bottom() && (text == "deployment" || text == "workload") =>
+                {
+                    Some(at.y)
+                }
+                _ => None,
+            })
+            .reduce(f64::min);
         for i in &f.items {
             if let Item::Text { at, text, .. } = i
                 && at.x > server.x
-                && at.y <= server.bottom()
+                && legend_top.is_none_or(|y| at.y < y)
                 && text != "server"
             {
                 assert!(inside(at), "{name}: {i:?} outside the server");

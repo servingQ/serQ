@@ -420,6 +420,15 @@
         "supplied": true
       },
       "doc": "long_prefill_token_threshold (inf: none)"
+    },
+    {
+      "name": "adaptive",
+      "side": "Server",
+      "value": 0.0,
+      "arg": {
+        "key": "adaptive"
+      },
+      "doc": "long_prefill_token_threshold_adaptive (0: off)"
     }
   ]
 }

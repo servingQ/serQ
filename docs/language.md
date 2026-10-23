@@ -455,7 +455,9 @@ workload {
 
 Each file reads its own names: no constant or definition of the workload
 file is read by the deployment, none of the deployment's by the workload, and
-both may declare `p`, each meaning its own. The workload runs on and holds
+both may declare `p`, each meaning its own; not a word of the language
+(`cap`), which keeps its spelling in both files, so a `let` of it in both
+is refused. The workload runs on and holds
 its own stages and pools, the server none of them. The one exception is a
 declared stage `tool`: the workload's `tool Z;` uses it whichever file
 declares it ([Which stage](#which-stage)). What the server does

@@ -992,16 +992,24 @@ fn a_relations_copy_names_its_poster() {
 
 // --- the constants, for a reader (`Program::consts`, #15) -------------------
 
-/// The constants a small pair keeps: `deployment` is what the deployment
-/// declares before `fn main()` and at the end of its body, around a
-/// server; `lets` the workload file's lines before its `workload { … }`.
-fn consts_of(deployment: (&str, &str), lets: &str) -> Vec<serq::ir::Const> {
+/// A small pair: `deployment` is what the deployment declares before
+/// `fn main()` and at the end of its body, around a server; `workload` the
+/// workload file's lines before its `workload { … }` and after it.
+fn pair_of(deployment: (&str, &str), workload: (&str, &str)) -> (String, String) {
     let src = format!(
         "{}\nfn main() {{\n  stage svc : fifo;\n  server {{ run svc (cost(svc, ~exp(1))); }}\n{}\n}}\n",
         deployment.0, deployment.1
     );
-    let workload =
-        format!("{lets}\nworkload {{\n  arrive poisson(0.5);\n  session {{ turn; end; }}\n}}\n");
+    let workload = format!(
+        "{}\nworkload {{\n  arrive poisson(0.5);\n  session {{ turn; end; }}\n}}\n{}",
+        workload.0, workload.1
+    );
+    (src, workload)
+}
+
+/// The constants `pair_of` keeps.
+fn consts_of(deployment: (&str, &str), workload: (&str, &str)) -> Vec<serq::ir::Const> {
+    let (src, workload) = pair_of(deployment, workload);
     common::compile(&src, &workload, &common::horizon(10.0))
         .unwrap_or_else(|e| panic!("{e}\n{src}\n{workload}"))
         .consts
@@ -1073,13 +1081,17 @@ fn a_supplied_input_says_so() {
 
 /// The comment that ends a `let`'s line is its, wherever the pair puts the
 /// tokens after it: the last `let` of the deployment's `fn main()` is
-/// followed by the workload's tokens, and the workload's comments are
-/// numbered as its tokens are (without, a workload `let` had none).
+/// followed by the workload's tokens, the workload's comments are
+/// numbered as its tokens are (without, a workload `let` had none), and
+/// the comment after the workload's last token goes with it.
 #[test]
 fn a_constants_comment_survives_the_pair() {
     let consts = consts_of(
         ("", "  let m = 4;  // members"),
-        "let Lambda = 0.3;  // sessions per second",
+        (
+            "let Lambda = 0.3;  // sessions per second",
+            "let z = 1;  // zed",
+        ),
     );
     let docs: Vec<(&str, Option<&str>)> = consts
         .iter()
@@ -1089,14 +1101,15 @@ fn a_constants_comment_survives_the_pair() {
         docs,
         [
             ("m", Some("members")),
-            ("Lambda", Some("sessions per second"))
+            ("Lambda", Some("sessions per second")),
+            ("z", Some("zed"))
         ]
     );
 }
 
 /// Both files may declare one name, each meaning its own; one file's name
-/// declared again is its last declaration, which every expression after it
-/// reads.
+/// declared again is its last declaration, which the linker folds into
+/// every expression that reads it.
 #[test]
 fn a_constant_is_its_files_last_declaration() {
     use serq::ir::Side;
@@ -1105,7 +1118,7 @@ fn a_constant_is_its_files_last_declaration() {
             "let p = 1;  // the deployment's\nlet q = 2;\nlet p = 3;",
             "",
         ),
-        "let p = 0.9;  // the workload's",
+        ("let p = 0.9;  // the workload's", ""),
     );
     let got: Vec<(&str, Side, f64)> = consts
         .iter()
@@ -1164,4 +1177,26 @@ fn a_constant_twice_on_one_side_is_refused() {
     theirs.side = serq::ir::Side::Workload;
     other.consts.push(theirs);
     Program::from_json(&other.to_json()).unwrap();
+}
+
+/// A word of the language keeps its spelling in a pair, so both files'
+/// `let cap` would be one constant: the deployment's `cap cap` read the
+/// workload's 24 while the legend said its own 8 (#15). Refused where the
+/// workload declares it, naming the deployment's.
+#[test]
+fn a_word_both_files_declare_is_refused() {
+    let (src, workload) = pair_of(
+        ("let cap = 8;", "  pool live { cap cap; }"),
+        ("let cap = 24;", ""),
+    );
+    let e = common::compile(&src, &workload, &common::horizon(10.0)).unwrap_err();
+    assert!(
+        e.contains("`cap` is declared by the deployment too (at deployment.sq:1:5)")
+            && e.contains("not a word of the language"),
+        "{e}"
+    );
+    // one file's, either, is its own
+    for (d, w) in [("let cap = 8;", ""), ("", "let cap = 24;")] {
+        consts_of((d, "  pool live { cap 4; }"), (w, ""));
+    }
 }

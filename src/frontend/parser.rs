@@ -1855,8 +1855,8 @@ impl Parser {
                 }
                 continue;
             }
-            if let Some(split) = self.paired {
-                self.paired_item(self.toks[item_at].line > split)?;
+            if self.paired.is_some() {
+                self.paired_item(self.in_workload(item_at))?;
             }
             if !in_main && !self.is_kw("use") && !self.is_kw("def") && !self.is_kw("let") {
                 return self.err("executable declarations belong inside `fn main() { … }`; only `use`, `def` and constants belong outside it");
@@ -1875,6 +1875,26 @@ impl Parser {
                 let at = self.pos;
                 let name = self.definition()?;
                 self.declare(at, &name, Kind::Constant)?;
+                // the pair renames each file's constants apart, but not a
+                // word of the language (`frontend::paired`): both files'
+                // `let cap` would be one constant, the last value read by
+                // the deployment's expressions too (#15)
+                if self.in_workload(at)
+                    && let Some(d) = self.declared.iter().find(|d| {
+                        d.kind == Kind::Constant && d.name == name && !self.in_workload(d.at)
+                    })
+                {
+                    let t = &self.toks[d.at];
+                    return self.err_at(
+                        at,
+                        format!(
+                            "`{name}` is declared by the deployment too (at {}:{}): the pair \
+                             renames each file's constants apart, but not a word of the language, \
+                             so the deployment would read this one's value; rename one",
+                            t.line, t.col
+                        ),
+                    );
+                }
                 self.expect(&Tok::Assign)?;
                 let mut supplied_input = false;
                 // the definition as written, before a `def`'s use in it
@@ -1915,9 +1935,10 @@ impl Parser {
                 let (written, number) = written;
                 prog.let_notes.push(LetNote {
                     index: prog.lets.len(),
-                    side: match self.paired {
-                        Some(split) if self.toks[at].line > split => crate::ir::Side::Workload,
-                        _ => crate::ir::Side::Server,
+                    side: if self.in_workload(at) {
+                        crate::ir::Side::Workload
+                    } else {
+                        crate::ir::Side::Server
                     },
                     written,
                     number,
@@ -3829,6 +3850,12 @@ impl Parser {
         }
     }
 
+    /// Whether the token at `at` is a paired workload file's: past the
+    /// deployment's last line (`paired`).
+    fn in_workload(&self, at: usize) -> bool {
+        self.paired.is_some_and(|split| self.toks[at].line > split)
+    }
+
     /// A `let`'s definition as written, from the token at `from` to the `;`,
     /// `,` or `)` that ends it, the tokens' own spelling a space apart where
     /// the text has one (`blocks * bs`, `max(a, b)`), and whether it is one
@@ -3858,7 +3885,7 @@ impl Parser {
             _ => &toks[..],
         };
         let number = matches!(unsigned, [t] if matches!(&t.tok, Tok::Num(_))
-            || matches!(&t.tok, Tok::Ident(w) if w == "inf"));
+            || matches!(&t.tok, Tok::Ident(w) if supplied(w) == Some(Supplied::Inf)));
         (out, number)
     }
 
@@ -3932,7 +3959,7 @@ impl Parser {
             if !on_ok {
                 return self.err("a queue's pool is its own: `pool NAME on …` is a deployment's");
             }
-            if self.paired.is_some_and(|l| self.toks[at].line > l) {
+            if self.in_workload(at) {
                 // the workload's own capacity (a session cap), not the
                 // deployment's memory
                 return self.err_at(

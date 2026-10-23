@@ -98,8 +98,10 @@ not move the version.
 
 - **Which constants.** Every `let` the program writes, in both files, in
   the order each file declares them. A name declared twice in one file
-  appears once, at its last declaration, which every expression after it
-  reads (`lk.consts` keeps the last). A constant the parser makes for itself
+  appears once, at its last declaration, which the linker folds into every
+  expression that reads the name, before it or after (`lk.consts` keeps the
+  last); only an array size, folded at parse time, reads an earlier one. A
+  constant the parser makes for itself
   (a link's or a relation's `latency`, `D.pull.time`) is not listed. The
   rule the reader can state is "the program's constants" (criterion 0).
 - **Which file.** Both files may declare one name, each meaning its own
@@ -109,7 +111,15 @@ not move the version.
   words, `deployment` and `workload`. The side is read from where the `let`
   is (a token after the pair's split line is the workload's), not from the
   pair's renaming (`w·`): a word of the language is not renamed, and
-  `replica.sq`'s workload declares `let cap = 24;`.
+  `replica.sq`'s workload declares `let cap = 24;`. Because it is not
+  renamed, both files' `let cap` would be one constant, the workload's value
+  read by a deployment's `pool reqs { cap cap; }` while the legend gave
+  the deployment's `cap` its own. The parser refuses the workload's
+  (`tests/ir.rs` `a_word_both_files_declare_is_refused`): `` `cap` is
+  declared by the deployment too (at deployment.sq:1:5): the pair renames
+  each file's constants apart, but not a word of the language, so the
+  deployment would read this one's value; rename one``. It was read
+  silently before the legend, which only made it visible.
 - **Derived constants.** The definition is written as it is in the text,
   `C  160000  = blocks * bs`, read from the tokens before the parser
   expands a `def`'s use in it. The tokens keep their own spelling (`1e5` is
@@ -186,19 +196,31 @@ the IR alone. Until a use asks for that, the legend is the step.
   marks a snippet.
 - **The files' paths in the headings.** Rejected: the IR has none, and a
   figure drawn from the IR would then differ from one drawn from the text.
-- **Every declaration of a name declared twice.** Rejected: the earlier
-  value is read only by the expressions between the two, and a legend with
-  two rows for one name in one file is the ambiguity it exists to remove.
-  A name declared twice is read two ways by the frontend already (a family
-  sized at parse time by the first, its `cap` by the linker's last), which
-  is a defect of its own, not the legend's.
+- **Every declaration of a name declared twice.** Rejected: the linker
+  folds the last into every expression, before it or after, so the earlier
+  value is read by no expression the IR keeps, and a legend with two rows
+  for one name in one file is the ambiguity it exists to remove. A name
+  declared twice is read two ways by the frontend already (a family sized at
+  parse time by the first, its `cap` by the linker's last), which is a
+  defect of its own, not the legend's.
 - **A `--legend` option.** Rejected: two figures of one program.
 - **What it does not do.** `cap 16` and `block 16` are both named and still
-  not told apart (above). A word of the language the pair does not rename
-  (`cap`) declared in both files is one name to the linker, whatever the
-  legend says of each file's; that is the pair's defect, not the legend's.
+  not told apart (above).
+- **Let the pair rename a word of the language too.** Rejected for the
+  clash above: `rename` would have to tell the constant `cap` from the
+  clause `cap` in every position (it does so only at a clause's start), and
+  a refusal costs no program here, none of which declares one word in both
+  files.
 - **Two spellings and `serq ir`.** `CLAUDE.md` checks that a new form
   lowers to the IR of the form it replaces by diffing `serq ir`. Two
   spellings of a constant (`let C = 2 * 3e5;` and `let C = 6e5;`) now
   differ in `consts[].written`, and in nothing that runs. The diff of the two
-  spellings of a construct leaves `consts` out, as `tests/queues.rs` does.
+  spellings of a construct leaves `consts` out, as `tests/queues.rs` does:
+  `diff <(serq ir A | jq 'del(.consts)') <(serq ir B | jq 'del(.consts)')`.
+- **A comment is in the IR.** The comment on a `let`'s line is
+  `consts[].doc`, so editing it in an oracle or claims program moves the
+  committed IR (`tools/oracle/*.ir.json`, `tools/oracle/serve/*.ir.json`,
+  `tools/claims/*.ir.json`) and `make check` fails until it is regenerated
+  (`make oracle-ir`, `SERQ_BLESS=1` for `serve/`, `make claims-ir`). The
+  price of a legend drawn from the IR alone (#265): a comment the figure
+  shows is a comment the IR holds.
