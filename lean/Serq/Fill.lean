@@ -13,17 +13,42 @@ gives more than wanted (`fillAmounts_le_want`) and is work-conserving
 (`fillAmounts_sum`). This is what a FIFO prefill queue needs from the engine
 (serving-queue-theory's `StepEngine`).
 
+The fill is `Serve.serve` (`Serq/Serve.lean`) on the engine's jobs. `Serve`
+sees a job as the prefill work it has left, `0` for a decode (`prefillLeft`).
+Without a chunk cap the fill leaves the jobs what `Serve.serve` leaves them
+(`serve_fillAmounts`), with a cap `c` what `Serve.serveCap c` does
+(`serveCap_fillAmounts`), for jobs that hold work (`prefillLeft` says why
+every job on a machine `exec` reaches does; this is read off `exec`, not
+proved). So `Serve`'s theorems hold of `Exec`'s jobs: while every
+decoding job is ahead of every prefilling one (`Serve.Shape`), the fill in
+the jobs' order is the fill in decode-first order
+(`fillAmounts_eq_decode_first`), each of the first decoders takes one token
+and the prefills share what they leave (`fillAmounts_decoders_first`), and
+that is the iteration `assign` builds (`assign_decode_first`). An iteration
+without a cap keeps the shape (`fill_preserves_shape`); one with a cap may
+break it (`chunk_cap_breaks_fill_shape`).
+
 Not covered yet: an iteration whose growth crosses a block boundary (the
 vLLM programs' decode every `bs` tokens and their prefill chunks after the
 first) and one that admits waiting requests; for those programs the
-theorems apply to the iterations that do neither.
+theorems apply to the iterations that do neither. Nor that a path keeps the
+job list in the shape: a run joins the jobs by its session's latest hold
+admission (`exec`, `.run`), so a request in a hold decodes in the place its
+admission gave it, but on an engine whose requests hold nothing every run
+joins behind the jobs started before it, and a decode waits behind the
+prompts that arrived while it prefilled (`DaiChain.absSlot_leaves_shape`).
 
-Key definitions: `Exec.wantOf`, `Exec.fillAmounts`, `Exec.fillIter`.
+Key definitions: `Exec.wantOf`, `Exec.fillAmounts`, `Exec.fillIter`,
+`Exec.prefillLeft`, `Exec.decodeFirstJobs`.
 Key theorems: `Exec.assign_iter_eq_fillIter`, `Exec.assign_eq_fillIter`,
 `Exec.fillIter_eq_amounts`, `Exec.fillAmounts_fifo`, `Exec.fillAmounts_le_want`,
-`Exec.fillAmounts_sum`.
+`Exec.fillAmounts_sum`, `Exec.serve_fillAmounts`, `Exec.serveCap_fillAmounts`,
+`Exec.fillAmounts_eq_decode_first`, `Exec.fillAmounts_decoders_first`,
+`Exec.fill_preserves_shape`, `Exec.chunk_cap_breaks_fill_shape`,
+`Exec.assign_decode_first`.
 -/
 import Serq.Exec
+import Serq.Serve
 
 namespace SerqLang
 namespace Exec
@@ -272,6 +297,190 @@ theorem assign_eq_fillIter (hD : D.only = none) (m : Machine) (hq : engineQueues
             (by omega)
           rw [this]
           simp
+
+/-! ### The fill is `Serve.serve` -/
+
+/-- A job as `Serve` sees a resident: the prefill work it has left, `0` for
+a decode. `Serve` cannot tell a decode from a prefill with nothing left, nor
+a decode with a token left from one with none, so the theorems below take
+every job to hold work (`0 < j.left`). Every job on a machine `exec` reaches
+does: a run of zero work never becomes a job (`exec`, `.run`),
+`endIteration` drops a job with nothing left, and preemption only removes
+jobs. This is read off `exec`, not proved: `Inv` does not carry it. -/
+def prefillLeft (j : Job) : ℕ := if j.mode = .decode then 0 else j.left
+
+/-- The jobs in decode-first order: decodes first, each group in its order. -/
+def decodeFirstJobs (js : List Job) : List Job :=
+  js.filter (·.mode = .decode) ++ js.filter (·.mode ≠ .decode)
+
+/-- **The greedy fill is `Serve.serve`** (no chunk cap): what the fill leaves
+each job of its prefill is what `Serve.serve` leaves the resident. The cap
+of an iteration is `iterDeployment`'s, so `D` is the iteration's
+deployment. -/
+theorem serve_fillAmounts (hc : D.chunk = 0) :
+    ∀ (js : List Job) (left : ℕ), (∀ j ∈ js, 0 < j.left) →
+      Serve.serve left (js.map prefillLeft) =
+        (js.zip (fillAmounts D js left)).map fun p => prefillLeft p.1 - p.2
+  | [], _, _ => rfl
+  | j :: js, left, hpos => by
+    have hj : 0 < j.left := hpos j List.mem_cons_self
+    have hrest : ∀ j' ∈ js, 0 < j'.left := fun j' h => hpos j' (List.mem_cons_of_mem _ h)
+    simp only [List.map_cons, fillAmounts, List.zip_cons_cons]
+    by_cases hm : j.mode = .decode
+    · have hr : prefillLeft j = 0 := by simp [prefillLeft, hm]
+      have hw : wantOf D j = 1 := by simp [wantOf, hm]; omega
+      rw [hr, hw, Serve.serve]
+      have : left - min 1 left = left - 1 := by omega
+      rw [this, serve_fillAmounts hc js (left - 1) hrest]
+      simp
+    · obtain ⟨r, hr⟩ : ∃ r, j.left = r + 1 := ⟨j.left - 1, by omega⟩
+      have hres : prefillLeft j = r + 1 := by simp [prefillLeft, hm, hr]
+      have hw : wantOf D j = r + 1 := by
+        unfold wantOf; cases h : j.mode <;> simp_all
+      rw [hres, hw, Serve.serve, serve_fillAmounts hc js _ hrest]
+
+/-- **With a chunk cap, the greedy fill is `Serve.serveCap`.** The two
+theorems are apart because a chunk of `0` means no cap to `wantOf` and no
+prefill at all to `Serve.serveCap`. -/
+theorem serveCap_fillAmounts (hc : 0 < D.chunk) :
+    ∀ (js : List Job) (left : ℕ), (∀ j ∈ js, 0 < j.left) →
+      Serve.serveCap D.chunk left (js.map prefillLeft) =
+        (js.zip (fillAmounts D js left)).map fun p => prefillLeft p.1 - p.2
+  | [], _, _ => rfl
+  | j :: js, left, hpos => by
+    have hj : 0 < j.left := hpos j List.mem_cons_self
+    have hrest : ∀ j' ∈ js, 0 < j'.left := fun j' h => hpos j' (List.mem_cons_of_mem _ h)
+    simp only [List.map_cons, fillAmounts, List.zip_cons_cons]
+    by_cases hm : j.mode = .decode
+    · have hr : prefillLeft j = 0 := by simp [prefillLeft, hm]
+      have hw : wantOf D j = 1 := by simp [wantOf, hm]; omega
+      rw [hr, hw, Serve.serveCap]
+      have : left - min 1 left = left - 1 := by omega
+      rw [this, serveCap_fillAmounts hc js (left - 1) hrest]
+      simp
+    · obtain ⟨r, hr⟩ : ∃ r, j.left = r + 1 := ⟨j.left - 1, by omega⟩
+      have hres : prefillLeft j = r + 1 := by simp [prefillLeft, hm, hr]
+      have hw : wantOf D j = min (r + 1) D.chunk := by
+        unfold wantOf; cases h : j.mode <;> simp_all
+      rw [hres, hw, Serve.serveCap, serveCap_fillAmounts hc js _ hrest]
+
+/-- The two decode-first orders agree: `Serve.decodeFirst` of what `Serve`
+reads of the jobs is what it reads of `decodeFirstJobs`. -/
+theorem decodeFirst_prefillLeft (js : List Job) (hpos : ∀ j ∈ js, 0 < j.left) :
+    Serve.decodeFirst (js.map prefillLeft) = (decodeFirstJobs js).map prefillLeft := by
+  have key : ∀ j ∈ js, (prefillLeft j = 0 ↔ j.mode = .decode) := by
+    intro j hj
+    have := hpos j hj
+    by_cases hm : j.mode = .decode <;> simp [prefillLeft, hm]; omega
+  unfold Serve.decodeFirst decodeFirstJobs
+  rw [List.map_append, List.filter_map, List.filter_map]
+  congr 2
+  · apply List.filter_congr; intro j hj; simp [key j hj]
+  · apply List.filter_congr; intro j hj; simp [key j hj]
+
+/-- In the shape, the jobs' order is decode-first order. -/
+theorem decodeFirstJobs_eq_self :
+    ∀ (js : List Job), (∀ j ∈ js, 0 < j.left) → Serve.Shape (js.map prefillLeft) →
+      decodeFirstJobs js = js
+  | [], _, _ => rfl
+  | j :: js, hpos, h => by
+    have hrest : ∀ j' ∈ js, 0 < j'.left := fun j' h => hpos j' (List.mem_cons_of_mem _ h)
+    by_cases hm : j.mode = .decode
+    · have hr : prefillLeft j = 0 := by simp [prefillLeft, hm]
+      rw [List.map_cons, hr] at h
+      have ih := decodeFirstJobs_eq_self js hrest h
+      unfold decodeFirstJobs at ih ⊢
+      simp only [List.filter_cons, hm, decide_true, ↓reduceIte, ne_eq, not_true_eq_false,
+        decide_false, Bool.false_eq_true, List.cons_append]
+      rw [ih]
+    · have hj := hpos j List.mem_cons_self
+      obtain ⟨r, hr⟩ : ∃ r, j.left = r + 1 := ⟨j.left - 1, by omega⟩
+      have hres : prefillLeft j = r + 1 := by simp [prefillLeft, hm, hr]
+      rw [List.map_cons, hres] at h
+      simp only [Serve.Shape] at h
+      have hnd : ∀ j' ∈ js, j'.mode ≠ .decode := by
+        intro j' hj' hm'
+        have := h (prefillLeft j') (List.mem_map.mpr ⟨j', hj', rfl⟩)
+        simp [prefillLeft, hm'] at this
+      have h0 : js.filter (·.mode = .decode) = [] := by
+        rw [List.filter_eq_nil_iff]; intro j' hj'; simpa using hnd j' hj'
+      have h1 : js.filter (·.mode ≠ .decode) = js := by
+        rw [List.filter_eq_self]; intro j' hj'; simpa using hnd j' hj'
+      unfold decodeFirstJobs
+      simp only [List.filter_cons, hm, decide_false, Bool.false_eq_true, ↓reduceIte, ne_eq,
+        not_false_eq_true, decide_true]
+      simp only [ne_eq] at h1
+      rw [h0, h1]; rfl
+
+/-- **The jobs' order is decode-first, in `Exec`** (`Serve.serve_eq_decode_first`
+for the fill): in the shape, the greedy fill of the jobs in their order is the
+greedy fill in decode-first order. -/
+theorem fillAmounts_eq_decode_first (js : List Job) (left : ℕ) (hpos : ∀ j ∈ js, 0 < j.left)
+    (h : Serve.Shape (js.map prefillLeft)) :
+    fillAmounts D js left = fillAmounts D (decodeFirstJobs js) left := by
+  rw [decodeFirstJobs_eq_self js hpos h]
+
+/-- The fill of two lists is the fill of the first, then the fill of the
+second from what the first leaves. -/
+theorem fillAmounts_append : ∀ (a b : List Job) (left : ℕ),
+    fillAmounts D (a ++ b) left =
+      fillAmounts D a left ++ fillAmounts D b (left - (fillAmounts D a left).sum)
+  | [], b, left => by simp [fillAmounts]
+  | j :: a, b, left => by
+    simp only [List.cons_append, fillAmounts, List.sum_cons, fillAmounts_append a b, Nat.sub_sub]
+
+/-- **The decoders are served first.** In the shape, each of the first `left`
+decoding jobs takes one token, and the prefills have the fill of what the
+decoders leave. -/
+theorem fillAmounts_decoders_first (js : List Job) (left : ℕ) (hpos : ∀ j ∈ js, 0 < j.left)
+    (h : Serve.Shape (js.map prefillLeft)) :
+    fillAmounts D js left =
+      fillAmounts D (js.filter (·.mode = .decode)) left ++
+        fillAmounts D (js.filter (·.mode ≠ .decode)) (left - (js.filter (·.mode = .decode)).length) := by
+  conv_lhs => rw [← decodeFirstJobs_eq_self js hpos h]
+  unfold decodeFirstJobs
+  rw [fillAmounts_append, fillAmounts_sum]
+  have hw : ((js.filter (·.mode = .decode)).map (wantOf D)).sum = (js.filter (·.mode = .decode)).length := by
+    have : ∀ j ∈ js.filter (·.mode = .decode), wantOf D j = 1 := by
+      intro j hj
+      obtain ⟨hjs, hm⟩ := List.mem_filter.mp hj
+      have := hpos j hjs
+      simp only [decide_eq_true_eq] at hm
+      simp [wantOf, hm]; omega
+    rw [List.map_congr_left this]; simp
+  rw [hw]
+  congr 2
+  omega
+
+/-- The fill keeps the shape (`Serve.serve_preserves_shape`), without a cap. -/
+theorem fill_preserves_shape (hc : D.chunk = 0) (js : List Job) (left : ℕ)
+    (hpos : ∀ j ∈ js, 0 < j.left) (h : Serve.Shape (js.map prefillLeft)) :
+    Serve.Shape ((js.zip (fillAmounts D js left)).map fun p => prefillLeft p.1 - p.2) := by
+  rw [← serve_fillAmounts D hc js left hpos]
+  exact Serve.serve_preserves_shape left _ h
+
+/-- A chunk cap breaks it (`Serve.chunk_cap_breaks_shape`): two prefills of 5
+and 3 tokens, budget 8, cap 4. -/
+theorem chunk_cap_breaks_fill_shape (hc : D.chunk = 4) :
+    Serve.Shape (([⟨0, .prefill, 5, none⟩, ⟨1, .prefill, 3, none⟩] : List Job).map prefillLeft) ∧
+    ¬ Serve.Shape (((([⟨0, .prefill, 5, none⟩, ⟨1, .prefill, 3, none⟩] : List Job)).zip
+        (fillAmounts D [⟨0, .prefill, 5, none⟩, ⟨1, .prefill, 3, none⟩] 8)).map
+        fun p => prefillLeft p.1 - p.2) := by
+  rw [← serveCap_fillAmounts D (by omega) _ 8 (by simp), hc]
+  exact Serve.chunk_cap_breaks_shape
+
+/-- **`assign` serves decode-first.** Under the hypotheses of
+`assign_iter_eq_fillIter`, with every job holding work and the jobs in the
+shape, the iteration `assign` builds is the greedy fill in decode-first order. -/
+theorem assign_decode_first (hD : D.only = none) (pre0 f left : ℕ) (M : Machine)
+    (hq : engineQueuesEmpty D M) (hnd : (M.jobs.map (·.owner)).Nodup)
+    (hcov : ∀ j ∈ M.jobs, ∀ p, j.growing = some p →
+        ∃ a x, holdOn (getS M j.owner) p = some (a, x) ∧ x + wantOf D j ≤ a)
+    (hf : M.jobs.length < f) (hpos : ∀ j ∈ M.jobs, 0 < j.left)
+    (h : Serve.Shape (M.jobs.map prefillLeft)) :
+    (assign D f M 0 left pre0).iter = M.iter ++ fillIter D (decodeFirstJobs M.jobs) left := by
+  rw [assign_iter_eq_fillIter D hD pre0 f M 0 left hq hnd (by simpa using hcov) (by omega),
+    List.drop_zero, decodeFirstJobs_eq_self _ hpos h]
 
 end Exec
 end SerqLang

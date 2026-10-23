@@ -68,7 +68,7 @@ and §4 is about the distance between the two.
 | Process (Def. 5) | $X(t) = \Phi_t(\xi)$, a generalised semi-Markov process, total: a path either has finitely many transitions in $[0,t]$ or ends in the error state the run time reports | the object the theorems are about |
 | Prop. 1 | $\Phi$ deterministic; one seed fixes, across machines, the arrivals and the marks of every (session, turn) | proved |
 | Prop. 2 | $U_m + \lvert\mathcal C_m\rvert \le M_m$ on every path | proved for `Core.Step`'s five commands; asserted on every run of the interpreter |
-| Prop. 3 | the prefill queue is a FIFO queue whose per-slot capacity is $B - d_\ell$ | proved per iteration by `Fill.lean`; the order step argued |
+| Prop. 3 | the prefill queue is a FIFO queue whose per-slot capacity is $B - d_\ell$ | proved per iteration by `Fill.lean`, the order step included; the order along a path a hypothesis |
 | Prop. 4 | Markov on the configuration space; a countable chain at integer times under `cost 1` and integer marks | proved |
 | Prop. 5 | dead cache entries do not change what a live session sees: the process regenerates when empty | eviction step proved (`Regen.lean`); path lift a conjecture |
 
@@ -370,9 +370,11 @@ oracle and differential-test run (§6, item 6).
 **Proposition 3 (The prefill queue is a FIFO queue in the environment of
 the decode batch).** Consider one step stage with `serve admission`, no
 chunk cap, $d_\ell \le B$ decoding residents at the start of iteration $\ell$,
-nobody waiting at the pools it admits for, distinct owners for its
-residents, every `growing` resident's allocation already covering the
-position it reaches in the iteration (no block boundary crossed), and no
+every decoding resident ahead of every prefilling one (`Serve.Shape` of
+the residents' `prefillLeft`), nobody waiting at the pools it admits for,
+distinct owners for its residents, every `growing` resident's allocation
+already covering the position it reaches in the iteration (no block
+boundary crossed), and no
 preemption of the prefills considered — all of it at every iteration
 $\ell_0 < \ell' \le \ell$ below. Let $\mathrm{ahead}_\ell(k)$ be the tokens iteration $\ell$
 gives to the prefilling residents admitted before $k$,
@@ -385,17 +387,19 @@ $g_0 + \sum_{\ell_0 < \ell' \le \ell} \min(\mathrm{rem}_{\ell'}(k),\ B - d_{\ell
 iteration $\ell'$ lasts $\tau(\text{batch}_{\ell'})$.
 
 *Proof.* `Fill.assign_eq_fillIter` (no growing job, `engineQueuesEmpty`,
-`Fill.lean:228`) and `assign_iter_eq_fillIter` (growing jobs whose
+`Fill.lean:256`) and `assign_iter_eq_fillIter` (growing jobs whose
 allocation covers the position they reach, distinct owners, nobody
-waiting, `Fill.lean:154`): the iteration's assignment *is* `fillIter`,
+waiting, `Fill.lean:182`): the iteration's assignment *is* `fillIter`,
 which serves in order (`fillAmounts_fifo`), gives no job more than it
 wants (`fillAmounts_le_want`) and hands out the budget or all that is
-wanted (`fillAmounts_sum`). In admission order without a cap the fill is
-decode-first, so the $d_\ell$ decoders take one token each before any
-prefill: `Serve.serve_eq_decode_first`, which is a theorem about an
-abstraction (`List ℕ` of remaining works, `Serve.lean:34`) not yet
-connected to `Exec.assign` by a theorem, so this step is argued, not
-proved end to end. The iteration $\ell_0$ of the admission itself has a
+wanted (`fillAmounts_sum`). In the shape the fill is decode-first:
+`assign_decode_first` (`Fill.lean:475`) makes the iteration the fill of the
+residents in decode-first order, and `fillAmounts_decoders_first`
+(`Fill.lean:435`) splits that fill: the $d_\ell \le B$ decoders take one
+token each, and the prefills have the fill of the $B - d_\ell$ they leave.
+`serve_fillAmounts` is the link to `Serve`: the fill leaves the jobs what
+`Serve.serve` leaves the residents, so `Serve`'s shape theorems hold of
+`Exec`'s jobs. The iteration $\ell_0$ of the admission itself has a
 non-empty queue and is outside both `Fill` theorems, which is why its
 contribution enters as the datum $g_0$.
 
@@ -406,20 +410,26 @@ arrivals, whose service capacity per slot is $B - d_\ell$ tokens and whose
 slot length is $\tau(\text{batch}_\ell)$, both functions of the state, is
 the natural extension and is a conjecture. The paper models the prefill
 stage as "a FIFO queue whose server is available a fraction $1 - \rho_D$
-of the time" (`main.tex:318-320`, verbatim); identifying that server with
+of the time" (`main.tex:328-329`, verbatim); identifying that server with
 this queue at the constant per-slot capacity $(1 - \rho_D) B$ is this
 document's reading. The decode-first order is the invariant `Shape`
-(`Serve.lean:27-31`, decoders before prefills in the residents' list),
-carried by `shape_append_prefill` under FIFO admission and
-`serve_preserves_shape` under the fill, and broken by preemption, which
-re-queues a resident; the paper's proof marker on its decode-first
-sentence (`main.tex:317`, `\provedby{serve_preserves_shape, …}`) inherits
-the same `List ℕ`-to-`Exec.assign` gap. The hypotheses are the
-theorems': a chunk cap breaks the order (`chunk_cap_breaks_shape`), and
-an iteration whose growth crosses a block boundary or that admits while
-filling is not yet covered by `Fill.lean` (`Fill.lean:16-19`). `vllm.sq`'s
-decodes grow `kv` by a block every `bs` tokens, so the proposition covers
-its iterations between boundary crossings, not all of them.
+(`Serve.lean:34-37`, decoders before prefills in the residents' list),
+carried by `shape_append_prefill` under FIFO admission and, for one
+iteration of `Exec`, by `fill_preserves_shape`, and broken by preemption,
+which re-queues a resident. That a path keeps `Exec`'s job list in the
+shape is a hypothesis, not a theorem, and it fails for an engine whose
+requests hold no memory: none is admitted, so a decode joins behind the
+prompts that arrived while it prefilled (`dai_sarathi.sq`,
+`DaiChain.absSlot_leaves_shape`; which of the program and the language
+changes is #734). The paper's proof marker on its
+decode-first sentence (`main.tex:326`, `\provedby{serve_preserves_shape,
+…}`) holds of one iteration of `Exec` under that hypothesis. The
+hypotheses are the theorems': a chunk cap breaks the order
+(`chunk_cap_breaks_fill_shape`), and an iteration whose growth crosses a
+block boundary or that admits while filling is not yet covered by
+`Fill.lean` (`Fill.lean:31-34`). `vllm.sq`'s decodes grow `kv` by a block
+every `bs` tokens, so the proposition covers its iterations between
+boundary crossings, not all of them.
 
 **Proposition 4 (Markov structure).** (i) For every workload,
 $(X(t))_{t \ge 0}$ is a Markov process on the configuration space, a Polish

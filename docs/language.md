@@ -1101,9 +1101,10 @@ admission sequence number, `remaining`, the tokens its run has left, and
 `running.count`, `running.decoding`, `running.kv_decode`,
 `running.kv_prefill`; ties in admission order; a key may not draw), or
 `admission` (the order their sessions were admitted, vLLM's `running`
-list; the default), which is `by` with no keys, where every request ties,
-or `decode first`, which is `by (decoding ? 0 : 1)`; of the orders, the IR
-knows only `by`. A scheduler that serves the shortest remaining run first
+list; on an engine whose requests hold nothing, none is admitted and they
+are served in the order their runs started; the default), which is `by`
+with no keys, where every request ties, or `decode first`, which is `by
+(decoding ? 0 : 1)`; of the orders, the IR knows only `by`. A scheduler that serves the shortest remaining run first
 is `advance running by (remaining)`, the opposite `by (-remaining)`. One
 token to a decoding run, up to `each at most` to a prefilling one (with a
 `granule g`, short of its remainder, a multiple of `g`, none when that is
@@ -1136,10 +1137,23 @@ reservation is above the cap.
 batch: a running prefill takes precedence, otherwise a waiting prefill that
 fits displaces the tentative decodes and takes the full budget, and once a
 prefill is selected nothing more is admitted in that iteration
-([Engine](api/engine.md#exclusive-prefill)). Without a per-request chunk
-cap, serving in admission order *is* serving decode-first
-(`SerqLang.Serve.serve_eq_decode_first`; a cap breaks it,
-`chunk_cap_breaks_shape`).
+([Engine](api/engine.md#exclusive-prefill)). Serving in admission order
+*is* serving decode-first while every decoding request is ahead of every
+prefilling one, in an iteration that grows no hold past what it already
+holds, admits no one (its engine's queues are empty) and has no `only`,
+with one job per session and work left in each
+(`SerqLang.Exec.assign_decode_first`, its `hcov`, `hq`, `hD`, `hnd` and `hpos`;
+a growth past the hold can preempt and an admission adds a request, and
+neither is proved yet). Without a per-request chunk cap the fill of such
+an iteration keeps that order (`fill_preserves_shape`), and admission
+would too: it adds a prefilling request at the end, and a request decodes
+in the place its admission gave it (`Serve.shape_append_prefill`, not yet
+a theorem of `Exec`). A cap
+breaks it (`chunk_cap_breaks_fill_shape`), and so does an engine whose
+requests hold nothing (Dai et al.'s, `examples/papers/dai_sarathi.sq`):
+none is admitted, so they are served in the order
+their runs started, and a request's decode waits behind the prompts that
+arrived while it prefilled (`SerqLang.Papers.DaiChain.absSlot_leaves_shape`).
 
 `only (p)` on `advance running` and `admit waiting` says which requests
 the iteration serves; the order says in what order:

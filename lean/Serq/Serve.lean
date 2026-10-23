@@ -3,8 +3,9 @@
 
 A decode-first replica serves prefill "from the token budget the decode
 batch leaves": decoding turns first, prefill after. vLLM
-v1 serves its running requests in admission order (`scheduler.py`,
-`running` list) and gives each `min(remaining, budget left)` tokens. The
+v1 serves its running requests in admission order (`scheduler.py:626`,
+`running` list) and gives each `min(remaining, budget left)` tokens
+(`scheduler.py:670-679`, at the pin `0c87a197`). The
 two rules coincide whenever every decoding resident precedes every
 prefilling one. This module proves that a greedy step preserves that
 shape when a prefill may take the whole budget left (no per-request chunk
@@ -18,6 +19,11 @@ prefilling one `min(r, left)` (or `min(r, c, left)` with a cap `c`).
 
 Key theorems: `serve_preserves_shape`, `decodeFirst_eq_self`,
 `serve_eq_decode_first`, `chunk_cap_breaks_shape`.
+
+These steps are the engine's: `Exec.serve_fillAmounts` and
+`Exec.serveCap_fillAmounts` (`Serq/Fill.lean`) show that the greedy fill of
+an iteration leaves its jobs what `serve` and `serveCap` leave the residents,
+and `Exec.assign_decode_first` is the conclusion for an iteration of `Exec`.
 -/
 import Mathlib.Tactic
 

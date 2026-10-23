@@ -70,6 +70,14 @@ import papers.KongPoisson
 #print axioms SerqLang.Exec.fillAmounts_le_want
 #print axioms SerqLang.Exec.fillAmounts_sum
 #print axioms SerqLang.Exec.assign_iter_eq_fillIter
+#print axioms SerqLang.Exec.serve_fillAmounts
+#print axioms SerqLang.Exec.serveCap_fillAmounts
+#print axioms SerqLang.Exec.decodeFirst_prefillLeft
+#print axioms SerqLang.Exec.fillAmounts_eq_decode_first
+#print axioms SerqLang.Exec.fillAmounts_decoders_first
+#print axioms SerqLang.Exec.fill_preserves_shape
+#print axioms SerqLang.Exec.chunk_cap_breaks_fill_shape
+#print axioms SerqLang.Exec.assign_decode_first
 -- dead cache entries are irrelevant to the live ones under LRU (Serq/Regen.lean)
 #print axioms SerqLang.Exec.makeRoom_fuel
 #print axioms SerqLang.Exec.makeRoom_dead_irrelevant
@@ -132,12 +140,13 @@ import papers.KongPoisson
 #print axioms SerqLang.Papers.BariNodes.hit_idle_le
 #print axioms SerqLang.Papers.BariNodes.return_idle
 -- positive recurrence: from a set to a state, and the papers' chains on job lists
--- (Serq/Recurrence.lean, examples/papers/{Dai,Bari}{Sim,Recurrent}.lean)
+-- (Serq/Recurrence.lean, examples/papers/{Dai,Bari}{Sim,Recurrent}.lean, DaiChain.lean)
 #print axioms SerqLang.Foster.hit_le_of_reach
 #print axioms SerqLang.Foster.positiveRecurrent_of_hit
 #print axioms SerqLang.Exec.shareOf_fillIter_split
 #print axioms SerqLang.Slot.slot_jobs
 #print axioms SerqLang.Papers.DaiSim.simulation
+#print axioms SerqLang.Papers.DaiChain.absSlot_leaves_shape
 #print axioms SerqLang.Papers.DaiRecurrent.hit_nil_le
 #print axioms SerqLang.Papers.DaiRecurrent.irreducible
 #print axioms SerqLang.Papers.DaiRecurrent.positive_recurrent
