@@ -432,17 +432,30 @@ pub struct ConnectorSpec {
 #[derive(Clone, Debug, PartialEq)]
 pub enum ConnectorKind {
     /// An L2 queue (`queue C : l2`): its stage, whose bandwidth the copies
-    /// share, its pool (`C.kv`), and the time one token's copy takes.
+    /// share, its pool (`C.kv`), and the time one token's copy takes;
+    /// `link`, the engine's own link its copies also cross, when
+    /// `kvt.l2_link (C, Q, …)` declares one (#600).
     L2 {
         stage: Ref,
         pool: Ref,
         per_token: Expr,
+        link: Option<L2Link>,
     },
     /// The source of the KV relation of the engine's queue (`kvt.nixl_pull
     /// (C, Q, …)`, `kvt.nixl_push`): a load reads, from the lease the
     /// request's entry took `from C`, over the two NICs. `None` until the
     /// program is read, where the relation may be declared below.
     Relation(Option<Relation>),
+}
+
+/// `kvt.l2_link (C, Q, share = s);`: the copies of `Q`'s engine's
+/// `connector C`, its loads and its saves, hold `C`'s `serve` and `Q`'s NIC
+/// at once, divided by `s`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct L2Link {
+    /// The engine's queue's NIC, `Q.nic`.
+    pub nic: String,
+    pub share: crate::ir::Share,
 }
 
 /// A connector's KV relation, as `kvt.nixl_pull` or `kvt.nixl_push`

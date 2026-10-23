@@ -176,6 +176,23 @@ impl Report {
         Ok(d)
     }
 
+    /// Every engine that takes requests by name, in declaration order: its
+    /// admissions after warm-up, re-admissions and token hit
+    /// (`docs/design/engine-admissions.md`).
+    #[getter]
+    fn engines<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let d = PyDict::new(py);
+        for e in &self.0.engines {
+            d.set_item(&e.name, e.clone())?;
+        }
+        Ok(d)
+    }
+
+    /// The engine `name`, or `None` (`serq::Report::engine`).
+    fn engine(&self, name: &str) -> Option<serq::engine::report::EngineReport> {
+        self.0.engine(name).cloned()
+    }
+
     #[getter]
     fn pools(&self) -> Vec<serq::engine::report::PoolReport> {
         self.0.pools.clone()
@@ -706,6 +723,7 @@ fn pyserq(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Claim>()?;
     m.add_class::<serq::engine::report::StageReport>()?;
     m.add_class::<serq::engine::report::StatusReport>()?;
+    m.add_class::<serq::engine::report::EngineReport>()?;
     m.add_class::<serq::engine::report::PoolReport>()?;
     m.add_function(wrap_pyfunction!(compile, m)?)?;
     m.add_function(wrap_pyfunction!(run, m)?)?;

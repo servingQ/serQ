@@ -107,8 +107,14 @@ read it has ended, and keeps the second per program
   outputs.
 - `observe hit = E.reused > S` is any block of the program's own at the
   request's last admission. The engine records what each admission reused,
-  `E.reused` (vLLM's `prefix_cache_hits`), and prefilled, `E.prefill` (with
-  it, its queries).
+  `E.reused`, and prefilled, `E.prefill`, and the report's engine table
+  sums them over every admission
+  ([engine statistics](../reference/cli.md#engine-statistics)). vLLM's
+  `prefix_cache_hits` and `prefix_cache_queries` are the same sums over
+  first admissions only: the admission of a request preempted before is
+  counted apart (`metrics/stats.py:132-143`) and does not reach those
+  counters (`metrics/loggers.py:1052-1057`). The table's `readmits` counts
+  those admissions.
 
 ### The agents
 
@@ -266,12 +272,13 @@ cargo run --release -- run examples/multi-turn/thunderagent.sq --workload exampl
 cargo run --release -- run examples/multi-turn/thunderagent.sq --workload examples/workloads/closed_agents.sq --horizon 25000 --warmup 5000 --tr 0
 ```
 
-The report's `E.reused` and `E.prefill`, what the replicas' engine records
-of each admission, give the token hit rate of the tables below, reused
-over the two together (vLLM's `prefix_cache_hits` over
-`prefix_cache_queries`); the report's own `hit` row is something else, the
-share of turns whose last admission found a block of the program's own
-cached. Steps/min are `turns` × 60 / (horizon − warm-up). `resume_wait` is how long a paused program waited
+The `E` row's `token hit` in the report's engine table is the token hit
+rate of the tables below: `E.reused` over `E.reused` and `E.prefill`
+together, what the replicas' engine records of each admission, re-admissions
+after a preemption included (vLLM's `prefix_cache_hits` over
+`prefix_cache_queries` leaves those out; `readmits` counts them). The
+report's own `hit` row is something else, the share of turns whose last
+admission found a block of the program's own cached. Steps/min are `turns` × 60 / (horizon − warm-up). `resume_wait` is how long a paused program waited
 to be let in again. `tools/thunderagent/sweep.py` runs both modes over the
 agent counts, four seeds each, and prints the tables below. A run needs
 thousands of seconds before the agents' contexts settle: a 3 000 s run

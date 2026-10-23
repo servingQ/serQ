@@ -271,6 +271,25 @@ fn a_push_relation_says_push() {
     );
 }
 
+/// An engine's link to an L2 (#600): its mode is std/kvt's table's, the L2
+/// first, then the queue whose engine copies through it.
+#[test]
+fn an_l2_link_says_link() {
+    let src = read("examples/multi-turn/vllm_lmcache_replicas.sq");
+    let o = outline(&src);
+    assert_eq!(o.relations.len(), 1);
+    let r = &o.relations[0];
+    assert_eq!(
+        (r.mode.as_str(), r.source.as_str(), r.reader.as_str()),
+        ("link", "lmc", "E")
+    );
+    assert_eq!(text(&src, r.function), "l2_link");
+    assert_eq!(
+        text(&src, r.range),
+        "kvt.l2_link (lmc, E, share = share.maxmin);"
+    );
+}
+
 #[test]
 fn an_engine_outside_a_queue_is_a_declaration() {
     let src = read("examples/multi-turn/vllm.sq");

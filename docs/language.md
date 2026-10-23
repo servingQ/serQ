@@ -48,6 +48,7 @@ item     := let NAME = expr ;
           | queue NAME [ '[' expr ']' ] [ : ROLE [, ROLE]* ] { qitem* }   -- a station: its pools, stage and entries (below, *Queues*)
           | kvt.nixl_pull ( QUEUE , QUEUE [, latency = expr ] , share = POLICY ) ;   -- the source, its reader, the read (below, *Queues*)
           | kvt.nixl_push ( QUEUE , QUEUE [, latency = expr ] , share = POLICY ) ;   -- the source, its reader, the write
+          | kvt.l2_link ( QUEUE , QUEUE , share = POLICY ) ;   -- an L2, then a queue whose engine's connector copies through it over its `nic`
           | gauge NAME = expr ;              -- the time average of a function of the state (Gauges)
           | claim NAME [given ( expr )] : every iteration of ENGINE ( expr ) ;   -- a proposition about every path (Claims)
           | claim NAME [given ( expr )] : some iteration of ENGINE ( expr ) ;
@@ -237,8 +238,8 @@ inputs. Defaults and supplied expressions are resolved at link time; the
 result is the same IR as a program written with those values. An input that
 would change a parse-time array size is refused. See [std/args](api/std/args.md)
 for the full input contract. `use "std/kvt";` supplies the KV-transfer
-vocabulary ([std/kvt](api/std/kvt.md)), `kvt.nixl_pull (…)` and `kvt.nixl_push (…)`
-(below, *Queues*), and `use "std/share";` the sharing
+vocabulary ([std/kvt](api/std/kvt.md)), `kvt.nixl_pull (…)`, `kvt.nixl_push (…)`
+and `kvt.l2_link (…)` (below, *Queues*), and `use "std/share";` the sharing
 policies ([std/share](api/std/share.md)), `share.maxmin` and
 `share.bottleneck` (below, *Stages*).
 Syntax snippets elsewhere may show just a main body or one of its nested
@@ -670,6 +671,33 @@ keep their KV there: a load leaves the L2 its entry, and a save copies
 only the part of the session's entry it lacks. See [the KV-transfer
 library](https://github.com/servingQ/serQ/blob/main/docs/design/kv-transfer.md)
 for why the entry is the session's (*Known limitations*).
+
+The L2's `serve` is then every engine's link at once. Where each engine
+(each member of a family) reaches the L2 server over a NIC of its own, the
+queue declares it, `nic ps(φ);`, and an *L2 link* says the copies cross
+it:
+
+```serq
+queue E[J] : agg {
+  engine on gpu { … connector lmc { per_token (r); load (…); save (…); } … }
+  nic ps(1);   // the replica's own link to the server
+  …
+}
+kvt.l2_link (lmc, E, share = share.maxmin);
+```
+
+Each copy of `E[j]`'s connector, a load or a save, holds the L2's `serve`
+and `E.nic[j]` at once, `per_token` seconds a token at a rate of 1, divided
+by the relation's `share` (*Stages*): a copy goes at its link's speed, the
+L2's `serve` is the bandwidth all the links share, and both are `ps(φ)`
+with a constant φ in the same units. The L2 comes first, then the queue,
+both declared above; the queue has a `nic` and an engine whose connector
+names the L2, and one link per engine and L2. The links to one L2 are one
+fabric, with one policy. The `nic` is the queue's one NIC: a queue that is
+also a NIXL relation's end copies both over it, and the relation and the
+link are then one fabric too. A link takes no `latency` or `ttl`
+(`examples/multi-turn/vllm_lmcache_replicas.sq`, [the L2
+link](https://github.com/servingQ/serQ/blob/main/docs/design/l2-link.md)).
 
 `transfer on L[k], M[l] (n) from S to P (m)` names the stages itself, as
 a `server` does: link queues, or any `ps` stages. `latency x` on a link's
@@ -1395,7 +1423,11 @@ engine's records are attributes the caller reads after the call: `E.reused`
 prefill computes), `E.admitted` (when) and `E.first` (when its first token
 was sampled); a connector adds `E.loaded`, `E.saved` and `E.load_done`
 (below). `E.reused`, `E.prefill` and `E.loaded` are observations of the
-report too, one per admission.
+report too, one per admission. The report's engine table reads them per
+engine: its admissions, the re-admissions after a preemption, and
+`token_hit`, `Σ E.reused / Σ request.known`, the share of the admitted
+tokens its cache gave; tokens a connector loaded count in the denominator,
+not as hits ([engine statistics](reference/cli.md#engine-statistics)).
 
 The server, a gateway's `route` and the session may not run an engine's
 prefill or decode, nor hold a pool an engine admits (`pool P on E`, `pool
@@ -1427,7 +1459,9 @@ output it reads `save` (as `cache` is read) and, before it gives its pools
 back, copies to its entry in `C` the part of `n` tokens the entry lacks
 (LMCache's `request_finished` keeps the blocks until the save is done,
 `lmcache_mp_connector.py:952`). `per_token` may not read `cached` or
-`computed`, which during a copy are the L2 entry's.
+`computed`, which during a copy are the L2 entry's. Under `kvt.l2_link
+(C, Q, …)` both copies also cross the engine's own link, `Q.nic` of its
+member, at once with `C`'s bandwidth (*Queues*).
 
 A queue's engine's `connector P { load (n); }` reads instead from the
 source of its queue's KV relation (`kvt.nixl_pull (P, D, …)`,
@@ -1794,6 +1828,7 @@ file `examples/pairs.json` gives it, from `examples/workloads/`
 | `multi-turn/thunderagent.sq` | ThunderAgent's router in TR mode in front of two vLLM replicas, a fixed number of agents at once ([use case](use-cases/thunderagent.md)) | the source (ThunderAgent at 7ddc861), read; `tests/thunderagent.rs` against the router's default mode; no oracle |
 | `multi-turn/vllm.sq` | vLLM v1's engine, under a multi-turn agent workload and, from `examples/pairs.json`, a person's chat, single turns and an approximated subagent workload ([use case](use-cases/workloads.md)) | `tests/paired.rs` |
 | `multi-turn/vllm_lmcache.sq` | `vllm.sq` with an LMCache server as its L2 (`queue lmc : l2`, the engine's `connector lmc { … }`) | the source (the LMCache connector at vLLM v0.31.0, the scheduler at 0c87a197); `tests/connector.rs`; no scheduler oracle |
+| `multi-turn/vllm_lmcache_replicas.sq` | two `vllm_lmcache.sq` replicas (without its long-prefill threshold) sharing one LMCache server, each over its own link (`nic ps(1);`, `kvt.l2_link (lmc, E, …)`), a turn sent to the least loaded | the source (vLLM at 0c87a197); `tests/l2_link.rs` on the issue's pair; no scheduler oracle |
 | `multi-turn/vllm_system_prompt.sq` | `vllm.sq` serving the sessions of `M` products, each with its own system prompt, shared across sessions (its admission's `prefix (product: floor(S, bs), serial: inf)`) | the source (vLLM at 0c87a197); `tests/shared_prefix.rs`; no scheduler oracle |
 | `oracle/vllm_shared_prompt.sq` | `vllm_replay.sq` with a system prompt every session shares (its admission's `prefix (system: floor(S, bs), serial: inf)`), on the scenario `tools/oracle/shared_trace` | the upstream oracle, `tests/vllm_cache.rs`; no Lean theorem |
 | `oracle/vllm_request.sq` | one vLLM v1 request on the step clock, compiled per scenario to `tools/oracle/{adaptive,alone,chunked,hol,longchunk,mixed,preempt,seqcap}.ir.json` | the upstream oracle ([vLLM correspondence](#7-vllm-v1-as-a-serq-program)), `tests/vllm_oracle.rs`, the Lean theorems generated from the same IR |

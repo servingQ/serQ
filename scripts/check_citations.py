@@ -61,6 +61,8 @@ PATHS = {
     "kv_cache_utils.py": "vllm/v1/core/kv_cache_utils.py",
     "sched/utils.py": "vllm/v1/core/sched/utils.py",
     "metrics/stats.py": "vllm/v1/metrics/stats.py",
+    # the Prometheus logger: which of the scheduler's stats reach its counters
+    "metrics/loggers.py": "vllm/v1/metrics/loggers.py",
     "output_processor.py": "vllm/v1/engine/output_processor.py",
     # vLLM's benchmark client: what a client counts of a request
     "benchmarks/serve.py": "vllm/benchmarks/serve.py",
@@ -81,7 +83,9 @@ PATHS = {
     "nixl/connector.py": "vllm/distributed/kv_transfer/kv_connector/v1/nixl/connector.py",
     "nixl/pull_worker.py": "vllm/distributed/kv_transfer/kv_connector/v1/nixl/pull_worker.py",
     "nixl/base_worker.py": "vllm/distributed/kv_transfer/kv_connector/v1/nixl/base_worker.py",
-    "kv_connector/v1/base.py": "vllm/distributed/kv_transfer/kv_connector/v1/base.py",
+    # the KV connector's base class, cited `kv_connector/v1/base.py:…`: `CITE`
+    # reads one directory before the file, so the key is the last two parts
+    "v1/base.py": "vllm/distributed/kv_transfer/kv_connector/v1/base.py",
     "kv_connector/factory.py": "vllm/distributed/kv_transfer/kv_connector/factory.py",
     "factory.py": "vllm/distributed/kv_transfer/kv_connector/factory.py",
     "lmcache_mp_connector.py": "vllm/distributed/kv_transfer/kv_connector/v1/lmcache_mp_connector.py",

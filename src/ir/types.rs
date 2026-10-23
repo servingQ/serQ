@@ -312,7 +312,7 @@ impl Program {
                         k,
                     ));
                 }
-                for child in children(st) {
+                for child in st.blocks() {
                     server_body(p, child)?;
                 }
             }
@@ -321,7 +321,7 @@ impl Program {
         for (b, block) in self.blocks.iter().enumerate() {
             for (k, st) in block.iter().enumerate() {
                 if self.sides[b][k] == Side::Server {
-                    for child in children(st) {
+                    for child in st.blocks() {
                         server_body(self, child)?;
                     }
                 }
@@ -793,17 +793,6 @@ impl Program {
         // Turn programs cannot construct costs, so need no dynamic frame.
         walk(self, self.turn, &mut ready)?;
         walk(self, self.session, &mut ready)
-    }
-}
-
-fn children(st: &CStmt) -> Vec<BlockId> {
-    match st {
-        CStmt::Hold { body, .. }
-        | CStmt::Loop(body)
-        | CStmt::While(_, body)
-        | CStmt::Fork(body) => vec![*body],
-        CStmt::Branch(_, a, b) => vec![*a, *b],
-        _ => vec![],
     }
 }
 

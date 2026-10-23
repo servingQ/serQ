@@ -793,7 +793,26 @@ fn sets_always(stmts: &[Stmt], name: &str) -> bool {
         Stmt::End => true,
         Stmt::Branch(_, a, b) => sets_always(a, name) && sets_always(b, name),
         Stmt::Hold { body, .. } => sets_always(body, name),
-        _ => false,
+        // a `while` may not run, and a leg's `set` is its own; a `loop`'s
+        // body is not looked into, which is the safe answer
+        Stmt::Loop(_) | Stmt::While(..) | Stmt::Fork(_) => false,
+        // every statement is named, so a new one that holds a block does
+        // not compile until this says whether its block always runs (#740)
+        Stmt::Side(_)
+        | Stmt::Route(_)
+        | Stmt::Declare(..)
+        | Stmt::Turn
+        | Stmt::Request
+        | Stmt::Observe(..)
+        | Stmt::Grow(..)
+        | Stmt::Shrink(..)
+        | Stmt::Drop(_)
+        | Stmt::Release(_)
+        | Stmt::Load(..)
+        | Stmt::Run { .. }
+        | Stmt::Call { .. }
+        | Stmt::EngineRequest { .. }
+        | Stmt::Unread(_) => false,
     })
 }
 
@@ -897,6 +916,84 @@ fn is_pure(name: &str) -> bool {
 /// instead: one spelling for one admission.
 /// The modules `use "std/NAME";` imports, by the name a program calls them.
 pub(crate) const STD_MODULES: [&str; 3] = ["args", "kvt", "share"];
+
+/// What a std/kvt relation declares: NIXL's two modes of one copy from a
+/// source to its reader, or an engine's link to the L2 its connector copies
+/// through (#600).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum KvtMode {
+    Pull,
+    Push,
+    Link,
+}
+
+impl KvtMode {
+    /// As the outline names it.
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            KvtMode::Pull => "pull",
+            KvtMode::Push => "push",
+            KvtMode::Link => "link",
+        }
+    }
+}
+
+/// A relation std/kvt declares, `kvt.NAME (FIRST, SECOND, name = …);`.
+pub(crate) struct KvtRelation {
+    pub(crate) function: &'static str,
+    pub(crate) mode: KvtMode,
+    /// Its two queues, as a refusal writes them.
+    pub(crate) queues: &'static str,
+    /// The arguments it takes by name.
+    pub(crate) named: &'static [&'static str],
+}
+
+/// The relations std/kvt declares. Every site that names them, their modes
+/// or their arguments reads this table. An L2's copy posts no NIXL READ to
+/// wait for (`latency`), nor a send to keep (`ttl`).
+pub(crate) const KVT_RELATIONS: [KvtRelation; 3] = [
+    KvtRelation {
+        function: "nixl_pull",
+        mode: KvtMode::Pull,
+        queues: "SOURCE, READER",
+        named: &["latency", "share", "ttl"],
+    },
+    KvtRelation {
+        function: "nixl_push",
+        mode: KvtMode::Push,
+        queues: "SOURCE, READER",
+        named: &["latency", "share", "ttl"],
+    },
+    KvtRelation {
+        function: "l2_link",
+        mode: KvtMode::Link,
+        queues: "L2, QUEUE",
+        named: &["share"],
+    },
+];
+
+/// The relation of std/kvt named `function`.
+pub(crate) fn kvt_relation(function: &str) -> Option<&'static KvtRelation> {
+    KVT_RELATIONS.iter().find(|r| r.function == function)
+}
+
+/// `KVT_RELATIONS`, written as a program declares them.
+fn kvt_relations() -> String {
+    and_list(
+        KVT_RELATIONS
+            .iter()
+            .map(|r| format!("`kvt.{} ({}, …);`", r.function, r.queues)),
+    )
+}
+
+/// `a`, `a and b`, `a, b and c`.
+fn and_list(items: impl IntoIterator<Item = String>) -> String {
+    let all: Vec<String> = items.into_iter().collect();
+    match all.split_last() {
+        Some((last, rest)) if !rest.is_empty() => format!("{} and {last}", rest.join(", ")),
+        _ => all.concat(),
+    }
+}
 
 pub(crate) fn retired(word: &str) -> Option<&'static str> {
     RETIRED
@@ -1443,7 +1540,33 @@ fn always_leaves_kv(stmts: &[Stmt], request_kv: bool) -> bool {
             Stmt::Hold { body, .. } if leases(body) => return true,
             Stmt::Branch(_, a, b) if leases(a) && leases(b) => return true,
             Stmt::End => return false,
-            _ => {}
+            // a hold, an `if` or a request that leaves none on every way; a
+            // `loop`'s or a `while`'s body, not looked into (the safe
+            // answer); a leg, which may not lease
+            Stmt::Hold { .. }
+            | Stmt::Branch(..)
+            | Stmt::EngineRequest { .. }
+            | Stmt::Loop(_)
+            | Stmt::While(..)
+            | Stmt::Fork(_) => {}
+            // every statement is named, so a new one that holds a block
+            // does not compile until this says whether its block leases (#740)
+            Stmt::Side(_)
+            | Stmt::Route(_)
+            | Stmt::Declare(..)
+            | Stmt::Turn
+            | Stmt::Request
+            | Stmt::Set(..)
+            | Stmt::Observe(..)
+            | Stmt::Grow(..)
+            | Stmt::Shrink(..)
+            | Stmt::Drop(_)
+            | Stmt::Release(_)
+            | Stmt::Load(..)
+            | Stmt::Run { .. }
+            | Stmt::Choose { .. }
+            | Stmt::Call { .. }
+            | Stmt::Unread(_) => {}
         }
     }
     false
@@ -2818,9 +2941,10 @@ impl Parser {
     }
 
     /// `kvt.nixl_pull (P, D, latency = x);` and `kvt.nixl_push (P, D, …);`:
-    /// NIXL's two modes of one copy from `P` to `D`, from std/kvt
-    /// (`copy_relation`). std/kvt is a namespace the parser defines, as
-    /// std/args is: a connector is a function here.
+    /// NIXL's two modes of one copy from `P` to `D` (`copy_relation`); and
+    /// `kvt.l2_link (C, Q, share = s);`, the link `Q`'s engine's L2 copies
+    /// cross (`l2_link`). From std/kvt (`KVT_RELATIONS`), a namespace the
+    /// parser defines, as std/args is: a connector is a function here.
     fn kvt_call(&mut self, prog: &mut Program) -> PResult<()> {
         let at = self.pos;
         self.advance(); // `kvt`
@@ -2831,16 +2955,16 @@ impl Parser {
             return self.err_at(at, format!("`kvt.{function}` needs `use \"std/kvt\";`"));
         }
         // a module's functions, not keywords (`args.number` likewise)
-        let push = function == "nixl_push";
-        if !push && function != "nixl_pull" {
+        let Some(relation) = kvt_relation(&function) else {
             return self.err_at(
                 f_at,
                 format!(
-                    "std/kvt has no function `{function}`; it has \
-                     `nixl_pull (SOURCE, READER, …)` and `nixl_push (SOURCE, READER, …)`"
+                    "std/kvt has no function `{function}`; it declares {}",
+                    kvt_relations()
                 ),
             );
-        }
+        };
+        let (mode, named) = (relation.mode, relation.named);
         self.expect(&Tok::LParen)?;
         let a_at = self.pos;
         let source = self.ident()?;
@@ -2855,21 +2979,20 @@ impl Parser {
             let name = self.ident()?;
             // the arguments' names, not keywords (`share` is std/share's)
             let (is_latency, is_share) = (name == "latency", name == "share");
-            let is_ttl = name == "ttl";
-            let given = if is_latency {
-                latency.is_some()
-            } else if is_share {
-                share.is_some()
-            } else if is_ttl {
-                ttl.is_some()
-            } else {
+            let given = if !named.contains(&name.as_str()) {
                 return self.err_at(
                     n_at,
                     format!(
-                        "`kvt.{function}` takes `latency = …`, `share = …` and `ttl = …`, \
-                         found `{name}`"
+                        "`kvt.{function}` takes {}, found `{name}`",
+                        and_list(named.iter().map(|n| format!("`{n} = …`")))
                     ),
                 );
+            } else if is_latency {
+                latency.is_some()
+            } else if is_share {
+                share.is_some()
+            } else {
+                ttl.is_some()
             };
             if given {
                 return self.err_at(n_at, format!("`kvt.{function}` takes `{name}` once"));
@@ -2910,22 +3033,30 @@ impl Parser {
         }
         self.expect(&Tok::RParen)?;
         self.expect(&Tok::Semi)?;
-        // concurrent copies divide the NICs by a policy the relation names,
-        // which has no default
+        // concurrent copies divide the stages they cross by a policy the
+        // relation names, which has no default
         let Some(share) = share else {
+            let crossed = if mode == KvtMode::Link {
+                "the L2's `serve` and the NIC"
+            } else {
+                "the NICs"
+            };
             return self.err_at(
                 at,
                 format!(
-                    "`kvt.{function} ({source}, {reader})`: concurrent copies divide the NICs by \
-                     the policy the relation names; write `share = share.maxmin` or \
+                    "`kvt.{function} ({source}, {reader})`: concurrent copies divide {crossed} \
+                     by the policy the relation names; write `share = share.maxmin` or \
                      `share = share.bottleneck` (`use \"std/share\";`)"
                 ),
             );
         };
+        if mode == KvtMode::Link {
+            return self.l2_link(prog, at, (source, a_at), (reader, b_at), share);
+        }
         self.copy_relation(
             prog,
             at,
-            push,
+            mode == KvtMode::Push,
             (source, a_at),
             (reader, b_at),
             latency,
@@ -3092,8 +3223,9 @@ impl Parser {
         self.err_at(
             at,
             format!(
-                "std/kvt has no statement `{function}`; it declares `kvt.nixl_pull (…);` and \
-                 `kvt.nixl_push (…);`"
+                "std/kvt has no statement `{function}`; it declares {}, below the queues they \
+                 name",
+                kvt_relations()
             ),
         )
     }
@@ -4190,6 +4322,7 @@ impl Parser {
             latency: None,
             nic: false,
             takes: None,
+            links: vec![],
             at,
         });
         let qi = self.queues.len() - 1;
@@ -5786,6 +5919,145 @@ impl Parser {
             prefix,
             lease,
         })
+    }
+
+    /// `kvt.l2_link (C, Q, share = s);`: the copies of `Q`'s engine's
+    /// `connector C`, its loads and its saves, hold `C`'s `serve` and `Q`'s
+    /// NIC at once, divided by `s` (#600). The L2's contents are every
+    /// engine's; each engine (each member of a family) crosses its own link,
+    /// and the L2's `serve` is the bandwidth all of them share. Written
+    /// below both queues, so all it reads is known here.
+    fn l2_link(
+        &mut self,
+        prog: &mut Program,
+        at: usize,
+        (l2, l_at): (String, usize),
+        (reader, r_at): (String, usize),
+        share: crate::ir::Share,
+    ) -> PResult<()> {
+        let written = format!("`kvt.l2_link ({l2}, {reader})`");
+        for (q, q_at) in [(&l2, l_at), (&reader, r_at)] {
+            if !self.queues.iter().any(|d| d.name == *q) {
+                return self.err_at(
+                    q_at,
+                    format!(
+                        "{}\nhelp: declare `queue {q}` above the relation, or name a queue \
+                         that is",
+                        Code::CopyNoQueue
+                            .message(format_args!("{written}: no queue `{q}` is declared above"))
+                    ),
+                );
+            }
+        }
+        // the L2 first: its contents are what the link reaches
+        if self.cache_of(&l2).is_none_or(|(name, _)| name != l2) {
+            if self
+                .cache_of(&reader)
+                .is_some_and(|(name, _)| name == reader)
+            {
+                return self.err_at(
+                    at,
+                    format!(
+                        "{}\nhelp: fix-it: swap the two: `kvt.l2_link ({reader}, {l2}, …)`, \
+                         the L2 first, then the queue whose engine's connector copies \
+                         through it",
+                        Code::CopySwapped.message(format_args!(
+                            "{written}: `{l2}` plays no `l2`, and `{reader}` does: the L2 \
+                             comes first, then the queue whose engine copies through it"
+                        ))
+                    ),
+                );
+            }
+            return self.err_at(
+                l_at,
+                format!(
+                    "{written}: `{l2}` plays no `l2`; an engine's link reaches an L2 queue \
+                     (`queue {l2} : l2 {{ … serve ps(φ); }}`)"
+                ),
+            );
+        }
+        let qi = self
+            .queues
+            .iter()
+            .position(|d| d.name == reader)
+            .expect("checked above");
+        if !self.queues[qi].nic {
+            // its bandwidth is the program's: a help, no fix-it
+            return self.err_at(
+                r_at,
+                format!(
+                    "{}\nhelp: give `{reader}` a NIC, `nic ps(…);` above its entries: its own \
+                     link to `{l2}`",
+                    Code::CopyNoNic.message(format_args!(
+                        "{written}: queue `{reader}` has no `nic`; the link is `{reader}.nic`, \
+                         which the copies of its engine's `connector {l2}` cross"
+                    ))
+                ),
+            );
+        }
+        if let Some(&(_, first)) = self.queues[qi].links.iter().find(|(c, _)| *c == l2) {
+            let t = &self.toks[first];
+            return self.err_at(
+                at,
+                format!(
+                    "{written}: `{reader}` is linked to `{l2}` already, by the relation at \
+                     {}:{}: one link per engine and L2\nhelp: remove one of the two relations",
+                    t.line, t.col
+                ),
+            );
+        }
+        // what a request loads and saves is the program's to say, so no
+        // fix-it writes the connector (criterion 2): the help names it
+        let connector = format!("connector {l2} {{ per_token (r); load (n); save (n); }}");
+        let engine = prog.stages.iter_mut().find_map(|st| match &mut st.kind {
+            StageKind::Step(sp) if st.name == reader => Some(sp),
+            _ => None,
+        });
+        let (has, help) = match engine.map(|sp| sp.connector.as_mut()) {
+            Some(Some(ConnectorSpec {
+                queue,
+                kind: ConnectorKind::L2 { link, .. },
+                ..
+            })) if *queue == l2 => {
+                self.queues[qi].links.push((l2, at));
+                *link = Some(L2Link {
+                    nic: format!("{reader}.nic"),
+                    share,
+                });
+                return Ok(());
+            }
+            Some(Some(c)) => (
+                format!(
+                    "`{reader}`'s engine has `connector {}`, not `connector {l2}`",
+                    c.queue
+                ),
+                format!(
+                    "an engine has one connector: replace `connector {}` with `{connector}`",
+                    c.queue
+                ),
+            ),
+            Some(None) => (
+                format!("`{reader}`'s engine has no `connector {l2}`"),
+                format!(
+                    "in `{reader}`'s engine, write `{connector}`, the tokens a request loads \
+                     from `{l2}` and saves to it"
+                ),
+            ),
+            None => (
+                format!("`{reader}` has no engine"),
+                format!("give `{reader}` an engine with `{connector}`"),
+            ),
+        };
+        self.err_at(
+            at,
+            format!(
+                "{}\nhelp: {help}",
+                Code::CopyNoConnector.message(format_args!(
+                    "{written} is the link the copies of `{reader}`'s engine's `connector \
+                     {l2}` cross, and {has}: no copy would cross it"
+                ))
+            ),
+        )
     }
 
     /// `kvt.nixl_pull (P, D, latency = x);`: the KV the entries of `D`
