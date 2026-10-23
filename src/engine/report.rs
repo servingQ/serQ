@@ -133,10 +133,11 @@ pub struct PoolReport {
     /// Sessions preempted a second time without progress past their
     /// previous preemption: a livelock the run would otherwise hide.
     pub stuck: u64,
-    /// The run ended with the head of a queue asking this pool for more
-    /// than its cap: the queue's pool and what the head asks. A hold whose
-    /// units or `reserve` read the deployment's state is not rejected when
-    /// it joins the queue, and waits (#364).
+    /// The run ended with a hold waiting in a queue asking this pool for
+    /// more than its cap: the queue's pool and what the hold asks. The
+    /// queue's head, or under `queue … first fit` any of its waiters. A
+    /// hold whose units or `reserve` read the deployment's state is not
+    /// rejected when it joins the queue, and waits (#364).
     pub over_cap: Option<(String, f64)>,
     /// Holds waiting to grow in this pool when the run ends: a growth that
     /// did not fit and that the pool's `preempt` did not make room for
@@ -571,8 +572,8 @@ impl Report {
                 if let Some((queue, need)) = &p.over_cap {
                     let _ = writeln!(
                         s,
-                        "over: the head of pool `{queue}`'s queue asks `{}` for {need}, above \
-                         its cap, when the run ends, and waits (its hold reads the \
+                        "over: a hold waiting in pool `{queue}`'s queue asks `{}` for {need}, \
+                         above its cap, when the run ends, and waits (its hold reads the \
                          deployment's state, so joining the queue did not reject it)",
                         label(&p.name, p.index)
                     );

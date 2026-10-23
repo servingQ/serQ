@@ -179,7 +179,7 @@ exact; quantiles are within 0.5 %, and exact for a single value.
 | `mean_wait` | mean wait from a hold joining this pool's queue to its admission, after warm-up; a hold waits in the queue of its first pool, so a later pool of the hold has none |
 | `admissions`, `evicted_entries`, `evicted_units`, `preemptions`, `spills`, `rejected` | admission, eviction, preemption, spill and rejection counters |
 | `stuck` | sessions preempted again without progress past their previous preemption |
-| `over_cap` | `null`, or `{queue, need}` when that queue's head asks for more than this pool's capacity at the end of the run |
+| `over_cap` | `null`, or `{queue, need}` when a hold waiting in that queue asks for more than this pool's capacity at the end of the run: the queue's head, or under `queue … first fit` any of its waiters |
 | `growing_at_end` | holds waiting to grow in this pool when the run ends; the text report prints `grow:` |
 | `growing_stalled` | every session with an allocation in this pool is waiting to grow in it, so none will free room |
 

@@ -170,6 +170,13 @@ pub fn vllm(p: &Program) -> Result<Value, String> {
                 q.name
             ));
         }
+        if q.first_fit {
+            return refuse(format!(
+                "pool `{}` passes over a request that does not fit (`first fit`); vLLM stops \
+                 at the first that does not fit (scheduler.py:1228-1235)",
+                q.name
+            ));
+        }
         if q.spill.is_some() {
             return refuse(format!("pool `{}` spills; vLLM has no second tier", q.name));
         }

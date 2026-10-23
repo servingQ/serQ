@@ -270,7 +270,7 @@ fn the_adaptive_chunk_cap_is_taken_and_another_share_refused() {
 
 /// What vLLM's scheduler does not have since the iteration became a body:
 /// a body of its own (and with it a register), a held reservation, a
-/// request's legs.
+/// request's legs, a queue that passes over a request that does not fit.
 /// vLLM's schedule written out is vLLM: it lowers to no body.
 #[test]
 fn the_newer_constructs_are_refused_and_vllms_schedule_taken() {
@@ -315,6 +315,14 @@ fn the_newer_constructs_are_refused_and_vllms_schedule_taken() {
             "has its own schedule",
         ),
         ("reserve held;", "", vllm, hold, "holds its reservations"),
+        // vLLM stops at the first request that does not fit (#65)
+        (
+            "queue fifo first fit;",
+            "",
+            vllm,
+            hold,
+            "passes over a request that does not fit",
+        ),
     ] {
         let e = serq::target::vllm(&compile(reserve, state, schedule, h)).unwrap_err();
         assert!(e.contains(why), "{reserve} {schedule} {h}: {e}");

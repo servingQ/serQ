@@ -706,6 +706,7 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
                 preempt: preempt.clone(),
                 queue: queue.clone(),
                 queue_every,
+                first_fit: p.first_fit,
                 spill: spill.clone(),
                 reserve_held: p.reserve_held,
             });

@@ -1,0 +1,28 @@
+// Chapter 2, head-of-line blocking: 02-memory.sq with one clause changed.
+// The pool's queue admits the first request in its order that fits the
+// free units, where 02-memory.sq waits behind a head that does not.
+// Its workload: workloads/02-memory.sq.
+use "std/args";
+
+let S = 1.0;
+
+fn main() {
+  let C = args.number("C", 10);           // memory units
+
+  // --8<-- [start:pool]
+  pool mem { cap C; queue fifo first fit; }
+  // --8<-- [end:pool]
+  stage svc : fifo(4);
+
+  server (work_size, items) {
+    Cost processing = {
+      svc: S * work_size,
+      mem: items
+    };
+    set t0 = now;
+    hold mem (processing.mem) {
+      observe admit_wait = now - t0;
+      run svc (processing.svc);
+    }
+  }
+}

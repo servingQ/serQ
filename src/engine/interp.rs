@@ -3318,7 +3318,7 @@ impl<'p> Interp<'p> {
             // above them. A part that reads the deployment's state (a pool
             // or stage query, the clock, `budget_left`) may ask for less
             // later, so it is not judged now; one still over the cap when
-            // the run ends is named (`head_fits`, #364). A part of
+            // the run ends is named (`waiters_over_cap`, #364). A part of
             // attributes and numbers asks the same at every try: above the
             // cap, the request can never fit, and is rejected.
             let mut need: f64 = 0.0;
@@ -3482,21 +3482,44 @@ impl<'p> Interp<'p> {
         }
     }
 
-    /// Admit the selected waiting hold while every pool of its hold
-    /// has room; a selection that does not fit blocks the rest. A pool whose
-    /// queue is served by a stage (`admit_via`) is admitted from there.
+    /// Admit waiting holds while one fits every pool of its hold
+    /// (`first_fitting`): the selected one, or under `queue … first fit`
+    /// the first in the queue's order that fits. A pool whose queue is
+    /// served by a stage (`admit_via`) is admitted from there.
     fn try_admit(&mut self, pl: usize) {
         // an engine admits its queue; a pool under `queue … every`, its ticks
         if self.p.pools[pl].admit_via.is_some() || self.p.pools[pl].queue_every.is_some() {
             return;
         }
-        while let Some((index, sid)) = self.next_waiter(pl) {
-            let pending = self.pending_now(sid);
-            if !self.fits_all(&pending) {
-                break;
-            }
+        while let Some((index, sid, pending)) = self.first_fitting(pl) {
             self.pools[pl].queue.remove(index);
             self.admit(sid, pending);
+        }
+    }
+
+    /// The waiting hold of `pl`'s queue an admission takes now, with its
+    /// units evaluated now: its index in the queue, its session, its
+    /// request. The one selected, if it fits every pool it names; one that
+    /// does not fit stops the admission (head-of-line blocking, vLLM's `if
+    /// new_blocks is None: break`, scheduler.py:1228-1235). Under `queue …
+    /// first fit` one that does not fit is passed over and the next is
+    /// selected from the rest, the keys read again: each attempt reads the
+    /// queue from its head, and remembers what it passed over only until it
+    /// returns. A tick keeps its own list (`queue_tick`).
+    fn first_fitting(&mut self, pl: usize) -> Option<(usize, usize, Pending<'p>)> {
+        // the waiters not yet passed over, once one is
+        let mut rest: Option<Vec<usize>> = None;
+        loop {
+            let (index, sid) = self.next_waiter_among(pl, rest.as_deref())?;
+            let pending = self.pending_now(sid);
+            if self.fits_all(&pending) {
+                return Some((index, sid, pending));
+            }
+            if !self.p.pools[pl].first_fit || self.error.is_some() {
+                return None;
+            }
+            rest.get_or_insert_with(|| self.pools[pl].queue.iter().map(|e| e.sid).collect())
+                .retain(|&s| s != sid);
         }
     }
 
@@ -3510,25 +3533,34 @@ impl<'p> Interp<'p> {
             .all(|w| self.fits(w.pool, self.round_up(w.pool, w.need) - w.shared))
     }
 
-    /// The pools whose cap the head of a queue, evaluated as the run ends,
-    /// asks more than: `(the pool asked, the queue's pool, what it asks)`.
-    /// A hold whose units or `reserve` read the deployment's state was not
-    /// rejected when it joined (#364); one that still cannot fit is named
-    /// here, whether or not an admission tried it.
-    fn heads_over_cap(&mut self) -> Vec<(usize, usize, f64)> {
+    /// The pools whose cap a waiting hold, evaluated as the run ends, asks
+    /// more than: `(the pool asked, the queue's pool, what it asks)`. The
+    /// head of a queue, which blocks the rest; under `queue … first fit`
+    /// every waiter, since the others pass it and it would wait to the end
+    /// unseen. A hold whose units or `reserve` read the deployment's state
+    /// was not rejected when it joined (#364); one that still cannot fit is
+    /// named here, whether or not an admission tried it.
+    fn waiters_over_cap(&mut self) -> Vec<(usize, usize, f64)> {
         let error = self.error.clone();
         let mut over = vec![];
         for q in 0..self.pools.len() {
             if self.pools[q].queue.is_empty() {
                 continue;
             }
-            let Some((_, sid)) = self.next_waiter(q) else {
-                continue;
+            let waiters: Vec<usize> = if self.p.pools[q].first_fit {
+                self.pools[q].queue.iter().map(|e| e.sid).collect()
+            } else {
+                let Some((_, sid)) = self.next_waiter(q) else {
+                    continue;
+                };
+                vec![sid]
             };
-            let pending = self.pending_now(sid);
-            for w in &pending.pools {
-                if self.round_up(w.pool, w.need) > self.pools[w.pool].cap {
-                    over.push((w.pool, q, w.need));
+            for sid in waiters {
+                let pending = self.pending_now(sid);
+                for w in &pending.pools {
+                    if self.round_up(w.pool, w.need) > self.pools[w.pool].cap {
+                        over.push((w.pool, q, w.need));
+                    }
                 }
             }
         }
@@ -4757,8 +4789,10 @@ impl<'p> Interp<'p> {
 
     /// A tick of `pl` under `queue … every`: the holds that waited when it
     /// began are tried in the queue's order, each admitted one running
-    /// until it blocks before the next is tried, one that does not fit
-    /// passed over. A hold queued during the tick waits for the next.
+    /// until it blocks before the next is tried. The first that does not
+    /// fit ends the tick, unless `queue … first fit` passes it over; each
+    /// is tried once a tick. A hold queued during the tick waits for the
+    /// next.
     fn queue_tick(&mut self, pl: usize) {
         let dt = self.p.pools[pl].queue_every.expect("a queue tick");
         let k = self.pools[pl]
@@ -4770,7 +4804,10 @@ impl<'p> Interp<'p> {
             waiting.retain(|&s| s != sid);
             let pending = self.pending_now(sid);
             if !self.fits_all(&pending) {
-                continue;
+                if self.p.pools[pl].first_fit {
+                    continue;
+                }
+                break;
             }
             self.pools[pl].queue.remove(index);
             self.admit(sid, pending);
@@ -6027,7 +6064,9 @@ impl<'p> Interp<'p> {
     /// The stage's scheduler admits the selected waiting hold, with
     /// `left` tokens of this iteration's budget left (vLLM's waiting loop,
     /// scheduler.py:868-1128): the units are evaluated now, with
-    /// `budget_left(stage) = left`; the first that does not fit stops it.
+    /// `budget_left(stage) = left`; the first that does not fit stops it,
+    /// unless its queue says `first fit` (`first_fitting`), when a queue
+    /// none of whose waiters fits is passed over for the stage's next.
     /// Returns whether a session was admitted.
     fn admit_bound(&mut self, st: usize, left: f64) -> bool {
         for pl in 0..self.pools.len() {
@@ -6035,15 +6074,14 @@ impl<'p> Interp<'p> {
                 continue;
             }
             self.admit_budget = Some((st, left));
-            let Some((index, sid)) = self.next_waiter(pl) else {
-                self.admit_budget = None;
-                continue;
-            };
-            let pending = self.pending_now(sid);
+            let taken = self.first_fitting(pl);
             self.admit_budget = None;
-            if !self.fits_all(&pending) {
+            let Some((index, sid, pending)) = taken else {
+                if self.pools[pl].queue.is_empty() || self.p.pools[pl].first_fit {
+                    continue;
+                }
                 return false;
-            }
+            };
             self.pools[pl].queue.remove(index);
             self.admit(sid, pending);
             // run the admitted session's commands (zero time) until it
@@ -6599,7 +6637,7 @@ impl<'p> Interp<'p> {
                 itl_p99: s.steps.itl.quantile(0.99),
             })
             .collect();
-        let over = self.heads_over_cap();
+        let over = self.waiters_over_cap();
         let label = |q: usize| match p.pools[q].index {
             Some(i) => format!("{}[{i}]", p.pools[q].name),
             None => p.pools[q].name.clone(),

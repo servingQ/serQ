@@ -347,6 +347,8 @@ pub struct PoolDecl {
     pub queue: QueueOrder,
     /// `queue … every (dt)`: admissions at the pool's ticks only.
     pub queue_every: Option<Expr>,
+    /// `queue … first fit`: a waiter that does not fit is passed over.
+    pub first_fit: bool,
     pub spill: Option<Spill>,
     /// The engine whose scheduler serves the queue (`pool X on E`, `on E.DEVICE`), at
     /// the start of its iterations, while the iteration has budget left.

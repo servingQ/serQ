@@ -1,9 +1,11 @@
 //! A queue that admits at its ticks (`queue … every (dt)`,
 //! `docs/design/thunderagent.md`): the pool admits its waiting holds only
 //! at every multiple of `dt`, in the queue's order, each admitted one
-//! running until it blocks before the next is tried, one that does not fit
-//! passed over; a hold queued during a tick waits for the next.
-//! ThunderAgent's global waiting queue, drained at the router's tick.
+//! running until it blocks before the next is tried; the first that does
+//! not fit ends the tick, unless the queue says `first fit`
+//! (`docs/design/first-fit.md`), which passes it over. A hold queued during
+//! a tick waits for the next. ThunderAgent's global waiting queue, drained
+//! at the router's tick.
 
 mod common;
 
@@ -13,10 +15,14 @@ fn sessions(n: usize) -> String {
 }
 
 fn run(n: usize, src: &str) -> serq::Report {
+    run_to(n, src, 200.0)
+}
+
+fn run_to(n: usize, src: &str, horizon: f64) -> serq::Report {
     common::run(
         &common::main_source(src),
         &sessions(n),
-        &common::horizon(200.0),
+        &common::horizon(horizon),
     )
     .unwrap()
 }
@@ -43,28 +49,48 @@ fn a_tick_lets_the_waiters_in_in_its_order_one_after_another() {
     assert_eq!(r.observe("room_left").unwrap().samples, vec![2.0, 1.0, 0.0]);
 }
 
-/// A waiter that does not fit is passed over, not waited behind: serial 1
-/// asks 2 of the 1 that serial 2 leaves, and serial 0 goes in before it.
-/// Serial 1 goes in at the first tick after the others leave at t = 106,
-/// t = 110.
-#[test]
-fn a_waiter_that_does_not_fit_is_passed_over() {
-    let r = run(
+/// Serial 2 takes 1 of 2 units at the tick at t = 5, and serial 1 asks 2
+/// of the 1 left.
+fn tick_with_a_misfit(fit: &str) -> serq::Report {
+    run_to(
         3,
-        r#"
+        &format!(
+            r#"
         stage svc : fifo(4);
-        pool gate { cap 2; queue by (-serial) every (5); }
-        server {
-          hold gate (cost(gate, serial == 1 ? 2 : 1)) {
+        pool gate {{ cap 2; queue by (-serial){fit} every (5); }}
+        server {{
+          hold gate (cost(gate, serial == 1 ? 2 : 1)) {{
             observe who = serial;
             observe at = now;
             run svc (cost(svc, 101));
-          }
-        }
-"#,
-    );
+          }}
+        }}
+"#
+        ),
+        300.0,
+    )
+}
+
+/// Under `first fit` a waiter that does not fit is passed over, not waited
+/// behind: serial 1 asks 2 of the 1 that serial 2 leaves, and serial 0 goes
+/// in before it. Serial 1 goes in at the first tick after the others leave
+/// at t = 106, t = 110.
+#[test]
+fn a_waiter_that_does_not_fit_is_passed_over() {
+    let r = tick_with_a_misfit(" first fit");
     assert_eq!(r.observe("who").unwrap().samples, vec![2.0, 0.0, 1.0]);
     assert_eq!(r.observe("at").unwrap().samples, vec![5.0, 5.0, 110.0]);
+}
+
+/// Without `first fit` the first that does not fit ends the tick, as it
+/// stops a pool's admission at any other time: serial 0 waits behind
+/// serial 1, which goes in at t = 110 when serial 2 has left at t = 106,
+/// and serial 0 at t = 215, when serial 1 has left at t = 211.
+#[test]
+fn without_first_fit_a_tick_stops_at_the_first_that_does_not_fit() {
+    let r = tick_with_a_misfit("");
+    assert_eq!(r.observe("who").unwrap().samples, vec![2.0, 1.0, 0.0]);
+    assert_eq!(r.observe("at").unwrap().samples, vec![5.0, 110.0, 215.0]);
 }
 
 /// A hold queued during a tick waits for the next: a session that queues

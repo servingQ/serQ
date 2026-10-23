@@ -35,6 +35,7 @@ pool kv {
   evict lru;                  // or: evict by (k1, k2, …)  ascending
   preempt lifo;               // or: preempt none | preempt by (k1, …) [requeue tail]   whom a failed grow preempts
   queue fifo;                 // or: queue by (k1, …)     keys reevaluated at selection
+                              //     … first fit: a waiter that does not fit is passed over
   reserve held;               // a hold's unallocated reserve counts against later admissions
   spill tier via link (w) when (c);
 }
@@ -163,7 +164,8 @@ server (input, hidden output) reply (done) {   // hidden: the scheduler may not 
    session queues. Anything reading the cache or `budget_left` depends on this.
 3. **A hold on several pools joins the queue of the first one**, and is
    admitted only when every pool has room.
-4. **Only the head of a queue can be admitted** — head-of-line blocking.
+4. **Only the head of a queue can be admitted** — head-of-line blocking,
+   unless the queue says `first fit`.
 5. **Cached units never block an admission**; they are evicted to make room.
 6. **`end` keeps the session's cached prefixes.** To have them gone, the
    workload sends `final` on the last request and the server writes

@@ -17,7 +17,7 @@ than host-language code, and every input passes `Program::validate`.
 The source model and externally supplied execution settings resolve to one
 complete `Program`; its JSON records the experiment as well as the deployment.
 
-Source: `src/ir.rs`. Current version: `IR_VERSION = 15`.
+Source: `src/ir.rs`. Current version: `IR_VERSION = 16`.
 
 ## Format
 
@@ -70,7 +70,8 @@ runs identically (`tests/ir.rs`).
 | `evict` | `Lru` or `By([keys])`, read at `Evict`. |
 | `preempt` | `None`, `By {keys, tail}` or `Leases {keys, every?, suspend?}`. The least keys at `Victim` select the victim; ties select the last admitted. Under `By`, the victim is a hold, which runs again; `tail` defaults to false (requeue at the head); true requeues as a newcomer. Under `Leases`, the candidates are the sessions that lease the pool and hold it in no scope, and the victim's lease ends while its session goes on. With `every: dt` (seconds) the pool acts at every multiple of `dt` instead: a lease's growth is let through past the cap, and at a tick leases end in the keys' order while the pool is over its cap; `every` does not link with `reserve_held`; with `suspend: [keys]` (which needs `every`) a lease taken, at a tick or by a hold's growth, is set aside, its units back, a prefix it read let go and `Allocated` 0, and a later tick, before it takes any, gives set-aside leases back in the order of the `suspend` keys (read at `Victim`), each that fits; `Release` or the session's end drops one. |
 | `queue` | `null` for FIFO, otherwise nonempty pure selection keys, read at `Select`. |
-| `queue_every` | Optional seconds: the pool admits only at every multiple, the holds that waited when the tick began in the queue's order, each admitted one run until it blocks before the next is tried, one that does not fit passed over; a hold queued during a tick waits for the next. At an instant the pools' ticks follow its other events, in pool order, a pool's `queue_every` tick before its `Leases` `every` tick. Not on a pool with `admit_via`. |
+| `queue_every` | Optional seconds: the pool admits only at every multiple, the holds that waited when the tick began in the queue's order, each admitted one run until it blocks before the next is tried; the first that does not fit ends the tick unless `first_fit` passes it over (each tried once a tick); a hold queued during a tick waits for the next. At an instant the pools' ticks follow its other events, in pool order, a pool's `queue_every` tick before its `Leases` `every` tick. Not on a pool with `admit_via`. |
+| `first_fit` | A waiting hold that does not fit every pool it names is passed over and the next in the queue's order is tried, by the pool's own admission, an engine's iteration (`admit_via`) and a `queue_every` tick alike; each attempt outside a tick reads the queue from its head again, and a tick tries each waiter once. Without it the first that does not fit stops the attempt (head-of-line blocking). Omitted when false. |
 | `spill` | Optional `CSpill {to, via, work, when}`: destination pool, transfer stage, work and predicate. |
 | `admit_via` | Optional index of the step stage serving this pool's queue; a stage of another kind is refused, since nothing would admit the queue. |
 | `reserve_held` | Outstanding reservations count against later admissions and other holds' growth. Omitted when false. |

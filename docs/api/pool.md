@@ -6,7 +6,7 @@ pool NAME [ '[' N ']' ] {
   block expr;
   evict lru;  |  evict by (expr, …);
   preempt none;  |  preempt lifo;  |  preempt by (expr, …) [requeue head | tail];  |  preempt leases by (expr, …) [every (expr) [suspend by (expr, …)]];
-  queue fifo [every (expr)];  |  queue by (key, …) [every (expr)];
+  queue fifo [first fit] [every (expr)];  |  queue by (key, …) [first fit] [every (expr)];
   reserve held;
   spill POOL via STAGE (expr) when (expr);
 }
@@ -22,7 +22,7 @@ queues the sessions that do not yet fit. Every option is optional.
 | [`block`](#block) | `const` | none | allocation and caching granularity |
 | [`evict`](#evict) | `lru` \| `by (expr, …)` | `lru` | which cache entry goes first |
 | [`preempt`](#preempt) | `none` \| `by (expr, …) [requeue head \| tail]` \| `lifo` \| `leases by (expr, …)` | `none` | what a failed `grow` does: whom it preempts, and where the victim goes back |
-| [`queue`](#queue) | `fifo` \| `by (expr, …)` | `fifo` | admission order |
+| [`queue`](#queue) | `fifo` \| `by (expr, …)`, optionally `first fit`, `every (expr)` | `fifo`, head-of-line blocking, no ticks | admission order; whether a waiter that does not fit is passed over; admissions at ticks only |
 | [`reserve held`](#reserve-held) | — | off | a hold's unallocated `reserve` counts against later admissions |
 | [`spill`](#spill) | `pool`, `stage`, `expr`, `expr` | none | evicted prefixes are written to a tier |
 
@@ -132,6 +132,7 @@ Here `priority` and arrival time `t0` are attributes set by the program.
 ```serq
 queue fifo;
 queue by (key, …);
+queue fifo first fit;
 queue by (key, …) every (dt);
 ```
 
@@ -143,7 +144,8 @@ queue; it resets on re-entry. Keys may read visible session attributes,
 
 A preempted hold re-enters at the head, ahead of policy keys, unless its pool
 says `requeue tail`. Only the selected
-hold is tried: failure to fit blocks the rest. FIFO keeps enqueue order.
+hold is tried: failure to fit blocks the rest (head-of-line blocking, as
+vLLM's waiting loop stops, `scheduler.py:1228-1235`). FIFO keeps enqueue order.
 Selection occurs at admission attempts; there is no implicit aging timer.
 For a stage-bound pool, `budget_left(stage)` reads the budget remaining for
 that admission, and the policy is evaluated again after every admission.
@@ -159,10 +161,28 @@ This admits immediate requests, then aged long requests, then short requests,
 then other long requests. `serial` orders requests within a lane in this
 single-hold workload.
 
+`first fit` passes over a waiter that does not fit every pool its hold
+names and admits the first in the queue's order that fits. Each admission
+attempt starts again from the head, with the keys re-read and a preempted
+hold first; it remembers nothing it passed over. A large hold can be passed
+over for as long as smaller ones keep fitting, and a key that puts it
+first does not help, since the first is passed over too: without `first
+fit`, a key that selects it once `waited` is long enough keeps the room
+for it. `serq target` refuses `first fit`, since vLLM stops at the first
+that does not fit. The tutorial's memory chapter
+([Head-of-line blocking](../tutorial/02-memory.md#head-of-line-blocking))
+runs both:
+
+```serq
+pool mem { cap C; queue fifo first fit; }
+```
+
 `every (dt)` admits only at every multiple of `dt` seconds. At a tick the
 holds that waited when it began are tried in the queue's order; each one
-admitted runs until it blocks before the next is tried, and one that does
-not fit is passed over rather than blocking the rest. A hold queued during
+admitted runs until it blocks before the next is tried. The first that does
+not fit ends the tick, unless the queue says `first fit` (written before
+`every`: `queue fifo first fit every (dt);`), which passes it over and tries
+each waiter once a tick. A hold queued during
 the tick waits for the next one. The pools' ticks at an instant come after
 its other events, in the order the pools are declared (a pool's queue tick
 before its own preemption tick). Not on a pool an engine admits. ThunderAgent's global

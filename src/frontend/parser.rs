@@ -434,7 +434,7 @@ const MAX_FAMILY: usize = 10_000;
 /// parameter may not be one: a parameter is replaced token by token, and a
 /// keyword in the body is a token of the same spelling. `tests/docs_lexer.rs`
 /// keeps the list whole.
-pub const KEYWORDS: [&str; 121] = [
+pub const KEYWORDS: [&str; 122] = [
     "Cost",
     "Size",
     "admission",
@@ -471,6 +471,7 @@ pub const KEYWORDS: [&str; 121] = [
     "execute",
     "fifo",
     "first",
+    "fit",
     "fits",
     "fn",
     "fork",
@@ -917,9 +918,11 @@ const RETIRED: [(&str, &str); 7] = [
         "`where x = e` is gone: a hold's header is read at admission, so write `e` in it \
          where `x` stood",
     ),
+    // the word came back with one meaning, a queue's (#65)
     (
         "fit",
-        "`fit` is gone: the pools of a `hold` are the condition",
+        "`fit` as a condition is gone: the pools of a `hold` are the condition; the word \
+         is a queue's now, `queue … first fit`",
     ),
     (
         "branch",
@@ -3899,6 +3902,7 @@ impl Parser {
             preempt: PreemptOrder::None,
             queue: QueueOrder::Fifo,
             queue_every: None,
+            first_fit: false,
             spill: None,
             admit_via: None,
             reserve_held: false,
@@ -4021,10 +4025,21 @@ impl Parser {
                         self.expect(&Tok::RParen)?;
                         QueueOrder::By(keys)
                     };
+                    if self.eat_kw("first") {
+                        self.expect_kw("fit")?;
+                        d.first_fit = true;
+                    }
                     if self.eat_kw("every") {
                         self.expect(&Tok::LParen)?;
                         d.queue_every = Some(self.expr()?);
                         self.expect(&Tok::RParen)?;
+                        if self.is_kw("first") {
+                            return self.err(
+                                "`first fit` says which waiter the queue admits, at a tick \
+                                 as at any other time, so it comes with the order, before \
+                                 `every`: `queue … first fit every (dt);`",
+                            );
+                        }
                     }
                 }
                 "reserve" => {
@@ -7362,7 +7377,7 @@ mod tests {
             ),
             (
                 "\nserver { hold kv (cost(kv, 1)) fit { }\n}",
-                "`fit` is gone",
+                "`fit` as a condition is gone",
             ),
         ] {
             refused(&format!("pool kv {{ cap 1; }} {src}"), WL, now);

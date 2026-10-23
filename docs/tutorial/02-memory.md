@@ -97,9 +97,36 @@ admission wait; increasing it to 20 leaves little waiting at either resource.
 A pool's queue is FIFO by default, and **only the head can be admitted**. If
 the request at the front needs 5 units and 3 are free, the request behind it
 needing 2 units waits anyway. A large request can therefore delay smaller requests behind it.
+vLLM's scheduler does the same: its waiting loop stops at the first request
+whose blocks it cannot allocate (`if new_blocks is None: break`,
+`scheduler.py:1228-1235`).
 
 `queue by (expr)` changes the order if you want to model a priority scheduler
-instead.
+instead. `first fit` changes what happens to a request that does not fit: it
+is passed over, and the first one behind it that fits is admitted.
+`docs/tutorial/programs/02-first-fit.sq` is this chapter's program with that
+one line changed:
+
+```serq
+--8<-- "docs/tutorial/programs/02-first-fit.sq:pool"
+```
+
+```bash
+for p in 02-memory 02-first-fit; do
+  serq run docs/tutorial/programs/$p.sq --workload docs/tutorial/programs/workloads/02-memory.sq --horizon 100000 --warmup 5000 --seed 1 --C 6
+done
+```
+
+| `cap 6` | admit wait | its p99 | response |
+|---|---|---|---|
+| `02-memory.sq`: FIFO, the head blocks | 1.5808 | 10.9918 | 2.5805 |
+| `02-first-fit.sq`: `queue fifo first fit;` | 1.0687 | 8.7344 | 2.0684 |
+
+The small requests no longer wait behind a large one, and the queue drains
+faster. Nothing in the rule bounds how long a large request waits, though:
+each attempt starts again from the head, and a request needing 5 units is
+passed over for as long as smaller ones keep fitting. Head-of-line
+blocking is what keeps the room for it.
 
 ---
 

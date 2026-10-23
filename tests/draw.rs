@@ -841,6 +841,28 @@ fn a_queue_order_is_a_line_of_its_own() {
     );
 }
 
+/// `queue … first fit` is among the pool's options; head-of-line
+/// blocking, the default, says nothing, as FIFO does (#65).
+#[test]
+fn first_fit_is_among_the_pools_options() {
+    let texts = |name: &str| -> Vec<String> {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join(format!("docs/tutorial/programs/{name}.sq"));
+        deployment::figure(&example(&path))
+            .items
+            .into_iter()
+            .filter_map(|i| match i {
+                serq::view::figure::Item::Text { text, .. } => Some(text),
+                _ => None,
+            })
+            .collect()
+    };
+    let t = texts("02-first-fit");
+    assert!(t.iter().any(|x| x == "cap 10 · first fit"), "{t:?}");
+    let t = texts("02-memory");
+    assert!(!t.iter().any(|x| x.contains("first fit")), "{t:?}");
+}
+
 /// A queue key longer than a label holds is cut at a space, and says so.
 #[test]
 fn a_long_queue_key_is_cut_short() {

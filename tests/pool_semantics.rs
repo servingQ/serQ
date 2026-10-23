@@ -1052,7 +1052,7 @@ fn a_reserve_that_reads_the_state_waits_instead_of_being_rejected() {
     assert!(r.pool("reqs").unwrap().over_cap.is_none());
     assert!(
         r.text()
-            .contains("over: the head of pool `reqs`'s queue asks `kv` for 11"),
+            .contains("over: a hold waiting in pool `reqs`'s queue asks `kv` for 11"),
         "{}",
         r.text()
     );

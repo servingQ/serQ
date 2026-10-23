@@ -45,7 +45,7 @@ STATEMENTS = (
 OPTIONS = (
     "cap", "per_token", "save", "block", "evict", "lru", "preempt", "lifo", "leases", "suspend", "held", "requeue", "head", "tail", "none", "queue", "fifo",
     "admit", "while", "state", "taking", "via", "spill", "when", "ps", "delay", "cost",
-    "granule", "serve", "latency", "nic", "exclusive", "first", "only", "arrive", "arrivals", "poisson", "renewal", "closed", "hidden", "send", "reply",
+    "granule", "serve", "latency", "nic", "exclusive", "first", "fit", "only", "arrive", "arrivals", "poisson", "renewal", "closed", "hidden", "send", "reply",
     "batch", "trace", "ordered", "init", "horizon", "warmup", "seed",
     # an engine's schedule and execution; `advance`, `each` and `most` are
     # read only in the phrases `advance running` and `each at most`, which

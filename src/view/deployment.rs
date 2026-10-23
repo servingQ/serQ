@@ -3410,6 +3410,11 @@ fn pool_notes(p: &Program, i: usize, cached: bool) -> Vec<String> {
         };
         parts.push(format!("queue by ({shown})"));
     }
+    // a waiter that does not fit is passed over; head-of-line blocking says
+    // nothing, as FIFO does
+    if pool.first_fit {
+        parts.push("first fit".into());
+    }
     if let Some(dt) = pool.queue_every {
         parts.push(format!("queue every ({dt})"));
     }

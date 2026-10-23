@@ -41,7 +41,10 @@ use serde::{Deserialize, Serialize};
 /// source registers a send at each request's end (`CRequest::send`), which
 /// keeps its blocks until the reader's load ends it or its `ttl` does; and
 /// `Join` goes, the push mode's reader waiting for the send instead.
-pub const IR_VERSION: u32 = 15;
+/// 16 adds a pool's `first_fit` (`queue … first fit`, #65), and a pool
+/// under `queue_every` no longer passes over a hold that does not fit
+/// unless it is set.
+pub const IR_VERSION: u32 = 16;
 
 /// A reason `Program::validate` refuses a program, and the statement it is
 /// about (block, index in it) when it is about one.
@@ -879,13 +882,23 @@ pub struct CPool {
     pub queue: Option<Vec<CExpr>>,
     /// `queue … every (dt)`: the pool admits waiting holds only at every
     /// multiple of `dt` seconds, in the queue's order, each admitted one
-    /// running until it blocks before the next is tried, and one that does
-    /// not fit passed over; a hold queued during a tick waits for the next.
-    /// The pools' ticks at one instant act after its other events, in the
-    /// pools' order, a pool's queue tick before its preemption tick
-    /// (ThunderAgent's global waiting queue, drained at the router's tick).
+    /// running until it blocks before the next is tried; a hold queued
+    /// during a tick waits for the next. The first that does not fit ends
+    /// the tick, unless `first_fit` passes it over. The pools' ticks at one
+    /// instant act after its other events, in the pools' order, a pool's
+    /// queue tick before its preemption tick (ThunderAgent's global waiting
+    /// queue, drained at the router's tick).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub queue_every: Option<f64>,
+    /// `queue … first fit`: a waiting hold that does not fit every pool it
+    /// names is passed over and the next in the queue's order is tried, by
+    /// the pool's own admission, its ticks and an engine's iteration alike.
+    /// Each attempt outside a tick reads the queue from its head again; a
+    /// tick tries each waiter once. Without it the first that does not fit
+    /// stops the attempt (head-of-line blocking, vLLM's `if new_blocks is
+    /// None: break`, `scheduler.py:1228-1235`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub first_fit: bool,
     pub spill: Option<CSpill>,
     pub admit_via: Option<usize>,
     /// `reserve held`: what a hold's `reserve` tested and it has not

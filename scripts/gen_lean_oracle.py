@@ -55,8 +55,13 @@ OUT = os.path.join(ROOT, "lean", "Serq", "Oracle.lean")
 # statement `Join`. A connector was outside the fragment and stays so (below),
 # a send is, and no oracle program had a `Join`: a 14 file and a 15 file
 # translate alike.
-IR_VERSION = 15
-SUPPORTED_IR_VERSIONS = (7, 8, 9, 10, 11, 12, 13, 14, IR_VERSION)
+# 16 (docs/design/first-fit.md) adds a pool's `first_fit`, a waiter that does
+# not fit passed over, and makes a `queue_every` tick stop at the first that
+# does not fit unless it is set. Both are outside the fragment, whose
+# `admitHeads` stops at the head (`pool_outside_fragment`): a 15 file and a
+# 16 file translate alike.
+IR_VERSION = 16
+SUPPORTED_IR_VERSIONS = (7, 8, 9, 10, 11, 12, 13, 14, 15, IR_VERSION)
 
 
 def is_delay(kind):
@@ -79,6 +84,22 @@ def is_lifo(preempt):
     at the head (`tail` absent or false)."""
     by = preempt.get("By") if isinstance(preempt, dict) else None
     return by is not None and by.get("keys") == LIFO_KEYS and not by.get("tail", False)
+
+
+def pool_outside_fragment(p):
+    """Why a pool's admission is not the fragment's, or None. The fragment
+    admits a queue's head while it fits and stops at the first that does
+    not (`admitHeads`), whenever the pool settles. A held reservation, an
+    admission at ticks only (`queue_every`) and a waiter passed over
+    (`first_fit`) are rules it does not have; the claims generator reads
+    the same list."""
+    if p.get("reserve_held"):
+        return "reserve held"
+    if p.get("queue_every") is not None:
+        return "queue every, admissions at ticks"
+    if p.get("first_fit"):
+        return "first fit, a waiter that does not fit passed over"
+    return None
 
 
 NOT_PREEMPTED = {"Unary": ["Not", {"Ctx": "Preempted"}]}
@@ -762,10 +783,9 @@ class Lean:
                            "(a stage's `serve only` is one)")
         pools = []
         for i, p in enumerate(ir["pools"]):
-            if p.get("reserve_held"):
-                raise Fragment(f"pool {p['name']}: reserve held")
-            if p.get("queue_every") is not None:
-                raise Fragment(f"pool {p['name']}: queue every, admissions at ticks")
+            why = pool_outside_fragment(p)
+            if why is not None:
+                raise Fragment(f"pool {p['name']}: {why}")
             if p["evict"] != "Lru" or p["queue"] is not None or p["spill"] is not None:
                 raise Fragment(f"pool {p['name']}: only LRU eviction, FIFO queue, no spill")
             via = p["admit_via"] is not None

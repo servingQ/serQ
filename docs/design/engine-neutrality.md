@@ -111,8 +111,10 @@ nothing (#68) is contradicted by none of the three engines: SGLang retracts
 only in decode iterations ([`scheduler.py` L3758-L3760](https://github.com/sgl-project/sglang/blob/b792228b35b21565067520857319dfc05e4d134e/python/sglang/srt/managers/scheduler.py#L3758-L3760)), which admit nothing; TensorRT-LLM
 stops its scan at the victim ([`capacityScheduler.cpp` L591-L612](https://github.com/NVIDIA/TensorRT-LLM/blob/bf414e37291b9d15a5328af99e349db8dedf7a4d/cpp/tensorrt_llm/batch_manager/capacityScheduler.cpp#L591-L612)); TGI never preempts. Head-of-line blocking (#65) is
 every engine's default but TensorRT-LLM's prefix-aware skip, which needs the
-shared cache. Both are still rules rather than mechanisms, but no engine
-here asks for their opposite in a program serQ can write today.
+shared cache. It is now a default a program may contradict, `queue …
+first fit` ([First fit](first-fit.md)), though no engine here does. The rule
+of #68 is still a rule rather than a mechanism, but no engine here asks for
+its opposite in a program serQ can write today.
 
 Not vLLM's, and missing for every engine including vLLM: the prefix cache
 shared across requests (every engine here has one: SGLang's and TGI's radix

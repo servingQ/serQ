@@ -1,5 +1,6 @@
 {
   "docs/tutorial/programs/01-queue.sq": "docs/tutorial/programs/workloads/01-queue.sq",
+  "docs/tutorial/programs/02-first-fit.sq": "docs/tutorial/programs/workloads/02-memory.sq",
   "docs/tutorial/programs/02-memory.sq": "docs/tutorial/programs/workloads/02-memory.sq",
   "docs/tutorial/programs/03-sessions.sq": "docs/tutorial/programs/workloads/03-sessions.sq",
   "docs/tutorial/programs/04-cache.sq": "docs/tutorial/programs/workloads/04-cache.sq",

@@ -292,7 +292,8 @@ a queue's tick as a station of its own inside the queue's pool.
   otherwise (criterion 2). ThunderAgent's two orders agree, those calling
   a tool the smaller first, but a program may want the largest back
   first, so `suspend by` takes its own keys. Two rules stay fixed: a lease
-  that does not fit is passed over, as a waiter is, and the give-back
+  that does not fit is passed over, as a waiter of a `first fit` queue is
+  ([First fit](first-fit.md)), and the give-back
   comes before the pause. Writing either otherwise is a pool that pauses
   what it has just given back, or one that waits behind a lease that will
   not fit; no program here wants them, so no clause selects them.

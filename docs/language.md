@@ -68,8 +68,9 @@ poolopt  := cap expr ;                       -- capacity in units (default inf)
           | preempt leases by ( expr , ... ) [every ( expr ) [suspend by ( expr , ... )]] ;
                                              -- the victim: the lease with the least keys, which ends;
                                              -- every: at the pool's ticks; suspend: set aside, given back
-          | queue fifo [every ( expr )] ; | queue by ( expr (, expr)* ) [every ( expr )] ;
-                                             -- waiting selection; every: admissions at the pool's ticks
+          | queue fifo [first fit] [every ( expr )] ; | queue by ( expr (, expr)* ) [first fit] [every ( expr )] ;
+                                             -- waiting selection; first fit: a waiter that does not fit
+                                             -- is passed over; every: admissions at the pool's ticks
           | reserve held ;                   -- a hold's unallocated reservation counts against later admissions
           | spill POOL via STAGE ( expr ) when ( expr ) ;  -- write evicted prefixes to a tier
 kind     := fifo [ ( c ) ]                   -- c servers, one job each at rate 1
@@ -783,7 +784,8 @@ hold reserved and has not allocated stays reserved while it lasts: a later
 admission needs `used + Σ max(0, rᵢ − allocᵢ) + r ≤ cap`, and the holder
 grows into its own reservation;
 cached prefixes still never block. The first that does not
-fit blocks the rest (head-of-line blocking). The `cache` clause is what
+fit blocks the rest (head-of-line blocking), unless the pool's queue says
+`first fit` ([Waiting selection](#waiting-selection)). The `cache` clause is what
 makes a hold take part in the prefix cache. With it, on admission the
 session reads at most `ρ` units of the cached prefix of its hold's chain
 (`cached :=` what it read) and keeps them allocated while the hold lasts;
@@ -871,7 +873,8 @@ state (a pool or stage query, the clock, `budget_left`) asks for something
 else at the next try,
 so it is judged at every try and waits; a queue's head that, read as
 the run ends, still asks a pool for more than its cap is named (`over:`,
-the pool report's `over_cap`). One whose units or `reserve` are a constant does not
+the pool report's `over_cap`), and under `queue … first fit` any waiter
+that does, since the others pass it. One whose units or `reserve` are a constant does not
 link: it would be rejected whenever it is reached. A pool an engine `S` admits
 (`pool reqs on S` or `pool kv on S.gpu`) is not admitted at
 settle time: its queue is served by `S`'s `admit waiting`, in an
@@ -886,7 +889,8 @@ the xPyD case, `docs/use-cases/pd.md` §Writing xPyD). `engine S[N]` and an
 engine's family of capacities (`reqs[N] cap c;`) are refused: an engine's
 `taking` names one pool, and a call names no member (#539). An engine that serves several queues tries them in
 the order their pools are declared, and the first head that does not fit
-stops the iteration's admissions; `examples/pd-disaggregation/llmd_nixl_pull.sq` declares the
+stops the iteration's admissions (a queue that says `first fit` is passed
+over when none of its waiters fits); `examples/pd-disaggregation/llmd_nixl_pull.sq` declares the
 decoder's queue of requests whose KV has arrived before its queue of new
 ones, as vLLM serves `skipped_waiting` before `waiting`
 (`scheduler.py:2383-2385`). `budget_left(S)` then evaluates to the budget
@@ -1003,16 +1007,33 @@ fits, the smallest first (`suspend by (prompt)`).
 by keys re-read before every admission attempt (after each admission under
 an engine, where `budget_left` is that attempt's budget); `waited` is
 the seconds since the hold joined the queue, reset on re-entry. The chosen
-head that does not fit blocks the rest, a preempted hold re-enters ahead of
+head that does not fit blocks the rest (head-of-line blocking; `first fit`,
+below, passes it over), a preempted hold re-enters ahead of
 the keys, a key may not draw or read a `hidden` attribute, and selection
 sets no timer. See [Pool](api/pool.md).
+
+`queue fifo first fit` and `queue by (k₁, …) first fit` pass over a waiter
+that does not fit every pool its hold names, and admit the first in the
+queue's order that fits. Each admission attempt, the pool's own and each
+admission of an engine's iteration, reads the queue from its head again,
+the keys re-read and a preempted hold first, as without it; what it passed
+over is not remembered past it. A tick tries each waiter once (below). A
+large hold can so be passed over again and again, whatever the keys: one
+they put first is passed over too. A bound on its wait is head-of-line
+blocking with a key that selects it once it has `waited` long enough.
+Head-of-line blocking is vLLM's
+(`scheduler.py:1228-1235`), and `serq target` refuses a program whose
+engine's pools pass over. A waiter that never fits, its units read from
+the deployment's state, is named in `over_cap` wherever it waits in such
+a queue.
 
 `queue … every (dt)` admits only at the pool's ticks, every multiple of
 `dt` seconds (a constant, and positive). At a tick the holds that waited
 when it began are tried in the queue's order: each one admitted runs
 until it blocks (its body, and what follows it, up to its next wait)
-before the next is tried, and one that does not fit is passed over, not
-waited behind. A hold queued during a tick waits for the next, so a
+before the next is tried. The first that does not fit ends the tick, as it
+stops an admission at any other time; under `first fit` it is passed over,
+not waited behind, and each is tried once a tick. A hold queued during a tick waits for the next, so a
 session is admitted to such a pool at most once an instant, and a `while`
 around a hold on it links. It does not
 link on a pool an engine admits. ThunderAgent's router lets its global
@@ -1778,7 +1799,7 @@ from the cache alone rather than from the previous prompt, and caches `request.i
 |---|---|---|
 | a token budget per step, running requests first in `running` order, then waiting requests with the budget left | `engine vllm on gpu { tokens cap B; scheduler { advance running; admit waiting while (running.preempted == 0); } … }`, residents in admission order; `pool reqs on vllm` | `scheduler.py:577, 624-823, 868-1128` |
 | `max_num_seqs` | `reqs cap max_seqs;` in `engine vllm`, held as `pool reqs on vllm` | `scheduler.py:877-879` |
-| FCFS, head-of-line blocking (`if new_blocks is None: break`) | pool queue `fifo`; the first request that does not fit blocks | `scheduler.py:1228-1235` |
+| FCFS, head-of-line blocking (`if new_blocks is None: break`) | pool queue `fifo`, without `first fit`; the first request that does not fit blocks | `scheduler.py:1228-1235` |
 | admission needs blocks for the whole prompt (`scheduler_reserve_full_isl = True`), but only the first chunk is allocated | `kv (request.hit + min(request.known − request.hit, budget_left(vllm))) reserve (request.known)` | `kv_cache_manager.py:515-531`, `config/scheduler.py:191` |
 | a waiting request's prefix is looked up and its blocks touched only when it is scheduled | units evaluated at admission; the queue served by the engine | `scheduler.py:932-939`, `block_pool.py:754-770` |
 | chunked prefill, `long_prefill_token_threshold` | the engine's prefill, `each at most (threshold)` with `let threshold = running.count + waiting.count > 1 ? c : inf;`: the cap only while more than one request is running or waiting; `waiting.count` counts the queues the engine admits, as vLLM counts `waiting`, whose `skipped_waiting` these programs leave empty; a constant cap is not vLLM's, and `serq target` refuses it | `scheduler.py:606-616, 675-676, 1115-1128` |

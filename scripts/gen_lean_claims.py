@@ -35,14 +35,14 @@ import sys
 sys.path.insert(0, os.path.dirname(__file__))
 from gen_lean_oracle import (  # noqa: E402
     Expr, Fragment, Lean, affine, chunk_rule, erase_costs, fold, nat, one_ref, COST_VARS,
-    fragment_step, is_lifo, only_body,
+    fragment_step, is_lifo, only_body, pool_outside_fragment,
 )
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
 CDIR = os.path.join(ROOT, "tools", "claims")
 OUT = os.path.join(ROOT, "lean", "Serq", "Claims.lean")
 PROVED = os.path.join(ROOT, "examples", "papers", "ClaimsProved.lean")
-IR_VERSION = 15
+IR_VERSION = 16
 # the fragment's bound on the number of sessions, under which the fuel of
 # `settleLoop`, `drain` and `admitHeads` is shown to suffice (examples/papers/Kong.lean)
 MAX_SESSIONS = 500
@@ -210,8 +210,9 @@ class Program:
         grown = self.grown_pools()
         pools = []
         for i, p in enumerate(ir["pools"]):
-            if p.get("reserve_held"):
-                raise Fragment(f"pool {p['name']}: reserve held")
+            why = pool_outside_fragment(p)
+            if why is not None:
+                raise Fragment(f"pool {p['name']}: {why}")
             if p["evict"] != "Lru" or p["spill"] is not None or p["admit_via"] is not None:
                 raise Fragment(f"pool {p['name']}: LRU eviction, no spill, no admit via")
             if i in grown and (not is_lifo(p["preempt"]) or step["memory"] != i):

@@ -60,6 +60,29 @@ class FragmentBoundaries(unittest.TestCase):
         with self.assertRaisesRegex(generator.Fragment, "FIFO queue"):
             generator.Lean(ir).deployment()
 
+    def test_first_fit_is_not_silently_discarded(self):
+        # a waiter that does not fit is passed over (#65); the fragment's
+        # admission stops at the head (`admitHeads`)
+        ir = copy.deepcopy(self.ir)
+        ir["pools"][0]["first_fit"] = True
+        with self.assertRaisesRegex(generator.Fragment, "first fit"):
+            generator.Lean(ir).deployment()
+
+    def test_the_claims_pools_are_refused_as_the_oracles_are(self):
+        # one list for both generators (`pool_outside_fragment`): #591 taught
+        # the oracle generator `queue_every` alone, and a claim of a pool
+        # under it would have been proved of a pool that admits at once
+        import gen_lean_claims as claims
+        base = json.loads((Path(generator.ROOT) / "tools/claims/kong_svf.ir.json").read_text())
+        claims.Program("kong_svf", base).deployment()
+        for field, value, message in [("first_fit", True, "first fit"),
+                                      ("queue_every", 5.0, "queue every"),
+                                      ("reserve_held", True, "reserve held")]:
+            ir = copy.deepcopy(base)
+            ir["pools"][0][field] = value
+            with self.assertRaisesRegex(generator.Fragment, message):
+                claims.Program("kong_svf", ir).deployment()
+
     def test_multistage_runs_are_not_silently_discarded(self):
         ir = copy.deepcopy(self.ir)
         for block in ir["blocks"]:
