@@ -1140,7 +1140,8 @@ prefill is selected nothing more is admitted in that iteration
 ([Engine](api/engine.md#exclusive-prefill)). Serving in admission order
 *is* serving decode-first while every decoding request is ahead of every
 prefilling one, in an iteration that grows no hold past what it already
-holds, admits no one and has no `only` (`SerqLang.Exec.assign_decode_first`;
+holds, admits no one and has no `only`, with one job per session and work
+left in each (`SerqLang.Exec.assign_decode_first`, its `hnd` and `hpos`;
 a growth past the hold can preempt and an admission adds a request, and
 neither is proved yet). Without a per-request chunk cap the fill of such
 an iteration keeps that order (`fill_preserves_shape`), and admission
