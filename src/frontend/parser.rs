@@ -2265,114 +2265,134 @@ impl Parser {
             let StageKind::Step(sp) = &mut st.kind else {
                 continue;
             };
-            let Some(c) = &mut sp.connector else {
-                continue;
-            };
-            if !matches!(c.kind, ConnectorKind::Relation(None)) {
-                continue;
-            }
-            let q = self.queues.iter().find(|q| q.name == st.name);
-            let takes = q
-                .and_then(|q| q.takes.as_ref())
-                .filter(|t| t.source == c.queue);
-            let source = self.queues.iter().find(|s| s.name == c.queue);
-            let (Some(q), Some(t), Some(source)) = (q, takes, source) else {
-                let engine_at = self
-                    .engines
-                    .iter()
-                    .find(|e| e.name == st.name)
-                    .map_or(0, |e| e.at);
-                // the connector's name where it is written, in the engine
-                let at = (engine_at..self.toks.len().saturating_sub(1))
-                    .find(|&k| self.toks[k].text == "connector" && self.toks[k + 1].text == c.queue)
-                    .map_or(engine_at, |k| k + 1);
-                // the queue reads its KV from another: the relation has
-                // chosen the source, and the connector names it otherwise
-                if let Some(read) = q.and_then(|q| q.takes.as_ref()) {
-                    let verb = if read.push { "push" } else { "pull" };
+            let named: Vec<String> = sp.connectors.iter().map(|c| c.queue.clone()).collect();
+            for c in &mut sp.connectors {
+                if !matches!(c.kind, ConnectorKind::Relation(None)) {
+                    continue;
+                }
+                let q = self.queues.iter().find(|q| q.name == st.name);
+                let takes = q
+                    .and_then(|q| q.takes.as_ref())
+                    .filter(|t| t.source == c.queue);
+                let source = self.queues.iter().find(|s| s.name == c.queue);
+                let (Some(q), Some(t), Some(source)) = (q, takes, source) else {
+                    let engine_at = self
+                        .engines
+                        .iter()
+                        .find(|e| e.name == st.name)
+                        .map_or(0, |e| e.at);
+                    // the connector's name where it is written, in the engine
+                    let at = (engine_at..self.toks.len().saturating_sub(1))
+                        .find(|&k| {
+                            self.toks[k].text == "connector" && self.toks[k + 1].text == c.queue
+                        })
+                        .map_or(engine_at, |k| k + 1);
+                    // the queue reads its KV from another: the relation has
+                    // chosen the source, and the connector names it otherwise
+                    if let Some(read) = q.and_then(|q| q.takes.as_ref()) {
+                        let verb = if read.push { "push" } else { "pull" };
+                        // another of the engine's connectors reads it: a
+                        // rename would name it twice
+                        if named.contains(&read.source) {
+                            return self.err_at(
+                                at,
+                                format!(
+                                    "{}\nhelp: remove `connector {}`: a queue reads its KV from \
+                                     one source",
+                                    Code::ConnectorMisnamed.message(format_args!(
+                                        "engine `{0}`'s `connector {1}`: queue `{0}` reads its \
+                                         KV from `{2}` alone (`kvt.nixl_{verb} ({2}, {0}, …)`), \
+                                         which `connector {2}` reads, not from `{1}`",
+                                        st.name, c.queue, read.source
+                                    )),
+                                    c.queue
+                                ),
+                            );
+                        }
+                        return self.err_at(
+                            at,
+                            format!(
+                                "{}\nhelp: fix-it: rename `connector {}` to `connector {}`",
+                                Code::ConnectorMisnamed.message(format_args!(
+                                    "engine `{0}`'s `connector {1}`: queue `{0}` reads its KV from \
+                                     `{2}` (`kvt.nixl_{verb} ({2}, {0}, …)`), not from `{1}`",
+                                    st.name, c.queue, read.source
+                                )),
+                                c.queue,
+                                read.source
+                            ),
+                        );
+                    }
                     return self.err_at(
                         at,
                         format!(
-                            "{}\nhelp: fix-it: rename `connector {}` to `connector {}`",
-                            Code::ConnectorMisnamed.message(format_args!(
-                                "engine `{0}`'s `connector {1}`: queue `{0}` reads its KV from \
-                                 `{2}` (`kvt.nixl_{verb} ({2}, {0}, …)`), not from `{1}`",
-                                st.name, c.queue, read.source
+                            "{}\nhelp: declare the copy, a pull or a push: `kvt.nixl_pull ({}, {}, …);` \
+                             or `kvt.nixl_push ({}, {}, …);`",
+                            Code::ConnectorNoCopy.message(format_args!(
+                                "engine `{}`'s `connector {}`: queue `{}` reads KV from no `{}`",
+                                st.name, c.queue, st.name, c.queue
                             )),
                             c.queue,
-                            read.source
+                            st.name,
+                            c.queue,
+                            st.name
                         ),
                     );
-                }
-                return self.err_at(
-                    at,
-                    format!(
-                        "{}\nhelp: declare the copy, a pull or a push: `kvt.nixl_pull ({}, {}, …);` \
-                         or `kvt.nixl_push ({}, {}, …);`",
-                        Code::ConnectorNoCopy.message(format_args!(
-                            "engine `{}`'s `connector {}`: queue `{}` reads KV from no `{}`",
-                            st.name, c.queue, st.name, c.queue
-                        )),
-                        c.queue,
-                        st.name,
-                        c.queue,
-                        st.name
-                    ),
-                );
-            };
-            let Some(leased) = &source.leased else {
-                return self.err_at(
-                    source.at,
-                    format!(
-                        "engine `{}`'s `connector {}` reads what `{}` leases, and no entry of \
-                         `{}` leases a pool",
-                        st.name, c.queue, c.queue, c.queue
-                    ),
-                );
-            };
-            // a connector reads a send, which an engine's request registers:
-            // a source whose entry holds and leases is the other spelling of
-            // the prefill, and its lease would not be the relation's
-            if let Some(e) = source.entries.iter().find(|e| {
-                find_stmt(&e.body, &|s| {
-                    matches!(s, Stmt::Hold { lease: Some(_), .. }).then_some(())
-                })
-                .is_some()
-            }) {
-                return self.err_at(
-                    source.at,
-                    format!(
-                        "engine `{}`'s `connector {}` reads the send of `{}`'s engine request, \
-                         and `{}.{}` holds and leases instead: write the entry as a call of \
-                         its engine, `{} (prompt, 1);`, whose request the relation sends",
-                        st.name, c.queue, c.queue, c.queue, e.verb, c.queue
-                    ),
-                );
-            }
-            match ttls.iter().find(|(s, _)| *s == source.name) {
-                Some((_, ttl)) if *ttl != t.ttl => {
+                };
+                let Some(leased) = &source.leased else {
                     return self.err_at(
-                        t.at,
+                        source.at,
                         format!(
-                            "two KV relations from `{0}` name different `ttl`s: a request of \
-                             `{0}` keeps its blocks for one send, whichever reader reads it; \
-                             write the same `ttl` on both",
-                            source.name
+                            "engine `{}`'s `connector {}` reads what `{}` leases, and no entry of \
+                             `{}` leases a pool",
+                            st.name, c.queue, c.queue, c.queue
+                        ),
+                    );
+                };
+                // a connector reads a send, which an engine's request registers:
+                // a source whose entry holds and leases is the other spelling of
+                // the prefill, and its lease would not be the relation's
+                if let Some(e) = source.entries.iter().find(|e| {
+                    find_stmt(&e.body, &|s| {
+                        matches!(s, Stmt::Hold { lease: Some(_), .. }).then_some(())
+                    })
+                    .is_some()
+                }) {
+                    return self.err_at(
+                        source.at,
+                        format!(
+                            "engine `{}`'s `connector {}` reads the send of `{}`'s engine request, \
+                             and `{}.{}` holds and leases instead: write the entry as a call of \
+                             its engine, `{} (prompt, 1);`, whose request the relation sends",
+                            st.name, c.queue, c.queue, c.queue, e.verb, c.queue
                         ),
                     );
                 }
-                Some(_) => {}
-                None => ttls.push((source.name.clone(), t.ttl)),
+                match ttls.iter().find(|(s, _)| *s == source.name) {
+                    Some((_, ttl)) if *ttl != t.ttl => {
+                        return self.err_at(
+                            t.at,
+                            format!(
+                                "two KV relations from `{0}` name different `ttl`s: a request of \
+                                 `{0}` keeps its blocks for one send, whichever reader reads it; \
+                                 write the same `ttl` on both",
+                                source.name
+                            ),
+                        );
+                    }
+                    Some(_) => {}
+                    None => ttls.push((source.name.clone(), t.ttl)),
+                }
+                c.kind = ConnectorKind::Relation(Some(Relation {
+                    source: source.name.clone(),
+                    leased: format!("{}.{leased}", source.name),
+                    reader: q.name.clone(),
+                    latency: t.latency.clone(),
+                    push: t.push,
+                    share: t.share,
+                    ttl: t.ttl,
+                }));
             }
-            c.kind = ConnectorKind::Relation(Some(Relation {
-                source: source.name.clone(),
-                leased: format!("{}.{leased}", source.name),
-                reader: q.name.clone(),
-                latency: t.latency.clone(),
-                push: t.push,
-                share: t.share,
-                ttl: t.ttl,
-            }));
         }
         // and the other way: a relation copies only through its reader's
         // connector, which loads each copy, or an entry's `transfer … from
@@ -2406,28 +2426,32 @@ impl Parser {
             // what a request loads is the program's to say, so no fix-it
             // writes it (criterion 2): the help names the choice
             let connector = format!("connector {} {{ load (…); }}", t.source);
-            let (has, help) = match engine.map(|sp| sp.connector.as_ref()) {
-                Some(Some(c)) if c.queue == t.source => continue,
-                Some(Some(c)) => (
-                    format!(
-                        "`{}`'s engine has `connector {}`, not `connector {}`",
-                        q.name, c.queue, t.source
-                    ),
-                    // reached only by an L2's connector (another queue's
-                    // relation is refused first): which one the engine
-                    // keeps is a choice, so no fix-it
-                    format!(
-                        "an engine has one connector: replace `connector {}` with `{connector}`, \
-                         or keep it and give `{}` an entry that `transfer`s the KV `from {}`",
-                        c.queue, q.name, t.source
-                    ),
-                ),
-                Some(None) => (
+            let (has, help) = match engine {
+                Some(sp) if sp.connectors.iter().any(|c| c.queue == t.source) => continue,
+                // before the engine's connectors that load: a request loads
+                // from the first that has tokens, and passes a read after it
+                // over (`Validator::connector`)
+                Some(sp) => (
                     format!("`{}`'s engine has no `connector {}`", q.name, t.source),
                     format!(
                         "in `{}`'s engine, write `{connector}`, the tokens a request loads \
-                         from `{}` (`request.input - request.hit`)",
-                        q.name, t.source
+                         from `{}` (`request.input - request.hit`){}",
+                        q.name,
+                        t.source,
+                        match sp
+                            .connectors
+                            .iter()
+                            .filter(|c| c.load.is_some())
+                            .map(|c| format!("`connector {}`", c.queue))
+                            .collect::<Vec<_>>()[..]
+                        {
+                            [] => String::new(),
+                            ref cs => format!(
+                                ", before {}: a request loads from the first connector that \
+                                 has tokens, and passes a read after it over",
+                                cs.join(", ")
+                            ),
+                        }
                     ),
                 ),
                 None => (
@@ -6005,12 +6029,15 @@ impl Parser {
             StageKind::Step(sp) if st.name == reader => Some(sp),
             _ => None,
         });
-        let (has, help) = match engine.map(|sp| sp.connector.as_mut()) {
+        let (has, help) = match engine.map(|sp| {
+            sp.connectors
+                .iter_mut()
+                .find(|c| c.queue == l2 && matches!(c.kind, ConnectorKind::L2 { .. }))
+        }) {
             Some(Some(ConnectorSpec {
-                queue,
                 kind: ConnectorKind::L2 { link, .. },
                 ..
-            })) if *queue == l2 => {
+            })) => {
                 self.queues[qi].links.push((l2, at));
                 *link = Some(L2Link {
                     nic: format!("{reader}.nic"),
@@ -6018,16 +6045,9 @@ impl Parser {
                 });
                 return Ok(());
             }
-            Some(Some(c)) => (
-                format!(
-                    "`{reader}`'s engine has `connector {}`, not `connector {l2}`",
-                    c.queue
-                ),
-                format!(
-                    "an engine has one connector: replace `connector {}` with `{connector}`",
-                    c.queue
-                ),
-            ),
+            Some(Some(_)) => unreachable!("found an L2's"),
+            // an engine has several connectors (#599): the L2's goes among
+            // them
             Some(None) => (
                 format!("`{reader}`'s engine has no `connector {l2}`"),
                 format!(

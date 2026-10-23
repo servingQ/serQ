@@ -17,7 +17,7 @@ than host-language code, and every input passes `Program::validate`.
 The source model and externally supplied execution settings resolve to one
 complete `Program`; its JSON records the experiment as well as the deployment.
 
-Source: `src/ir.rs`. Current version: `IR_VERSION = 15`.
+Source: `src/ir.rs`. Current version: `IR_VERSION = 16`.
 
 ## Format
 
@@ -94,7 +94,7 @@ delay stage is `Ps(Ctx(N))`, `ps(present)` (`CStageKind::delay`).
 | `memory` | Optional pool index supplying resident KV totals and preemption candidates. |
 | `iteration?` | A list of `CIter` statements, below. Omitted for the default serve-then-admit procedure. Cannot accompany `ExclusivePrefill`. |
 | `request?` | `CRequest`: how the engine admits and releases a request (`CStmt::Request`), below. Omitted when it takes nothing and caches nothing. |
-| `connector?` | `CConnector`: its KV connector, to an L2 or from its queue's KV source, below. Omitted when it has none. |
+| `connector?` | `CConnector`: its KV connectors, to an L2 or from its queue's KV source, in the program's order, below. Omitted when it has none. |
 
 A `CRequest` is a hold's header read for a request: `pools: [(pool,
 units, reserve?)]`, `reuse?`, `prefix?` (read at `Request`), `cache?` and
@@ -113,22 +113,28 @@ would read the send. The request waits in its first pool's queue. Its
 `prefill` for each admission, and the attributes `admitted`, `first`,
 `last_reused` and `last_prefill` (`E.reused`, `E.prefill`) the caller reads
 after the call. A family engine's members each have their own `CStep`,
-whose `CRequest` names the member's pools. A `CConnector` has `load?` and
-`save?`, each a `CTransfer` of one shape: `amount`, read at `Request`
-(after `Hit`) or at `Release` and stored in the attribute `loaded` or
-`saved`; the copy, a run on `stage` (and `also`, held at once: a KV
-relation's reader's NIC, or the engine's own NIC under `kvt.l2_link`) of
-`work` after `latency?`, with `share?` and `poster?` as a `Run`'s; `into` and
-`units`, where the KV lands (a `Load`); `room?: {held, grow, cache}`, a
-save's room in an L2's pool, held first, grown by what the L2's entry
-lacks, cached whole; and `source?`, a KV relation's read: the source's
-memory, its member the attribute `from?` (which the request's entry sets;
--1: no source, nothing loaded), whose registered send the load waits for
-and ends. The engine runs a transfer as its own action while the
-request's status is `waiting_for_kv` (a load) or `finished` (a save);
-`Program::kernel` writes the statements it is (`Run; Load`, or `Hold {
-Grow; Run; Load }`) for the interpreter and the figure, which the IR does
-not hold. One status per request (`docs/design/request-state.md`). `record` is
+whose `CRequest` names the member's pools. A `CConnector` has `loads`, in
+the program's order, and `save?`, each a `CTransfer` of one shape:
+`amount`, read at `Request` (after `Hit`) or at `Release` and stored in
+the attribute `loaded` or `saved`; the copy, a run on `stage` (and `also`,
+held at once: a KV relation's reader's NIC, or the engine's own NIC under
+`kvt.l2_link`) of `work` after `latency?`, with `share?` and `poster?` as
+a `Run`'s; `into` and `units`, where the KV lands (a `Load`); `room?:
+{held, grow, cache}`, a save's room in an L2's pool, held first, grown by
+what the L2's entry lacks, cached whole; and `source?`, a KV relation's
+read: the source's memory, its member the attribute `from?` (which the
+request's entry sets; -1: no source, nothing loaded), whose registered
+send the load waits for and ends. At the admission each load's `amount` is read in order (one with
+a `source` only when `from` is not -1), and the first above 0 is the
+request's load, its amount in `loaded`; the others load nothing (vLLM's
+`MultiConnector`, `multi_connector.py:429-448`). One whose `source`'s send
+has ended is still chosen when its amount is above 0, and loads nothing.
+At most one load has a `source`, and it is the first: one before it that
+has tokens would pass the read over and leave the send to its `ttl`. The
+engine runs a transfer as its own action while the request's status is
+`waiting_for_kv` (a load) or `finished` (a save); `Program::kernel`
+writes the statements it is (`Run; Load`, or `Hold { Grow; Run; Load }`)
+for the interpreter and the figure, which the IR does not hold. One status per request (`docs/design/request-state.md`). `record` is
 the observation of what each admission loaded, `load_done` the attribute
 of when its latest load ended. After a load the interpreter computes the
 request's last token again if every one has KV, and reads the `CRequest`
@@ -281,7 +287,7 @@ text and directly constructed IR meet the same rules. Validation covers:
   and `output`; a `Load`; a `Run`'s `work` on a step stage or with
   `growing`; a step stage's `budget`, `chunk` and `granule`; a hold's or
   a `CRequest`'s `reuse`, `cache` and `prefix` lengths, its units on a KV
-  pool, and a `Grow` or `Shrink` of one; a `CConnector`'s `load` and
+  pool, and a `Grow` or `Shrink` of one; a `CConnector`'s `loads` and
   `save`; a KV pool's `cap` (`inf` too) and `block`. A *KV pool* is one
   whose units are positions of a token sequence: it has a `block`, is a
   step stage's `memory`, is taken by a hold or a `CRequest` with `cache`,
@@ -354,7 +360,7 @@ predicates and iteration-body guards, admission gates and assignments:
 | `Given` | a claim's `given`, evaluated for each session once its `init` has run (and its preset attributes are set), on its attributes (`hidden` ones included: a claim is no scheduler) and the constants; no `Sample`, no `Call` but arithmetic | none (not `Now`) |
 | `Iteration` | a claim over the iterations of a step stage, evaluated when an iteration starts, after its batch is scheduled (where the cost is read); no `Attr`, no `Sample`, of the calls only arithmetic, `Queue`, `Busy`, `Used`, `Free`, `Holders`, `Queued`, an index a `Num` in range | `Ntok`, `Ndec`, `Npre`, `Nres`, `Kvb`, `Kvp`, `Attn`, `Demand`, `Served`, `Arrived`, `Now` |
 | `End` | a claim `at end`, evaluated once when the run ends, when no session is live; no `Attr`, no `Sample`, no `Call` but arithmetic; the only moment that reads `Agg` | `Now` |
-| `Request` | a `CRequest`'s units, `reserve`, `reuse` and `prefix`, and a `CConnector`'s load, read for the request the scheduler admits; no draw | `Input`, `Output`, `Known`, `Hit`, `Loaded`, `Requeued`, `Now` |
+| `Request` | a `CRequest`'s units, `reserve`, `reuse` and `prefix`, and a `CConnector`'s loads, read for the request the scheduler admits; no draw | `Input`, `Output`, `Known`, `Hit`, `Loaded`, `Requeued`, `Now` |
 | `Release` | a `CRequest`'s `cache` and a `CConnector`'s save, read when the request gives its pools back (`Finished` 0 at a preemption, 1 at its end) | `Input`, `Output`, `Known`, `Finished`, `Now` |
 
 `Demand` is the tokens the stage's residents could take in the iteration

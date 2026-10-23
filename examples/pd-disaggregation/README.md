@@ -7,6 +7,13 @@ as `fork`, which the decoder's load waits for by its send, and the copy as
 `kvt.nixl_push (P, D, …)` (`docs/design/push-mode.md`,
 `docs/design/request-state.md`).
 
+`llmd_nixl_lmcache.sq` is `llmd_nixl_pull.sq` with an LMCache server
+both sides share, each engine's connectors vLLM's `MultiConnector`: the
+decoder reads a remote request's prompt from its prefiller and a local
+one's context from the L2, the prefiller its session's context from the
+L2, and the decoder saves each request to the L2
+(`docs/design/multi-connector.md`).
+
 `pd_open.sq` and `pd_tandem.sq` are research comparison fixtures for
 serving-queue-theory's queueing models. The open model uses Poisson arrivals;
 the saturated model circulates a closed population. They remain packaged

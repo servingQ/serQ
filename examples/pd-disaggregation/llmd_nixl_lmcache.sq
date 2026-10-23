@@ -1,0 +1,166 @@
+// llmd_nixl_pull.sq with an LMCache server both sides share: each engine's
+// connector is vLLM's MultiConnector (multi_connector.py:134-141), the NIXL
+// read first, then the L2, as vLLM documents for P/D with a shared store
+// (docs/features/disagg_prefill.md:32-35,
+// docs/features/mooncake_store_connector_usage.md:86-88). A request loads
+// from the first connector that has tokens for it (multi_connector.py:429-448):
+// a decoder's remote request from its prefiller, a local one, which took
+// its KV from no prefiller, from the L2; a prefiller's request from the L2,
+// what an earlier turn of its session left there. The decoder saves each
+// request's tokens to the L2 when it ends. Its workload is
+// examples/workloads/chat_reply.sq; docs/design/multi-connector.md explains it.
+//
+// What the model leaves out: the prefiller saves nothing to the L2, since
+// the decoder's save at the turn's end holds the prompt already, and a save
+// would keep the prefiller's request, and the decoder's read of it, waiting
+// (vLLM saves asynchronously, multi_connector.py:525-554); a prefiller's send
+// that the decoder's request does not read stays until the session's end
+// (vLLM's NIXL pull scheduler frees it when the read is 0 tokens); and
+// vllm_lmcache.sq's simplifications of the L2.
+use "std/args";
+use "std/kvt";
+use "std/share";
+
+let NP = 2;  // prefill instances
+let ND = 2;  // decode instances
+let B = 8192;  // max_num_batched_tokens
+let max_seqsP = 16;  // max_num_seqs on a prefiller
+let max_seqsD = 64;  // max_num_seqs on a decoder
+let blocksP = 10000;  // num_gpu_blocks on a prefiller
+let bs = 16;  // block_size
+let max_model_len = 16384;  // max_model_len
+let a = 2e-5;  // compute per scheduled token (s)
+let omega = 2e-4;  // weights read per iteration (s)
+let beta = 2e-9;  // KV read per iteration per resident context token (s)
+let c0 = 0;  // fixed cost per iteration (s)
+let BwP = 2e5;  // NIXL bandwidth out of a prefiller, tokens/s
+let BwD = 2e5;  // NIXL bandwidth into a decoder, tokens/s
+let x0 = 0.002;  // per-read latency (s)
+let minp = 0;  // prefix-based-pd-decider promptTokens
+let chunk = 256;  // LMCache's chunk: what it stores and finds, in tokens
+let r = 5e-6;  // seconds per token at the LMCache server's bandwidth
+
+fn main() {
+  let blocksD = args.number("blocksD", 10000);  // num_gpu_blocks on a decoder
+  let thr = args.number("thr", 512);  // prefix-based-pd-decider nonCachedTokens
+  let l2_cap = args.number("l2_cap", 1e6);  // tokens the LMCache server holds
+
+  queue gw : gateway {
+    route {
+      choose j in ND by (holders(D[j].kv) + queued(D[j].kv));
+      set hitD = min(cachedin(D[j].kv), floor(input - 1, bs));
+      set remote_prefill = input >= minp && input - hitD >= thr;
+      if (remote_prefill) {
+        choose i in NP by (cachedin(P[i].kv) > 0 ? 0 : 1, work(P[i]) + queued(P[i].reqs), ~uniform(0, 1));
+        P[i].prefill (input);
+        set t1 = now;
+        D[j].decode (input) from P[i];
+        observe send_held = D.load_done - t1;
+      } else {
+        D[j].decode (input);
+      }
+      observe remote = remote_prefill;
+    }
+  }
+
+  // The LMCache server: its memory, and the bandwidth the copies in and out
+  // of it divide.
+  queue lmc : l2 {
+    device host { kv cap l2_cap; }
+    pool kv on host { block chunk; evict lru; }
+    serve ps(1);
+  }
+
+  // The whole chunks of `known` tokens the L2 holds past the `hit` the GPU
+  // holds, all but the last token, which vLLM computes again after a full
+  // copy.
+  def beyond(known, hit) {
+    max(0, min(floor(cachedin(lmc.kv), chunk), known - 1) - hit)
+  }
+
+  queue P[NP] : prefill {
+    device gpu { compute (t) = t * a; hbm (k) = omega + beta * k; kv cap blocksP * bs; }
+    engine on gpu {
+      reqs cap max_seqsP;
+      tokens cap B;
+      connector lmc { per_token (r); load (request.preempted ? 0 : beyond(request.known, request.hit)); }
+      scheduler {
+        advance running;
+        // a request that copies in takes blocks for the copy and none for
+        // new work (scheduler.py:1069-1072), and no running slot until its
+        // KV is there (scheduler.py:1264-1267)
+        admit waiting while (running.preempted == 0)
+          taking kv (request.loaded > 0 ? request.hit + request.loaded : min(request.known, request.hit + budget_left(P)))
+                   reserve (request.known),
+                 reqs (request.loaded > 0 ? 0 : 1) reserve (1)
+          reuse (floor(request.known - 1, bs))
+          cache (request.input);
+      }
+      worker {
+        forward (c0 + max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
+      }
+    }
+    pool reqs on P { queue fifo; }
+    pool kv on gpu { block bs; evict lru; preempt lifo; }
+    nic ps(BwP);
+    // the prompt, and one token sampled and discarded (llm-d's prefill
+    // request has max_tokens = 1)
+    prefill (prompt) {
+      P (prompt, 1);
+    }
+  }
+
+  queue D[ND] : agg, decode {
+    device gpu { compute (t) = t * a; hbm (k) = omega + beta * k; kv cap blocksD * bs; }
+    engine on gpu {
+      reqs cap max_seqsD;
+      tokens cap B;
+      // NIXL first: a request whose entry took its KV from no prefiller
+      // (`D.from` -1) has nothing there, and the L2 is asked next
+      connector P { load (request.preempted ? 0 : request.input - request.hit); }
+      connector lmc {
+        per_token (r);
+        load (request.preempted ? 0 : beyond(request.known, request.hit));
+        save (floor(request.input + request.output, chunk));
+      }
+      scheduler {
+        advance running;
+        admit waiting while (running.preempted == 0)
+          taking kv (request.loaded > 0 ? request.hit + request.loaded : min(request.known, request.hit + budget_left(D)))
+                   reserve (request.known),
+                 reqs (request.loaded > 0 ? 0 : 1) reserve (1)
+          reuse (floor(request.known - 1, bs))
+          cache (request.input + request.output);
+      }
+      worker {
+        forward (c0 + max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
+      }
+    }
+    pool reqs on D { queue fifo; }
+    pool kv on D.gpu { block bs; evict lru; preempt lifo; }
+    nic ps(BwD);
+    decode (prompt) {
+      set produced = min(output, max_model_len - prompt);
+      D (prompt, produced);
+    }
+    decode (prompt) from P {
+      set produced = min(output, max_model_len - prompt);
+      D (prompt, produced);
+    }
+  }
+
+  kvt.nixl_pull (P, D, latency = x0, share = share.maxmin);
+
+  server (input, hidden output) reply (produced) {
+    observe too_long = input >= max_model_len;
+    if (input >= max_model_len) { end; }
+    gw.route();
+    set produced = D.produced;
+  }
+
+  gauge running_spread = max k in ND (used(D[k].reqs)) - min k in ND (used(D[k].reqs));
+  gauge kv_usage_max = max k in ND (used(D[k].kv) / (used(D[k].kv) + free(D[k].kv)));
+  gauge kv_usage_mean = sum k in ND (used(D[k].kv) / (used(D[k].kv) + free(D[k].kv))) / ND;
+  gauge load_spread = max k in ND (holders(D[k].kv) + queued(D[k].kv))
+                    - min k in ND (holders(D[k].kv) + queued(D[k].kv));
+}

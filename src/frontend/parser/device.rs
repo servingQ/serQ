@@ -498,7 +498,7 @@ impl Parser {
             schedule: Schedule::Procedure(None),
             state: vec![],
             request: None,
-            connector: None,
+            connectors: vec![],
         };
         let mut caps: Vec<Capacity> = vec![];
         let (mut tokens, mut schedule, mut execute) = (false, false, false);
@@ -543,10 +543,34 @@ impl Parser {
                 schedule = true;
                 self.schedule(&name, &mut s)?;
             } else if self.eat_kw("connector") {
-                if s.connector.is_some() {
-                    return self.err_at(k_at, "`connector` twice: an engine has one KV connector");
+                // several, asked in their order (vLLM's `MultiConnector`):
+                // each queue once, and one of them saves
+                let c_at = self.pos;
+                let c = self.connector()?;
+                if s.connectors.iter().any(|d| d.queue == c.queue) {
+                    return self.err_at(
+                        c_at,
+                        format!(
+                            "`connector {0}` twice: one connector names its queue, with its \
+                             `load` and its `save`",
+                            c.queue
+                        ),
+                    );
                 }
-                s.connector = Some(self.connector()?);
+                if c.save.is_some()
+                    && let Some(d) = s.connectors.iter().find(|d| d.save.is_some())
+                {
+                    return self.err_at(
+                        c_at,
+                        format!(
+                            "`connector {}` saves, and so does `connector {}`: a request \
+                             here runs one save, where vLLM runs every connector's at once \
+                             (multi_connector.py:334-346); keep `save` in one",
+                            c.queue, d.queue
+                        ),
+                    );
+                }
+                s.connectors.push(c);
             } else if self.eat_kw("worker") {
                 if execute {
                     return self.err_at(k_at, "`worker` twice: an engine has one worker");
@@ -665,7 +689,7 @@ impl Parser {
             device,
             stage: prog.stages.len(),
             caps,
-            connector: s.connector.is_some(),
+            connector: !s.connectors.is_empty(),
             request: s.request.is_some() || !in_queue,
             kv,
         });
@@ -683,7 +707,9 @@ impl Parser {
     /// `connector`: the L2 queue `C` it loads a request's KV from at the
     /// request's admission (`n` read as `taking` is, `request.hit` included)
     /// and saves it to at its end (`n` read as `cache` is), each token's copy
-    /// taking `r` at `C`'s bandwidth (`ir::CConnector`).
+    /// taking `r` at `C`'s bandwidth; or `C { load (n); }`, the source `C` of
+    /// the engine's queue's KV relation. One of an engine's connectors
+    /// (`ir::CConnector::loads`).
     fn connector(&mut self) -> PResult<ConnectorSpec> {
         let c_at = self.pos;
         let span = Some(self.span());

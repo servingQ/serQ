@@ -143,7 +143,7 @@ fn a_link_puts_load_and_save_on_the_member_s_nic() {
         };
         let i = st.index.expect("a member") as f64;
         let c = sp.connector.as_ref().expect("a connector");
-        for t in [c.load.as_ref().unwrap(), c.save.as_ref().unwrap()] {
+        for t in [&c.loads[0], c.save.as_ref().unwrap()] {
             assert_eq!(t.stage.base, lmc);
             assert_eq!(t.also.len(), 1);
             assert_eq!((t.also[0].base, t.also[0].count), (nic, 2));

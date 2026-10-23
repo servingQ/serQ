@@ -84,8 +84,9 @@ eitem    := NAME [ '[' N ']' ] cap expr ;    -- a capacity the engine holds (`re
           | scheduler { (let NAME = expr ;)* sstmt+ }   -- what each iteration does (required)
           | worker { forward ( expr ) ; }    -- what the worker does with the batch: its forward's time (required)
           | connector QUEUE { [per_token ( expr ) ;] [load ( expr ) ;] [save ( expr ) ;] }
-                                             -- its KV connector: to an `l2` queue, or from the source of
-                                             -- its queue's KV relation (*An engine's request*)
+                                             -- a KV connector: to an `l2` queue, or from the source of
+                                             -- its queue's KV relation; several are asked in their
+                                             -- order (*An engine's request*)
 sstmt    := advance running [only ( expr )] [admission | by ( expr , ... ) | decode first] [each at most ( expr )] ;
           | admit waiting [only ( expr )] [while ( expr )] [each at most ( expr )]
                 [taking POOL ( expr ) [reserve ( expr )] , ... [reuse ( expr )]
@@ -1473,6 +1474,39 @@ leg has ended first takes the running slot its admission left for after
 the load. A send whose copy has begun stays until the copy is done. Such
 a connector has no `per_token` or `save`.
 
+An engine may have several connectors, as vLLM's `MultiConnector`
+(`multi_connector.py:134-141`; [the design](https://github.com/servingQ/serQ/blob/main/docs/design/multi-connector.md)).
+Each names its queue once, with its `load` and its `save`, and one of
+them at most has `save`. At the admission each `load` is read in the
+order the connectors are written, and the first above 0 is the request's
+load: `request.loaded`, and the copy through that connector alone; the
+others load nothing (`multi_connector.py:429-448`). A connector with no
+`load` is not asked, and where it stands does not matter. The source's
+connector is not asked for a request its entry took from no source, and a
+read whose send has ended is the request's load, of nothing, when its
+`load` is above 0. A finished request runs the one `save`. `E.loaded` and
+`E.load_done` are the chosen load's. The source's connector is written
+first, or the program does not link: one before it that has tokens would
+pass the read over, and the send would keep the source's blocks until its
+`ttl` or the session's end, where vLLM's NIXL frees them at once
+(`nixl/pull_scheduler.py:145-147`), or in a push the session would end
+while its leg runs. The rule is vLLM's, the order of the others and every
+amount the program's: the source's `load` guarded by what another
+connector holds (`cachedin(lmc.kv)`) chooses otherwise, though its read of
+0 leaves the send to its `ttl`, as with one connector. The decoder of
+`examples/pd-disaggregation/llmd_nixl_lmcache.sq`
+reads a remote request's prompt from its prefiller and a local one's
+context from the L2, and saves to the L2:
+
+```serq
+      connector P { load (request.preempted ? 0 : request.input - request.hit); }
+      connector lmc {
+        per_token (r);
+        load (request.preempted ? 0 : beyond(request.known, request.hit));
+        save (floor(request.input + request.output, chunk));
+      }
+```
+
 After any connector's load, a request that has KV for every token it has
 computes its last again, to sample the next (`scheduler.py:3075-3076`),
 and its admission is read again: a pool it took none of and takes now, it
@@ -1820,6 +1854,7 @@ file `examples/pairs.json` gives it, from `examples/workloads/`
 | `oracle/vllm_request.sq` | one vLLM v1 request on the step clock, compiled per scenario to `tools/oracle/{adaptive,alone,chunked,hol,longchunk,mixed,preempt,seqcap}.ir.json` | the upstream oracle ([vLLM correspondence](#7-vllm-v1-as-a-serq-program)), `tests/vllm_oracle.rs`, the Lean theorems generated from the same IR |
 | `replay/vllm_replay.sq` | vLLM v1 on the A100 testbed replaying the short-context trace ([A100 testbed](#8-vllm-on-the-a100-testbed)) | the prefix-cache oracle `tools/oracle/cache_trace` (`tests/vllm_cache.rs`, theorem `vllm_cache_trace`) |
 | `pd-disaggregation/llmd_nixl_pull.sq` | llm-d's prefill/decode disaggregation with the NIXL connector, two prefill and two decode instances ([use case](use-cases/pd.md)) | the source (llm-d at 8a2f37d, the router at 13eebdb, vLLM at 0c87a197), `tests/pd_semantics.rs`; no scheduler oracle |
+| `pd-disaggregation/llmd_nixl_lmcache.sq` | `llmd_nixl_pull.sq` with an LMCache server both sides share: the decoder's connectors NIXL's then the L2's, the prefiller's the L2's (vLLM's `MultiConnector`, [the design](https://github.com/servingQ/serQ/blob/main/docs/design/multi-connector.md)) | the source (vLLM at 0c87a197), `tests/connector.rs`; no scheduler oracle |
 | `pd-disaggregation/vllm_nixl_push.sq` | vLLM's push proxy in front of one prefill and one decode instance with the NIXL connector's push mode, on the A6000 testbed, replaying the short-context trace ([the push mode](https://github.com/servingQ/serQ/blob/main/docs/design/push-mode.md)) | the source (vLLM at 0c87a197), `tests/fork_join.rs`; no scheduler oracle |
 | `pd-disaggregation/pd_two_fabrics.sq` | prefill/decode on two nodes, the KV read over NVLink inside a node and over RDMA between them, each fabric under its own `share` | `make check` links and draws it; neither policy is measured ([bandwidth sharing](https://github.com/servingQ/serQ/blob/main/docs/design/bandwidth-sharing.md)) |
 | `papers/*.sq` | three scheduling papers' serving systems | their claims, proved in Lean ([use cases](use-cases/index.md)) |

@@ -116,13 +116,16 @@ fn swap(t: &Text, k: usize) -> Option<Fix> {
 
 /// `E-connector-misnamed`, at the connector's name in queue `R`'s engine:
 /// the name of the queue `R`'s relation reads from, `S` in
-/// `kvt.nixl_pull (S, R, …)` or `kvt.nixl_push`.
+/// `kvt.nixl_pull (S, R, …)` or `kvt.nixl_push`. None when the engine has
+/// `connector S` already, which the rename would write twice.
 fn rename(t: &Text, k: usize) -> Option<Fix> {
     // the queue the engine is in: the last `queue R` above
-    let q = (0..k)
-        .rev()
+    let at = (0..k).rev().find(|&j| t.word(j) == Some("queue"))?;
+    let q = t.word(at + 1)?;
+    // to the next queue's
+    let end = (at + 1..t.toks.len())
         .find(|&j| t.word(j) == Some("queue"))
-        .and_then(|j| t.word(j + 1))?;
+        .unwrap_or(t.toks.len());
     // its relation, `nixl_pull (S, R` or `nixl_push (S, R`
     let source = (0..t.toks.len().saturating_sub(5)).find_map(|j| {
         let relation = matches!(t.word(j), Some("nixl_pull" | "nixl_push"))
@@ -131,6 +134,9 @@ fn rename(t: &Text, k: usize) -> Option<Fix> {
             && t.word(j + 4) == Some(q);
         relation.then(|| t.word(j + 2)).flatten()
     })?;
+    if (at..end).any(|j| t.word(j) == Some("connector") && t.word(j + 1) == Some(source)) {
+        return None;
+    }
     let wrong = t.word(k)?;
     Some(Fix {
         label: format!("rename `connector {wrong}` to `connector {source}`"),

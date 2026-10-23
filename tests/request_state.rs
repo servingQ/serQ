@@ -361,7 +361,7 @@ fn a_read_s_source_is_a_pool_of_the_program() {
     assert!(p.validate().is_ok());
     for st in &mut p.stages {
         if let serq::ir::CStageKind::Step(sp) = &mut st.kind
-            && let Some(t) = sp.connector.as_mut().and_then(|c| c.load.as_mut())
+            && let Some(t) = sp.connector.as_mut().and_then(|c| c.loads.first_mut())
             && let Some(src) = t.source.as_mut()
         {
             src.count = 999;
@@ -370,6 +370,28 @@ fn a_read_s_source_is_a_pool_of_the_program() {
     let e = p.validate().unwrap_err();
     assert!(
         e.contains("pool reference") && e.contains("out of range"),
+        "{e}"
+    );
+}
+
+/// A request's entry names one source (`E.from`), which one of its engine's
+/// loads reads: IR from JSON with two loads that read a source does not
+/// validate (#599), where the text cannot write it (one relation per
+/// reader, one connector per queue).
+#[test]
+fn two_loads_reading_a_source_do_not_validate() {
+    let (mut p, _) = load(&serq::program_path("llmd_nixl_pull"), common::horizon(10.0));
+    for st in &mut p.stages {
+        if let serq::ir::CStageKind::Step(sp) = &mut st.kind
+            && let Some(c) = sp.connector.as_mut()
+        {
+            let read = c.loads[0].clone();
+            c.loads.push(read);
+        }
+    }
+    let e = p.validate().unwrap_err();
+    assert!(
+        e.contains("two of a connector's loads read a source"),
         "{e}"
     );
 }
