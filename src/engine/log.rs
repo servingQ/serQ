@@ -490,6 +490,7 @@ impl Log {
     }
 }
 
+/// A log of version `v`, which this serq does not read.
 fn another_version(v: u32) -> String {
     format!("a run log of version {v}; this serq reads version {LOG_VERSION}")
 }
@@ -506,6 +507,7 @@ fn older(what: &str) -> String {
 /// `status` event; `Plain` has none.
 const MODES: [RunMode; 3] = [RunMode::Plain, RunMode::Prefill, RunMode::Decode];
 
+/// The name the log gives `mode`; the reader finds it again through `MODES`.
 fn mode_name(mode: RunMode) -> Option<&'static str> {
     match mode {
         RunMode::Plain => None,
@@ -514,6 +516,7 @@ fn mode_name(mode: RunMode) -> Option<&'static str> {
     }
 }
 
+/// An event's `"mode"` field, or nothing for `Plain`.
 fn write_mode(s: &mut String, mode: RunMode) {
     if let Some(name) = mode_name(mode) {
         let _ = write!(s, ",\"mode\":\"{name}\"");

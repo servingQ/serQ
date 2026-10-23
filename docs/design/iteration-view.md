@@ -54,8 +54,8 @@ outside this repository cannot be. The view is `view::iterations::figure(&Log,
 function of the IR; this one is a function of a run. Drawing it by running
 the program again (`run --draw`) would make the run exist to draw; drawing
 it from the file `run --log` wrote keeps one run, one record, and any
-number of figures of it, as the issue asked ("그림이 시뮬레이션을 돌리지
-않고 `run --log`가 쓴 기록을 읽습니다").
+number of figures of it, as #22 asked: the figure reads the record
+`run --log` wrote and does not run the simulation.
 
 **`serq draw --log LOG`, with no FILE.** Rejected: a positional `FILE.json`
 told apart by its contents (an IR and a log both have a top-level

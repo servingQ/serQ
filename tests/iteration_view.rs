@@ -15,6 +15,7 @@ use serq::view::iterations::{self, CELL_MAX, CELL_MIN, CELL_W, ROW_H, STRIP_H};
 /// The tutorial's engine (chapter 5, the program of chapter 6's cliff).
 const CLIFF: &str = "docs/tutorial/programs/05-engine.sq";
 
+/// The crate's directory, which the programs' paths are relative to.
 fn root() -> &'static Path {
     Path::new(env!("CARGO_MANIFEST_DIR"))
 }
@@ -73,6 +74,8 @@ fn row_labels(f: &Figure, grid: &Rect) -> Vec<(usize, String)> {
         .collect()
 }
 
+/// A resident's row label, written out here to hold the figure's to it:
+/// `34`, or `34/0` for a leg of session 34.
 fn label(w: Who) -> String {
     match w.leg {
         Some(l) => format!("{}/{l}", w.serial),

@@ -206,6 +206,8 @@ struct Scale {
     label: String,
 }
 
+/// Each column against its iteration's tokens cap, or, when a cap is not a
+/// positive finite number, every column against the window's largest batch.
 fn token_scale(cols: &[Column]) -> Scale {
     let budgets: Vec<f64> = cols.iter().map(|c| c.budget).collect();
     if budgets.iter().all(|b| b.is_finite() && *b > 0.0) {
