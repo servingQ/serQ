@@ -150,8 +150,9 @@ pub struct Takes {
     pub push: bool,
     /// `share = share.maxmin`: how the copies divide the two NICs.
     pub share: crate::ir::Share,
-    /// `ttl = t`: how long an unread send keeps the source's blocks.
-    pub ttl: Option<f64>,
+    /// `ttl = t`: how long an unread send keeps the source's blocks, the
+    /// `let` that holds it (`D.pull.ttl`) and where `t` is written.
+    pub ttl: Option<(String, usize)>,
     /// Where `kvt.…` is written, for an error about the relation.
     pub at: usize,
 }

@@ -113,6 +113,47 @@ fn an_expired_send_is_computed_again() {
     assert!(held.iter().all(|&x| x >= 0.0), "{held:?}");
 }
 
+/// A `ttl` over a program argument is the argument's value, as a `latency`
+/// over one is. The parser folded the `ttl` with the `let`s it knew, whose
+/// arguments are their defaults, so `--tl 2` left the IR's `ttl` at the
+/// default 0.5, in silence (#739); it is a constant the linker evaluates
+/// with the arguments, and checks there: an argument that makes it 0 is
+/// refused where `ttl` is written. llm-d's example has two prefillers
+/// (`NP = 2`), a send each.
+#[test]
+fn a_ttl_over_an_argument_is_the_arguments_value() {
+    let (_, workload) = example(LLMD);
+    let thr = "  let thr = args.number(\"thr\", 512);";
+    let src = with_ttl("tl").replace(thr, &format!("  let tl = args.number(\"tl\", 0.5);\n{thr}"));
+    assert!(src.contains("let tl"));
+    let w = std::fs::read_to_string(&workload).unwrap();
+    let compiled = |tl: Option<&str>| {
+        let mut ov = common::horizon(10.0);
+        if let Some(v) = tl {
+            ov.set("tl", v).unwrap();
+        }
+        serq::compile_paired(&src, &w, common::NAMES, &ov)
+    };
+    let ttls = |tl: Option<&str>| -> Vec<Option<f64>> {
+        let p = compiled(tl).unwrap_or_else(|e| panic!("{e}"));
+        p.stages
+            .iter()
+            .filter_map(|s| match &s.kind {
+                serq::ir::CStageKind::Step(st) => st.request.as_ref()?.send.as_ref(),
+                _ => None,
+            })
+            .map(|s| s.ttl)
+            .collect()
+    };
+    assert_eq!(ttls(None), [Some(0.5); 2]);
+    assert_eq!(ttls(Some("2")), [Some(2.0); 2]);
+    let e = compiled(Some("0")).unwrap_err();
+    assert!(
+        e.contains("`ttl` is a number above 0") && e.contains("it is 0") && e.contains("ttl = tl"),
+        "{e}"
+    );
+}
+
 /// A `ttl` is a positive constant: a setting of the relation, read once.
 /// `inf` is the default, left out (one meaning, one spelling).
 #[test]
