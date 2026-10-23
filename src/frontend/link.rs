@@ -318,6 +318,18 @@ pub(crate) enum Supplied {
 /// The name a program reads infinity by.
 pub const INF: &str = "inf";
 
+/// What a relation's `ttl` is, when it is not: the parser's refusal of
+/// one that is no constant and the linker's of one whose value is not
+/// above 0.
+pub const TTL_IS: &str = "`ttl` is a number above 0, or a constant over `let`s: how long the \
+     source keeps the blocks of a send its reader does not read (left out, until the session's \
+     end)";
+
+/// A relation's `ttl` as a message shows it: `none` where it is left out.
+fn ttl_text(ttl: Option<f64>) -> String {
+    ttl.map_or("none".into(), |t| t.to_string())
+}
+
 /// Whether the language supplies `name` as a value, and as what: the one
 /// place `CONTEXT_VARS` and `inf` are read together. An engine's lists
 /// (`LISTS`) are the language's too, but read as `name.…`, not as a value.
@@ -576,10 +588,9 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
         })?;
         lk.consts.insert(name.clone(), v);
     }
-    // An array size or a relation's `ttl` is folded by the parser, which
-    // knew only the `let`s above it, and reaches here as a number: its
-    // aggregates' indices are asked of the whole program, as an
-    // expression's are (#561).
+    // An array size is folded by the parser, which knew only the `let`s
+    // above it, and reaches here as a number: its aggregates' indices are
+    // asked of the whole program, as an expression's are (#561).
     for e in &prog.folded {
         lk.own_indices(e)?;
     }
@@ -940,7 +951,7 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
     }
     // an engine's connector: its transfers, lowered after the session's
     // blocks, which keep their numbers; a family's, one per member
-    let mut sends: Vec<(String, Option<f64>)> = vec![];
+    let mut sends: Vec<(String, Option<f64>, Span)> = vec![];
     let mut at = 0;
     for decl in &prog.stages {
         for i in 0..decl.count {
@@ -960,24 +971,42 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
                 let member = decl.array.then_some(i);
                 step.connector = Some(Box::new(lk.connector(c, &decl.name, taken, member)?));
                 if let ConnectorKind::Relation(Some(rel)) = &c.kind {
-                    sends.push((rel.source.clone(), rel.ttl));
+                    let ttl = rel.ttl.as_ref().map(|(n, at)| lk.ttl(n, *at)).transpose()?;
+                    sends.push((rel.source.clone(), ttl, rel.at));
                 }
             }
+        }
+    }
+    // per source, the `ttl` its first relation named: one send per
+    // request, whichever reader reads it; their values, which the
+    // program's arguments set (#739)
+    for (k, (source, ttl, at)) in sends.iter().enumerate() {
+        if let Some((_, first, _)) = sends[..k].iter().find(|(s, ..)| s == source)
+            && first != ttl
+        {
+            return Err(LinkError::new(format!(
+                "two KV relations from `{source}` name different `ttl`s ({} and {}): a request \
+                 of `{source}` keeps its blocks for one send, whichever reader reads it; write \
+                 the same `ttl` on both",
+                ttl_text(*first),
+                ttl_text(*ttl)
+            ))
+            .at(Some(*at)));
         }
     }
     // a KV relation's source engine registers a send of each request's
     // blocks, which the reader's load ends, or its `ttl`: an engine that
     // takes its memory (a source whose entries hold and lease keeps the
     // lease they write)
-    for &(ref source, ttl) in &sends {
+    for &(ref source, ttl, _) in &sends {
         for st in stages.iter_mut().filter(|st| st.name == *source) {
             if let CStageKind::Step(step) = &mut st.kind
                 && let Some(m) = step.memory
                 && let Some(r) = &mut step.request
                 && r.pools.iter().any(|(q, _, _)| q.base == m)
             {
-                // two relations from one source name one `ttl`: the parser
-                // refused the others, where the relation is written
+                // two relations from one source name one `ttl`: the others
+                // were refused above, where the relation is written
                 r.send = Some(crate::ir::CSend { ttl });
             }
         }
@@ -2859,6 +2888,25 @@ impl Linker<'_> {
         })
     }
 
+    /// A KV relation's `ttl`, the constant `name` holds: its value with the
+    /// program's arguments, written at `at`. A number above 0; `inf` is the
+    /// default, which the relation says by leaving `ttl` out.
+    fn ttl(&self, name: &str, at: Span) -> LResult<f64> {
+        let v = self.constant(name)?;
+        if v.is_finite() && v > 0.0 {
+            return Ok(v);
+        }
+        // the default, spelt: one meaning, one spelling
+        let message = if v == f64::INFINITY {
+            "`ttl = inf` is the default: leave `ttl` out for a send kept until it is read or \
+             the session ends"
+                .to_string()
+        } else {
+            format!("{TTL_IS}; it is {v}")
+        };
+        Err(LinkError::new(message).at(Some(at)))
+    }
+
     /// An engine's connector, for member `member` of an engine family (`None`
     /// for one engine): its amounts, read for the request, and the kernel
     /// blocks they mean, which read them as `E.loaded` and `E.saved`
@@ -3411,7 +3459,7 @@ pub(crate) trait Constants {
     }
     /// [`Self::own_index`] of every aggregate in `e`, refused at the
     /// aggregate, where `e` is not evaluated: a constant the parser folded
-    /// (an array size, a `ttl`, whose value is the parser's) or a branch a
+    /// (an array size, whose value is the parser's) or a branch a
     /// constant condition does not take. Either is the program's, and its
     /// indices are asked as an expression's are (#561), in an argument a
     /// call does not read as well (`Expr::any_written`). The parser

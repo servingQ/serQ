@@ -460,7 +460,12 @@ pub struct Relation {
     pub share: crate::ir::Share,
     /// `ttl = t`: how long a send the reader does not read keeps the
     /// source's blocks (`ir::CSend::ttl`); absent, until the session's end.
-    pub ttl: Option<f64>,
+    /// The `let` that holds it, which the linker evaluates with the
+    /// program's arguments, as it does the `latency`'s (#739), and where
+    /// `t` is written.
+    pub ttl: Option<(String, Span)>,
+    /// Where `kvt.…` is written, for an error about the relation.
+    pub at: Span,
 }
 
 /// An engine's `taking P (u) [reserve (r)], … [reuse (e)] [prefix (…)]
@@ -862,9 +867,9 @@ pub struct Program {
     pub cost_records: Vec<(String, Vec<String>)>,
     pub lets: Vec<(String, Expr)>,
     /// The constants the parser folds and keeps no expression of (an array
-    /// size, a relation's `ttl`) that hold an aggregate. The value is the
-    /// parser's; the linker asks each aggregate's index of the whole
-    /// program, as it does in an expression (#561).
+    /// size) that hold an aggregate. The value is the parser's; the linker
+    /// asks each aggregate's index of the whole program, as it does in an
+    /// expression (#561).
     pub folded: Vec<Expr>,
     pub pools: Vec<PoolDecl>,
     pub stages: Vec<StageDecl>,

@@ -2135,9 +2135,6 @@ impl Parser {
     /// KV relation, which `kvt.nixl_pull (C, Q, …)` or `kvt.nixl_push`
     /// declared, below the engine as often as above it.
     fn relations(&self, prog: &mut Program) -> PResult<()> {
-        // per source, the `ttl` its first relation named: one send per
-        // request, whichever reader reads it
-        let mut ttls: Vec<(String, Option<f64>)> = vec![];
         for st in &mut prog.stages {
             let StageKind::Step(sp) = &mut st.kind else {
                 continue;
@@ -2226,21 +2223,6 @@ impl Parser {
                     ),
                 );
             }
-            match ttls.iter().find(|(s, _)| *s == source.name) {
-                Some((_, ttl)) if *ttl != t.ttl => {
-                    return self.err_at(
-                        t.at,
-                        format!(
-                            "two KV relations from `{0}` name different `ttl`s: a request of \
-                             `{0}` keeps its blocks for one send, whichever reader reads it; \
-                             write the same `ttl` on both",
-                            source.name
-                        ),
-                    );
-                }
-                Some(_) => {}
-                None => ttls.push((source.name.clone(), t.ttl)),
-            }
             c.kind = ConnectorKind::Relation(Some(Relation {
                 source: source.name.clone(),
                 leased: format!("{}.{leased}", source.name),
@@ -2248,7 +2230,8 @@ impl Parser {
                 latency: t.latency.clone(),
                 push: t.push,
                 share: t.share,
-                ttl: t.ttl,
+                ttl: t.ttl.as_ref().map(|(n, at)| (n.clone(), self.span_at(*at))),
+                at: self.span_at(t.at),
             }));
         }
         // and the other way: a relation copies only through its reader's
@@ -2873,31 +2856,14 @@ impl Parser {
                 share = Some(self.share_policy()?);
             } else {
                 // how long the source keeps a send nobody reads: a constant,
-                // as vLLM's lease is a setting
+                // as vLLM's lease is a setting; its value is the linker's,
+                // which reads the program's arguments (#739)
                 let t_at = self.pos;
                 let e = self.expr()?;
-                match self.const_value(&e) {
-                    Some(v) if v > 0.0 && v.is_finite() => {
-                        self.keep_folded(e);
-                        ttl = Some(v);
-                    }
-                    // the default, spelt: one meaning, one spelling
-                    Some(v) if v == f64::INFINITY => {
-                        return self.err_at(
-                            t_at,
-                            "`ttl = inf` is the default: leave `ttl` out for a send kept \
-                             until it is read or the session ends",
-                        );
-                    }
-                    _ => {
-                        return self.err_at(
-                            t_at,
-                            "`ttl` is a number above 0, or a constant over `let`s: how long \
-                             the source keeps the blocks of a send its reader does not read \
-                             (left out, until the session's end)",
-                        );
-                    }
+                if self.const_value(&e).is_none() {
+                    return self.err_at(t_at, crate::frontend::link::TTL_IS);
                 }
+                ttl = Some((t_at, e));
             }
         }
         self.expect(&Tok::RParen)?;
@@ -3780,7 +3746,7 @@ impl Parser {
     }
 
     /// Keep `e`, a constant folded here whose expression the program keeps
-    /// nowhere else (an array size, a `ttl`), for the linker when it holds an
+    /// nowhere else (an array size), for the linker when it holds an
     /// aggregate: the index is a name the program does not already have,
     /// and only the linker knows the program's names (#561), in an argument
     /// a call does not read as well (`Expr::any_written`).
@@ -5796,7 +5762,7 @@ impl Parser {
         (reader, r_at): (String, usize),
         latency: Option<(usize, Expr)>,
         share: crate::ir::Share,
-        ttl: Option<f64>,
+        ttl: Option<(usize, Expr)>,
     ) -> PResult<()> {
         let verb = if push { "push" } else { "pull" };
         let written = format!("`kvt.nixl_{verb} ({source}, {reader})`");
@@ -5952,6 +5918,19 @@ impl Parser {
         } else {
             None
         };
+        // a constant of its own (`D.pull.ttl`), as the `latency` is, which
+        // the linker evaluates with the program's arguments: one the parser
+        // folded kept an argument's default (#739). It is in its place, for
+        // an error of its evaluation (`0/0`).
+        let ttl = ttl.map(|(t_at, e)| {
+            let tname = format!("{reader}.{verb}.ttl");
+            if let Some(v) = self.const_value(&e) {
+                self.consts.push((tname.clone(), v));
+            }
+            let e = Expr::Located(self.span_at(t_at), Box::new(e));
+            prog.lets.push((tname.clone(), e));
+            (tname, t_at)
+        });
         self.queues[qi].takes = Some(queue::Takes {
             source,
             latency,

@@ -305,13 +305,12 @@ fn a_load_whose_send_expired_computes_the_prompt_itself() {
     assert_eq!(samples(&r, "D.prefill"), [1.0]);
 }
 
-/// A `ttl` is folded by the parser, which knows only the `let`s above it,
-/// and reaches the linker as a number; an aggregate's index in it is a name
-/// the program does not already have, as in any expression. Until #561,
-/// `sum prompt in 2 (0.25)` linked with `prompt` an attribute. The
-/// relation's `latency` is a constant of the program, which the linker
-/// asks the same; in either, so is a branch a constant condition does not
-/// take (#561 review: the `latency` linked and the `ttl` did not).
+/// A relation's `ttl` and its `latency` are constants of the program,
+/// which the linker evaluates (#739); an aggregate's index in either is a
+/// name the program does not already have, as in any expression, and so is
+/// one in a branch a constant condition does not take. Until #561,
+/// `sum prompt in 2 (0.25)` linked with `prompt` an attribute (#561
+/// review: the `latency` linked and the `ttl`, then the parser's, did not).
 #[test]
 fn a_relations_aggregate_index_is_its_own() {
     let refusal = "`sum prompt in`: `prompt` is also a session attribute";
@@ -445,7 +444,26 @@ fn two_relations_from_one_source_name_one_ttl() {
         "{e}"
     );
     assert!(
-        e.contains("two KV relations from `P` name different `ttl`s"),
+        e.contains("two KV relations from `P` name different `ttl`s (1 and 2)"),
+        "{e}"
+    );
+    // their values, which the program's arguments set (#739): two `ttl`s
+    // over two arguments of one default are one until an argument says
+    // otherwise
+    let args = format!(
+        "use \"std/args\"; let a = args.number(\"a\", 2); let b = args.number(\"b\", 2);\n{}",
+        src("a", "b")
+    );
+    let compiled = |b: &str| {
+        let mut ov = common::horizon(100.0);
+        ov.set("b", b).unwrap();
+        common::compile(&common::main_source(&args), PROMPT10, &ov)
+    };
+    compiled("2").unwrap_or_else(|e| panic!("{e}"));
+    let e = compiled("1").unwrap_err();
+    assert!(
+        e.contains("two KV relations from `P` name different `ttl`s (2 and 1)")
+            && e.contains("kvt.nixl_pull (P, E"),
         "{e}"
     );
 }
