@@ -176,6 +176,22 @@ or in the session before its `turn`. A request's end reveals the turn's
 outputs to the workload: the session's statements after it read the turn
 that has ended (`set K = K + n + o;`), until it sets a hidden attribute again.
 
+The pools' and the engines' keys are the scheduler too. They never read
+the attribute itself, and read an attribute set from it only where the
+scheduler reads the session after the run that reveals it: `set y = o;`
+then `queue by (y)` does not link, and `run A (cost(A, o)); set y = o;`
+before the `hold` does.
+
+| Read | Checked |
+|---|---|
+| a pool's `queue by` | at a `hold` on it; during a request to an engine that takes it or admits from it; wherever the session waits in a hold on a pool that preempts with `requeue tail`, which puts the hold back as a newcomer |
+| a pool's `preempt by` | wherever the session waits holding it; during a request to an engine that takes it |
+| an engine's `advance running by`, `advance running only`, `admit waiting only` | during a request to it |
+| an engine's `taking`, `reuse`, `prefix`, its connector's `load` | at the request |
+| a pool's `evict by`, `spill … when`, `preempt leases by`, `suspend by` | wherever the session is: at each wait, at each `release`, `shrink` and hold's end, which admit what waits, after the request, and in the workload's own waits and releases |
+| a hold's header | at the hold; on a pool that preempts, wherever its body waits too, since a preempted hold is admitted again |
+| a hold's `lease` time | at the hold and at its end, where the lease starts |
+
 Paths join conservatively: after a branch, the attribute counts as revealed
 only if both arms reveal it, and a loop's body may not run at all. Loop-carried
 assignments are checked until no new hidden dependencies reach the next pass.

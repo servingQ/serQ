@@ -446,3 +446,413 @@ fn what_the_workload_sets_from_a_hidden_attribute_before_the_request_is_hidden()
     ))
     .unwrap();
 }
+
+/// The issue's workload (#554): one hidden draw per turn, sent as it is.
+const DRAW: &str = "workload { arrive poisson(1); turn { Size o = ~exp(10); } send (o); }";
+
+/// A pool `kv` with `clause`, a stage `A` (and `B` when the server runs
+/// it), and a server that takes the hidden `o` and runs `server`.
+fn pool_program(clause: &str, server: &str) -> String {
+    let b = if server.contains("run B") {
+        "stage B : fifo;"
+    } else {
+        ""
+    };
+    common::main_source(&format!(
+        "pool kv {{ cap 30; {clause} }}
+         stage A : fifo; {b}
+         server (hidden o) {{ {server} }}"
+    ))
+}
+
+fn key_refused(src: &str, workload: &str, expected: &str) {
+    let err = compile(src, workload, 100.0).unwrap_err();
+    assert!(
+        err.contains(expected),
+        "{src}\n  missing {expected:?} in {err}"
+    );
+}
+
+/// The bug as found (#554 q2): `queue by (o)` was refused and `set y = o;`
+/// with `queue by (y)` linked, since `Program::validate` sees only the
+/// hidden attribute and the linker, which follows what is set from it,
+/// checked the server's statements and not the keys. Each key reads `y`
+/// while `A`, whose work reveals `o`, has not ended: at the hold, during
+/// the run in the hold, and wherever the entry's session is. The two
+/// rules are held equal: the same key on `o` gives validate's message.
+#[test]
+fn a_pool_key_may_not_read_what_the_server_set_from_a_hidden_attribute() {
+    use serq::ir::Moment;
+    let server = "set y = o; hold kv (cost(kv, 1)) { run A (cost(A, o)); }";
+    for (clause, moment) in [
+        ("queue by (y);", Moment::Select),
+        ("evict by (y);", Moment::Evict),
+        ("preempt by (y);", Moment::Victim),
+    ] {
+        key_refused(
+            &pool_program(clause, server),
+            DRAW,
+            &format!(
+                "pool `kv`: `y` is set from the hidden `o` in the server, but is read in {moment}"
+            ),
+        );
+        key_refused(
+            &pool_program(&clause.replace("(y)", "(o)"), server),
+            DRAW,
+            &format!("pool `kv`: `o` is hidden from the scheduler, but is read in {moment}"),
+        );
+    }
+    // a spill clause is read for an entry, as an eviction key is
+    key_refused(
+        &common::main_source(
+            "pool l2 { cap 100; }
+             stage copy : delay;
+             pool kv { cap 30; spill l2 via copy (1) when (y > 1); }
+             stage A : fifo;
+             server (hidden o) { set y = o; hold kv (cost(kv, 1)) { run A (cost(A, o)); } }",
+        ),
+        DRAW,
+        "pool `kv`: `y` is set from the hidden `o` in the server, but is read in an eviction key \
+         or spill clause",
+    );
+}
+
+/// The same, set in the workload's `turn` and sent (#554 q1): the message
+/// names where it was set.
+#[test]
+fn a_pool_key_may_not_read_what_the_turn_set_from_a_hidden_attribute() {
+    let src = common::main_source(
+        "pool kv { cap 30; queue by (x); }
+         stage A : fifo;
+         server (x, hidden o) { hold kv (cost(kv, 1)) { run A (cost(A, o)); } }",
+    );
+    key_refused(
+        &src,
+        "workload { arrive poisson(1); turn { Size o = ~exp(10); set x = o; } send (x, o); }",
+        "pool `kv`: `x` is set from the hidden `o` in the workload's turn, but is read in a \
+         pool's queue keys, read before selecting a waiting session",
+    );
+    // and bound by `send`, which sets it at the turn's end
+    key_refused(
+        &src,
+        "workload { arrive poisson(1); turn { Size o = ~exp(10); } send (x: o, o); }",
+        "`x` is set from the hidden `o` in the workload's turn, but is read in a pool's queue keys",
+    );
+}
+
+/// `program_with`'s engine with `scheduler` and `pool` as written.
+fn engine_program(scheduler: &str, pool: &str, server: &str) -> String {
+    common::main_source(&format!(
+        "device gpu {{ kv cap 1000; }}
+        engine E on gpu {{ tokens cap inf;
+          scheduler {{ {scheduler} }}
+          worker {{ forward (1); }} }}
+        pool kv on gpu {{ block 16; {pool} }}
+        server (prompt, hidden o) {{ {server} }}
+        "
+    ))
+}
+
+/// An engine reads its running requests' keys and `only`s, and its pool's
+/// preempt keys, while the request runs, before its end reveals the output.
+#[test]
+fn an_engine_s_keys_may_not_read_what_the_server_set_from_a_hidden_attribute() {
+    use serq::ir::Moment;
+    let admit = "while (running.preempted == 0) taking kv (request.input);";
+    let server = "set y = o; E (prompt, o);";
+    for scheduler in [
+        format!("advance running by (y); admit waiting {admit}"),
+        format!("advance running only (y > 0); admit waiting {admit}"),
+        format!("advance running; admit waiting only (y > 0) {admit}"),
+    ] {
+        key_refused(
+            &engine_program(&scheduler, "", server),
+            WORKLOAD,
+            &format!(
+                "engine `E`: `y` is set from the hidden `o` in the server, but is read in {}",
+                Moment::Serve
+            ),
+        );
+    }
+    key_refused(
+        &engine_program(
+            &format!("advance running; admit waiting {admit}"),
+            "preempt by (y);",
+            server,
+        ),
+        WORKLOAD,
+        &format!(
+            "pool `kv`: `y` is set from the hidden `o` in the server, but is read in {}",
+            Moment::Victim
+        ),
+    );
+}
+
+/// A connector's `load` is read when the scheduler admits the request, as
+/// `taking` is: the linker's list of what an admission reads lacked it.
+#[test]
+fn a_connector_s_load_is_its_engine_s_admission() {
+    let src = |server: &str| {
+        common::main_source(&format!(
+            "queue lmc : l2 {{ pool kv {{ cap 1000; }} serve ps(1); }}
+             device gpu {{ kv cap 1000; }}
+             pool kv on gpu {{ }}
+             engine E on gpu {{
+               tokens cap inf;
+               connector lmc {{ per_token (1e-6); load (min(y, request.input)); }}
+               scheduler {{ advance running; admit waiting while (running.preempted == 0) taking kv (request.known); }}
+               worker {{ forward (1); }}
+             }}
+             server (prompt, hidden o) {{ {server} }}"
+        ))
+    };
+    key_refused(
+        &src("set y = o; E (prompt, o);"),
+        WORKLOAD,
+        "`y` is set from the hidden `o` in the server, but the server's admission reads it",
+    );
+    compile(
+        &src("set y = 0; E (prompt, o); set y = o; E (prompt, 1);"),
+        WORKLOAD,
+        100.0,
+    )
+    .unwrap();
+}
+
+/// A lease outlives the hold that took it: its keys read the session it is
+/// of wherever the session is, here in a run that has not revealed `o`.
+#[test]
+fn a_lease_s_keys_read_the_lessee_wherever_it_is() {
+    use serq::ir::Moment;
+    for clause in [
+        "preempt leases by (y);",
+        "preempt leases by (1) every (1) suspend by (y);",
+    ] {
+        key_refused(
+            &pool_program(
+                clause,
+                "hold kv (cost(kv, 1)) { } lease kv (inf);
+                 set y = o; run A (cost(A, o));",
+            ),
+            DRAW,
+            &format!(
+                "pool `kv`: `y` is set from the hidden `o` in the server, but is read in {}",
+                Moment::Victim
+            ),
+        );
+        // set once the run has revealed `o`, it is the scheduler's
+        compile(
+            &pool_program(
+                clause,
+                "hold kv (cost(kv, 1)) { } lease kv (inf);
+                 run A (cost(A, o)); set y = o;",
+            ),
+            DRAW,
+            100.0,
+        )
+        .unwrap();
+    }
+}
+
+/// An eviction key reads the session that wrote the entry, wherever it is:
+/// after the request, with what the server set, and in the workload's tool
+/// call, with what the workload set for its next turn.
+#[test]
+fn an_eviction_key_reads_the_session_after_its_request() {
+    key_refused(
+        &pool_program(
+            "evict by (y);",
+            "hold kv (cost(kv, 1)) { run A (cost(A, 1)); } set y = o;",
+        ),
+        DRAW,
+        "`y` is set from the hidden `o` in the server, but is read in an eviction key",
+    );
+    let src = common::main_source(
+        "pool kv { cap 30; evict by (x); }
+         stage A : fifo;
+         server (x, hidden o) { hold kv (cost(kv, 1)) { run A (cost(A, o)); } }",
+    );
+    let workload = |session: &str| {
+        format!(
+            "workload {{ arrive batch(1);
+               turn {{ set o = ~exp(10); set x = 1; }}
+               send (x, o);
+               session {{ {session} }} }}"
+        )
+    };
+    key_refused(
+        &src,
+        &workload("turn; set o = ~exp(10); set x = o; tool (5); turn; end;"),
+        "`x` is set from the hidden `o` in the workload's session, but is read in an eviction key",
+    );
+    // without the tool call nothing reads `x` before the turn sets it again
+    compile(
+        &src,
+        &workload("turn; set o = ~exp(10); set x = o; turn; end;"),
+        100.0,
+    )
+    .unwrap();
+}
+
+/// The workload's statements that free its own pool, a `release`, a
+/// `shrink` and a hold's end, admit what waits (`Interp::try_admit_all`),
+/// and an admission may evict the deployment's entry this session wrote,
+/// whose key reads it there: the workload's walk gathered only its waits.
+#[test]
+fn an_eviction_key_reads_the_session_where_the_workload_frees_a_pool() {
+    let src = common::main_source(
+        "pool kv { cap 30; evict by (x); }
+         stage A : fifo;
+         server (x, hidden o) { hold kv (cost(kv, 1)) { run A (cost(A, o)); } }",
+    );
+    let workload = |session: &str| {
+        format!(
+            "pool c {{ cap 10; }}
+             workload {{ arrive batch(1);
+               turn {{ set o = ~exp(10); set x = 1; }}
+               send (x, o);
+               session {{ turn; {session} turn; end; }} }}"
+        )
+    };
+    for session in [
+        "hold c (cost(c, 1)) { } lease c (inf); set o = ~exp(10); set x = o; release c; set x = 1;",
+        "hold c (cost(c, 1)) { set o = ~exp(10); set x = o; } set x = 1;",
+        "hold c (cost(c, 2)) { set o = ~exp(10); set x = o; shrink c (cost(c, 1)); set x = 1; }",
+    ] {
+        key_refused(
+            &src,
+            &workload(session),
+            "`x` is set from the hidden `o` in the workload's session, but is read in an \
+             eviction key",
+        );
+    }
+    // set again before the pool is freed, nothing reads it
+    compile(
+        &src,
+        &workload(
+            "hold c (cost(c, 1)) { } lease c (inf); set o = ~exp(10); set x = o; set x = 1; \
+             release c;",
+        ),
+        100.0,
+    )
+    .unwrap();
+    // the server's `shrink` frees units as its `release` does
+    key_refused(
+        &pool_program(
+            "evict by (y);",
+            "set y = 1; hold kv (cost(kv, 2)) { set y = o; shrink kv (cost(kv, 1)); set y = 1; \
+             run A (cost(A, o)); }",
+        ),
+        DRAW,
+        "`y` is set from the hidden `o` in the server, but is read in an eviction key",
+    );
+}
+
+/// A preempted hold goes back to its queue with the attributes it has then
+/// (`Interp::preempt`): under `requeue tail` as a newcomer, selected by the
+/// queue's keys again. Under `requeue head` (and `preempt lifo`) it goes
+/// back ahead of the keys, which never read it (`next_waiter_among`), and
+/// a pool that does not preempt never puts it back: neither is refused.
+#[test]
+fn a_preempted_hold_is_selected_again_by_its_queue_keys() {
+    let server = "set y = 1; hold kv (cost(kv, 1)) { set y = o; run A (cost(A, o)); }";
+    key_refused(
+        &pool_program("queue by (y); preempt by (1) requeue tail;", server),
+        DRAW,
+        "`y` is set from the hidden `o` in the server, but is read in a pool's queue keys",
+    );
+    for clause in [
+        "queue by (y);",
+        "queue by (y); preempt by (1);",
+        "queue by (y); preempt lifo;",
+    ] {
+        compile(&pool_program(clause, server), DRAW, 100.0).unwrap();
+    }
+}
+
+/// A preempted hold's header is evaluated again when it goes back to the
+/// queue and at each admission it tries (`Interp::wanted`, `pending_now`),
+/// on the attributes as they are then, whether it re-enters at the head or
+/// the tail: a copy its body set before a run revealed it is read there.
+#[test]
+fn a_preempted_hold_s_header_is_read_again() {
+    let server = "set y = 1; hold kv (cost(kv, y)) { set y = o; run A (cost(A, o)); }";
+    for clause in ["preempt by (1);", "preempt by (1) requeue tail;"] {
+        key_refused(
+            &pool_program(clause, server),
+            DRAW,
+            "`y` is set from the hidden `o` in the server, but the server's admission of a \
+             preempted hold reads it before a run reveals it",
+        );
+    }
+    // a pool that does not preempt reads the header once, at the hold
+    compile(&pool_program("", server), DRAW, 100.0).unwrap();
+    // set once `A` has revealed `o`, the copy is the scheduler's
+    compile(
+        &pool_program(
+            "preempt by (1);",
+            "set y = 1; hold kv (cost(kv, y)) { run A (cost(A, o)); set y = o; run A (cost(A, 1)); }",
+        ),
+        DRAW,
+        100.0,
+    )
+    .unwrap();
+}
+
+/// A lease's time is read at the hold's end, where the lease starts
+/// (`Interp::end_hold`), on the attributes as they are there.
+#[test]
+fn a_lease_s_time_is_read_at_the_hold_s_end() {
+    key_refused(
+        &pool_program(
+            "",
+            "set y = 1; hold kv (cost(kv, 1)) { run A (cost(A, 1)); set y = o; } lease kv (y);",
+        ),
+        DRAW,
+        "`y` is set from the hidden `o` in the server, but the server's lease reads it before a \
+         run reveals it",
+    );
+    compile(
+        &pool_program(
+            "",
+            "set y = 1; hold kv (cost(kv, 1)) { set y = o; run A (cost(A, o)); } lease kv (y);",
+        ),
+        DRAW,
+        100.0,
+    )
+    .unwrap();
+}
+
+/// A key reads the session where the scheduler reads it: what a run has
+/// revealed by then it may read.
+#[test]
+fn a_key_may_read_what_a_run_has_revealed() {
+    let revealed = "run A (cost(A, o)); set y = o; hold kv (cost(kv, 1)) { run B (cost(B, 1)); }";
+    for clause in ["queue by (y);", "preempt by (y);", "evict by (y);"] {
+        compile(&pool_program(clause, revealed), DRAW, 100.0).unwrap();
+    }
+    // the queue reads `y` at the hold, after `A` has revealed `o`; an
+    // eviction key reads it during `A` too, before: in the second turn the
+    // entry the first turn's hold wrote is read while `A` runs
+    // (`Interp::node_writer`: the live session's attributes)
+    let during = "set y = o; run A (cost(A, o)); hold kv (cost(kv, 1)) { run B (cost(B, 1)); }";
+    compile(&pool_program("queue by (y);", during), DRAW, 100.0).unwrap();
+    key_refused(
+        &pool_program("evict by (y);", during),
+        "workload { arrive poisson(1); turn { Size o = ~exp(10); } send (o);
+           session { turn; turn; end; } }",
+        "`y` is set from the hidden `o` in the server, but is read in an eviction key",
+    );
+    // an engine's request reveals its output when it ends
+    let admit = "admit waiting while (running.preempted == 0) taking kv (request.input);";
+    compile(
+        &engine_program(
+            &format!("advance running by (y); {admit}"),
+            "",
+            "E (prompt, o); set y = o; E (prompt, 1);",
+        ),
+        WORKLOAD,
+        100.0,
+    )
+    .unwrap();
+}
