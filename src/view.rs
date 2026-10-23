@@ -1,8 +1,10 @@
-//! Drawing an IR program: the deployment view produces a `figure::Figure`,
-//! two writers paint it.
+//! Drawing: the deployment view makes a `figure::Figure` of an IR program,
+//! the iteration view one of a run's log (`engine::log`); two writers paint
+//! either.
 
 pub mod deployment;
 pub mod figure;
+pub mod iterations;
 pub mod svg;
 pub mod tikz;
 

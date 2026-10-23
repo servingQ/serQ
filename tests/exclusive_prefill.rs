@@ -86,7 +86,10 @@ fn memory(name: &str, src: &str) -> Vec<(f64, f64)> {
         .events
         .iter()
         .filter_map(|e| match &e.kind {
-            EventKind::Iter { memory, .. } => Some(memory.expect("llm's memory is kv")),
+            EventKind::Iter { memory, .. } => {
+                let m = memory.expect("llm's memory is kv");
+                Some((m.used, m.cached))
+            }
             _ => None,
         })
         .collect()

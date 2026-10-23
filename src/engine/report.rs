@@ -815,7 +815,7 @@ impl Report {
 }
 
 /// A row's name: `kvD[0]` for an array member, `kv` otherwise.
-fn label(name: &str, index: Option<u32>) -> String {
+pub(crate) fn label(name: &str, index: Option<u32>) -> String {
     match index {
         Some(i) => format!("{name}[{i}]"),
         None => name.to_string(),

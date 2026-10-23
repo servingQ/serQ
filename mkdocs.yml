@@ -94,6 +94,7 @@ nav:
       - Visualization:
           - visualization/index.md
           - Deployment view: visualization/deployment.md
+          - Iteration view: visualization/iterations.md
   - Use cases:
       - use-cases/index.md
       - Simulation:

@@ -8,7 +8,9 @@ admitted, running on a stage, preempted, ending, each change of an engine
 request's [status](cli.md#request-statuses) and each move of its KV, and
 each iteration of an engine with the requests in its batch, the tokens each
 takes, its budget and its memory pool's use. [serq-lar](https://github.com/servingQ/serq-lar)
-animates it over the [deployment view](../visualization/deployment.md).
+animates it over the [deployment view](../visualization/deployment.md), and
+`serq draw --log LOG.json` draws an engine's iterations from it, the
+[iteration view](../visualization/iterations.md).
 
 The log is off unless asked for, and the run is the same with it: the
 interpreter checks one flag per event. In the API it is
@@ -29,8 +31,8 @@ sessions and the engines' iterations left out, `…`):
 ```json
 {
   "version": 0,
-  "stages": [{"name": "P", "index": 0}, {"name": "P", "index": 1}, {"name": "P.nic", "index": 0}, …],
-  "pools":  [{"name": "P.reqs", "index": 0}, …],
+  "stages": [{"name": "P", "index": 0, "memory": 2}, {"name": "P", "index": 1, "memory": 3}, {"name": "P.nic", "index": 0}, …],
+  "pools":  [{"name": "P.reqs", "index": 0, "cap": 16}, {"name": "P.reqs", "index": 1, "cap": 16}, {"name": "P.kv", "index": 0, "cap": 160000}, …],
   "truncated": false,
   "events": [
     {"t": 0, "ev": "arrive", "s": 0},
@@ -40,7 +42,7 @@ sessions and the engines' iterations left out, `…`):
     {"t": 0, "ev": "admit", "s": 0, "pool": 0},
     {"t": 0, "ev": "run", "s": 0, "stages": [0], "mode": "prefill"},
     {"t": 0, "ev": "status", "s": 0, "r": 1, "stage": 0, "status": "running", "mode": "prefill"},
-    {"t": 0, "ev": "iter", "stage": 0, "dur": 0.027420000000000003, "tokens": 1371, "budget": 8192, "reqs": [[0]], "each": [1371], "used": 1376, "cached": 0},
+    {"t": 0, "ev": "iter", "stage": 0, "dur": 0.027420000000000003, "tokens": 1371, "budget": 8192, "reqs": [[0]], "each": [1371], "used": 1376, "cached": 0, "evicted": 0},
     …
     {"t": 0.027420000000000003, "ev": "done", "s": 0, "stage": 0},
     {"t": 0.027420000000000003, "ev": "status", "s": 0, "r": 1, "stage": 0, "status": "finished"},
@@ -74,8 +76,12 @@ sessions and the engines' iterations left out, `…`):
 
 `stages` and `pools` are the program's, in the IR's order: an event names
 one by its index, and an array's members share a name and carry an
-`index` (`null` for a single stage or pool). `truncated` says whether the
-cap stopped the log before the run ended. Events are in time order; ties
+`index` (`null` for a single stage or pool). An engine's stage names its
+memory pool as `memory` (absent for a stage with none), and a pool gives
+its `cap` in units (`null` for one without a cap): an iteration's `used`
+and `cached` are read against the cap of the same run, not of a program
+that may have changed since. `truncated` says whether the cap stopped the
+log before the run ended. Events are in time order; ties
 keep the order they happened in.
 
 `s` is the session's serial. A leg of it ([`fork`](../api/statements.md))
@@ -97,7 +103,7 @@ report's `arrivals`. The keys are short because the events are many.
 | `revoke` | `s`, `pool` | its lease of `pool` is taken (`preempt leases by`) |
 | `status` | `s`, `r`, `stage`, `status`, `mode` | its engine request `r` (its `r`-th call, from 1) to engine `stage` enters [`status`](cli.md#request-statuses) (`waiting`, `waiting_for_kv`, `running`, `preempted`, `finished`), or its `mode` there changes: `prefill` or `decode` while `running`, absent otherwise |
 | `transfer` | `s`, `r`, `stage`, `kind`, `at` | a KV move of that request: `kind` `load`, `save` or `send`, `at` `registered` (it exists: a load or save begun, a send its request's end left), `start` (its copy runs) or `done` (copied, read, or expired) |
-| `iter` | `stage`, `dur`, `tokens`, `budget`, `reqs`, `each`, `used`, `cached` | an iteration of engine `stage` starts: it lasts `dur`, schedules `tokens` of its `budget` (the engine's `tokens cap` as this iteration reads it, `null` when it is `inf`), over the requests `reqs` in the batch's order, each `[s]` for a session's or `[s, leg]` for a leg's. `each` is the tokens of each of `reqs`, in its order (a decode's 1, a prefill's chunk), and sums to `tokens`. `used` and `cached` are the units allocated and cached in the engine's memory (its device's pool, `pool kv on gpu`) once the iteration is scheduled: `used(p)`, and what the report's `mean_used` and `mean_cached` average. They are units, not blocks (divide by the pool's `block` for blocks), and absent for an engine with no memory |
+| `iter` | `stage`, `dur`, `tokens`, `budget`, `reqs`, `each`, `used`, `cached`, `evicted` | an iteration of engine `stage` starts: it lasts `dur`, schedules `tokens` of its `budget` (the engine's `tokens cap` as this iteration reads it, `null` when it is `inf`), over the requests `reqs` in the batch's order, each `[s]` for a session's or `[s, leg]` for a leg's. `each` is the tokens of each of `reqs`, in its order (a decode's 1, a prefill's chunk), and sums to `tokens`. `used` and `cached` are the units allocated and cached in the engine's memory (its device's pool, `pool kv on gpu`) once the iteration is scheduled: `used(p)`, and what the report's `mean_used` and `mean_cached` average. They are units, not blocks (divide by the pool's `block` for blocks), never more than the pool's `cap` together. `evicted` is the units the memory has evicted from its cache since the run began, the report's `evicted_units` so far (a warm-up does not reset it): where it rose since the engine's previous iteration, something was evicted between them. All three are absent for an engine with no memory |
 | `end` | `s` (`leg`) | the session (the leg) ends |
 
 A request to an engine is its session's `wait` and `admit` at the engine's
@@ -146,7 +152,18 @@ session runs (`spill … via`).
 
 Not in version 0: the units each hold takes, and the use of a pool that
 is no engine's memory; which entries a pool's cache holds, beyond their
-total; a columnar encoding for long runs. A renamed, removed or retyped
-field bumps `version` (`LOG_VERSION`); an added one does not, nor an added
-event a reader may pass over (`status` and `transfer` came after version 0
-did, and so did `iter`'s `budget`, `each`, `used` and `cached`).
+total and what it has evicted; a columnar encoding for long runs. A
+renamed, removed or retyped field bumps `version` (`LOG_VERSION`); an
+added one does not, nor an added event a reader may pass over (`status`
+and `transfer` came after version 0 did, and so did `iter`'s `budget`,
+`each`, `used`, `cached` and `evicted`, and the header's `memory` and
+`cap`).
+
+## Reading it back
+
+`serq::engine::log::Log::from_json` reads a log back, as `serq draw --log`
+does: the events, typed, with the header. It refuses another `version`,
+passes over an event it does not know, and refuses a log written before a
+field the figure needs (an iteration's `budget`, `each` or `evicted`, a
+pool's `cap`) with the advice to run the program again, rather than draw
+it without them. A stage or pool index past the header is an error.

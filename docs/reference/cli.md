@@ -8,6 +8,8 @@ serq ir    FILE --workload W [--instance F] [--def name=expr]... [--seed N] [--h
                     [--arrivals N] [--trace F] [--inline-trace] [--name value]...
 serq draw  FILE --workload W [--instance F] [--def name=expr]... [--format tikz|svg] [--out PATH]
                     [--name value]...   (experimental)
+serq draw  --log LOG [--engine NAME] [--from T] [--iterations N] [--format tikz|svg] [--out PATH]
+                    (experimental)
 serq target FILE --workload W [--instance F] [--def name=expr]... [--name value]...
 serq fmt   [--check] FILE...
 serq --version
@@ -46,7 +48,7 @@ to 0 and `seed` to 1. JSON IR contains all resolved settings already.
 | `run` | execute the program as a discrete-event simulation and print the report |
 | `check` | parse, link and validate the program; print a summary |
 | `ir` | print the program's [IR](../ir.md) as JSON |
-| `draw` | render the program as a figure ([visualization](../visualization/index.md)) |
+| `draw` | render the program as a figure ([visualization](../visualization/index.md)); with `--log`, an engine of a run that already ran, iteration by iteration ([the iteration view](../visualization/iterations.md)): it reads the log `run --log` wrote, runs nothing and takes no `FILE` |
 | `target` | synthesise the program for [vLLM's scheduler](#the-vllm-target): print the configuration that runs it, or refuse with the construct vLLM cannot run (exit 1) |
 | `fmt` | format one or more `.sq` files in place; comments, number spellings, and aligned trailing comments are preserved; a run of blank lines becomes one, and none is kept at the start or end of the file or of a block (inside a block comment they are kept) |
 | `--version` (or `-V`) | print `serq X.Y.Z`, the interpreter's version, for the record of a run; `run --json` writes the same as `serq_version` |
@@ -67,7 +69,10 @@ to 0 and `seed` to 1. JSON IR contains all resolved settings already.
 | `--inline-trace` | ir | turn the trace file into the sessions' turns, as `CArrival::Sessions` data |
 | `--json` | run | print the report as JSON |
 | `--dump DIR` | run | write `DIR/<name>.csv` per `observe`, columns `time,session,turn,value`, `DIR/client/<name>.csv` per client metric, the same columns, and `DIR/gauge/<name>.csv` per `gauge`, columns `time,value` (its change points) |
-| `--log FILE` | run | write the [run log](log.md) to `FILE` as JSON: what each session did, when, for a replay of the run; the report's JSON then carries it too, as `log` |
+| `--log FILE` | run, draw | `run`: write the [run log](log.md) to `FILE` as JSON: what each session did, when, for a replay of the run; the report's JSON then carries it too, as `log`. `draw`: read it, and draw an engine's iterations ([the iteration view](../visualization/iterations.md)); then only `--engine`, `--from`, `--iterations`, `--format` and `--out` apply |
+| `--engine NAME` | draw `--log` | the engine to draw, as the log names it: `llm`, or `D[0]` for a member of an array; may be left out when one engine iterates |
+| `--from T` | draw `--log` | the first iteration drawn is the engine's first at or after `T` seconds (default 0) |
+| `--iterations N` | draw `--log` | draw at most `N` iterations, one column each (default 120) |
 | `--format` | draw | `tikz` (default) or `svg` |
 | `--out PATH` | draw | write to a file instead of stdout |
 | `--check` | fmt | exit with code 1 and list files that need formatting, without writing them |

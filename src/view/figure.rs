@@ -1,7 +1,8 @@
 //! The geometry a view produces and a writer consumes.
 //!
-//! The view (`deployment`, the queueing network) produces a `Figure`; both
-//! writers (`svg`, `tikz`) consume one.
+//! The views (`deployment`, the queueing network; `iterations`, a run's
+//! engine iteration by iteration) produce a `Figure`; both writers (`svg`,
+//! `tikz`) consume one.
 //! Nothing in here knows about serQ, and nothing in a writer decides a
 //! coordinate: a figure is the test surface,
 //! which is why the tests assert on rectangles rather than on bytes.
@@ -84,6 +85,23 @@ pub enum BoxStyle {
     /// The server: everything the figure draws but the client. A request
     /// enters it from the client and its reply leaves it for the client.
     Server,
+    /// The tokens a request prefills in an iteration (the iteration view).
+    Prefill,
+    /// The tokens a request decodes in an iteration (the iteration view).
+    Decode,
+    /// A pool's allocated units (`used(p)`), where `Cached` is its prefix
+    /// cache (the iteration view).
+    Used,
+}
+
+/// What a mark says happened where it stands (the iteration view): not a
+/// part of the program, an event of its run.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mark {
+    /// A request was preempted from the engine: a cross in its row.
+    Preempt,
+    /// The engine's memory evicted cached units: a triangle pointing down.
+    Evict,
 }
 
 /// How a connector is drawn.
@@ -257,6 +275,8 @@ pub enum Item {
     /// A filled dot: the poster of a copy, on its bracket over the
     /// poster's station.
     Dot { at: Point, r: f64 },
+    /// A mark centred at `at`, `size` across.
+    Mark { at: Point, size: f64, mark: Mark },
     Text {
         at: Point,
         text: String,
@@ -520,6 +540,34 @@ impl Figure {
             .collect()
     }
 
+    /// Every mark, where it stands, for tests.
+    pub fn marks(&self) -> Vec<(Point, Mark)> {
+        self.items
+            .iter()
+            .filter_map(|i| match i {
+                Item::Mark { at, mark, .. } => Some((*at, *mark)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Whether it draws a run (a request's tokens, a pool's allocated
+    /// units, a mark of an event) rather than only a program: a writer
+    /// then defines the colours of a run, which a program's figure does
+    /// without.
+    pub fn of_a_run(&self) -> bool {
+        self.items.iter().any(|i| {
+            matches!(
+                i,
+                Item::Mark { .. }
+                    | Item::Box {
+                        style: BoxStyle::Prefill | BoxStyle::Decode | BoxStyle::Used,
+                        ..
+                    }
+            )
+        })
+    }
+
     /// Set `width`/`height` from the extent of the items, plus a margin.
     pub fn fit(&mut self, margin: f64) {
         let mut max = pt(0.0, 0.0);
@@ -535,6 +583,7 @@ impl Figure {
                 | Item::Drum { rect, .. } => visit(pt(rect.right(), rect.bottom())),
                 Item::Edge { pts, .. } => pts.iter().for_each(|p| visit(*p)),
                 Item::Dot { at, r } => visit(pt(at.x + r, at.y + r)),
+                Item::Mark { at, size, .. } => visit(pt(at.x + size / 2.0, at.y + size / 2.0)),
                 Item::Text {
                     at,
                     text,
