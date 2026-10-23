@@ -146,7 +146,7 @@ fn a_routers_chooses_their_counts_and_keys_are_found_in_the_text() {
             (
                 "j",
                 "ND",
-                vec!["holders(D[j].kv) + queued(D[j].kv)"],
+                vec!["holders(D[j].kv) + queued(D[j].kv)", "~uniform(0, 1)"],
                 "route",
                 Some("gw")
             ),
@@ -166,9 +166,12 @@ fn a_routers_chooses_their_counts_and_keys_are_found_in_the_text() {
     let j = &o.chooses[0];
     assert_eq!(
         text(&src, j.range),
-        "choose j in ND by (holders(D[j].kv) + queued(D[j].kv));"
+        "choose j in ND by (holders(D[j].kv) + queued(D[j].kv), ~uniform(0, 1));"
     );
-    assert_eq!(text(&src, j.by), "(holders(D[j].kv) + queued(D[j].kv))");
+    assert_eq!(
+        text(&src, j.by),
+        "(holders(D[j].kv) + queued(D[j].kv), ~uniform(0, 1))"
+    );
 }
 
 #[test]

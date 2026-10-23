@@ -63,13 +63,13 @@ From `examples/pd-disaggregation/llmd_nixl_pull.sq`, a few items:
 ```json
 {
   "relations": [{"mode": "pull", "source": "P", "reader": "D",
-                 "range": [4275, 4332], "function": [4279, 4288]}],
+                 "range": [4220, 4277], "function": [4224, 4233]}],
   "calls": [{"queue": "P", "index": "i", "verb": "prefill", "from": null,
-             "range": [1770, 1792], "block": "route", "owner": "gw"}, …]
+             "range": [1673, 1694], "block": "route", "owner": "gw"}, …]
 }
 ```
 
-`&src[4275..4332]` is `kvt.nixl_pull (P, D, latency = x0, share = share.maxmin);`.
+`&src[4220..4277]` is `kvt.nixl_pull (P, D, latency = x0, share = share.maxmin);`.
 An editor that turns the pull into a push replaces `function`; one that
 sends requests to another decoder writes a call after the last of
 `calls`; one that changes how the router picks a decoder replaces a

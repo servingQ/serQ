@@ -123,17 +123,18 @@ client's table; a program that calls no engine prints none:
 ```text
 status          stays    mean     p50     p99  number
 --------------  -----  ------  ------  ------  ------
-waiting           155  0.0001  0.0000  0.0036   0.000
-waiting_for_kv     41  0.0120  0.0106  0.0347   0.016
-running           113  0.0369  0.0309  0.1037   0.139
-finished           41  0.0121  0.0106  0.0347   0.017
+waiting           130  0.0000  0.0000  0.0001   0.000
+waiting_for_kv     36  0.0121  0.0114  0.0261   0.015
+running            94  0.0359  0.0290  0.2108   0.112
+finished           36  0.0121  0.0114  0.0261   0.015
 ```
 
-(`llmd_nixl_pull.sq` with `chat_reply.sq`, `--horizon 30`.) The 41
+(`llmd_nixl_pull.sq` with `chat_reply.sq`, `--horizon 30`.) The 36
 `finished` stays are the prefiller's requests whose blocks waited for the
 decoder's read; the decoders' requests waited for that KV as long. The
-program's own `observe send_held` has 40 of them: it is taken after the
-decoder's call returns, and one decoder was still at work at the horizon.
+program's own `observe send_held` has the 36 too: it is taken after the
+decoder's call returns, so a decoder still at work at the horizon would
+leave one out.
 A request admitted at once still waited, for no time: the `waiting` median
 of 0. `running`'s `number` is the engines' residents, their stages'
 `number`.
