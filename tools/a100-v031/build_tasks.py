@@ -5,11 +5,11 @@ import shutil
 import sys
 from pathlib import Path
 
+from convert_all import MODELS
+
 res, atif, col, pub = (Path(a) for a in sys.argv[1:5])
-MODELS = {"llama31-8b": ("meta-llama/Llama-3.1-8B-Instruct", "Llama-3.1-8B-Instruct"),
-          "qwen3-8b": ("Qwen/Qwen3-8B", "Qwen3-8B")}
-SCRIPTS = ["setup.sh", "gen_dataset.py", "run_model.sh", "run_all.sh", "run_knobs.sh", "run_knobs_all.sh",
-           "otlp_sink.py", "metrics.py", "bench_to_atif.py", "convert_all.py", "summarize.py"]
+SCRIPTS = ["setup.sh", "gen_dataset.py", "common.sh", "run_model.sh", "run_all.sh", "run_knobs.sh",
+           "run_knobs_all.sh", "otlp_sink.py", "metrics.py", "bench_to_atif.py", "convert_all.py", "summarize.py"]
 
 TOML = '''schema_version = "1.3"
 artifacts = []
@@ -119,7 +119,8 @@ WORKDIR /app
 COPY data /app/data
 '''
 
-for tag, (model, short) in MODELS.items():
+for tag, model in MODELS.items():
+    short = model.split("/")[1]
     name = f"a100-vllm031-single-turn-{tag}-2026-10"
     t = pub / name
     if t.exists():
@@ -134,8 +135,8 @@ for tag, (model, short) in MODELS.items():
     (t / "environment" / "Dockerfile").write_text(DOCKER)
     shutil.copytree(res / tag, data / "runs")
     (data / "inputs").mkdir()
-    for s in (1, 2, 3):
-        shutil.copy(res / "data" / f"{tag}-s{s}.jsonl", data / "inputs" / f"{tag}-s{s}.jsonl")
+    for f in sorted((res / "data").glob(f"{tag}-*.jsonl")):
+        shutil.copy(f, data / "inputs" / f.name)
     shutil.copy(res / "host.txt", data / "host.txt")
     (data / "scripts").mkdir()
     for s in SCRIPTS:

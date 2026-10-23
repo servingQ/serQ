@@ -1,5 +1,8 @@
-"""Convert a serQ golden rounds.jsonl (one line per request) into ATIF-v1.7
-trajectories, one per session (serQ #589).
+#!/usr/bin/env python3
+"""Convert a rounds.jsonl of this directory (`pd_replay.py`, one line per
+request) into ATIF-v1.7 trajectories, one per session (serQ #589; Harbor
+`servingq/a6000-pd-nixl-2026-09`). The model defaults to the one those runs
+served (`serve_pd.sh`).
 
 usage: rounds_to_atif.py ROUNDS RUN_ID OUT_DIR [--extra JSON]
 """

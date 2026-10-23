@@ -11,6 +11,10 @@ import paramiko
 
 HOST, USER = os.environ["GPU_HOST"], os.environ.get("GPU_USER", "ubuntu")
 c = paramiko.SSHClient()
+# a host in ~/.ssh/known_hosts must show the key recorded there (paramiko
+# refuses another); a host not in it, a fresh instance, is trusted on first
+# use and not recorded
+c.load_system_host_keys()
 c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 c.connect(HOST, username=USER, key_filename=os.path.expanduser("~/.ssh/id_ed25519"), timeout=20)
 
@@ -25,6 +29,8 @@ elif sys.argv[1] == "get":
     def get(r, l):
         Path(l).mkdir(parents=True, exist_ok=True)
         for e in sftp.listdir_attr(r):
+            if e.filename in ("", ".", "..") or "/" in e.filename:
+                sys.exit(f"refusing remote name {e.filename!r} in {r}")
             rp, lp = f"{r}/{e.filename}", os.path.join(l, e.filename)
             if stat.S_ISDIR(e.st_mode):
                 get(rp, lp)
