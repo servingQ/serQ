@@ -139,6 +139,62 @@ fn only_selects_and_by_orders() {
     );
 }
 
+/// On an engine that takes nothing, a request holds nothing, so `admission`
+/// orders the runs as they started: a request's decode, which starts when
+/// its prefill ends, stands behind a prompt that arrived meanwhile. Serving
+/// Sarathi-Serve's order there is the program's to write, `decode first`
+/// (docs/design/sarathi-decode-first.md). A prefills 6 and decodes 2 from
+/// t=0; B arrives at t=1 and prefills 8, budget 4, an iteration a unit:
+/// A takes 4 at 0 and 2 at 1, B the 2 left at 1, and at 2 A's decode
+/// starts behind B's prefill. In admission order B's prefill takes the
+/// whole budget at 2 and A's decode waits a unit; decode first, A decodes
+/// at 2 and 3 and B takes the 3 left each time.
+#[test]
+fn an_engine_that_takes_nothing_serves_its_runs_in_the_order_they_started() {
+    let src = |order: &str| {
+        format!(
+            r#"
+        stage gate : delay;
+        device gpu {{ }}
+        engine llm on gpu {{
+          tokens cap 4;
+          scheduler {{ advance running {order}; admit waiting while (running.preempted == 0); }}
+          worker {{ forward (1); }}
+        }}
+        server (prompt, out) {{
+          run gate (cost(gate, serial));
+          llm (prompt, out);
+        }}
+
+"#
+        )
+    };
+    let workload = "workload { arrive batch(2);
+        init { set prompt = serial == 0 ? 6 : 8; set out = serial == 0 ? 3 : 1; }
+        send (prompt, out);
+        session { turn; end; }
+      }";
+    assert_eq!(
+        trace("admission", &src("admission"), workload),
+        [
+            "ITER 0.0000 0:1:p4",
+            "ITER 1.0000 0:1:p2 1:1:p2",
+            "ITER 2.0000 1:1:p4",
+            "ITER 3.0000 1:1:p2 0:1:d1",
+            "ITER 4.0000 0:1:d1",
+        ]
+    );
+    assert_eq!(
+        trace("decode first", &src("decode first"), workload),
+        [
+            "ITER 0.0000 0:1:p4",
+            "ITER 1.0000 0:1:p2 1:1:p2",
+            "ITER 2.0000 0:1:d1 1:1:p3",
+            "ITER 3.0000 0:1:d1 1:1:p3",
+        ]
+    );
+}
+
 /// A prefills 1 and decodes 2 from t=0; B and C wait from t=1 in a queue
 /// the engine admits, and do the same. The engine's admission takes the
 /// request's slot of `reqs`.
