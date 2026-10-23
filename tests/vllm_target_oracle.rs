@@ -28,10 +28,6 @@ fn dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tools/oracle/serve")
 }
 
-fn num(v: &Value, k: &str) -> f64 {
-    v.get(k).and_then(Value::as_f64).unwrap_or(0.0)
-}
-
 fn read(name: &str) -> Value {
     serde_json::from_str(&std::fs::read_to_string(dir().join(name)).unwrap()).unwrap()
 }
@@ -41,19 +37,7 @@ const RUNNING: &str = "advance running each at most (threshold);";
 /// The oracle program with the scenario's engine, order and requests.
 fn ir(name: &str) -> serq::Program {
     let sc = read(&format!("{name}.json"));
-    let mut ov = common::horizon(100000.0);
-    for (k, v) in [
-        ("bs", num(&sc, "block_size")),
-        ("B", num(&sc, "budget")),
-        ("blocks", num(&sc, "num_blocks") - 1.0), // the null block
-        ("max_seqs", num(&sc, "max_seqs")),
-    ] {
-        ov.set_num(k, v).unwrap();
-    }
-    // vLLM's 0 is no cap, which the program's default `inf` already is
-    if num(&sc, "chunk") > 0.0 {
-        ov.set_num("chunk", num(&sc, "chunk")).unwrap();
-    }
+    let ov = common::oracle_engine(&sc);
     let path = program_path("vllm_request");
     let src = std::fs::read_to_string(&path).unwrap();
     let workload =
@@ -64,21 +48,9 @@ fn ir(name: &str) -> serq::Program {
         RUNNING,
         &format!("advance running by ({serve}) each at most (threshold);"),
     );
-    let sessions: Vec<Vec<(&str, f64)>> = sc["requests"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|q| {
-            vec![
-                ("prompt", num(q, "prompt")),
-                ("o", num(q, "out")),
-                ("arrive", num(q, "arrive")),
-            ]
-        })
-        .collect();
     common::compile(&common::main_source(&src), &workload, &ov)
         .unwrap()
-        .with_sessions(&sessions)
+        .with_sessions(&common::oracle_sessions(&sc))
         .unwrap()
 }
 

@@ -1,0 +1,466 @@
+{
+  "version": 15,
+  "attrs": [
+    "cached",
+    "serial",
+    "turn_no",
+    "new",
+    "out",
+    "think",
+    "more",
+    "forced",
+    "computed",
+    "prompt",
+    "o",
+    "arrive",
+    "vllm.admitted",
+    "vllm.first",
+    "vllm.reused",
+    "vllm.prefill"
+  ],
+  "attr_types": [
+    "Value",
+    "Size",
+    "Size",
+    "Size",
+    "Size",
+    "Size",
+    "Size",
+    "Size",
+    "Value",
+    "Size",
+    "Size",
+    "Size",
+    "Value",
+    "Value",
+    "Value",
+    "Value"
+  ],
+  "sides": [
+    [
+      "Workload",
+      "Workload",
+      "Workload"
+    ],
+    [],
+    [
+      "Workload",
+      "Workload",
+      "Server",
+      "Server",
+      "Server",
+      "Workload"
+    ]
+  ],
+  "observes": [
+    "first",
+    "done",
+    "vllm.reused",
+    "vllm.prefill"
+  ],
+  "pools": [
+    {
+      "name": "reqs",
+      "cap": 16.0,
+      "block": null,
+      "evict": "Lru",
+      "preempt": "None",
+      "queue": null,
+      "spill": null,
+      "admit_via": 0
+    },
+    {
+      "name": "kv",
+      "cap": 31984.0,
+      "block": 16.0,
+      "evict": "Lru",
+      "preempt": {
+        "By": {
+          "keys": [
+            {
+              "Unary": [
+                "Neg",
+                {
+                  "Ctx": "Admission"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "queue": null,
+      "spill": null,
+      "admit_via": null
+    }
+  ],
+  "stages": [
+    {
+      "name": "vllm",
+      "kind": {
+        "Step": {
+          "budget": {
+            "Num": 4096.0
+          },
+          "cost": {
+            "Num": 1.0
+          },
+          "chunk": {
+            "Cond": [
+              {
+                "Binary": [
+                  "Gt",
+                  {
+                    "Binary": [
+                      "Add",
+                      {
+                        "Ctx": "Nres"
+                      },
+                      {
+                        "Call": [
+                          "Queued",
+                          [
+                            {
+                              "Pool": {
+                                "base": 0,
+                                "count": 1,
+                                "index": null
+                              }
+                            }
+                          ]
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "Num": 1.0
+                  }
+                ]
+              },
+              {
+                "Call": [
+                  "Max",
+                  [
+                    {
+                      "Expr": {
+                        "Num": 1000.0
+                      }
+                    },
+                    {
+                      "Expr": {
+                        "Call": [
+                          "Floor",
+                          [
+                            {
+                              "Expr": {
+                                "Binary": [
+                                  "Div",
+                                  {
+                                    "Num": 4096.0
+                                  },
+                                  {
+                                    "Binary": [
+                                      "Add",
+                                      {
+                                        "Ctx": "Nres"
+                                      },
+                                      {
+                                        "Call": [
+                                          "Queued",
+                                          [
+                                            {
+                                              "Pool": {
+                                                "base": 0,
+                                                "count": 1,
+                                                "index": null
+                                              }
+                                            }
+                                          ]
+                                        ]
+                                      }
+                                    ]
+                                  }
+                                ]
+                              }
+                            }
+                          ]
+                        ]
+                      }
+                    }
+                  ]
+                ]
+              },
+              {
+                "Num": 0.0
+              }
+            ]
+          },
+          "serve": {
+            "By": []
+          },
+          "memory": 1,
+          "request": {
+            "pools": [
+              [
+                {
+                  "base": 0,
+                  "count": 1,
+                  "index": null
+                },
+                {
+                  "Num": 1.0
+                },
+                null
+              ],
+              [
+                {
+                  "base": 1,
+                  "count": 1,
+                  "index": null
+                },
+                {
+                  "Call": [
+                    "Min",
+                    [
+                      {
+                        "Expr": {
+                          "Ctx": "Known"
+                        }
+                      },
+                      {
+                        "Expr": {
+                          "Call": [
+                            "BudgetLeft",
+                            [
+                              {
+                                "Stage": {
+                                  "base": 0,
+                                  "count": 1,
+                                  "index": null
+                                }
+                              }
+                            ]
+                          ]
+                        }
+                      }
+                    ]
+                  ]
+                },
+                {
+                  "Ctx": "Known"
+                }
+              ]
+            ],
+            "records": {
+              "reused": 2,
+              "prefill": 3,
+              "admitted": 12,
+              "first": 13,
+              "last_reused": 14,
+              "last_prefill": 15
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "gate",
+      "kind": {
+        "Ps": {
+          "Ctx": "N"
+        }
+      }
+    }
+  ],
+  "arrival": {
+    "Sessions": [
+      {
+        "attrs": [
+          [
+            9,
+            6000.0
+          ],
+          [
+            10,
+            2.0
+          ],
+          [
+            11,
+            0.0
+          ]
+        ]
+      },
+      {
+        "attrs": [
+          [
+            9,
+            6000.0
+          ],
+          [
+            10,
+            2.0
+          ],
+          [
+            11,
+            0.0
+          ]
+        ]
+      },
+      {
+        "attrs": [
+          [
+            9,
+            2000.0
+          ],
+          [
+            10,
+            2.0
+          ],
+          [
+            11,
+            2.0
+          ]
+        ]
+      },
+      {
+        "attrs": [
+          [
+            9,
+            2000.0
+          ],
+          [
+            10,
+            2.0
+          ],
+          [
+            11,
+            2.0
+          ]
+        ]
+      },
+      {
+        "attrs": [
+          [
+            9,
+            2000.0
+          ],
+          [
+            10,
+            2.0
+          ],
+          [
+            11,
+            2.0
+          ]
+        ]
+      }
+    ]
+  },
+  "trace": null,
+  "trace_ordered": false,
+  "init": 0,
+  "turn": 1,
+  "session": 2,
+  "blocks": [
+    [
+      {
+        "Set": [
+          9,
+          {
+            "Num": 1.0
+          }
+        ]
+      },
+      {
+        "Set": [
+          10,
+          {
+            "Num": 1.0
+          }
+        ]
+      },
+      {
+        "Set": [
+          11,
+          {
+            "Num": 0.0
+          }
+        ]
+      }
+    ],
+    [],
+    [
+      {
+        "Run": {
+          "stage": {
+            "base": 1,
+            "count": 1,
+            "index": null
+          },
+          "mode": "Plain",
+          "work": {
+            "Cost": [
+              {
+                "Stage": {
+                  "base": 1,
+                  "count": 1
+                }
+              },
+              {
+                "Attr": 11
+              }
+            ]
+          },
+          "growing": null
+        }
+      },
+      "Turn",
+      {
+        "Request": {
+          "stage": {
+            "base": 0,
+            "count": 1,
+            "index": null
+          },
+          "input": {
+            "Attr": 9
+          },
+          "output": {
+            "Attr": 10
+          }
+        }
+      },
+      {
+        "Observe": [
+          0,
+          {
+            "Attr": 13
+          }
+        ]
+      },
+      {
+        "Observe": [
+          1,
+          {
+            "Ctx": "Now"
+          }
+        ]
+      },
+      "End"
+    ]
+  ],
+  "horizon": 100000.0,
+  "warmup": 0.0,
+  "seed": 1,
+  "slot_cached": 0,
+  "slot_serial": 1,
+  "slot_turn": 2,
+  "slot_new": 3,
+  "slot_out": 4,
+  "slot_think": 5,
+  "slot_more": 6,
+  "slot_forced": 7,
+  "slot_computed": 8,
+  "hidden": [
+    10
+  ]
+}

@@ -39,6 +39,8 @@ import papers.KongPoisson
 #print axioms SerqLang.Exec.makeRoom_room
 #print axioms SerqLang.Exec.evictOne_lt
 #print axioms SerqLang.Oracle.vllmRequest_wf
+#print axioms SerqLang.Oracle.vllm_adaptive
+#print axioms SerqLang.Oracle.vllm_alone
 #print axioms SerqLang.Oracle.vllm_chunked
 #print axioms SerqLang.Oracle.vllm_hol
 #print axioms SerqLang.Oracle.vllm_longchunk

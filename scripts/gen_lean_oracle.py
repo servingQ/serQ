@@ -4,7 +4,7 @@ scenarios in tools/oracle/, and lean/Serq/Regress.lean from the regressions
 in tests/lean-regress/ (their IR and the interpreter's answers, see
 scripts/lean_regress.py). The oracle scenarios are:
 
-- <name>.ir.json for the six single-request scenarios:
+- <name>.ir.json for the single-request scenarios:
   examples/oracle/vllm_request.sq compiled with the scenario's engine, the
   requests as explicit sessions; answers in <name>.out.json.
 - cache_trace.ir.json for the multi-turn prefix-cache scenario:
@@ -877,13 +877,13 @@ and `tools/vllm_replay_oracle.py`, upstream `ref/vllm` at 0c87a197).
 Do not edit. The programs, the deployments and the workloads below are
 translations of that IR, the same IR the serQ tests run.
 
-Six scenarios run one request program, `vllmRequest` (serQ
+The request scenarios run one request program, `vllmRequest` (serQ
 `examples/oracle/vllm_request.sq`): wait until the arrival, hold a slot and the
 KV blocks of the chunk the engine's budget leaves (admission needs room for
 the whole prompt), prefill growing the hold, decode growing it. The
 theorems say that the executable semantics gives, for every request, the
 step of its first token and of its last token, and the number of
-preemptions, that the real scheduler gives. The seventh, `vllmTurn` (serQ
+preemptions, that the real scheduler gives. The last, `vllmTurn` (serQ
 `examples/replay/vllm_replay.sq` on a unit step clock, the trace inlined as the
 sessions' turns), is a multi-turn replay with a prefix cache: hits, a
 partial hit and misses caused by eviction; its theorem gives, for every
@@ -936,7 +936,7 @@ def gen():
         if obs[:2] != ["first", "done"]:
             raise Fragment(f"{name}: observations {obs} (outcome reads 0 = first, 1 = done)")
         out.append(f'''
-/-- serQ `tools/oracle/{name}.ir.json`: {n} requests, {sc["num_blocks"]} blocks of {sc["block_size"]}, budget {sc["budget"]}, {sc["max_seqs"]} slots, chunk {sc.get("chunk", 0)}; the deployment and the workload are the IR's. -/
+/-- serQ `tools/oracle/{name}.ir.json`: {n} requests, {sc["num_blocks"]} blocks of {sc["block_size"]}, budget {sc["budget"]}, {sc["max_seqs"]} slots, chunk {sc.get("chunk", 0)}{", adaptive" if sc.get("adaptive") else ""}; the deployment and the workload are the IR's. -/
 theorem vllm_{name} :
     outcome {lean.deployment()} {horizon}
       {lean.workload()} =

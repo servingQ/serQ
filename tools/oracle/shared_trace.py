@@ -9,7 +9,7 @@ traces) and `shared_trace.jsonl` with the token ids for the real scheduler
 and new text: the generated tokens are not in it. Deterministic.
 
     python3 tools/oracle/shared_trace.py
-    VLLM_TARGET_DEVICE=cpu VLLM_PLUGINS= PYTHONPATH=ref/vllm python \\
+    VLLM_TARGET_DEVICE=cpu VLLM_PLUGINS= python \\
         tools/vllm_replay_oracle.py --trace tools/oracle/shared_trace.jsonl \\
         --spacing 5 --budget 64 --max-seqs 4 --blocks 30 --c-step 1 --a 0 --b 0 \\
         --c0 0 --omega 0 --beta 0 --cost sum --d 0 --out tools/oracle/shared_trace.out.csv
