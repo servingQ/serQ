@@ -23,16 +23,19 @@ A golden checks **time, and the aggregates that move it**: per-request
 time to first token, time per output token and response time; queueing
 delay; step count and step time; preemptions; prefix-cache hits; KV
 occupancy. It is measured on a released engine, unpatched and without
-plugins, with what the engine exports by default (the response `usage`,
-OTLP spans, `/metrics`, the iteration log, KV events) and an existing
-client. Collection runs only on GPUs, on Lambda Cloud, and the records go
-to a private Harbor Hub dataset, `servingq/serq-serving-traces`.
+plugins, with what the engine itself exports and an existing client. Of
+what the engine exports, the response `usage` and `/metrics` are there by
+default; the cached tokens in `usage`, the OTLP spans, the iteration log,
+the KV-cache metrics and the KV events each need a flag of the engine's
+own, which [What one run records](#what-one-run-records) names. Collection
+runs only on GPUs, on Lambda Cloud, and the records go to a private Harbor
+Hub dataset, `servingq/serq-serving-traces`.
 
 ## What is collected, and what is not yet
 
 | Collected | Where | What |
 |---|---|---|
-| A100 single-turn, vLLM v0.31.0, Llama-3.1-8B-Instruct and Qwen3-8B (2026-10-13) | Harbor `servingq/a100-vllm031-single-turn-llama31-8b-2026-10` and `servingq/a100-vllm031-single-turn-qwen3-8b-2026-10`; scripts `tools/a100-v031/` (#605) | `examples/workloads/single_turn.sq` against `examples/multi-turn/vllm.sq`, replayed by `vllm bench serve`. Per model: a saturation probe (1 to 96 concurrent requests; λ_max 3.72 req/s for Llama, 3.63 for Qwen), a Poisson sweep at 0.2, 0.4, 0.6, 0.8, 0.9, 1.0 and 1.2 × λ_max with three repetitions, the 1.0 point with async scheduling on, and seven engine settings at 0.9 × λ_max with three repetitions; 51 runs per model, all exit 0. Both models get the same (n, o) draws. Every request, 65 023 in all, is an ATIF-v1.7 trajectory that harbor 0.24.0's validator accepts |
+| A100 single-turn, vLLM v0.31.0, Llama-3.1-8B-Instruct and Qwen3-8B (2026-10-13) | Harbor `servingq/a100-vllm031-single-turn-llama31-8b-2026-10` and `servingq/a100-vllm031-single-turn-qwen3-8b-2026-10`; scripts: #605, which adds them as `tools/a100-v031/` | `examples/workloads/single_turn.sq` against `examples/multi-turn/vllm.sq`, replayed by `vllm bench serve`. Per model: a saturation probe (1 to 96 concurrent requests; λ_max 3.72 req/s for Llama, 3.63 for Qwen), a Poisson sweep at 0.2, 0.4, 0.6, 0.8, 0.9, 1.0 and 1.2 × λ_max with three repetitions, the 1.0 point with async scheduling on, and seven engine settings at 0.9 × λ_max with three repetitions; 51 runs per model, all exit 0. Both models get the same (n, o) draws. Every request, 65 023 in all, is an ATIF-v1.7 trajectory that harbor 0.24.0's validator accepts |
 | A6000 P/D pull and push (2026-09) | Harbor `servingq/a6000-pd-nixl-2026-09`; part in `tools/a6000/` | pull 1P1D, push 1P1D and pull 2P2D at session spacing 3.0 s, 96 sessions of `examples/replay/data/short_base.csv` each, 288 ATIF trajectories. `/metrics` polled once a second, no step record; a toy round-robin proxy; vLLM at the dev commit `0c87a197` |
 
 The single-turn records per run: the client's per-request JSON
@@ -51,22 +54,28 @@ multi-turn on the A100 (the continuity check, chat, a shared system prompt;
 F2), the step-cost refit on synchronous data (F3), llm-d P/D on A6000 with
 the real router (F4), and the P2 and P3 rows of the
 [priority table](#deployment-and-workload-by-priority), which are not
-scheduled.
+scheduled. Nor is any program compared with a golden yet (F5).
 
 ## The goldens that exist
 
 | Program | Golden | Limit |
 |---|---|---|
 | `examples/oracle/vllm_request.sq`, `examples/oracle/vllm_shared_prompt.sq` | the CPU oracle above | no time, by design: it checks the scheduler's choices, and that is enough for them |
-| `examples/replay/vllm_replay.sq` (A100, Qwen3-8B) | `tools/a100/steps.jsonl` (3 022 steps), `tools/a100/step_fit.json` | a step has no request id; the TTFT comparison is three points of one run each, and the run records are not published (`docs/use-cases/vllm.md`, sections *Measured replay* and *Reported comparison*); which CUDA graph mode the steps ran in is not recorded |
+| `examples/replay/vllm_replay.sq` (A100, Qwen3-8B) | `tools/a100/steps.jsonl` (3 024 steps, 3 022 of them fitted), `tools/a100/step_fit.json` | a step has no request id; the TTFT comparison is three points of one run each, and the run records are not published (`docs/use-cases/vllm.md`, sections *Measured replay* and *Reported comparison*); which CUDA graph mode the steps ran in is not recorded |
 | `examples/multi-turn/vllm.sq` with `examples/workloads/single_turn.sq` | the two A100 single-turn tasks | the step cost is not refitted on them (F3) |
 | `examples/pd-disaggregation/llmd_nixl_pull.sq`, `vllm_nixl_push.sq` | the A6000 task | polled `/metrics`, no step record; the program models llm-d's router, the run used a toy proxy; one load point; a dev commit, not a release. `docs/use-cases/pd.md` says the model has no hardware validation |
 | `examples/engines/*.sq`, `vllm_lmcache.sq`, `thunderagent.sq` | none | source correspondence and interpreter tests only; `docs/use-cases/thunderagent.md` says the paper is not fitted |
+| `examples/pd-disaggregation/pd_two_fabrics.sq` | none | its header says neither fabric's sharing policy is a measurement and asks for a run on two nodes, NVLink inside each and RDMA between them; no row below schedules one (the H100 row is the nearest) |
 
-Out of scope: `examples/vendors/` (vllm-rbln and vllm-ascend are not GPUs),
-and the paper and theory programs (`examples/papers/*`, `mg1`, `ps`,
+Out of scope: `examples/vendors/` (vllm-rbln and vllm-ascend are not GPUs);
+the paper and theory programs (`examples/papers/*`, `mg1`, `ps`,
 `closed`, `replica`, `routing`, `pd_ps`, `pd_tandem`, `pd_open`), which
-closed forms and the Lean model check.
+closed forms and the Lean model check, and `fastertransformer.sq`, Dai et
+al.'s model of FasterTransformer, whose claims are held to their paper;
+`pd_batching.sq`, a what-if that runs `llmd_nixl_pull.sq`'s engines
+colocated and split, whose engines F4 measures; and the language's own
+examples (`arguments`, `separate_phases`), which have no deployment to
+measure.
 
 ## Engine versions: releases
 
@@ -77,9 +86,10 @@ release that contains the commit its example cites.
 **vLLM v0.31.0** (released 2026-10-05, commit `db9527a4`). The `ref/vllm`
 pin `0c87a197` is a development commit after v0.30.0, and v0.31.0 is 98
 commits ahead of it and none behind (GitHub compare `0c87a197...v0.31.0`).
-Those commits change the scheduler: the `skipped_waiting` queue is
-rewritten as `kv_holding_waiting` (vllm#58947), streaming continuations get
-their own max tokens (vllm#57676), and the prefix-cache key changes
+Those commits change the scheduler: the `skipped_waiting` queue is split
+into `kv_holding_waiting` and `deferred_waiting` (vllm#58947), streaming
+continuations get their own max tokens (vllm#57676), and the prefix-cache
+key changes
 (vllm#51899, vllm#59335). Measured today, 15 of the 31 files
 `scripts/check_citations.py` cites differ between the two, and 119 of the
 178 citations in `tools/citations.json` point at different text at the
@@ -141,9 +151,10 @@ logged).
 - **CUDA graphs.** On, in vLLM's default mode (`FULL_AND_PIECEWISE`), for
   the golden and for the step-cost fit alike. With 64 sequences the capture
   sizes are 1, 2, 4, 8 and every 8 up to 128, twice `max_num_seqs`
-  ([`vllm/config/vllm.py` L2453–2460](https://github.com/vllm-project/vllm/blob/v0.31.0/vllm/config/vllm.py#L2453-L2460);
-  the single-turn log lists the same 19), and a smaller step is padded to
-  the next size. The manifest records the sizes from the log, and
+  ([`vllm/config/vllm.py` L2453–2460](https://github.com/vllm-project/vllm/blob/v0.31.0/vllm/config/vllm.py#L2453-L2460)
+  for the bound, [L2569–2576](https://github.com/vllm-project/vllm/blob/v0.31.0/vllm/config/vllm.py#L2569-L2576)
+  for the list; the single-turn log lists the same 19), and a smaller step
+  is padded to the next size. The manifest records the sizes from the log, and
   `--cudagraph-metrics` the padding. `tools/a100/step_fit.json` does not
   say its mode, so F3 does not mix it with the new data.
 - **The null block.** vLLM takes one block of the pool as the null block
@@ -169,13 +180,18 @@ logged).
   and the KV transfer's `kv_load_failure_policy` is `fail`, v0.31.0's
   default ([`vllm/config/kv_transfer.py` L103–106](https://github.com/vllm-project/vllm/blob/v0.31.0/vllm/config/kv_transfer.py#L103-L106)),
   written out in the manifest.
-- **What v0.31.0 renames.** Prefill throttling is for data-parallel MoE
-  and does not apply. The `skipped_waiting` rewrite does not change the
-  local path, but the P/D citations of `skipped_waiting`
-  (`examples/pd-disaggregation/vllm_nixl_push.sq` and `docs/language.md`
-  §3, *Pools*) name a queue that v0.31.0 calls `kv_holding_waiting`
-  ([`vllm/v1/core/sched/scheduler.py` L216](https://github.com/vllm-project/vllm/blob/v0.31.0/vllm/v1/core/sched/scheduler.py#L216));
-  F1 fixes them.
+- **What v0.31.0 restructures.** Prefill throttling is for data-parallel
+  MoE and does not apply. `skipped_waiting`, the pin's queue of requests in
+  a blocked status, is not renamed but split in two: `kv_holding_waiting`,
+  a queue of the waiting requests that hold KV blocks, which a step drains
+  before `waiting`, and `deferred_waiting`, the set of those skipped or
+  blocked
+  ([`vllm/v1/core/sched/scheduler.py` L212–219](https://github.com/vllm-project/vllm/blob/v0.31.0/vllm/v1/core/sched/scheduler.py#L212-L219),
+  [L874–887](https://github.com/vllm-project/vllm/blob/v0.31.0/vllm/v1/core/sched/scheduler.py#L874-L887),
+  [L2386–2404](https://github.com/vllm-project/vllm/blob/v0.31.0/vllm/v1/core/sched/scheduler.py#L2386-L2404)).
+  A request now belongs by holding blocks, not by its status, so each serQ
+  site that cites `skipped_waiting` is re-read against these lines in F1,
+  not renamed.
 
 ## The client
 
@@ -211,9 +227,10 @@ target agents, and any Harbor agent as the user
   target that cannot act, and a turn is the user's message and the model's
   answer. An agent or subagent session keeps the tools, and a tool's run
   time becomes the gap before the next call.
-- **The simulated user is a hosted model.** Its calls are not part of the
-  trace; only the target's calls reach the engine under test. Its API cost
-  is approved with F2's GPU session.
+- **The simulated user is a hosted model.** F2 picks which and records it
+  in the manifest. Its calls are not part of the trace; only the target's
+  calls reach the engine under test. Its API cost is approved with F2's GPU
+  session.
 - F2's dry run checks, before any GPU is paid for, that each target turn is
   one call to the engine, and finds any call opencode makes on its own (a
   session title, a compaction) so that it is pointed away from the engine
@@ -243,9 +260,14 @@ v0.13.0 (2026-09-24, its latest release), for every engine.
   ([`src/aiperf/metrics/types/usage_cache_metrics.py` L33–62](https://github.com/ai-dynamo/aiperf/blob/v0.13.0/src/aiperf/metrics/types/usage_cache_metrics.py#L33-L62)).
   It sends `X-Request-ID` with each request
   ([`src/aiperf/transports/base_transports.py` L125–126](https://github.com/ai-dynamo/aiperf/blob/v0.13.0/src/aiperf/transports/base_transports.py#L125-L126)),
-  and vLLM takes that header as the request's id
-  ([`vllm/entrypoints/serve/engine/serving.py` L120–129](https://github.com/vllm-project/vllm/blob/v0.31.0/vllm/entrypoints/serve/engine/serving.py#L120-L129)),
-  which its span carries, so a client record and a server span join on it.
+  and vLLM takes that header as the base of the request's id
+  ([`vllm/entrypoints/serve/engine/serving.py` L120–129](https://github.com/vllm-project/vllm/blob/v0.31.0/vllm/entrypoints/serve/engine/serving.py#L120-L129)).
+  The chat endpoint prefixes it, `chatcmpl-<id>`
+  ([`vllm/entrypoints/openai/chat_completion/serving.py` L291–293](https://github.com/vllm-project/vllm/blob/v0.31.0/vllm/entrypoints/openai/chat_completion/serving.py#L291-L293)),
+  and the span carries that prefixed id
+  ([`vllm/v1/engine/output_processor.py` L836](https://github.com/vllm-project/vllm/blob/v0.31.0/vllm/v1/engine/output_processor.py#L836)),
+  so a client record and a server span join on the header once the prefix
+  is stripped.
 - **The two context modes.** aiperf's `ConversationContextMode`
   ([`src/aiperf/common/enums/enums.py` L166–193](https://github.com/ai-dynamo/aiperf/blob/v0.13.0/src/aiperf/common/enums/enums.py#L166-L193))
   says how a turn's prompt is built. A Harbor-generated session is replayed
@@ -319,27 +341,40 @@ whose concurrency rises until the throughput is flat, which gives λ_max.
 | continuity check (`vllm_replay.sq`, `llmd_nixl_pull.sq`; `short_base.csv`) | session spacing | the old measurements' points: A100 3.0 and 2.5 s, A6000 pull 1P1D 3.0 s |
 | chat (a Harbor trace, `vllm_replay.sq`) | session spacing | the probe finds the collapse; six points close around it |
 | shared system prompt (`vllm_system_prompt.sq`) | Poisson λ × system prompt S | λ as single-turn, S ∈ {0, 2k, 8k} tokens |
-| subagent (`vllm.sq` with `subagents.sq`) | concurrent agents | three points near λ_max |
+| subagent (`vllm.sq` with `subagents.sq`) | Poisson λ of agent sessions (`subagents.sq`'s `Lambda`), open | three points near λ_max |
 | agent (`thunderagent.sq`) | concurrent agents N, closed | 1, 2, 4, 8, 16, 32, … until the KV is exceeded |
 | P/D (`llmd_nixl_pull.sq`, `vllm_nixl_push.sq`) | chat spacing × NP:ND | the chat spacings × {1:1, 1:3, 3:1, 2:2} |
 
-Apart from the load, each knob a program takes as a parameter is moved one
-at a time at the knee: `max_num_batched_tokens` {512, 2048, 8192},
-`max_num_seqs`, prefix caching on and off, chunked prefill on and off, and
-the KV capacity (lowered to force preemption). The single-turn golden did
-seven: `B512`, `B2048`, `seqs16`, `seqs128`, `noprefix`, `nochunk` and
-`kv2000` at 0.9 × λ_max.
+Apart from the load, each engine knob is moved one at a time at the knee:
+`max_num_batched_tokens` {512, 2048, 8192}, `max_num_seqs`, prefix caching
+on and off, chunked prefill on and off, and the KV capacity (lowered to
+force preemption). The single-turn golden did seven: `B512`, `B2048`,
+`seqs16`, `seqs128`, `noprefix`, `nochunk` and `kv2000` at 0.9 × λ_max.
+
+Not every point can yet be put to its program. `vllm.sq` takes
+`max_num_seqs` and the KV capacity as arguments (`--max_seqs`,
+`--blocks`), so `seqs16`, `seqs128` and `kv2000` run as they are; its `B`
+and the `Lambda` of `single_turn.sq` and `subagents.sq` are constants, so
+`--Lambda 3.72` or `--B 512` is refused at link ("unknown program argument
+`Lambda`"), and F5 makes them arguments first. Prefix caching off and
+chunked prefill off are not arguments at all: they change `vllm.sq`'s
+`reuse` and `taking kv` clauses, so each is a variant program, which F5
+writes or leaves out of the comparison, and says which.
 
 ### The continuity check
 
 The first multi-turn run of the new pipeline (v0.31.0, aiperf, the new
 records) replays the trace and the points of the old measurements: the A100
 at spacing 3.0 and 2.5 s (`docs/use-cases/vllm.md`, *Reported comparison*)
-and the A6000 pull 1P1D at 3.0 s (`servingq/a6000-pd-nixl-2026-09`). A
-disagreement is then the engine's or the tools', and can be told apart;
-starting from a Harbor trace would change the workload and the tools at
-once. `short_base.csv` serves only this check, not the sweeps: where it
-came from is not written in the repository (`docs/use-cases/vllm.md` says
+and the A6000 pull 1P1D at 3.0 s (`servingq/a6000-pd-nixl-2026-09`). The
+old runs had asynchronous scheduling on (the A100's `c_it` was calibrated
+with it, and `tools/a6000/serve_pd.sh` leaves the pin's default, which
+turns it on), so the continuity runs keep it on, and the same points are
+then repeated with it off. A disagreement is then the engine's or the
+tools', and can be told apart; starting from a Harbor trace, or with
+asynchronous scheduling off, would change two things at once.
+`short_base.csv` serves only this check, not the sweeps: where it came
+from is not written in the repository (`docs/use-cases/vllm.md` says
 only "333 sessions").
 
 Replacing it by a Harbor trace is a separate change after the check. It is
@@ -354,7 +389,7 @@ and `docs/use-cases/vllm.md`.
 
 A run is one load point × one repetition. Everything is switched on by a
 flag of the released engine or client, and the columns follow serQ's
-outputs so that a comparison is one diff: `serq run --dump DIR`
+outputs so that F5's comparison is one diff: `serq run --dump DIR`
 (`time,session,turn,value`) and `tools/oracle/cache_trace.out.csv`
 (`session,turn,sent,first,done,prompt,cached,out`).
 
@@ -394,7 +429,11 @@ outputs so that a comparison is one diff: `serq run --dump DIR`
    blocks' lifetime, idle time before eviction and reuse gap. Those are
    sampled, 1 % of blocks by default
    ([`vllm/config/observability.py` L60–66](https://github.com/vllm-project/vllm/blob/v0.31.0/vllm/config/observability.py#L60-L66));
-   the manifest records the rate.
+   the manifest records the rate. In P/D, the NIXL connector's transfer
+   histograms and counters (`vllm:nixl_xfer_time_seconds`,
+   `vllm:nixl_bytes_transferred`, `vllm:nixl_num_failed_transfers`, …,
+   [`nixl/stats.py` L177–263](https://github.com/vllm-project/vllm/blob/v0.31.0/vllm/distributed/kv_transfer/kv_connector/v1/nixl/stats.py#L177-L263)),
+   which are all a run has of its transfers.
 6. `kv_events.jsonl`: `BlockStored`, `BlockRemoved` and `AllBlocksCleared`
    from `--kv-events-config`'s ZMQ publisher
    ([`vllm/distributed/kv_events.py` L56–140](https://github.com/vllm-project/vllm/blob/v0.31.0/vllm/distributed/kv_events.py#L56-L140)):
@@ -444,9 +483,11 @@ An agent's tool call is the agent step's `tool_calls`, its result the
 pause, a resume and the router's choice in the step's `extra.route`. A
 subagent is a trajectory in the root's `subagent_trajectories`, linked from
 the parent's `observation.results[].subagent_trajectory_ref`. In P/D,
-`extra.instance` is `{"prefill": "p0", "decode": "d1"}` and a transfer id
-points into `transfers.jsonl`. Engine steps, KV events and GPU samples have
-no place in ATIF and stay files of the run. The collection scripts keep only
+`extra.instance` is `{"prefill": "p0", "decode": "d1"}`; a transfer has no
+record of its own to point to (see
+[What is lost without a plugin](#what-is-lost-without-a-plugin)), only the
+NIXL histograms of `metrics.jsonl`. Engine steps, KV events and GPU samples
+have no place in ATIF and stay files of the run. The collection scripts keep only
 trajectories that `harbor.utils.trajectory_validator` accepts.
 
 **`message` holds the text the turn added.** A user step's `message` is
@@ -473,7 +514,7 @@ single-turn golden.
 | P0 | vLLM, one GPU (`multi-turn/vllm.sq`) | single-turn | step cost, per-request TTFT, response and waiting time, preemptions | collected 2026-10-13; refit F3 |
 | P0 | vLLM, one GPU (`replay/vllm_replay.sq`, `multi-turn/vllm_system_prompt.sq`) | continuity check, chat, shared system prompt | the same, plus prefix sharing across sessions (#553) and reading a prefix still being computed (#575). Every engine-form example shares this engine's lines, so it comes first | F2 |
 | P1 | llm-d P/D pull (`llmd_nixl_pull.sq`) | chat | with the real llm-d router, not a toy proxy: lease hold time, transfer time and NIC sharing (`share.maxmin`), the decoder's `cached_tokens` | F4 |
-| P2 | SGLang, TensorRT-LLM, TGI (`engines/*.sq`), P0's instance and model | single-turn, chat | engine neutrality: whether the programs reproduce the engines' differences under one workload (prefill first, `GUARANTEED_NO_EVICT`, block 1) | not scheduled; after F2 |
+| P2 | SGLang, TensorRT-LLM, TGI (`engines/*.sq`), P0's instance and model | single-turn, chat | engine neutrality: whether the programs reproduce the engines' differences under one workload (prefill first, `GUARANTEED_NO_EVICT`, block 1). Every engine's single-turn, vLLM's included, is replayed by aiperf on P2's instance, so that the engines differ and the client does not; the `vllm bench serve` single-turn golden is not P2's baseline | not scheduled; after F2 |
 | P2 | vLLM with LMCache (`vllm_lmcache.sq`) | chat with a working set larger than the GPU's KV | L2 hit tokens, load time | not scheduled; after F2 |
 | P3 | ThunderAgent (`thunderagent.sq`), J replicas | agent | pause and resume, the router's choice, the throughput ratio | not scheduled; on four A6000 replicas first |
 | P3 | vLLM P/D push (`vllm_nixl_push.sq`) | chat | the collapsed operating point | not scheduled; on F4's instance |
@@ -485,7 +526,7 @@ single-turn golden.
 |---|---|---|
 | `gpu_1x_a100_sxm4` | P0; P2's engines and LMCache | the device of `tools/a100/step_fit.json` and `vllm_replay.sq`, so the old fit carries over; the single-turn golden ran on it |
 | `gpu_4x_a6000` | P1 and the P/D push (1P1D, 1P3D, 3P1D, 2P2D); P3's four-replica ThunderAgent | the 2026-09 device. Its IB dmabuf registration failed then and the transfers ran over TCP, so the manifest names the NIC |
-| `gpu_8x_h100_sxm5` | ThunderAgent and P/D over NVLink or IB, at the paper's scale | only if the four-replica A6000 run shows the regime cannot be reached at that scale |
+| `gpu_8x_h100_sxm5` | ThunderAgent and P/D over NVLink or IB, at the paper's scale; two of them would give `pd_two_fabrics.sq` its two fabrics, NVLink inside a node and RDMA between | only if the four-replica A6000 run shows the regime cannot be reached at that scale |
 
 Every launch is a paid action: the user approves the instance type and its
 $/h, quoted from Lambda when asked, before it starts.
@@ -516,17 +557,21 @@ and its instruction and test ask for a summary that the data recomputes, as
 
 Each collection is a paid GPU session that the user approves, instance type
 and $/h first, so none of them is part of this document's change. The
-pin move needs no GPU.
+pin move and the comparison need no GPU. Each step is an issue of its own.
 
-**F1. Move `ref/vllm` to v0.31.0.** Before any multi-turn collection, so
-that the CPU oracle and the golden read one engine.
+**F1. Move `ref/vllm` to v0.31.0 (#760).** Before any multi-turn
+collection, so that the CPU oracle and the golden read one engine.
 
 - `scripts/fetch_vllm_ref.sh`: `REV` from `0c87a197…` to
   `db9527a46873454610df6dbedf79a36d6bf1a7f6`.
 - Re-read and re-point the 119 citations that say something else at the
   same lines (all 82 in the scheduler), then `make citations`.
-- `skipped_waiting` becomes `kv_holding_waiting` in `docs/language.md`
-  (§3, *Pools*) and `examples/pd-disaggregation/vllm_nixl_push.sq`.
+- Re-read each site that cites `skipped_waiting` against v0.31.0's split
+  (*What v0.31.0 restructures* above) and fix it there: `docs/language.md`
+  (§3, *Pools*, and the chunked-prefill row of §7's table),
+  `docs/use-cases/pd.md` (*A decode instance*),
+  `examples/pd-disaggregation/vllm_nixl_push.sq`, `tests/pd_semantics.rs`
+  and `tools/serq_vllm.py`.
 - The `RELEASED` entry for the LMCache connector in
   `scripts/check_citations.py` becomes redundant; the `v0.31.0rc2` links of
   `docs/use-cases/vllm.md` and `docs/use-cases/index.md` move to the
@@ -538,7 +583,7 @@ that the CPU oracle and the golden read one engine.
 - After it, the vLLM links in this document can become `name.py:N`
   citations that `scripts/check_citations.py` checks.
 
-**F2. P0 multi-turn on the A100 (aiperf).** After F1. Needs a paid
+**F2. P0 multi-turn on the A100 (aiperf; #761).** After F1. Needs a paid
 `gpu_1x_a100_sxm4` session, and the simulated user's API budget, approved
 first.
 
@@ -549,24 +594,46 @@ first.
 - The two converters (trajectory to aiperf input, run records to the serQ
   trace), with a test that turns `tools/a6000/pull1x1_s3_rounds.jsonl` into
   `short_base.csv`'s rows.
-- On the GPU: the continuity runs (3.0 and 2.5 s), then the chat and
+- The choices left to it: the simulated user's hosted model and the
+  terminal-bench task set, both recorded in the manifest.
+- On the GPU: the continuity runs (3.0 and 2.5 s, asynchronous scheduling
+  on as in the old runs, then off), then the chat and
   shared-system-prompt sweeps, with `probe.jsonl`, the iteration log, KV
   events and the KV and CUDA graph metrics; published as Harbor tasks.
 
-**F3. Refit the step cost on synchronous data.** `c_it` and the worker of
+**F3. Refit the step cost on synchronous data (#762).** `c_it` and the worker of
 `examples/replay/vllm_replay.sq`, from F2's probe and iteration log. Needs
 F2's session to have run the probe, or a paid A100 session for it; the fit
 itself runs on a CPU. It moves numbers, so the sim-reviewer runs; it
 regenerates `tools/oracle/*.ir.json` and updates `docs/use-cases/vllm.md`.
 The single-turn synchronous records are on Harbor for a first look.
 
-**F4. P1, llm-d P/D on A6000 with the real router.** Needs a paid
+**F4. P1, llm-d P/D on A6000 with the real router (#763).** Needs a paid
 `gpu_4x_a6000` session, approved first, and F2's converters. Before it, find
 the repository that holds `8a2f37d` and `13eebdb` and the release that
 contains them. On the GPU: the NIC (IB or TCP) checked and recorded, then
 the continuity run (pull 1P1D at 3.0 s, against
-`servingq/a6000-pd-nixl-2026-09`), then the chat spacings × {1:1, 1:3, 3:1,
-2:2} through the llm-d router.
+`servingq/a6000-pd-nixl-2026-09`, asynchronous scheduling on, then off),
+then the chat spacings × {1:1, 1:3, 3:1, 2:2} through the llm-d router.
+
+**F5. Compare a program with its golden (#764).** No GPU. The
+counterpart, for time, of `scripts/check_oracle_gpu.py`, which holds the
+CPU oracle and the A100 engine to the same choices.
+
+- First the knobs a sweep moves become program arguments (`args.number`,
+  their defaults kept): `Lambda` in `examples/workloads/single_turn.sq` and
+  `subagents.sq`, and `B` in `examples/multi-turn/vllm.sq`, inside its
+  `fn main()`, where a program's arguments are declared. Prefix caching
+  off and chunked prefill off are variant programs, written or left out,
+  and the script says which.
+- `scripts/check_golden.py`: for each collected point it runs the program
+  with that point's arguments (`serq run … --dump`) and sets its mean and
+  p90 TTFT, TPOT and response time, its preemptions and its prefix hit
+  rate beside the golden's three repetitions (`summary.json` and the
+  trajectories' `extra.serq` rows).
+- The tolerance is decided after F3, from the spread of the single-turn
+  repetitions, and written into the script and this document. Until then
+  the script reports how far a program is and judges nothing.
 
 P2 and P3 stay rows of the [priority table](#deployment-and-workload-by-priority)
 until F2 and F4 land.
@@ -587,8 +654,9 @@ waits a Poisson interval between requests rather than the trace's think
 and estimates the cached share from the history's length
 ([L484–487](https://github.com/vllm-project/vllm/blob/v0.31.0/benchmarks/multi_turn/benchmark_serving_multi_turn.py#L484-L487)).
 Rejected for aiperf, which is also the same client for every engine.
-Single-turn stays on `vllm bench serve`, which was collected and needs no
-session order.
+vLLM's single-turn golden stays on `vllm bench serve`, which was collected
+and needs no session order; P2, which compares engines, replays
+single-turn with aiperf for all of them.
 
 **Harbor as the replayer.** Harbor has no timed resend: `--load-trajectory`
 loads a past trajectory as the agent's context to continue the session, and
@@ -643,6 +711,11 @@ knee point with asynchronous scheduling on says how far the default is.
 wait for the model, so the CPU's share of a step is inferred from the probe
 and the end-to-end step count. If that is not enough, the plugin question
 is reopened.
+
+**Weak: a golden has no pass mark yet.** F5 sets a program beside its
+golden and reports the distance; what distance passes waits for F3's
+refit and the spread of the repetitions, so until then a golden says how
+far a program is, not whether it is right.
 
 **Weak: the data is private.** The Harbor dataset is private, so a reader
 of this repository cannot rerun a comparison without access. The scripts,
