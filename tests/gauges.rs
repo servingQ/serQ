@@ -318,6 +318,29 @@ fn an_array_sizes_aggregate_index_is_its_own() {
             "let N = 4; let M = sum N in 2 (1); stage svc[2] : fifo;",
             "`sum N in`: `N` is also a `let` constant",
         ),
+        // an argument a `def` does not read is not evaluated either, and is
+        // the program's too (#753 review): written, as a reference's index,
+        // inside another unread argument, in a branch not taken
+        (
+            svc,
+            "def one(x) { 2 } stage svc[one(sum svc in 2 (1))] : fifo;",
+            "`sum svc in`: `svc` is also a stage",
+        ),
+        (
+            svc,
+            "def one(x) { 2 } let M = 1 ? 2 : one(kv[sum j in 2 (0)]); stage svc[M] : fifo;",
+            "`sum j in`: `j` is also a session attribute",
+        ),
+        (
+            svc,
+            "def one(x) { 2 } stage svc[one(one(sum j in 2 (1)))] : fifo;",
+            "`sum j in`: `j` is also a session attribute",
+        ),
+        (
+            svc,
+            "def one(x) { 2 } let M = 1 ? 2 : one(sum j in 2 (1)); stage svc[M] : fifo;",
+            "`sum j in`: `j` is also a session attribute",
+        ),
     ] {
         let src = DEPLOYMENT.replace(from, to);
         let e = link_error(&src, WORKLOAD);
@@ -331,6 +354,7 @@ fn an_array_sizes_aggregate_index_is_its_own() {
         "stage svc[sum k in 2 (1)] : fifo;",
         "stage svc[1 ? 2 : sum k in 2 (1)] : fifo;",
         "let M = 1 ? 2 : sum k in 2 (1); stage svc[M] : fifo;",
+        "def one(x) { 2 } stage svc[one(sum k in 2 (1))] : fifo;",
     ] {
         let own = DEPLOYMENT.replace(svc, to);
         assert!(

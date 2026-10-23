@@ -3781,9 +3781,10 @@ impl Parser {
     /// Keep `e`, a constant folded here whose expression the program keeps
     /// nowhere else (an array size, a `ttl`), for the linker when it holds an
     /// aggregate: the index is a name the program does not already have,
-    /// and only the linker knows the program's names (#561).
+    /// and only the linker knows the program's names (#561), in an argument
+    /// a call does not read as well (`Expr::any_written`).
     fn keep_folded(&mut self, e: Expr) {
-        if e.any(&|x| matches!(x, Expr::Over(..))) {
+        if e.any_written(&|x| matches!(x, Expr::Over(..))) {
             self.folded.push(e);
         }
     }

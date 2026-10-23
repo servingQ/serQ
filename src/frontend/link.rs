@@ -3070,11 +3070,12 @@ pub(crate) trait Constants {
     /// aggregate, where `e` is not evaluated: a constant the parser folded
     /// (an array size, a `ttl`, whose value is the parser's) or a branch a
     /// constant condition does not take. Either is the program's, and its
-    /// indices are asked as an expression's are (#561). The parser
+    /// indices are asked as an expression's are (#561), in an argument a
+    /// call does not read as well (`Expr::any_written`). The parser
     /// wraps every aggregate in its place (`Expr::Located`).
     fn own_indices(&self, e: &Expr) -> LResult<()> {
         let refused = Cell::new(None);
-        e.any(&|x| {
+        e.any_written(&|x| {
             let Expr::Located(span, inner) = x else {
                 return false;
             };
