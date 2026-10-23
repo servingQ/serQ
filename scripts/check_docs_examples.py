@@ -17,8 +17,10 @@ with no `…` is a program the check links. A fence is serQ when the site draws
 it as serQ: its language, spelt any way Pygments looks it up, is one of
 SerqLexer's aliases (docs/hooks/serq_lexer.py).
 
-A fence that imports pyserq, whatever its language, is a script, and runs in
-a temporary directory with the Python running this.
+A fence that imports pyserq (`import pyserq`, `from pyserq import …`),
+whatever its language, is a script, and runs in a temporary directory with
+the Python running this. Each link, command and script has DEADLINE seconds:
+one that runs on fails with its page line, not at CI's job limit.
 
 A fence with neither is a fragment: `scripts/check_docs_lexer.py` lexes it.
 A fragment worth linking is included from a program `make check` links, by a
@@ -50,10 +52,17 @@ MAIN = re.compile(r"\bfn\s+main\s*\(")
 # what is not code: a string, then a comment, as serq_lexer.py reads them
 NOT_CODE = re.compile(r'"[^"\n]*"|/\*.*?\*/|//[^\n]*', re.S)
 ELIDED = "…"
-PYSERQ = re.compile(r"^\s*import pyserq\b", re.M)
+# a line that imports pyserq, however it names it
+PYSERQ = re.compile(r"""^[ \t]* (?:
+      from [ \t]+ pyserq\b                                          # from pyserq import compile
+    | import [ \t]+ (?: [\w.]+ (?:[ \t]+ as [ \t]+ \w+)? [ \t]*,[ \t]* )* pyserq\b
+                                                                    # import pyserq [as sq], import json, pyserq
+)""", re.M | re.X)
 PAIR = ("model.sq", "workload.sq")
 SHELL = ("sh", "bash", "shell")
 LEXER = ROOT / "docs" / "hooks" / "serq_lexer.py"
+# seconds one example may take; every one the site shows takes well under a second
+DEADLINE = 60
 
 
 def serq_languages(lexer=LEXER):
@@ -155,9 +164,19 @@ def fences(path):
         i = j + 1
 
 
+def run(argv, cwd):
+    """(failed, what it printed) of one example: it exits non-zero, or runs past DEADLINE and is stopped."""
+    try:
+        r = subprocess.run(argv, cwd=cwd, capture_output=True, text=True, timeout=DEADLINE)
+    except subprocess.TimeoutExpired as e:
+        printed = b"".join(s for s in (e.stdout, e.stderr) if s)  # bytes here, whatever `text` says
+        return True, f"it ran past {DEADLINE} s and was stopped\n{printed.decode(errors='replace')}".strip()
+    return r.returncode != 0, (r.stdout + r.stderr).strip()
+
+
 def serq(*args, cwd):
-    r = subprocess.run([SERQ, *args], cwd=cwd, capture_output=True, text=True)
-    return r.returncode, (r.stdout + r.stderr).strip()
+    """(failed, what it printed) of `serq` with these arguments, run in cwd."""
+    return run([SERQ, *args], cwd)
 
 
 def commands(body):
@@ -202,9 +221,9 @@ def check_serq(page, rel):
     with tempfile.TemporaryDirectory() as d:
         for name, [(line, body)] in titled.items():
             (Path(d) / name).write_text(body)
-        code, out = serq("check", PAIR[0], "--workload", PAIR[1], cwd=d)
+        failed, out = serq("check", PAIR[0], "--workload", PAIR[1], cwd=d)
         linked += 1
-        if code:
+        if failed:
             line = titled[PAIR[0]][0][0]
             errors.append(f"{rel}:{line}: the page's model.sq with its workload.sq does not link "
                           f"(lines are the fence's):\n{out}")
@@ -215,9 +234,9 @@ def check_serq(page, rel):
             for k, cmd, words in commands(body):
                 if PAIR[0] not in words:
                     continue
-                code, out = serq(*words[1:], cwd=d)
+                failed, out = serq(*words[1:], cwd=d)
                 ran += 1
-                if code:
+                if failed:
                     errors.append(f"{rel}:{line + k}: `{cmd}` fails on the page's model.sq and workload.sq:\n{out}")
     return errors, linked, ran
 
@@ -234,11 +253,12 @@ def run_python(body, where):
     with tempfile.TemporaryDirectory() as d:
         script = Path(d) / "example.py"
         script.write_text(body)
-        r = subprocess.run([sys.executable, str(script)], cwd=d, capture_output=True, text=True)
-    return None if r.returncode == 0 else f"{where}: the script fails:\n{(r.stdout + r.stderr).strip()}"
+        failed, out = run([sys.executable, str(script)], d)
+    return f"{where}: the script fails:\n{out}" if failed else None
 
 
 def main(argv):
+    """Check every page the site builds: its serQ programs, or with --python its pyserq scripts."""
     errors = []
     if "--python" in argv:
         try:

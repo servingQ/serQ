@@ -10,6 +10,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import check_docs_examples as docs  # noqa: E402
@@ -131,6 +132,19 @@ class Serq(unittest.TestCase):
         text = f"{FENCE}`markdown\n{FENCE}serq\n{MODEL}{FENCE}\n{FENCE}`\n"
         self.assertEqual(check(text), ([], 0, 0))
 
+    def test_a_serq_that_runs_on_is_stopped_at_the_deadline(self):
+        # a stand-in serq that never returns: the check fails at the page line, not at CI's job limit
+        with tempfile.TemporaryDirectory() as d:
+            hang = Path(d) / "serq"
+            hang.write_text("#!/bin/sh\necho linking\nexec sleep 30\n")
+            hang.chmod(0o755)
+            with mock.patch.object(docs, "DEADLINE", 1), mock.patch.object(docs, "SERQ", str(hang)):
+                errors, linked, _ = check(pair())
+        self.assertEqual(linked, 1)
+        self.assertEqual(len(errors), 1)
+        self.assertTrue(errors[0].startswith("page.md:1:"), errors[0])
+        self.assertIn("ran past 1 s and was stopped\nlinking", errors[0])
+
 
 class Python(unittest.TestCase):
     def test_a_script_is_found_by_its_import_whatever_its_language(self):
@@ -141,10 +155,26 @@ class Python(unittest.TestCase):
             page.write_text(text)
             self.assertEqual([line for line, _ in docs.pyserq_scripts(page)], [1, 4, 7, 10])
 
+    def test_a_script_is_found_by_any_import_of_pyserq(self):
+        for imports in ("from pyserq import compile", "import pyserq as sq", "import json, pyserq",
+                        "import json as j, pyserq as sq", "from pyserq.sub import x", "    import pyserq"):
+            with self.subTest(imports=imports):
+                self.assertTrue(docs.PYSERQ.search(f"x = 1\n{imports}\n"))
+        for other in ("import pyserqx", "from pyserq_helper import x", "# import pyserq",
+                      "import json  # pyserq", 'print("import pyserq")'):
+            with self.subTest(other=other):
+                self.assertFalse(docs.PYSERQ.search(f"{other}\n"))
+
     def test_a_failing_script_names_its_page_line(self):
         e = docs.run_python("raise SystemExit('no')\n", "page.md:5")
         self.assertTrue(e.startswith("page.md:5:"), e)
         self.assertIsNone(docs.run_python("assert 1 + 1 == 2\n", "page.md:5"))
+
+    def test_a_script_that_runs_on_is_stopped_at_the_deadline(self):
+        with mock.patch.object(docs, "DEADLINE", 1):
+            e = docs.run_python("print('started', flush=True)\nwhile True:\n    pass\n", "page.md:5")
+        self.assertTrue(e.startswith("page.md:5:"), e)
+        self.assertIn("ran past 1 s and was stopped\nstarted", e)
 
     # Only against a wheel of this tree: the repository's pyserq/ directory, or an
     # older pyserq installed here, would be found as "pyserq" and answer for another

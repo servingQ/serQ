@@ -36,6 +36,7 @@ def sources():
 
 
 def main():
+    """Lex every source; an error token names its file and line."""
     if examples.SERQ_LANGS != set(SerqLexer.aliases):
         # check_docs_examples reads the aliases from the source, without Pygments
         sys.exit(f"check_docs_lexer: check_docs_examples reads {sorted(examples.SERQ_LANGS)} as SerqLexer's "
