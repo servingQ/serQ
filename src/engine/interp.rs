@@ -697,17 +697,17 @@ struct StageState {
     /// waiting for an event that may not come (#263).
     idle_with_work: bool,
     steps: StepStats,
-    admitted: Admitted,
+    admissions: Admissions,
 }
 
 /// What an engine member's admissions after warm-up had and read, for the
 /// report's engine table (`EngineReport`): the same admissions its records
 /// `E.reused` and `E.prefill` sample.
 #[derive(Default)]
-struct Admitted {
+struct Admissions {
     /// Admissions, and of them those of a request preempted since its call.
     count: u64,
-    again: u64,
+    readmissions: u64,
     /// The requests' tokens at each admission (`request.known`), and of
     /// them the ones read from the engine's cache (`E.reused`).
     tokens: f64,
@@ -1084,7 +1084,7 @@ impl<'p> Interp<'p> {
                 iterations: 0,
                 idle_with_work: false,
                 steps: StepStats::new(),
-                admitted: Admitted::default(),
+                admissions: Admissions::default(),
             })
             .collect();
         Interp {
@@ -2756,7 +2756,8 @@ impl<'p> Interp<'p> {
         let now = self.now;
         let r = self.sessions[sid].req.as_mut().expect("a request");
         r.phase = Phase::Admitted;
-        let (known, spec, loaded, st, again) = (r.known, r.spec, r.loaded, r.stage, r.preempted);
+        let (known, spec, loaded, st, readmitted) =
+            (r.known, r.spec, r.loaded, r.stage, r.preempted);
         if let Some(spec) = spec {
             // what it computes: past what it read and loads, and its last
             // token again when a load brings every one (`load_ended`)
@@ -2767,9 +2768,9 @@ impl<'p> Interp<'p> {
             };
             // the admissions `observe_for` samples: after warm-up
             if self.warm {
-                let a = &mut self.stages[st].admitted;
+                let a = &mut self.stages[st].admissions;
                 a.count += 1;
-                a.again += u64::from(again);
+                a.readmissions += u64::from(readmitted);
                 a.tokens += known;
                 a.reused += pos;
             }
@@ -6593,7 +6594,7 @@ impl<'p> Interp<'p> {
             .collect();
         // one row per engine that takes requests, a family's members summed,
         // as its records `E.reused` and `E.prefill` are one per family
-        let mut sums: Vec<(&str, Admitted)> = vec![];
+        let mut sums: Vec<(&str, Admissions)> = vec![];
         for (s, cs) in self.stages.iter().zip(&p.stages) {
             if !matches!(&cs.kind, CStageKind::Step(step) if step.request.is_some()) {
                 continue;
@@ -6601,13 +6602,13 @@ impl<'p> Interp<'p> {
             let k = match sums.iter().position(|(name, _)| *name == cs.name) {
                 Some(k) => k,
                 None => {
-                    sums.push((&cs.name, Admitted::default()));
+                    sums.push((&cs.name, Admissions::default()));
                     sums.len() - 1
                 }
             };
-            let (a, b) = (&mut sums[k].1, &s.admitted);
+            let (a, b) = (&mut sums[k].1, &s.admissions);
             a.count += b.count;
-            a.again += b.again;
+            a.readmissions += b.readmissions;
             a.tokens += b.tokens;
             a.reused += b.reused;
         }
@@ -6616,7 +6617,7 @@ impl<'p> Interp<'p> {
             .map(|(name, a)| EngineReport {
                 name: name.into(),
                 admissions: a.count,
-                readmissions: a.again,
+                readmissions: a.readmissions,
                 // no admission, or none with a token: no share to give
                 token_hit: if a.tokens > 0.0 {
                     a.reused / a.tokens

@@ -157,9 +157,13 @@ report is built, `RequestRecords` and `Program::observes` stay, and so do
 ## Known wrinkles
 
 - The pools' counters span the whole run and this table the time after
-  warm-up; a reader comparing `E.kv`'s `admits` with the engine's
-  `admits` sees the warm-up's admissions. #480 and #64 touch the pool
-  counters.
+  warm-up. A reader adding the `E.kv` pools' `admits` in the run above,
+  1130 + 1042 = 2172, finds 310 more than the engine's 1862: the
+  warm-up's admissions, as the same run at `--warmup 0` shows (`E  2172`).
+  The pool table says that its counters include the warm-up
+  (`docs/reference/cli.md`, Pool statistics). Whether they should count
+  after it, as the pool's `mean_wait` beside them does, is a question
+  about the pool table, not this one.
 - `readmits` and the stays in `preempted` agree in every run checked (10
   and 10 above, 1 and 1 in `tests/report.rs`), but they are two counts: the
   table counts admissions, the status table the stays the interpreter
@@ -174,6 +178,19 @@ one report: the records `E.reused` and `E.prefill` beside it count every
 admission, and a reader comparing the row with their means would find a
 difference nothing names. The row keeps the records' population and says
 how large the difference is (`readmits`).
+
+**`readmits` beside the `preempted` stays.** In every run checked the
+column equals the count of stays in `preempted` just above it: 10 here,
+319 and 5 953 in tutorial 6 at 1.5 and 2.0 sessions/s, 1 in `sglang.sq`
+and in `vllm_lmcache.sq` (`--horizon 1000 --warmup 100`). By the rule
+that dropped `reused/adm` (below), one meaning in one place, it would
+go. It is kept: it is vLLM's own count,
+`PrefixCacheStats.preempted_requests` (`metrics/stats.py:132-143`), the
+size of what the Prometheus counters leave out, where the stays are a
+duration's samples; and the two count different events. A stay in
+`preempted` ends when the request's status reads otherwise or its
+session ends with the request unfinished (`abandon_request`): a
+re-admission is one such end, not the only one.
 
 **`reused/adm` and `prefill/adm` columns (the issue's After).** They are
 the means of `E.reused` and `E.prefill`, a few lines above in the same

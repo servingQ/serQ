@@ -39,6 +39,11 @@ fn keys(v: &serde_json::Value) -> Vec<String> {
     k
 }
 
+/// The sum of an observation's samples.
+fn total(r: &serq::Report, name: &str) -> f64 {
+    r.observe(name).unwrap().samples.iter().sum()
+}
+
 #[test]
 fn the_report_has_the_shape_its_version_names() {
     let src = "pool kv { cap 10; } stage svc : fifo;
@@ -351,8 +356,7 @@ fn the_gaps_add_up_to_the_decode_time_through_preemptions() {
         r.pool("kv").unwrap().preemptions > 0,
         "no preemption to test"
     );
-    let sum = |name: &str| r.observe(name).unwrap().samples.iter().sum::<f64>();
-    let tpot = sum("span") / sum("gaps");
+    let tpot = total(&r, "span") / total(&r, "gaps");
     let itl = r.stage("llm").unwrap().mean_itl;
     // every session drains (`arrivals`), so every gap is observed: exact
     assert!(
@@ -501,7 +505,6 @@ fn a_decoders_gaps_add_up_through_its_preemptions() {
         r.pool("D.kv").unwrap().preemptions > 0,
         "no preemption to test"
     );
-    let sum = |name: &str| r.observe(name).unwrap().samples.iter().sum::<f64>();
     let gaps = r
         .observe("output_tokens")
         .unwrap()
@@ -509,7 +512,7 @@ fn a_decoders_gaps_add_up_through_its_preemptions() {
         .iter()
         .map(|o| o - 1.0)
         .sum::<f64>();
-    let tpot = sum("decode_time") / gaps;
+    let tpot = total(&r, "decode_time") / gaps;
     let itl = r.stage("D").unwrap().mean_itl;
     assert!(
         (itl - tpot).abs() <= 1e-9 * tpot,
@@ -702,11 +705,6 @@ fn the_corpus_earns_one_note() {
 // ------------------------------------------------- the engine table ----
 // (#594, `docs/design/engine-admissions.md`)
 
-/// The sum of an observation's samples.
-fn total(r: &serq::Report, name: &str) -> f64 {
-    r.observe(name).unwrap().samples.iter().sum()
-}
-
 /// Engine `e` on a GPU of 1000 KV tokens that reads from its cache every
 /// token but the last and caches `cache`, with `connector` as written (to
 /// the L2 `lmc` of 1000, declared with it); one iteration a second.
@@ -834,11 +832,16 @@ fn a_readmission_is_counted_apart() {
 }
 
 /// The run of #594 as it was filed: the row's admissions are `E.reused`'s
-/// count (1862 then), its re-admissions the stays in `preempted` (10 and
-/// 10), and, without a connector, its token hit what each reader of the
-/// records computed, `Σ E.reused / (Σ E.reused + Σ E.prefill)` (0.795).
-/// Invariants, not values: a change to the run moves the numbers, not
-/// these.
+/// count (1862 then) and, without a connector, its token hit what each
+/// reader of the records computed, `Σ E.reused / (Σ E.reused +
+/// Σ E.prefill)` (0.795). Invariants, not values: a change to the run
+/// moves the numbers, not these.
+///
+/// Its re-admissions equal the stays in `preempted` (10 and 10) on this
+/// run, not by construction: the table counts admissions, the status table
+/// the stays it closes, two counts that agree here
+/// (`docs/design/engine-admissions.md`, Known wrinkles). A change to the
+/// run may part them and fail this assertion with no fault in either.
 #[test]
 fn the_issue_594_run_agrees_with_its_records() {
     let mut ov = Overrides {
@@ -851,21 +854,28 @@ fn the_issue_594_run_agrees_with_its_records() {
     let r = common::run_example("examples/multi-turn/thunderagent.sq", &ov).unwrap();
     let e = r.engine("E").unwrap();
     assert_eq!(e.admissions, r.observe("E.reused").unwrap().count);
-    let preempted = r.statuses.iter().find(|x| x.name == "preempted").unwrap();
-    assert!(e.readmissions > 0, "no re-admission to test");
-    assert_eq!(e.readmissions, preempted.stays);
     let (reused, prefill) = (total(&r, "E.reused"), total(&r, "E.prefill"));
     let hit = reused / (reused + prefill);
     assert!((e.token_hit - hit).abs() <= 1e-12, "{} {hit}", e.token_hit);
+    // this run's agreement, not an invariant (above)
+    let preempted = r.statuses.iter().find(|x| x.name == "preempted").unwrap();
+    assert!(e.readmissions > 0, "no re-admission to test");
+    assert_eq!(e.readmissions, preempted.stays);
 }
 
 /// Every engine of the corpus: a row for each engine with records, in
 /// their order; its admissions its records' count; its token hit a share,
-/// NaN only when no admission had a token, and without a connector what
-/// the readers computed from the records.
+/// NaN only when no admission had a token, without a connector what the
+/// readers computed from the records, and with one between the bounds its
+/// records set. An admission's tokens are at most what it read, loaded and
+/// computes, and at least what it read and computes: a load that brings
+/// every token has the last computed again (`load_ended`), so the three
+/// may count that token twice. Hence
+/// `Σ reused / (Σ reused + Σ loaded + Σ prefill) <= token_hit <=
+/// Σ reused / (Σ reused + Σ prefill)`.
 #[test]
 fn every_engine_row_agrees_with_its_records() {
-    let mut rows = 0;
+    let (mut rows, mut connected) = (0, 0);
     for (name, r) in corpus() {
         let recorded: Vec<&str> = r
             .observes
@@ -901,8 +911,18 @@ fn every_engine_row_agrees_with_its_records() {
                     e.name,
                     u / (u + p)
                 );
+            } else {
+                let l = total(&r, &record("loaded"));
+                let (low, high) = (u / (u + l + p), u / (u + p));
+                assert!(
+                    low <= h + 1e-12 && h <= high + 1e-12,
+                    "{name}: {} {h} outside [{low}, {high}]",
+                    e.name
+                );
+                connected += 1;
             }
         }
     }
     assert!(rows >= 20, "{rows} rows");
+    assert!(connected >= 2, "{connected} rows with a connector");
 }

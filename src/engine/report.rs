@@ -191,7 +191,8 @@ pub struct EngineReport {
     /// Of those, the admissions of a request preempted since its call.
     pub readmissions: u64,
     /// The share of the admitted tokens the engine's cache gave: `Σ E.reused`
-    /// over `Σ request.known`, each read at an admission, NaN without one.
+    /// over `Σ request.known`, each read at an admission, NaN when no
+    /// admission had a token.
     /// A token a connector loaded is among the tokens, not the hits (its
     /// record is `E.loaded`); without one, the tokens are `E.reused` and
     /// `E.prefill` together.
