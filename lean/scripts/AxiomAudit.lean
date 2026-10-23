@@ -48,6 +48,10 @@ import papers.KongPoisson
 #print axioms SerqLang.Oracle.vllm_preempt
 #print axioms SerqLang.Oracle.vllm_seqcap
 #print axioms SerqLang.Oracle.vllmTurn_wf
+#print axioms SerqLang.Oracle.vllm_serve_admission
+#print axioms SerqLang.Oracle.vllm_serve_newest_first
+#print axioms SerqLang.Oracle.vllm_serve_newest_first_preempt
+#print axioms SerqLang.Oracle.vllm_serve_prefill_first
 #print axioms SerqLang.Oracle.vllm_cache_trace
 -- serving order of a step engine (Serq/Serve.lean)
 #print axioms SerqLang.Serve.serve_preserves_shape
@@ -63,9 +67,15 @@ import papers.KongPoisson
 -- regressions against the interpreter (Serq/Regress.lean, generated)
 #print axioms SerqLang.Regress.regress_cost_ctx
 #print axioms SerqLang.Regress.regress_preempt_delay
+#print axioms SerqLang.Regress.regress_served_victim
+-- the engine's serving order and the iteration's settlement (Serq/Exec.lean)
+#print axioms SerqLang.Exec.pick_of_nil
+#print axioms SerqLang.Exec.pick_mem
+#print axioms SerqLang.Exec.settleIter_eq_self
 -- an iteration of the step engine is the greedy fill, in serving order (Serq/Fill.lean)
 #print axioms SerqLang.Exec.fillIter_eq_amounts
 #print axioms SerqLang.Exec.fillAmounts_fifo
+#print axioms SerqLang.Exec.assign_eq_fillIter_cov
 #print axioms SerqLang.Exec.assign_eq_fillIter
 #print axioms SerqLang.Exec.fillAmounts_le_want
 #print axioms SerqLang.Exec.fillAmounts_sum
@@ -78,6 +88,10 @@ import papers.KongPoisson
 #print axioms SerqLang.Exec.fill_preserves_shape
 #print axioms SerqLang.Exec.chunk_cap_breaks_fill_shape
 #print axioms SerqLang.Exec.assign_decode_first
+#print axioms SerqLang.Exec.plan_eq_fillIter
+#print axioms SerqLang.Exec.plan_eq_fillIter_only
+-- an iteration hands out min budget demand in any serving order (Serq/Work.lean)
+#print axioms SerqLang.Exec.assign_tokSum
 -- dead cache entries are irrelevant to the live ones under LRU (Serq/Regen.lean)
 #print axioms SerqLang.Exec.makeRoom_fuel
 #print axioms SerqLang.Exec.makeRoom_dead_irrelevant

@@ -7,6 +7,10 @@ scripts/lean_regress.py). The oracle scenarios are:
 - <name>.ir.json for the single-request scenarios:
   examples/oracle/vllm_request.sq compiled with the scenario's engine, the
   requests as explicit sessions; answers in <name>.out.json.
+- serve/<name>.ir.json: the same program, its engine serving the residents
+  in the order the scenario's `serve` names (`advance running by (…)`);
+  answers in serve/<name>.out.json from vLLM's scheduler patched to serve
+  in that order (tools/serq_vllm.py, tests/vllm_target_oracle.rs).
 - cache_trace.ir.json for the multi-turn prefix-cache scenario:
   examples/replay/vllm_replay.sq on a unit step clock with the trace inlined as
   explicit sessions with turns; answers in cache_trace.out.csv.
@@ -88,18 +92,51 @@ def fragment_step(ir):
     """The step engine of a program in the fragment, which both generators
     read (this one and gen_lean_claims.py): stage 0 is the step engine and
     every other stage a delay; a prefill gets any amount (no `granule`); the
-    residents are served in admission order, `serve` `By([])` (`decode
-    first` and `by (…)` lower to `By` with keys, `exclusive prefill` to
-    `ExclusivePrefill`: `src/frontend/link.rs`, `serve`)."""
+    residents are served in an order, `serve` `By(keys)` (`decode first` and
+    `by (…)` lower to `By` with keys, `src/frontend/link.rs`, `serve`; the
+    keys are `serve_by`'s), not under `exclusive prefill`."""
     st = ir["stages"]
     if not st or "Step" not in st[0]["kind"] or any(not is_delay(s["kind"]) for s in st[1:]):
         raise Fragment("stages must be one step engine (stage 0) and delays")
     step = st[0]["kind"]["Step"]
     if step.get("granule") is not None:
         raise Fragment("granule: the fragment gives a prefill any amount")
-    if step["serve"] != {"By": []}:
-        raise Fragment(f"serve {step['serve']}: the fragment serves residents in admission order (`By([])`)")
+    if not isinstance(step["serve"], dict) or "By" not in step["serve"]:
+        raise Fragment(f"serve {step['serve']}: `exclusive prefill` lets a prefill displace the decodes "
+                       "served before it and take the whole budget, an iteration the fragment's "
+                       "`Exec.assign` does not build")
     return step
+
+
+def serve_leaf(e):
+    """What a serve key or `serve only` reads for one resident
+    (`Exec.ServeEnv`, serQ `resident_ctx`): whether it decodes, its admission
+    number, its work left, the residents and the decoding ones, and its
+    session's attributes. The memory the residents hold (`kv_decode`,
+    `kv_prefill`) and the clock are not in it."""
+    if "Ctx" in e:
+        v = {"Decoding": "e.decoding", "Admission": "e.admission", "Remaining": "e.remaining",
+             "Nres": "e.residents", "Ndec": "e.decoders"}.get(e["Ctx"])
+        if v:
+            return v
+    if "Attr" in e:
+        return f"(e.attr {e['Attr']})"
+    raise Fragment(f"a serve key or `serve only` reads {e}")
+
+
+def serve_by(step):
+    """The step engine's serve keys as `Exec.Deployment.serveBy`, a Lean list
+    of functions of `Exec.ServeEnv` to ℤ: each key is a natural expression
+    over `serve_leaf`, or its negation at the top (`-admission`, newest
+    first, as `preempt lifo` spells it). A negation inside a key and a
+    difference are refused: ℕ stops at 0 where the interpreter goes
+    negative, and with the sign only at the top one key never compares -0.0
+    with +0.0, the one place the interpreter's `total_cmp` and ℤ part."""
+    def key(e):
+        neg = "Unary" in e and e["Unary"][0] == "Neg"
+        n = Expr(serve_leaf, sub=False).nat(e["Unary"][1] if neg else e)
+        return f"fun e => {'-' if neg else ''}(({n} : ℕ) : ℤ)"
+    return "[" + ", ".join(key(k) for k in step["serve"]["By"]) + "]"
 
 
 def only_body(body):
@@ -780,7 +817,7 @@ class Lean:
         return (f"⟨[{', '.join(pools)}], {nat(fold(step['budget']), 'budget')}, "
                 f"{nat(chunk, 'chunk')}, "
                 f"{'none' if step['memory'] is None else 'some ' + str(step['memory'])}, {cost}, none, "
-                f"{at or 'none'}⟩")
+                f"{at or 'none'}, {serve_by(step)}⟩")
 
     def workload(self):
         """`Exec.Workload` of the IR's explicit sessions."""
@@ -883,7 +920,11 @@ KV blocks of the chunk the engine's budget leaves (admission needs room for
 the whole prompt), prefill growing the hold, decode growing it. The
 theorems say that the executable semantics gives, for every request, the
 step of its first token and of its last token, and the number of
-preemptions, that the real scheduler gives. The last, `vllmTurn` (serQ
+preemptions, that the real scheduler gives. The `vllm_serve_*` scenarios
+run the same program with the engine serving its residents in another order
+(`serve by`: by admission, newest first, prefills first); their answers come
+from the vLLM scheduler patched to serve in that order (serQ
+`tools/serq_vllm.py`). The last, `vllmTurn` (serQ
 `examples/replay/vllm_replay.sq` on a unit step clock, the trace inlined as the
 sessions' turns), is a multi-turn replay with a prefix cache: hits, a
 partial hit and misses caused by eviction; its theorem gives, for every
@@ -910,12 +951,19 @@ def outcome (D : Deployment) (horizon : ℕ) (w : Workload) :
 '''
 
 
-def request_scenarios():
-    return sorted(f[:-9] for f in os.listdir(ODIR) if f.endswith(".out.json") and os.path.exists(os.path.join(ODIR, f[:-9] + ".json")))
+def request_scenarios(sub=""):
+    """The scenarios with an answer in `tools/oracle/<sub>`, named by their
+    path below `tools/oracle/`."""
+    d = os.path.join(ODIR, sub)
+    return sorted(os.path.join(sub, f[:-9]) if sub else f[:-9] for f in os.listdir(d)
+                  if f.endswith(".out.json") and os.path.exists(os.path.join(d, f[:-9] + ".json")))
 
 
 def gen():
-    names = request_scenarios()
+    # the scenarios of tools/oracle/serve/ serve the residents in the order
+    # their `serve` names, and the patched scheduler answered them
+    # (tools/serq_vllm.py, tests/vllm_target_oracle.rs)
+    names = request_scenarios() + request_scenarios("serve")
     for n in names:
         if not os.path.exists(os.path.join(ODIR, n + ".ir.json")):
             raise Fragment(f"{n}: no IR file ({n}.ir.json)")
@@ -935,9 +983,10 @@ def gen():
         obs = ir["observes"]
         if obs[:2] != ["first", "done"]:
             raise Fragment(f"{name}: observations {obs} (outcome reads 0 = first, 1 = done)")
+        order = f", served by `{sc['serve']}` (the patched scheduler's answer)" if "serve" in sc else ""
         out.append(f'''
-/-- serQ `tools/oracle/{name}.ir.json`: {n} requests, {sc["num_blocks"]} blocks of {sc["block_size"]}, budget {sc["budget"]}, {sc["max_seqs"]} slots, chunk {sc.get("chunk", 0)}{", adaptive" if sc.get("adaptive") else ""}; the deployment and the workload are the IR's. -/
-theorem vllm_{name} :
+/-- serQ `tools/oracle/{name}.ir.json`: {n} requests, {sc["num_blocks"]} blocks of {sc["block_size"]}, budget {sc["budget"]}, {sc["max_seqs"]} slots, chunk {sc.get("chunk", 0)}{", adaptive" if sc.get("adaptive") else ""}{order}; the deployment and the workload are the IR's. -/
+theorem vllm_{name.replace("/", "_")} :
     outcome {lean.deployment()} {horizon}
       {lean.workload()} =
     ([{fs}], [{ds}], {ans["preemptions"]}) := by

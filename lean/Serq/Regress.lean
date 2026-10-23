@@ -48,7 +48,7 @@ def chunkExpr : Prog := [route|
 
 /-- `serq run`: first, done, llm.reused, llm.prefill per session, and 0 preemptions. -/
 theorem regress_chunk_expr :
-    let m := Exec.runW ⟨[⟨160, 16, false, none⟩, ⟨2, 1, true, none⟩], 32, 0, some 0, fun _ => 1, none, some fun c => if (((c.queued 1) + c.residents) > 2) then 8 else 0⟩ 1000
+    let m := Exec.runW ⟨[⟨160, 16, false, none⟩, ⟨2, 1, true, none⟩], 32, 0, some 0, fun _ => 1, none, some fun c => if (((c.queued 1) + c.residents) > 2) then 8 else 0, []⟩ 1000
       ⟨[[(9, 40), (10, 4)], [(9, 40), (10, 6)], [(9, 40), (10, 2)]], [], none, 0, some 8, none⟩ chunkExpr
     ([observed m 0, observed m 1, observed m 2, observed m 3], m.preempts) =
     ([[(0, 5), (1, 5), (2, 11)], [(0, 9), (1, 11), (2, 13)], [(0, 0), (1, 0), (2, 0)], [(0, 40), (1, 40), (2, 40)]], 0) := by
@@ -84,7 +84,7 @@ def costCtx : Prog := [route|
 
 /-- `serq run`: ttft, done, llm.reused, llm.prefill per session, and 0 preemptions. -/
 theorem regress_cost_ctx :
-    let m := Exec.runW ⟨[⟨2048, 16, false, none⟩, ⟨4, 1, true, none⟩], 48, 0, some 0, fun st => 3 + 1 * st.tokens + 2 * st.prefilled + 1 * st.decoders + 1 * st.kvDecode + 1 * st.attention2, none, none⟩ 100000
+    let m := Exec.runW ⟨[⟨2048, 16, false, none⟩, ⟨4, 1, true, none⟩], 48, 0, some 0, fun st => 3 + 1 * st.tokens + 2 * st.prefilled + 1 * st.decoders + 1 * st.kvDecode + 1 * st.attention2, none, none, []⟩ 100000
       ⟨[[(9, 40), (10, 3), (11, 0)], [(9, 70), (10, 2), (11, 5)]], [], none, 0, some 8, none⟩ costCtx
     ([observed m 0, observed m 1, observed m 2, observed m 3], m.preempts) =
     ([[(0, 1723), (1, 6934)], [(0, 7074), (1, 7159)], [(0, 0), (1, 0)], [(0, 40), (1, 70)]], 0) := by
@@ -105,10 +105,46 @@ def preemptDelay : Prog := [route|
 
 /-- `serq run`: resumed, done per session, and 8 preemptions. -/
 theorem regress_preempt_delay :
-    let m := Exec.runW ⟨[⟨48, 16, false, none⟩, ⟨4, 1, true, none⟩], 64, 0, some 0, fun _ => 1, none, none⟩ 1000
+    let m := Exec.runW ⟨[⟨48, 16, false, none⟩, ⟨4, 1, true, none⟩], 64, 0, some 0, fun _ => 1, none, none, []⟩ 1000
       ⟨[[(9, 1)], [(9, 10)]], [], none, 0, some 8, none⟩ preemptDelay
     ([observed m 0, observed m 1], m.preempts) =
     ([[(0, 0), (0, 32), (0, 18), (0, 16), (0, 16), (0, 16), (0, 16), (0, 16), (1, 0), (1, 16)], [(0, 65), (1, 43)]], 8) := by
+  decide +kernel
+
+/-- `tests/lean-regress/served_victim.sq`, translated from its IR. Attributes: 2 = turn_no, 3 = new, 4 = out, 5 = think, 6 = more, 7 = forced, 8 = computed, 9 = prompt, 10 = o, 11 = arrive, 12 = vllm.admitted, 13 = vllm.first, 14 = vllm.reused, 15 = vllm.prefill, 16 = vllm.input, 17 = vllm.output, 18 = vllm.kept, 19 = vllm.known, 20 = vllm.again. Observations: 0 = first, 1 = done, 2 = vllm.reused, 3 = vllm.prefill. Pools: 0 = reqs, 1 = kv. Stages: 0 = vllm, 1 = gate. -/
+def servedVictim : Prog := [route|
+  run 1 (x.attr 11);
+  turn;
+  set 16 = x.attr 9;
+  set 17 = x.attr 10;
+  set 18 = x.attr 16;
+  set 20 = 0;
+  hold 0 (1), 1 (min (if ((x.attr 20) ≠ 0) then (max (x.attr 18) ((x.attr 8) + 1)) else (x.attr 18)) x.budgetLeft) fits (if ((x.attr 20) ≠ 0) then (max (x.attr 18) ((x.attr 8) + 1)) else (x.attr 18)) {
+    set 19 = if ((x.attr 20) ≠ 0) then (max (x.attr 18) ((x.attr 8) + 1)) else (x.attr 18);
+    set 18 = x.attr 19;
+    set 20 = 1;
+    observe 2 = x.cached;
+    observe 3 = (x.attr 19) - x.cached;
+    run 0 prefill ((x.attr 19) - x.cached) growing 1;
+    branch (if ((x.attr 19) = (x.attr 16)) then 1 else 0) {
+      set 13 = x.now;
+      done
+    } else {
+      done
+    };
+    run 0 decode (((x.attr 17) - 1) - ((x.attr 19) - (x.attr 16))) growing 1;
+    done
+  };
+  observe 0 = x.attr 13;
+  observe 1 = x.now;
+  stop]
+
+/-- `serq run`: first, done, vllm.reused, vllm.prefill per session, and 1 preemptions. -/
+theorem regress_served_victim :
+    let m := Exec.runW ⟨[⟨8, 1, true, none⟩, ⟨240, 16, false, none⟩], 24, 0, some 1, fun _ => 1, none, some fun c => if ((c.residents + (c.queued 0)) > 1) then 12 else 0, [fun e => -((e.admission : ℕ) : ℤ)]⟩ 100
+      ⟨[[(9, 125), (10, 5), (11, 4)], [(9, 52), (10, 16), (11, 3)], [(9, 90), (10, 9), (11, 5)]], [], none, 0, some 8, none⟩ servedVictim
+    ([observed m 0, observed m 1, observed m 2, observed m 3], m.preempts) =
+    ([[(0, 15), (1, 7), (2, 27)], [(0, 19), (1, 27), (2, 35)], [(0, 0), (1, 0), (2, 0), (2, 0)], [(0, 125), (1, 52), (2, 90), (2, 90)]], 1) := by
   decide +kernel
 
 end Regress

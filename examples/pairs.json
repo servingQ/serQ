@@ -42,5 +42,6 @@
   "examples/vendors/rbln.sq": "examples/workloads/rbln_batch.sq",
   "tests/lean-regress/chunk_expr.sq": "tests/lean-regress/workloads/chunk_expr.sq",
   "tests/lean-regress/cost_ctx.sq": "tests/lean-regress/workloads/cost_ctx.sq",
-  "tests/lean-regress/preempt_delay.sq": "tests/lean-regress/workloads/preempt_delay.sq"
+  "tests/lean-regress/preempt_delay.sq": "tests/lean-regress/workloads/preempt_delay.sq",
+  "tests/lean-regress/served_victim.sq": "tests/lean-regress/workloads/served_victim.sq"
 }

@@ -238,8 +238,7 @@ theorem ci_start : Starts M Busy := by
   show SB L g (startIteration D m) ∧ (startIteration D m).jobs = m.jobs ∧ (startIteration D m).sess = m.sess
   have hq : engineQueuesEmpty D m := fun p hp => by simp [pdef, D, Claims.BariRad.deployment] at hp
   have hg : ∀ j ∈ m.jobs, j.growing = none := fun j hj => (hI.jobs j hj).2.2.1
-  have ha := assign_eq_fillIter_only D m hq hg m.preempts (m.jobs.length + 100000) 0 128 [] (by omega)
-  simp only [List.drop_zero, List.nil_append] at ha
+  have ha := plan_eq_fillIter_only D rfl m hq hg
   have hvia : ((List.range D.pools.length).any fun p =>
       (pdef D p).viaEngine && !(pst m p).queue.isEmpty) = false := by
     simp [D, Claims.BariRad.deployment]
@@ -261,7 +260,7 @@ theorem ci_start : Starts M Busy := by
       by first | rfl | trivial, by first | rfl | trivial⟩
   · have hne0 : m.jobs.isEmpty = false := by simpa using hjs
     simp only [hne0, Bool.not_false, ↓reduceIte]
-    rw [hb, ha]
+    rw [ha, hb]
     set it := fillIter D (m.jobs.filter (serves D m)) 128 with hit
     have hfull := rad_full m hR
     rw [← hit] at hfull

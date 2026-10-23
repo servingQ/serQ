@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parent.parent
 DIR = ROOT / "tests" / "lean-regress"
 SERQ = ROOT / "target" / "release" / "serq"
 # Durations of the regression experiments; the models contain no run settings.
-HORIZONS = {"chunk_expr": 1000, "cost_ctx": 100000, "preempt_delay": 1000}
+HORIZONS = {"chunk_expr": 1000, "cost_ctx": 100000, "preempt_delay": 1000, "served_victim": 100}
 
 
 def ir_of(sq):

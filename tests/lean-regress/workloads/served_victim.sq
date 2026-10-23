@@ -1,0 +1,11 @@
+// The sessions of tests/lean-regress/served_victim.sq: one request each,
+// sent at `arrive` (served_victim.sessions.json lists them).
+
+stage gate : delay;
+
+workload {
+  arrive batch(3);
+  init { set prompt = 1; set o = 1; set arrive = 0; }
+  send (prompt, o);
+  session { run gate (cost(gate, arrive)); turn; }
+}

@@ -26,9 +26,13 @@ order (as serQ reads explicit sessions of its IR, or an ordered trace).
   (`admit via engine`) is admitted by the engine at the start of an
   iteration, with the budget its residents leave (`budgetLeft`), and not
   in an iteration that preempted.
-* **The engine** hands its budget to its residents in admission order, one
-  token to a decoding job and up to `chunk` to a prefilling one, grows the
-  holds of `growing` jobs before the tokens are committed, then admits.
+* **The engine** hands its budget to its residents in serving order
+  (admission order, or ascending `serve by` keys read as the residents
+  stand), one token to a decoding job and up to `chunk` to a prefilling one,
+  grows the holds of `growing` jobs before the tokens are committed, then
+  admits. A job a growth preempts after it was served gives its tokens back,
+  a growth that preempts the grower ends the serving, and the holds'
+  positions advance when the iteration is settled (`assign`, `settleIter`).
 
 These are the rules of serQ `src/sim.rs`, which reproduces the real vLLM
 v1 scheduler step for step (serQ `docs/language.md` §7). The vLLM
@@ -123,6 +127,12 @@ structure Deployment where
   starts; vLLM's `chunk (residents + queued(p) > 1 ? c : 0)` (scheduler.py:606-616)
   is one. `none`: the constant `chunk`. -/
   chunkAt : Option (ChunkEnv → ℕ)
+  /-- `serve by (k₁, …)`: the order the engine serves its residents in,
+  ascending keys compared in order, each read per resident on the residents
+  as they stand when the next is picked; ties, and `[]`, in admission order
+  (serQ `order_by`). A key is an integer, so that `-admission` (newest
+  first) is one. -/
+  serveBy : List (ServeEnv → ℤ)
 
 /-- What a claim over iterations reads (serQ `Moment::Iteration`): the
 iteration's start, the tokens the engine scheduled before it (`served`), its
@@ -287,6 +297,7 @@ structure Job where
   mode : Mode
   left : ℕ
   growing : Option ℕ
+  deriving DecidableEq
 
 structure PoolSt where
   used : ℕ
@@ -1055,45 +1066,197 @@ def wantOf (j : Job) : ℕ := match j.mode with
   | .decode => min 1 j.left
   | _ => if D.chunk > 0 then min j.left D.chunk else j.left
 
+/-- What a serve key or `serve only` reads for job `j` (serQ
+`resident_ctx`): its session's attributes and admission number, whether it
+decodes, the work it has left, and the residents' totals as they stand. -/
+def serveEnv (m : Machine) (j : Job) : ServeEnv :=
+  ⟨(getS m j.owner).attr.get, if j.mode = .decode then 1 else 0, (getS m j.owner).admSeq, j.left,
+   m.jobs.length, (m.jobs.filter (·.mode = .decode)).length⟩
+
 /-- Whether `serve only` lets job `j` take tokens, read on the residents as
 they stand (serQ `serves`). -/
 def serves (m : Machine) (j : Job) : Bool :=
   match D.only with
   | none => true
-  | some p =>
-    p ⟨(getS m j.owner).attr.get, if j.mode = .decode then 1 else 0, (getS m j.owner).admSeq, j.left,
-       m.jobs.length, (m.jobs.filter (·.mode = .decode)).length⟩ ≠ 0
+  | some p => p (serveEnv m j) ≠ 0
 
-/-- Build the iteration starting now. -/
-def assign : ℕ → Machine → ℕ → ℕ → ℕ → Machine
+/-- The tokens of a batch. -/
+def tokSum (l : List (ℕ × ℕ)) : ℕ := (l.map (·.2)).sum
+
+/-- Key vectors in lexicographic order: `a` comes strictly before `b`. -/
+def keyLt : List ℤ → List ℤ → Bool
+  | a :: as, b :: bs => decide (a < b) || (decide (a = b) && keyLt as bs)
+  | _, _ => false
+
+/-- Job `j`'s serve keys, read on the residents as they stand. -/
+def keysOf (m : Machine) (j : Job) : List ℤ := D.serveBy.map (· (serveEnv m j))
+
+/-- One step of `pick`'s scan: keep the job with the lesser keys, the
+earlier on a tie. -/
+def pickStep (m : Machine) (b : Job × List ℤ) (k : Job) : Job × List ℤ :=
+  let kk := keysOf D m k
+  if keyLt kk b.2 then (k, kk) else b
+
+/-- The job of `todo` the engine serves next: the first with the least keys
+(serQ sorts the residents stably by their keys and serves the first not yet
+served, `order_by`). Without keys, the first. -/
+def pick (m : Machine) : List Job → Option Job
+  | [] => none
+  | j :: js => match D.serveBy with
+    | [] => some j
+    | _ => some (js.foldl (pickStep D m) (j, keysOf D m j)).1
+
+/-- Without keys the engine serves in the order of `todo`. -/
+theorem pick_of_nil (h : D.serveBy = []) (m : Machine) (todo : List Job) :
+    pick D m todo = todo.head? := by
+  cases todo with
+  | nil => rfl
+  | cons j js => simp [pick, h]
+
+theorem pick_eq_none (m : Machine) (todo : List Job) : pick D m todo = none ↔ todo = [] := by
+  cases todo with
+  | nil => simp [pick]
+  | cons j js => simp only [pick]; split <;> simp
+
+/-- The job picked is one of `todo`. -/
+theorem pick_mem (m : Machine) {todo : List Job} {j : Job} (h : pick D m todo = some j) : j ∈ todo := by
+  cases todo with
+  | nil => simp [pick] at h
+  | cons j0 js =>
+    simp only [pick] at h
+    split at h
+    · simp only [Option.some.injEq] at h; subst h; exact List.mem_cons_self
+    · simp only [Option.some.injEq] at h
+      subst h
+      -- the scan keeps a job of `j0 :: js`
+      suffices ∀ (l : List Job) (b : Job × List ℤ), b.1 ∈ j0 :: js → (∀ k ∈ l, k ∈ j0 :: js) →
+          (l.foldl (pickStep D m) b).1 ∈ j0 :: js from
+        this js _ List.mem_cons_self fun k hk => List.mem_cons_of_mem _ hk
+      intro l
+      induction l with
+      | nil => intro b hb _; exact hb
+      | cons k l ih =>
+        intro b hb hl
+        simp only [List.foldl_cons]
+        apply ih _ _ fun k' hk' => hl k' (List.mem_cons_of_mem _ hk')
+        dsimp only [pickStep]
+        split
+        · exact hl k List.mem_cons_self
+        · exact hb
+
+/-- Build the iteration starting now (serQ `start_iteration`): the engine
+serves the jobs of `todo` one at a time, the next being `pick`'s on the
+residents as they stand, from the `left` tokens of its budget; when none is
+left to serve, it admits from a queue it serves while tokens are left and the
+iteration has preempted no one (`pre0` is the count before it), and serves
+the newcomer. A growing job first grows its hold to the position it will
+reach, which may preempt; then, as in the interpreter's `give` and vLLM's
+`schedule`:
+
+* the batch records the tokens only, and the hold's position advances when
+  the iteration is settled (`settleIter`), for the jobs still in it;
+* a job the growth preempted after it was served leaves the batch and its
+  tokens return to the budget (vLLM's PRIORITY path, scheduler.py:779-797);
+* a growth that preempts the grower itself ends the iteration's serving
+  (scheduler.py:807-813, `break`).
+
+In admission order the victim, the resident admitted last, has not been
+served yet, and a grower that preempts itself is the last resident, so the
+last two rules bite only under `serve by`. -/
+def assign : ℕ → Machine → List Job → ℕ → ℕ → Machine
   | 0, m, _, _, _ => m
-  | f + 1, m, idx, left, pre0 =>
-    match m.jobs[idx]? with
+  | f + 1, m, todo, left, pre0 =>
+    match pick D m todo with
     | none =>
       if left > 0 ∧ m.preempts = pre0 then
         match admitVia D m left with
-        | (m, true) => assign f m idx left pre0
-        | (m, false) => m
+        -- the newcomer was admitted last, so its job is at the end of the list
+        | (m', true) => assign f m' (m'.jobs.drop m.jobs.length) left pre0
+        | (m', false) => m'
       else m
     | some j =>
-      if !serves D m j then assign f m (idx + 1) left pre0 else
+      let todo := todo.erase j
+      if !serves D m j then assign f m todo left pre0 else
       let t := min (wantOf D j) left
-      if t = 0 then assign f m (idx + 1) left pre0 else
+      if t = 0 then assign f m todo left pre0 else
       match j.growing with
       | none =>
         let m := { m with iter := m.iter ++ [(j.owner, t)] }
-        if left - t = 0 then m else assign f m (idx + 1) (left - t) pre0
+        if left - t = 0 then m else assign f m todo (left - t) pre0
       | some p =>
         match holdOn (getS m j.owner) p with
-        | none => assign f m (idx + 1) left pre0
+        | none => assign f m todo left pre0
         | some (a, x) =>
-          let (m, ok) := if x + t > a then grow D (D.pools.length * 100000) m j.owner p (x + t - a)
+          let (m', ok) := if x + t > a then grow D (D.pools.length * 100000) m j.owner p (x + t - a)
             else (m, true)
+          -- the tokens of the jobs the growth preempted return to the budget,
+          -- and those not served yet are no longer residents
+          let left := left + (tokSum m.iter - tokSum m'.iter)
+          let todo := if m'.preempts = m.preempts then todo else todo.filter (· ∈ m'.jobs)
           if ok then
-            let m := setS m j.owner (mapHold (getS m j.owner) p fun (a, x) => (a, x + t))
-            let m := { m with iter := m.iter ++ [(j.owner, t)] }
-            if left - t = 0 then m else assign f m (idx + 1) (left - t) pre0
-          else assign f m idx left pre0
+            let m' := { m' with iter := m'.iter ++ [(j.owner, t)] }
+            if left - t = 0 then m' else assign f m' todo (left - t) pre0
+          -- the grower preempted itself: the iteration serves no one else
+          else m'
+
+/-- One job of the batch settled: a job growing a hold on `p` advances the
+hold's position by its tokens `e.2`. -/
+def settleOne (m : Machine) (e : ℕ × ℕ) : Machine :=
+  match (m.jobs.find? (·.owner = e.1)).bind (·.growing) with
+  | some p => setS m e.1 (mapHold (getS m e.1) p fun (a, x) => (a, x + e.2))
+  | none => m
+
+/-- Settle the iteration's batch (serQ, after planning; vLLM's
+`_update_after_schedule`, scheduler.py:1584-1597): each job in it that grows
+a hold advances the hold's position by its tokens. A job a growth preempted
+in the iteration has left the batch and keeps the position it had. -/
+def settleIter (m : Machine) : Machine := m.iter.foldl settleOne m
+
+/-- The iteration an engine starting in `m` plans: its residents in serving
+order, then the waiting it admits, from the whole budget, settled. -/
+def plan (m : Machine) : Machine :=
+  settleIter (assign D (m.jobs.length + 100000) { m with iter := [] } m.jobs D.budget m.preempts)
+
+/-- Settling changes the sessions only. -/
+theorem settleIter_eq (m : Machine) : ∃ sess, settleIter m = { m with sess := sess } := by
+  unfold settleIter
+  suffices ∀ (l : List (ℕ × ℕ)) (M : Machine), ∃ sess, l.foldl settleOne M = { M with sess := sess } from
+    this m.iter m
+  intro l
+  induction l with
+  | nil => intro M; exact ⟨M.sess, rfl⟩
+  | cons e l ih =>
+    intro M
+    simp only [List.foldl_cons]
+    unfold settleOne
+    split
+    · exact ih _
+    · exact ih M
+
+theorem settleIter_iter (m : Machine) : (settleIter m).iter = m.iter := by
+  obtain ⟨_, h⟩ := settleIter_eq m; rw [h]
+
+theorem settleIter_jobs (m : Machine) : (settleIter m).jobs = m.jobs := by
+  obtain ⟨_, h⟩ := settleIter_eq m; rw [h]
+
+/-- With no job growing a hold, settling changes nothing. -/
+theorem settleIter_eq_self (m : Machine) (h : ∀ j ∈ m.jobs, j.growing = none) : settleIter m = m := by
+  unfold settleIter
+  suffices ∀ (l : List (ℕ × ℕ)), l.foldl settleOne m = m from this m.iter
+  intro l
+  induction l with
+  | nil => rfl
+  | cons e l ih =>
+    simp only [List.foldl_cons]
+    have : settleOne m e = m := by
+      unfold settleOne
+      have : (m.jobs.find? (·.owner = e.1)).bind (·.growing) = none := by
+        cases hf : m.jobs.find? (·.owner = e.1) with
+        | none => rfl
+        | some j => simp [h j (List.mem_of_find?_eq_some hf)]
+      rw [this]
+    rw [this]
+    exact ih
 
 /-- What the cost of the iteration `m.iter` reads, after its growths (as
 the interpreter reads it). A growing prefill chunk of `t` tokens has moved its
@@ -1157,6 +1320,12 @@ theorem iterDeployment_only (m : Machine) : (iterDeployment D m).only = D.only :
 theorem iterDeployment_pdef (m : Machine) (p : ℕ) : pdef (iterDeployment D m) p = pdef D p := by
   unfold pdef; rw [iterDeployment_pools]
 
+theorem iterDeployment_budget (m : Machine) : (iterDeployment D m).budget = D.budget := by
+  unfold iterDeployment; split <;> rfl
+
+theorem iterDeployment_serveBy (m : Machine) : (iterDeployment D m).serveBy = D.serveBy := by
+  unfold iterDeployment; split <;> rfl
+
 /-- Start an iteration on the idle engine. It lasts `cost` (at least one
 clock unit) if it serves a token or preempted; otherwise the engine stays
 idle until the next event. -/
@@ -1166,7 +1335,7 @@ def startIteration (m : Machine) : Machine :=
   if busy then
     -- the chunk cap as it holds for this iteration, read before it starts
     let Di := iterDeployment D m
-    let m' := assign Di (m.jobs.length + 100000) { m with iter := [] } 0 D.budget m.preempts
+    let m' := plan Di m
     if !m'.iter.isEmpty || m'.preempts ≠ m.preempts then
       let st := iterStats D m'
       { m' with iterEnd := some (m'.now + max 1 (D.cost st), m'.nextDelay)

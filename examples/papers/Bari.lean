@@ -394,7 +394,7 @@ def decodeMode (m : Machine) : Prop :=
 
 theorem serves_rad (m : Machine) (j : Job) :
     serves Dr m j = true ↔ (decodeMode m → j.mode = .decode) ∧ (¬ decodeMode m → j.mode ≠ .decode) := by
-  unfold serves decodeMode
+  unfold serves serveEnv decodeMode
   simp only [Claims.BariRad.deployment]
   generalize (m.jobs.filter (·.mode = .decode)).length = d
   generalize m.jobs.length = r
@@ -488,8 +488,7 @@ theorem rad_start (m : Machine) (h : R m) :
         (startIteration Dr m).last.stats.decoders = (startIteration Dr m).last.residents) := by
   have hq : engineQueuesEmpty Dr m := fun p hp => by simp [pdef, Claims.BariRad.deployment] at hp
   have hg : ∀ j ∈ m.jobs, j.growing = none := fun j hj => (h.jobs j hj).2.2.2.2
-  have ha := assign_eq_fillIter_only Dr m hq hg m.preempts (m.jobs.length + 100000) 0 128 [] (by omega)
-  simp only [List.drop_zero, List.nil_append] at ha
+  have ha := plan_eq_fillIter_only Dr rfl m hq hg
   obtain ⟨hT, hclaim⟩ := rad_batch m h
   have hS : ∀ e ∈ fillIter Dr (m.jobs.filter (serves Dr m)) 128, (getS m e.1).status = .engine := by
     intro e he
@@ -502,7 +501,7 @@ theorem rad_start (m : Machine) (h : R m) :
   simp only [iterDeployment_of_none _ (rfl : Claims.BariRad.deployment.chunkAt = none)]
   split
   · have hb : Claims.BariRad.deployment.budget = 128 := rfl
-    rw [hb, ha]
+    rw [ha, hb]
     split
     · exact ⟨hR, fun _ => hclaim⟩
     · exact ⟨hR, fun he => by simp at he⟩

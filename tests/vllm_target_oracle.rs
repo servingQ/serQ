@@ -13,9 +13,10 @@
 //! must give the same answer. `SERQ_BLESS=1` rewrites the IR and target
 //! files; the answers come from the oracle run.
 //!
-//! The scenarios are outside the Lean fragment (it serves in admission
-//! order), so they live apart from `tools/oracle/*.json`, which
-//! `scripts/gen_lean_oracle.py` translates.
+//! The scenarios live apart from `tools/oracle/*.json`, whose answers are
+//! stock vLLM's, because the patched scheduler answers them;
+//! `scripts/gen_lean_oracle.py` translates both, these as the theorems
+//! `vllm_serve_<name>` of `lean/Serq/Oracle.lean`.
 
 mod common;
 

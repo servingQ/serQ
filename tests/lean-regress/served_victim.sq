@@ -1,0 +1,36 @@
+// A served resident preempted in its iteration gives its tokens back
+// (serQ #322, #328). The engine serves the newest first and preempts LIFO,
+// so the victim of a growth, the latest admitted, is the first served. At
+// step 12 request 2 (newest, prefilling) takes 12 of the 24 tokens; request
+// 0's chunk then needs a block, preempts request 2, and the 12 return to the
+// budget, so request 1 still decodes in that step. Without the refund
+// request 0's chunk would spend the budget and request 1 would wait a step
+// (vLLM's PRIORITY path, scheduler.py:779-797). The Lean semantics must give
+// the interpreter's answer (lean/Serq/Regress.lean; README.md).
+// examples/oracle/vllm_request.sq with its engine fixed: 16 blocks of 16
+// (one is vLLM's null block), 24 tokens, 8 requests, a chunk of 12.
+
+fn main() {
+  device gpu { kv cap 15 * 16; }
+  engine vllm on gpu {
+    reqs cap 8;
+    tokens cap 24;
+    scheduler {
+      let threshold = running.count + waiting.count > 1 ? 12 : inf;
+      advance running by (-admission) each at most (threshold);
+      admit waiting while (running.preempted == 0) each at most (threshold)
+        taking reqs (1), kv (min(request.known, budget_left(vllm))) reserve (request.known);
+    }
+    worker {
+      forward (1);
+    }
+  }
+  pool reqs on vllm { queue fifo; }
+  pool kv on gpu { block 16; evict lru; preempt lifo; }
+
+  server (prompt, hidden o) {
+    vllm (prompt, o);
+    observe first = vllm.first;
+    observe done = now;
+  }
+}

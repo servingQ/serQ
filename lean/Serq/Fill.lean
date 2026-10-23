@@ -3,11 +3,13 @@
 
 `Exec.assign` builds the iteration: residents in serving order, each takes
 what it wants (one token for a decode, the rest or a chunk for a prefill)
-from the budget left. When no growth in it needs more than the hold already
-has (every growing job's allocation covers the position it will reach, so
-`assign` calls no `grow` and preempts no one) and nobody waits for the
-engine (so it admits no one), it is the greedy fill of the budget over the
-job list, `fillIter`; and the greedy fill serves in order (a job gets tokens
+from the budget left. Without serve keys (admission order), when no growth
+in it needs more than the hold already has (every growing job's allocation
+covers the position it will reach, so `assign` calls no `grow` and preempts
+no one) and nobody waits for the engine (so it admits no one), it is the
+greedy fill of the budget over the job list, `fillIter`, and the iteration
+the engine plans is that fill (`plan_eq_fillIter`); and the greedy fill
+serves in order (a job gets tokens
 only if every job before it got all it wanted, `fillAmounts_fifo`), never
 gives more than wanted (`fillAmounts_le_want`) and is work-conserving
 (`fillAmounts_sum`). This is what a FIFO prefill queue needs from the engine
@@ -40,8 +42,9 @@ prompts that arrived while it prefilled (`DaiChain.absSlot_leaves_shape`).
 
 Key definitions: `Exec.wantOf`, `Exec.fillAmounts`, `Exec.fillIter`,
 `Exec.prefillLeft`, `Exec.decodeFirstJobs`.
-Key theorems: `Exec.assign_iter_eq_fillIter`, `Exec.assign_eq_fillIter`,
-`Exec.fillIter_eq_amounts`, `Exec.fillAmounts_fifo`, `Exec.fillAmounts_le_want`,
+Key theorems: `Exec.assign_eq_fillIter_cov`, `Exec.assign_iter_eq_fillIter`,
+`Exec.assign_eq_fillIter`, `Exec.plan_eq_fillIter`, `Exec.fillIter_eq_amounts`,
+`Exec.fillAmounts_fifo`, `Exec.fillAmounts_le_want`,
 `Exec.fillAmounts_sum`, `Exec.serve_fillAmounts`, `Exec.serveCap_fillAmounts`,
 `Exec.fillAmounts_eq_decode_first`, `Exec.fillAmounts_decoders_first`,
 `Exec.fill_preserves_shape`, `Exec.chunk_cap_breaks_fill_shape`,
@@ -174,129 +177,98 @@ theorem getS_setS_ne (m : Machine) {i k : ℕ} (s : Sess) (h : i ≠ k) :
     getS (setS m i s) k = getS m k := by
   simp only [getS, setS, Array.getD_eq_getD_getElem?, Array.getElem?_setIfInBounds_ne h]
 
-/-- **`assign` is the greedy fill, growing jobs included.** If nobody waits
-for the engine, the owners of the jobs are distinct, and every growing job
-from `idx` on holds enough of its pool for the position it will reach, then
-the iteration `assign` builds is `fillIter` of the rest of the job list (with
-enough fuel): it advances the holds' positions but calls no `grow`. -/
-theorem assign_iter_eq_fillIter (hD : D.only = none) (pre0 : ℕ) :
-    ∀ (f : ℕ) (M : Machine) (idx left : ℕ), engineQueuesEmpty D M →
-      (M.jobs.map (·.owner)).Nodup →
-      (∀ j ∈ M.jobs.drop idx, ∀ p, j.growing = some p →
-        ∃ a x, holdOn (getS M j.owner) p = some (a, x) ∧ x + wantOf D j ≤ a) →
-      M.jobs.length - idx < f →
-      (assign D f M idx left pre0).iter = M.iter ++ fillIter D (M.jobs.drop idx) left := by
+/-- **`assign` is the greedy fill, growing jobs included.** Without serve
+keys and `serve only`, if nobody waits for the engine and every growing job
+of `todo` holds enough of its pool for the position it will reach, then
+`assign` serves `todo` in its order and builds `fillIter` of it (with
+enough fuel): it calls no `grow` and changes nothing but the batch. -/
+theorem assign_eq_fillIter_cov (hK : D.serveBy = []) (hD : D.only = none) (m : Machine)
+    (hq : engineQueuesEmpty D m) (pre0 : ℕ) :
+    ∀ (f : ℕ) (todo : List Job) (left : ℕ) (acc : List (ℕ × ℕ)),
+      (∀ j ∈ todo, ∀ p, j.growing = some p →
+        ∃ a x, holdOn (getS m j.owner) p = some (a, x) ∧ x + wantOf D j ≤ a) →
+      todo.length < f →
+      assign D f { m with iter := acc } todo left pre0 = { m with iter := acc ++ fillIter D todo left } := by
   intro f
   induction f with
-  | zero => intro M idx left _ _ _ h; omega
+  | zero => intro todo left acc _ h; omega
   | succ f ih =>
-    intro M idx left hq hnd hcov hf
+    intro todo left acc hcov hf
     rw [assign]
-    cases hj : M.jobs[idx]? with
-    | none =>
-      have hlen : M.jobs.length ≤ idx := by simpa [List.getElem?_eq_none_iff] using hj
-      simp only [List.drop_eq_nil_of_le hlen, fillIter, List.append_nil]
+    cases todo with
+    | nil =>
+      simp only [pick_of_nil D hK, List.head?_nil, fillIter, List.append_nil]
       split_ifs
-      · rw [admitVia_empty D M left hq]
+      · rw [admitVia_empty D { m with iter := acc } left hq]
       · rfl
-    | some j =>
-      obtain ⟨hl, he⟩ := List.getElem?_eq_some_iff.mp hj
-      have hdrop : M.jobs.drop idx = j :: M.jobs.drop (idx + 1) := by
-        rw [List.drop_eq_getElem_cons hl, he]
-      have hcov' : ∀ j' ∈ M.jobs.drop (idx + 1), ∀ p, j'.growing = some p →
-          ∃ a x, holdOn (getS M j'.owner) p = some (a, x) ∧ x + wantOf D j' ≤ a :=
-        fun j' hj' => hcov j' (by rw [hdrop]; exact List.mem_cons_of_mem _ hj')
-      have hfresh : ∀ j' ∈ M.jobs.drop (idx + 1), j.owner ≠ j'.owner := by
-        have hsub : ((M.jobs.drop idx).map (·.owner)).Nodup :=
-          hnd.sublist ((List.drop_sublist _ _).map _)
-        rw [hdrop, List.map_cons, List.nodup_cons] at hsub
-        intro j' hj' heq
-        exact hsub.1 (heq ▸ List.mem_map.mpr ⟨j', hj', rfl⟩)
-      rw [hdrop, fillIter]
-      simp only [serves_of_none D hD, Bool.not_true, Bool.false_eq_true, ↓reduceIte]
+    | cons j js =>
+      have hcov' : ∀ j' ∈ js, ∀ p, j'.growing = some p →
+          ∃ a x, holdOn (getS m j'.owner) p = some (a, x) ∧ x + wantOf D j' ≤ a :=
+        fun j' hj' => hcov j' (List.mem_cons_of_mem _ hj')
+      simp only [pick_of_nil D hK, List.head?_cons, List.erase_cons_head, fillIter,
+        serves_of_none D hD, Bool.not_true, Bool.false_eq_true, ↓reduceIte]
+      simp only [List.length_cons] at hf
       by_cases h0 : min (wantOf D j) left = 0
       · rw [if_pos h0, if_pos h0]
-        exact ih M (idx + 1) left hq hnd hcov' (by omega)
+        exact ih js left acc hcov' (by omega)
       · rw [if_neg h0, if_neg h0]
-        cases hg : j.growing with
-        | none =>
-          simp only
+        -- the batch takes the job's tokens, and (growing) its hold covers them
+        have hpush : ∀ M : Machine, M = { m with iter := acc ++ [(j.owner, min (wantOf D j) left)] } →
+            (if left - min (wantOf D j) left = 0 then M
+              else assign D f M js (left - min (wantOf D j) left) pre0) =
+            { m with iter := acc ++ if left - min (wantOf D j) left = 0 then [(j.owner, min (wantOf D j) left)]
+                else (j.owner, min (wantOf D j) left) :: fillIter D js (left - min (wantOf D j) left) } := by
+          intro M hM
+          subst hM
           by_cases h1 : left - min (wantOf D j) left = 0
           · rw [if_pos h1, if_pos h1]
-          · rw [if_neg h1, if_neg h1]
-            refine (ih _ (idx + 1) _ ?_ ?_ ?_ ?_).trans ?_
-            · exact fun q hv => hq q hv
-            · exact hnd
-            · intro j' hj' p' hg'
-              exact hcov' j' hj' p' hg'
-            · exact (by omega : M.jobs.length - (idx + 1) < f)
-            · simp
+          · rw [if_neg h1, if_neg h1, ih js _ _ hcov' (by omega)]
+            simp
+        cases hg : j.growing with
+        | none => exact hpush _ rfl
         | some p =>
-          obtain ⟨a, x, hh, hax⟩ := hcov j (by rw [hdrop]; exact List.mem_cons_self) p hg
-          simp only [hh]
+          obtain ⟨a, x, hh, hax⟩ := hcov j List.mem_cons_self p hg
+          have hh' : holdOn (getS { m with iter := acc } j.owner) p = some (a, x) := hh
+          dsimp only
+          rw [hh']
+          dsimp only
           have hnot : ¬ (x + min (wantOf D j) left > a) := by
             have := min_le_left (wantOf D j) left; omega
-          simp only [hnot, if_false, ite_true]
-          by_cases h1 : left - min (wantOf D j) left = 0
-          · rw [if_pos h1, if_pos h1]; simp [setS]
-          · rw [if_neg h1, if_neg h1]
-            refine (ih _ (idx + 1) _ ?_ ?_ ?_ ?_).trans ?_
-            · exact fun q hv => hq q hv
-            · exact hnd
-            · intro j' hj' p' hg'
-              have := hcov' j' hj' p' hg'
-              simpa [getS, setS, Array.getD_eq_getD_getElem?,
-                Array.getElem?_setIfInBounds_ne (hfresh j' hj')] using this
-            · exact (by omega : M.jobs.length - (idx + 1) < f)
-            · simp [setS]
+          simp only [hnot, if_false, ite_true, Nat.sub_self, Nat.add_zero]
+          exact hpush _ rfl
 
-/-- **`assign` is the greedy fill.** With no job growing and nobody waiting
-for the engine, the iteration `assign` builds from job `idx` on, with `left`
-tokens, is `fillIter` of the rest of the job list (with enough fuel). -/
-theorem assign_eq_fillIter (hD : D.only = none) (m : Machine) (hq : engineQueuesEmpty D m)
-    (hg : ∀ j ∈ m.jobs, j.growing = none) (pre0 : ℕ) :
-    ∀ (f idx left : ℕ) (acc : List (ℕ × ℕ)), m.jobs.length - idx < f →
-      assign D f { m with iter := acc } idx left pre0
-        = { m with iter := acc ++ fillIter D (m.jobs.drop idx) left } := by
-  intro f
-  induction f with
-  | zero => intro idx left acc h; omega
-  | succ f ih =>
-    intro idx left acc hf
-    rw [assign]
-    simp only
-    cases hj : m.jobs[idx]? with
-    | none =>
-      have hlen : m.jobs.length ≤ idx := by
-        simpa [List.getElem?_eq_none_iff] using hj
-      have hdrop : m.jobs.drop idx = [] := List.drop_eq_nil_of_le hlen
-      simp only [hdrop, fillIter, List.append_nil]
-      split_ifs
-      · have := admitVia_empty D { m with iter := acc } left hq
-        rw [this]
-      · rfl
-    | some j =>
-      have hmem : j ∈ m.jobs := List.mem_of_getElem? hj
-      have hdrop : m.jobs.drop idx = j :: m.jobs.drop (idx + 1) := by
-        rw [List.drop_eq_getElem_cons (by
-          rcases List.getElem?_eq_some_iff.mp hj with ⟨hl, _⟩; exact hl)]
-        congr 1
-        rcases List.getElem?_eq_some_iff.mp hj with ⟨_, he⟩; exact he
-      have hlen : idx < m.jobs.length := by
-        rcases List.getElem?_eq_some_iff.mp hj with ⟨hl, _⟩; exact hl
-      rw [hdrop, fillIter]
-      simp only [hg j hmem, serves_of_none D hD, Bool.not_true, Bool.false_eq_true, ↓reduceIte]
-      by_cases h0 : min (wantOf D j) left = 0
-      · rw [if_pos h0, if_pos h0]
-        exact ih (idx + 1) left acc (by omega)
-      · rw [if_neg h0, if_neg h0]
-        by_cases h1 : left - min (wantOf D j) left = 0
-        · rw [if_pos h1, if_pos h1]
-        · rw [if_neg h1, if_neg h1]
-          have := ih (idx + 1) (left - min (wantOf D j) left) (acc ++ [(j.owner, min (wantOf D j) left)])
-            (by omega)
-          rw [this]
-          simp
+/-- **`assign` is the greedy fill.** Without serve keys and `serve only`,
+with no job of `todo` growing and nobody waiting for the engine, the
+iteration `assign` builds from `todo` with `left` tokens is `fillIter` of
+`todo` (with enough fuel). -/
+theorem assign_eq_fillIter (hK : D.serveBy = []) (hD : D.only = none) (m : Machine)
+    (hq : engineQueuesEmpty D m) (pre0 : ℕ) :
+    ∀ (f : ℕ) (todo : List Job) (left : ℕ) (acc : List (ℕ × ℕ)), (∀ j ∈ todo, j.growing = none) →
+      todo.length < f →
+      assign D f { m with iter := acc } todo left pre0 = { m with iter := acc ++ fillIter D todo left } :=
+  fun f todo left acc hg hf =>
+    assign_eq_fillIter_cov D hK hD m hq pre0 f todo left acc (fun j hj p hp => by simp [hg j hj] at hp) hf
+
+/-- The batch of `assign_eq_fillIter_cov`, from any machine. -/
+theorem assign_iter_eq_fillIter (hK : D.serveBy = []) (hD : D.only = none) (pre0 : ℕ) (f : ℕ) (M : Machine)
+    (todo : List Job) (left : ℕ) (hq : engineQueuesEmpty D M)
+    (hcov : ∀ j ∈ todo, ∀ p, j.growing = some p →
+      ∃ a x, holdOn (getS M j.owner) p = some (a, x) ∧ x + wantOf D j ≤ a)
+    (hf : todo.length < f) :
+    (assign D f M todo left pre0).iter = M.iter ++ fillIter D todo left := by
+  have := assign_eq_fillIter_cov D hK hD M hq pre0 f todo left M.iter hcov hf
+  rw [show ({ M with iter := M.iter } : Machine) = M from rfl] at this
+  rw [this]
+
+/-- **The iteration an engine plans is the greedy fill of its residents**,
+without serve keys and `serve only`, when no resident grows and nobody waits
+for the engine. -/
+theorem plan_eq_fillIter (hK : D.serveBy = []) (hD : D.only = none) (m : Machine)
+    (hq : engineQueuesEmpty D m) (hg : ∀ j ∈ m.jobs, j.growing = none) :
+    plan D m = { m with iter := fillIter D m.jobs D.budget } := by
+  unfold plan
+  rw [assign_eq_fillIter D hK hD m hq m.preempts _ m.jobs D.budget [] hg (by omega), List.nil_append]
+  exact settleIter_eq_self _ hg
 
 /-! ### The fill is `Serve.serve` -/
 
@@ -472,15 +444,15 @@ theorem chunk_cap_breaks_fill_shape (hc : D.chunk = 4) :
 /-- **`assign` serves decode-first.** Under the hypotheses of
 `assign_iter_eq_fillIter`, with every job holding work and the jobs in the
 shape, the iteration `assign` builds is the greedy fill in decode-first order. -/
-theorem assign_decode_first (hD : D.only = none) (pre0 f left : ℕ) (M : Machine)
-    (hq : engineQueuesEmpty D M) (hnd : (M.jobs.map (·.owner)).Nodup)
+theorem assign_decode_first (hK : D.serveBy = []) (hD : D.only = none) (pre0 f left : ℕ)
+    (M : Machine) (hq : engineQueuesEmpty D M)
     (hcov : ∀ j ∈ M.jobs, ∀ p, j.growing = some p →
         ∃ a x, holdOn (getS M j.owner) p = some (a, x) ∧ x + wantOf D j ≤ a)
     (hf : M.jobs.length < f) (hpos : ∀ j ∈ M.jobs, 0 < j.left)
     (h : Serve.Shape (M.jobs.map prefillLeft)) :
-    (assign D f M 0 left pre0).iter = M.iter ++ fillIter D (decodeFirstJobs M.jobs) left := by
-  rw [assign_iter_eq_fillIter D hD pre0 f M 0 left hq hnd (by simpa using hcov) (by omega),
-    List.drop_zero, decodeFirstJobs_eq_self _ hpos h]
+    (assign D f M M.jobs left pre0).iter = M.iter ++ fillIter D (decodeFirstJobs M.jobs) left := by
+  rw [assign_iter_eq_fillIter D hK hD pre0 f M M.jobs left hq hcov hf,
+    decodeFirstJobs_eq_self _ hpos h]
 
 end Exec
 end SerqLang

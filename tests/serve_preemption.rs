@@ -17,7 +17,9 @@
 //! `tests/vllm_target_oracle.rs` also checks.
 //!
 //! The scenario does not exercise the budget a served victim returns: the
-//! answer is the same without it.
+//! answer is the same without it. `tests/lean-regress/served_victim.sq`
+//! does, against the Lean model (`regress_served_victim`); the Lean model
+//! gives this scenario's answer too (`Oracle.vllm_serve_newest_first_preempt`).
 
 mod common;
 
