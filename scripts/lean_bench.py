@@ -25,7 +25,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 TEMPLATE = ROOT / "tools/oracle/cache_trace.ir.json"
-LEAN = ROOT / "lean/.lake/build/bin/serq-lean-bench"
+LEAN = ROOT / ".lake/build/bin/serq-lean-bench"
 SERQ = ROOT / "target/release/serq"
 
 

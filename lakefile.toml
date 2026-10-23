@@ -1,3 +1,8 @@
+# The Lean model of serQ (docs/lean.md). The package is the repository root,
+# not lean/: an editor takes the nearest lean-toolchain or lakefile above a
+# file as that file's project, and the root is the one directory above both
+# lean/ and examples/papers/ (#365). scripts/check_lean.sh refuses a
+# lean-toolchain or lakefile anywhere below the root.
 name = "Serq"
 defaultTargets = ["Serq", "papers"]
 
@@ -11,17 +16,20 @@ name = "mathlib"
 scope = "leanprover-community"
 rev = "v4.34.0"
 
+# the semantics
 [[lean_lib]]
 name = "Serq"
+srcDir = "lean"
 
 # the proofs about the paper programs, beside them in examples/papers/
 [[lean_lib]]
 name = "papers"
-srcDir = "../examples"
+srcDir = "examples"
 roots = []
 globs = ["papers.+"]
 
 # performance probe: the executable semantics on a workload from a JSON file
 [[lean_exe]]
 name = "serq-lean-bench"
+srcDir = "lean"
 root = "Bench.Main"

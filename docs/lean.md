@@ -35,11 +35,13 @@ described in the [Dai](use-cases/dai.md), [Bari](use-cases/bari.md) and
 
 ## Build and check
 
-The package is in `lean/` and uses Mathlib `v4.34.0`. Download its cache for
-the first build, then run the repository check:
+The Lake package is the repository root (`lakefile.toml`, `lean-toolchain`)
+and uses Mathlib `v4.34.0`. Its library `Serq` is in `lean/` and its library
+`papers` in `examples/papers/`. From the repository root, download the Mathlib
+cache for the first build, then run the repository check:
 
 ```bash
-(cd lean && lake exe cache get)
+lake exe cache get
 make lean
 ```
 
@@ -48,12 +50,22 @@ proofs, rejects `sorry`, and audits the declarations listed in
 `lean/scripts/AxiomAudit.lean`. The permitted axioms are `propext`,
 `Classical.choice` and `Quot.sound`.
 
-To check one paper proof after building its dependencies:
+To check one paper proof after building its dependencies, from the
+repository root:
 
 ```bash
-cd lean
-lake env lean ../examples/papers/Dai.lean
+lake env lean examples/papers/Dai.lean
 ```
+
+## Edit in an editor
+
+Open the repository, or any folder inside it, with the Lean extension. The
+extension takes the nearest directory above a file that holds a
+`lean-toolchain` or a lakefile as that file's project. For `lean/` and
+`examples/papers/` that directory is the repository root, so a proof beside
+its program imports `Serq` the same way a file in `lean/` does. `make lean`
+fails if a `lean-toolchain` or a lakefile appears anywhere below the root,
+since the files below it would then open as a separate project.
 
 ## Use from another Lean project
 
@@ -64,8 +76,11 @@ Add a pinned dependency to your Lake configuration:
 name = "Serq"
 git = "https://github.com/servingQ/serQ"
 rev = "<tag or commit>"
-subDir = "lean"
 ```
+
+A revision whose package is still in `lean/` (it has `lean/lakefile.toml`),
+every tag up to `v0.1.7-alpha.2` among them, needs `subDir = "lean"` in this
+entry.
 
 Import `Serq` or a specific module. Definitions use the namespace `SerqLang`.
 The library `Serq` contains the semantics; `papers` contains proofs from

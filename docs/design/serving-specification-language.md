@@ -137,7 +137,7 @@ at no cost to it; it waits for a reader (self-critique).
 |---|---|
 | p4c frontend and midend | `.sq` to the IR (`src/frontend/`) |
 | bmv2, the reference target | the interpreter (`src/engine/`) |
-| Petr4, the formal semantics | the Lean package (`lean/`) |
+| Petr4, the formal semantics | the Lean model (`lean/`) |
 | p4testgen, tests from the program | the vLLM oracle (`tools/oracle/`) |
 | a backend for a switch ASIC | **none** |
 
