@@ -112,11 +112,12 @@ What a program sees: a schedule spelt `!running.preempted` or `0 ==
 running.preempted` runs as it did, as a body, and `serq target` refuses
 it. `exclusive prefill; admit waiting while (!running.preempted);` no
 longer links, with the refusal that names the rule's one schedule. And
-one program that did not link now does: `state k = 0;` with no `set k`
-and a gate spelt `!running.preempted` or `0 == running.preempted`,
-refused before (`src/frontend/link.rs:770`, "is set by nothing"), now
-links as a body (#746, since closed: a register its schedule does not
-`set` is refused, whatever the schedule's form).
+one program that did not link linked after this change: `state k = 0;`
+with no `set k` and a gate spelt `!running.preempted` or `0 ==
+running.preempted`, refused before as the procedure
+(`src/frontend/link.rs:770`, "is set by nothing"), linked as a body.
+#746 refuses it again: since then a register its schedule does not `set`
+is refused, whatever the schedule's form.
 
 ## The two questions
 
@@ -125,12 +126,12 @@ not preempted") with a list of the spellings in use when it was written:
 the kernel's `!preempted`, the engine's `== 0`, and the swap. A list of
 spellings is never the meaning, so `< 1` fell outside it. The same rule
 was kept in `src/target.rs` (`is_vllm_iteration`), fixed here. One more
-rule lives on the procedure's path alone: the linker refuses a register
+rule lived on the procedure's path alone: the linker refused a register
 that nothing sets only for the procedure (`src/frontend/link.rs`, "is
-set by nothing"), so a body with `state k = 0;` and no `set k` links.
+set by nothing"), so a body with `state k = 0;` and no `set k` linked.
 That gap was there for `< 1` and every other body before this change,
-which widens it to `!` and `0 ==` (§The price); it is a separate rule,
-left to #746.
+which widened it to `!` and `0 ==` (§The price); it is a separate rule,
+left to #746, which closed it.
 
 **Should the language have refused the program?** No. `!`, `0 ==` and
 `< 1` are correct programs that run as the procedure does. Only the
