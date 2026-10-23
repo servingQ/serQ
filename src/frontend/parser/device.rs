@@ -760,6 +760,8 @@ impl Parser {
                     stage: r(stage),
                     pool: r(pool),
                     per_token,
+                    // `kvt.l2_link`, below the queue, sets it
+                    link: None,
                 }
             }
             // a read over the NICs the relation declares, whose time is

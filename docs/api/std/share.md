@@ -8,7 +8,7 @@ The sharing policies: how the flows that hold several `ps` stages at once
 divide the stages' capacity. A policy is a value a job over several stages
 names, `share = share.maxmin`, in a [run](../statements.md#run) or `transfer
 on` over several stages or in a [relation](kvt.md#kvtnixl_pull-and-kvtnixl_push)
-of std/kvt:
+of std/kvt ([`kvt.l2_link`](kvt.md#kvtl2_link) too):
 
 ```serq
 kvt.nixl_pull (P, D, latency = x0, share = share.maxmin);

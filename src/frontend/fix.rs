@@ -80,7 +80,8 @@ pub fn fixes(code: Code, src: &str, line: usize, col: usize) -> Vec<Fix> {
 }
 
 /// `E-copy-swapped`, at the relation: `kvt.nixl_pull (S, R, …)` written
-/// `(R, S, …)`, the two queues' names exchanged.
+/// `(R, S, …)`, or `kvt.l2_link (C, Q, …)` written `(Q, C, …)`, the two
+/// queues' names exchanged.
 fn swap(t: &Text, k: usize) -> Option<Fix> {
     let open = (k..t.toks.len()).find(|&j| t.toks[j].tok == Tok::LParen)?;
     let (a, b) = (open + 1, open + 3);
@@ -88,8 +89,18 @@ fn swap(t: &Text, k: usize) -> Option<Fix> {
         return None;
     }
     let (first, second) = (t.word(a)?, t.word(b)?);
+    use crate::frontend::parser::{KvtMode, kvt_relation};
+    let link = open > 0
+        && t.word(open - 1)
+            .and_then(kvt_relation)
+            .is_some_and(|r| r.mode == KvtMode::Link);
+    let order = if link {
+        "the L2 first, then the queue whose engine copies through it"
+    } else {
+        "the source first, then the reader"
+    };
     Some(Fix {
-        label: format!("swap `{first}` and `{second}`: the source first, then the reader"),
+        label: format!("swap `{first}` and `{second}`: {order}"),
         edits: vec![
             Edit {
                 range: Range(t.start(a), t.end(a)),

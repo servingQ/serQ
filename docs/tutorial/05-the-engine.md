@@ -135,6 +135,9 @@ on llm` hands the pool's queue to the engine's scheduler.
 
 The engine records what it did with each admission: `llm.reused`, the
 tokens it read from the cache, and `llm.prefill`, the tokens it computed.
+The report's engine table sums them: the admissions, those of a request
+preempted before, and the share of the admitted tokens the cache gave
+([engine statistics](../reference/cli.md#engine-statistics)).
 The time to the first token needs no `observe`: the report's `client`
 section gives it for every turn, from the `turn;` to the token the
 prefill samples, once however many times the request is preempted, and
@@ -190,6 +193,10 @@ status   stays    mean     p50     p99  number
 waiting  44889  0.0011  0.0000  0.0271   0.003
 running  44889  0.0635  0.0503  0.2571   0.158
 
+engine  admits  readmits  token hit
+------  ------  --------  ---------
+llm      44889         0      0.820
+
 stage  number   util   done    thru    wait  service    iters
 -----  ------  -----  -----  ------  ------  -------  -------
 llm     0.158  0.141  89549  4.9749  0.0000   0.0318  9261013
@@ -221,7 +228,8 @@ TTFT is now separately observable, and at 19 ms it is a different quantity from
 the 64 ms response. Iteration-level simulation gives both.
 
 Measured 2026-10-15 on serQ afee627 with whole token counts (#661, #700), by
-the command above.
+the command above; the engine table, which moves no other number, since
+#594.
 
 !!! note "`wait NaN` on the `kv` pool"
     An admission that takes several pools joins the queue of the **first**

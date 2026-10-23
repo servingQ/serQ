@@ -232,7 +232,10 @@ A register may be read in:
 
 Other reads are link errors. Each register name must be unique and cannot
 also name an attribute, constant, context variable, pool or stage. Engine
-families cannot declare registers.
+families cannot declare registers. A register the schedule never writes
+with `set` (in an `if` or not) does not link: it would keep its first
+value, which is a `let`. vLLM's procedure sets none, so its engine declares
+none.
 
 A guard based on a register must allow recovery when the engine empties.
 TGI's engine skips admission after an iteration that admitted, unless no
@@ -274,7 +277,8 @@ records are attributes the caller reads after the call: `ENGINE.reused`,
 `ENGINE.prefill`, `ENGINE.admitted` and `ENGINE.first` (a connector adds
 `ENGINE.loaded`, `ENGINE.saved` and `ENGINE.load_done`); `ENGINE.reused`,
 `ENGINE.prefill` and `ENGINE.loaded` are observations of the report too,
-one per admission.
+one per admission, which the report's engine table sums per engine
+([engine statistics](../reference/cli.md#engine-statistics)).
 
 An engine that is a KV relation's source
 ([`kvt.nixl_pull`](std/kvt.md)) keeps its memory past each request's end,
@@ -320,7 +324,9 @@ The engine's KV connector (vLLM's `KVConnector`). `QUEUE` is one of two:
   `per_token` a token, into its hold on the engine's memory before its
   prefill. A finished request copies to its entry in the queue the part of
   `n` tokens it lacks before it gives its pools back. `per_token` is
-  required, and at least one of `load` and `save`;
+  required, and at least one of `load` and `save`. Under
+  [`kvt.l2_link`](std/kvt.md#kvtl2_link) both copies also cross the
+  engine's own `nic`, at once;
 - the source of the engine's queue's KV relation (`kvt.nixl_pull (QUEUE,
   Q, …)` or `kvt.nixl_push`; NIXL's). A request its entry was called `from
   QUEUE[i]` with reads `n` tokens' KV over the two NICs the relation

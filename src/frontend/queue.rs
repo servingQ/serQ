@@ -134,6 +134,10 @@ pub struct QueueDecl {
     pub nic: bool,
     /// `kvt.nixl_pull (S, Q, …);` or `kvt.nixl_push (S, Q, …);`: where its entries take the KV from.
     pub takes: Option<Takes>,
+    /// `kvt.l2_link (C, Q, …);`: each L2 `C` the copies of its engine's
+    /// connector reach over its NIC, and where the relation is written, for
+    /// an error about a second.
+    pub links: Vec<(String, usize)>,
     pub at: usize,
 }
 

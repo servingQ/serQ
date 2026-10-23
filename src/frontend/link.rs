@@ -770,38 +770,47 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
                     None
                 },
                 memory: sp.memory.as_ref().map(|m| lk.pool_base(m)).transpose()?,
-                iteration: match &sp.schedule {
-                    Schedule::Body(b) => Some(iteration(&lk, lk.stages[&s.name].0, b)?),
-                    // vLLM's procedure sets no register; one the program
-                    // declares would stay at its first value
-                    Schedule::Procedure(_) if !sp.state.is_empty() => {
+                iteration: {
+                    let body = match &sp.schedule {
+                        Schedule::Body(b) => Some(iteration(&lk, lk.stages[&s.name].0, b)?),
+                        Schedule::Procedure(None) => None,
+                        // `only (p)` shared by `advance running` and `admit
+                        // waiting` is the body that serves only `p` and
+                        // admits while the iteration has not preempted, each
+                        // newcomer `p` excludes waiting unserved (#355)
+                        Schedule::Procedure(Some(p)) => {
+                            let p = lk.expr(p)?;
+                            Some(vec![
+                                CIter::Serve {
+                                    only: Some(p.clone()),
+                                    by: None,
+                                },
+                                CIter::Admit {
+                                    only: Some(p),
+                                    gate: Some(CExpr::Unary(
+                                        UnOp::Not,
+                                        Box::new(CExpr::Ctx(CtxVar::Preempted)),
+                                    )),
+                                },
+                            ])
+                        }
+                    };
+                    // a register no `set` of the schedule writes, in an `if`
+                    // or not, stays at its first value: a `let` spelt a
+                    // second way. vLLM's procedure sets none; a body sets
+                    // what it says (#746)
+                    let set = |name: &str| {
+                        let r = lk.reg_index[name];
+                        sets(body.as_deref().unwrap_or(&[]), r)
+                    };
+                    if let Some((name, _)) = sp.state.iter().find(|(n, _)| !set(n)) {
                         return Err(LinkError::new(format!(
-                            "engine `{}`: register `{}` is set by nothing: a schedule that \
-                             sets it is written with `set {} = …;`",
-                            s.name, sp.state[0].0, sp.state[0].0
+                            "engine `{}`: register `{name}` is set by nothing: a schedule that \
+                             sets it is written with `set {name} = …;`",
+                            s.name
                         )));
                     }
-                    Schedule::Procedure(None) => None,
-                    // `only (p)` shared by `advance running` and `admit
-                    // waiting` is the body that serves only `p` and admits
-                    // while the iteration has not preempted, each newcomer
-                    // `p` excludes waiting unserved (#355)
-                    Schedule::Procedure(Some(p)) => {
-                        let p = lk.expr(p)?;
-                        Some(vec![
-                            CIter::Serve {
-                                only: Some(p.clone()),
-                                by: None,
-                            },
-                            CIter::Admit {
-                                only: Some(p),
-                                gate: Some(CExpr::Unary(
-                                    UnOp::Not,
-                                    Box::new(CExpr::Ctx(CtxVar::Preempted)),
-                                )),
-                            },
-                        ])
-                    }
+                    body
                 },
             }),
         };
@@ -1061,6 +1070,36 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
     Ok((linked, lk.spans))
 }
 
+/// An L2 connector's copy of `tokens` at `per_token` each: a run on the
+/// L2's `stage`, and, under `kvt.l2_link`, on the engine's own NIC held at
+/// once (`also`), the two divided by the link's `share` (#600). No side
+/// posts it: a load and a save go opposite ways over the same two stages.
+fn l2_copy(
+    stage: &Ref,
+    link: Option<&crate::frontend::ast::L2Link>,
+    own: &impl Fn(&str) -> Ref,
+    tokens: Expr,
+    per_token: &Expr,
+) -> Stmt {
+    let also: Vec<Ref> = link.iter().map(|l| own(&l.nic)).collect();
+    let stages: Vec<Ref> = std::iter::once(stage.clone())
+        .chain(also.iter().cloned())
+        .collect();
+    Stmt::Run {
+        stage: stage.clone(),
+        mode: RunMode::Plain,
+        work: Expr::cost(
+            &stages,
+            Expr::Binary(BinOp::Mul, Box::new(tokens), Box::new(per_token.clone())),
+        ),
+        growing: None,
+        also,
+        share: link.map(|l| l.share),
+        latency: None,
+        poster: None,
+    }
+}
+
 /// A connector's lowered statements as its transfer (`ir::CTransfer`):
 /// `blocks[0]` is `run; load; [release S]` for a load, `hold P { grow; run;
 /// load } cache` for a save (its body `blocks[1]`). The lowering above writes
@@ -1271,6 +1310,15 @@ fn serve(lk: &Linker, s: &Serve) -> LResult<CServe> {
         )]),
         Serve::By(keys) => CServe::By(keys.iter().map(|k| lk.expr(k)).collect::<Result<_, _>>()?),
         Serve::ExclusivePrefill => CServe::ExclusivePrefill,
+    })
+}
+
+/// Whether a statement of `body`, in a branch or not, sets register `r`.
+fn sets(body: &[CIter], r: usize) -> bool {
+    body.iter().any(|s| match s {
+        CIter::Set(q, _) => *q == r,
+        CIter::Branch(_, a, b) => sets(a, r) || sets(b, r),
+        CIter::Serve { .. } | CIter::Admit { .. } => false,
     })
 }
 
@@ -2880,7 +2928,9 @@ impl Linker<'_> {
     /// NICs from the lease the request's entry took `from` the source (the
     /// member `E.from`), waiting first for the source's leg in a push, and
     /// ends the lease. A save is the hold on the L2's pool that copies what
-    /// its entry lacks and caches the rest.
+    /// its entry lacks and caches the rest. An L2's copy, a load's or a
+    /// save's, also crosses the member's own NIC when `kvt.l2_link` links
+    /// the two (`l2_copy`).
     fn connector(
         &mut self,
         c: &ConnectorSpec,
@@ -2909,24 +2959,11 @@ impl Linker<'_> {
                 let kv = own(&kv.name);
                 let mut body = match &c.kind {
                     ConnectorKind::L2 {
-                        stage, per_token, ..
-                    } => vec![Stmt::Run {
-                        stage: stage.clone(),
-                        mode: RunMode::Plain,
-                        work: Expr::cost(
-                            one(stage),
-                            Expr::Binary(
-                                BinOp::Mul,
-                                Box::new(var(&loaded)),
-                                Box::new(per_token.clone()),
-                            ),
-                        ),
-                        growing: None,
-                        also: vec![],
-                        share: None,
-                        latency: None,
-                        poster: None,
-                    }],
+                        stage,
+                        per_token,
+                        link,
+                        ..
+                    } => vec![l2_copy(stage, link.as_ref(), &own, var(&loaded), per_token)],
                     ConnectorKind::Relation(None) => {
                         unreachable!("the parser refuses a connector no relation reads by")
                     }
@@ -2978,16 +3015,7 @@ impl Linker<'_> {
                     at,
                     Stmt::Load(kv.clone(), Expr::cost(one(&kv), var(&loaded))),
                 );
-                self.member_of.set(member.map(|_| size));
-                let first = self.blocks.len();
-                let compiled = self.expr(n).and_then(|e| Ok((e, self.block(&body)?)));
-                self.member_of.set(None);
-                let (mut amount, b) = compiled?;
-                if let Some(i) = member {
-                    member_expr(&mut amount, i, size, engine)?;
-                    self.member_block(b, i, size, engine)?;
-                }
-                Some(transfer(amount, self.take_blocks(first)))
+                Some(self.member_transfer(n, &body, member, size, engine)?)
             }
         };
         let save = match (&c.save, &c.kind) {
@@ -2999,6 +3027,7 @@ impl Linker<'_> {
                     stage,
                     pool,
                     per_token,
+                    link,
                 },
             ) => {
                 // the part of what the L2 is to hold that its entry lacks
@@ -3020,33 +3049,16 @@ impl Linker<'_> {
                     reuse: None,
                     body: vec![
                         Stmt::Grow(kv.clone(), Expr::cost(one(kv), new.clone())),
-                        Stmt::Run {
-                            stage: stage.clone(),
-                            mode: RunMode::Plain,
-                            work: Expr::cost(
-                                one(stage),
-                                Expr::Binary(
-                                    BinOp::Mul,
-                                    Box::new(new.clone()),
-                                    Box::new(per_token.clone()),
-                                ),
-                            ),
-                            growing: None,
-                            also: vec![],
-                            share: None,
-                            latency: None,
-                            poster: None,
-                        },
+                        l2_copy(stage, link.as_ref(), &own, new.clone(), per_token),
                         Stmt::Load(kv.clone(), Expr::cost(one(kv), new)),
                     ],
                     cache: Some(Expr::cost(one(kv), var(&saved))),
                     prefix: None,
                     lease: None,
                 }];
-                let amount = self.expr(n)?;
-                let first = self.blocks.len();
-                self.block(&body)?;
-                Some(transfer(amount, self.take_blocks(first)))
+                // the member's own link (`E.nic[i]`) and pools; the L2 is
+                // one queue, which every member's reference names already
+                Some(self.member_transfer(n, &body, member, size, engine)?)
             }
         };
         self.side = side;
@@ -3060,6 +3072,31 @@ impl Linker<'_> {
                 .then(|| self.attr(&format!("{engine}.{RELATION_FROM}"))),
             record: self.observe_slot(&loaded),
         })
+    }
+
+    /// A connector's load or save: its amount `n` and the kernel blocks
+    /// `body`, as member `member` of an engine family of `size` reads them
+    /// (`None` for one engine), its pools and stages that member's.
+    fn member_transfer(
+        &mut self,
+        n: &Expr,
+        body: &[Stmt],
+        member: Option<usize>,
+        size: usize,
+        engine: &str,
+    ) -> LResult<crate::ir::CTransfer> {
+        self.member_of.set(member.map(|_| size));
+        let first = self.blocks.len();
+        let compiled = self.expr(n).and_then(|e| Ok((e, self.block(body)?)));
+        self.member_of.set(None);
+        let (mut amount, _) = compiled?;
+        if let Some(i) = member {
+            member_expr(&mut amount, i, size, engine)?;
+            for b in first..self.blocks.len() {
+                self.member_block(b, i, size, engine)?;
+            }
+        }
+        Ok(transfer(amount, self.take_blocks(first)))
     }
 
     /// The blocks from `first` on, taken out of the program: a connector's,

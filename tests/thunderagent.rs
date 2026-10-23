@@ -66,12 +66,10 @@ fn paper(tr: &str, more: &[&str]) -> serq::Report {
     run_program("thunderagent", &sets, Some(1), Some(1500.0))
 }
 
+/// The share of the replicas' admitted tokens their caches gave (the
+/// report's engine table).
 fn token_hit(r: &serq::Report) -> f64 {
-    let total = |k: &str| {
-        let o = r.observe(k).unwrap();
-        o.mean * o.count as f64
-    };
-    total("E.reused") / (total("E.reused") + total("E.prefill"))
+    r.engine("E").unwrap().token_hit
 }
 
 #[test]

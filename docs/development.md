@@ -58,7 +58,9 @@ reqs     0.2       0.0  0.001    0.171  0.0005     798         0         0      
 (`vllm.reused`, the tokens an admission read from the cache;
 `vllm.prefill`, the tokens it computed): each of the program's is whatever
 its `observe` line says, so read that line before comparing the number with
-a measurement.
+a measurement. The `engine` table, among the tables the excerpt leaves
+out, sums the records per engine
+([engine statistics](reference/cli.md#engine-statistics)).
 `client` rows are what each turn's client saw, the same in every program:
 `ttft` from sending the turn to its first output token, `tpot` the time per
 output token after the first, `response` from sending to the answer

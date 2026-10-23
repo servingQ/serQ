@@ -111,7 +111,7 @@ def attrs(x):
 
 
 SAMPLES = {"samples", "times", "sessions", "turns"}
-LOOKUPS = {"json", "observes", "client", "status", "gauges", "claims", "stages", "pools", "observe", "gauge", "claim", "stage", "stages_named", "pool", "pools_named"}
+LOOKUPS = {"json", "observes", "client", "status", "engines", "gauges", "claims", "stages", "pools", "observe", "engine", "gauge", "claim", "stage", "stages_named", "pool", "pools_named"}
 
 
 def test_the_report_is_its_json_by_name():
@@ -125,7 +125,7 @@ def test_the_report_is_its_json_by_name():
     assert fails.claim("none").result == "fails" and fails.claim("none").first == fails.end
     for r in [pyserq.run(pyserq.compile(MG1, workload=PAIRS[MG1], seed=4, horizon=20000.0, warmup=1000.0)), arrays, replay, kong, live, fails]:
         js = json.loads(r.json())
-        scalars = {k: v for k, v in js.items() if k not in ("observes", "client", "status", "gauges", "claims", "stages", "pools")}
+        scalars = {k: v for k, v in js.items() if k not in ("observes", "client", "status", "engines", "gauges", "claims", "stages", "pools")}
         # every field, both ways: nothing JSON has is missing, nothing it lacks is added
         assert attrs(r) == set(scalars) | LOOKUPS
         assert all(same(getattr(r, k), v) for k, v in scalars.items())
@@ -161,14 +161,21 @@ def test_the_report_is_its_json_by_name():
         for name, x in js["status"].items():
             st = r.status[name]
             assert attrs(st) == set(x) | {"name"} and all(same(getattr(st, k), v) for k, v in x.items())
+        # every engine that takes requests, by name, as the JSON has it
+        assert list(r.engines) == list(js["engines"])
+        for name, x in js["engines"].items():
+            e = r.engine(name)
+            assert e.name == name and attrs(e) == set(x) | {"name"}
+            assert all(same(getattr(e, k), v) for k, v in x.items())
         # the JSON leaves `claims` out when the program has none
         assert list(r.claims) == [c["name"] for c in js.get("claims", [])]
         for c in js.get("claims", []):
             cl = r.claim(c["name"])
             assert attrs(cl) == set(c) and all(same(getattr(cl, k), v) for k, v in c.items())
         assert r.observe("nope") is None and r.stage("nope") is None and r.pool("nope") is None
-        assert r.gauge("nope") is None and r.claim("nope") is None
+        assert r.gauge("nope") is None and r.claim("nope") is None and r.engine("nope") is None
     assert type(replay.pools[0]).__module__ == "pyserq" and type(replay.client["ttft"]).__module__ == "pyserq"
+    assert list(replay.engines) == ["vllm"] and type(replay.engine("vllm")).__module__ == "pyserq"
     assert kong.claim("queueing_bound").result == "holds" and type(kong.claim("queueing_bound")).__module__ == "pyserq"
     assert pyserq.run(pyserq.compile(MG1, workload=PAIRS[MG1], horizon=5.0, warmup=0.0)).client["response"].ci == math.inf
 

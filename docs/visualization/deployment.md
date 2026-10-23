@@ -53,7 +53,7 @@ every way through holds it, whichever hold took it on each.
 | Dashed enclosure | A pool held across several stations. |
 | Unfilled frame | Pools held at one station, listed below its glyph. |
 | Transfer bracket | A job using both endpoints' NICs, an arrow inside it from each station to the next the run names; its label names the source and destination KV. |
-| `pull` / `push`, a dot on the bracket | Who posts a KV relation's copy (`kvt.nixl_pull`, `kvt.nixl_push`): the dot stands over the poster's NIC, and the word leads the copy's label. A pull is posted at the arrow's head, where the bytes arrive; a push at its tail. Between two stacked instances the copy has no bracket, and a dot stands over each member's NIC. A `transfer on` written by hand names no poster and has neither. |
+| `pull` / `push`, a dot on the bracket | Who posts a KV relation's copy (`kvt.nixl_pull`, `kvt.nixl_push`): the dot stands over the poster's NIC, and the word leads the copy's label. A pull is posted at the arrow's head, where the bytes arrive; a push at its tail. Between two stacked instances the copy has no bracket, and a dot stands over each member's NIC. A `transfer on` written by hand names no poster and has neither, nor does an engine's copy to and from an L2 over its own link (`kvt.l2_link`), whose loads and saves go opposite ways: its member's NIC is in its panel, the L2 outside (`vllm_lmcache_replicas.sq`). |
 | Latency label | A delay before a single transfer. A delay leading to several transfers remains a station. |
 
 The diagram simplifies control flow. Consecutive visits to one station do
