@@ -852,6 +852,36 @@ pub enum CStmt {
     },
 }
 
+impl CStmt {
+    /// The blocks this statement holds, in order: a hold's, a `loop`'s, a
+    /// `while`'s and a fork's body, a branch's then-arm and then its
+    /// else-arm. It names every statement, so a new statement that holds a
+    /// block does not compile until it is added here, once (#740; the
+    /// source's `Stmt::blocks`, #280).
+    pub(crate) fn blocks(&self) -> impl Iterator<Item = BlockId> {
+        let (a, b) = match self {
+            CStmt::Hold { body, .. }
+            | CStmt::Loop(body)
+            | CStmt::While(_, body)
+            | CStmt::Fork(body) => (Some(*body), None),
+            CStmt::Branch(_, a, b) => (Some(*a), Some(*b)),
+            CStmt::Turn
+            | CStmt::Set(..)
+            | CStmt::Observe(..)
+            | CStmt::Grow(..)
+            | CStmt::Shrink(..)
+            | CStmt::Drop(_)
+            | CStmt::Release(_)
+            | CStmt::Load(..)
+            | CStmt::Run { .. }
+            | CStmt::Choose { .. }
+            | CStmt::End
+            | CStmt::Request { .. } => (None, None),
+        };
+        a.into_iter().chain(b)
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CSpill {
     pub to: usize,
@@ -1605,14 +1635,7 @@ impl Program {
             }
             *was = true;
             for st in &self.blocks[b] {
-                match st {
-                    CStmt::Hold { body, .. }
-                    | CStmt::Loop(body)
-                    | CStmt::While(_, body)
-                    | CStmt::Fork(body) => todo.push(*body),
-                    CStmt::Branch(_, a, c) => todo.extend([*a, *c]),
-                    _ => {}
-                }
+                todo.extend(st.blocks());
             }
         }
         Ok(())
