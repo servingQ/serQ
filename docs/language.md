@@ -50,8 +50,8 @@ item     := let NAME = expr ;
           | kvt.nixl_push ( QUEUE , QUEUE [, latency = expr ] , share = POLICY ) ;   -- the source, its reader, the write
           | kvt.l2_link ( QUEUE , QUEUE , share = POLICY ) ;   -- an L2, then a queue whose engine's connector copies through it over its `nic`
           | gauge NAME = expr ;              -- the time average of a function of the state (Gauges)
-          | claim NAME [given ( expr )] : every iteration of STAGE ( expr ) ;   -- a proposition about every path (Claims)
-          | claim NAME [given ( expr )] : some iteration of STAGE ( expr ) ;
+          | claim NAME [given ( expr )] : every iteration of ENGINE ( expr ) ;   -- a proposition about every path (Claims)
+          | claim NAME [given ( expr )] : some iteration of ENGINE ( expr ) ;
           | claim NAME [given ( expr )] : at end ( expr ) ;
 qitem    := pool NAME { poolopt* }              -- the queue's own; only its entries hold it
           | device NAME { resource* }           -- the member's device, `QUEUE.NAME`
@@ -1149,9 +1149,9 @@ chunk the iteration gave it ([vLLM correspondence](#7-vllm-v1-as-a-serq-program)
 iteration's serving (scheduler.py:807-813); then `admit waiting` admits
 from the queues the engine admits. The iteration advances the clock by
 `worker`'s expression in `batch.tokens`, `batch.decoding`,
-`batch.prefilled`, `batch.kv_decode`, `batch.kv_prefill`,
-`batch.attention` and `running.count`; its tokens are applied when it
-ends. A run of zero work completes at once. An iteration that schedules no
+`batch.prefilled`, `batch.kv_decode`, `batch.kv_prefill` and
+`batch.attention`; its tokens are applied when it ends. A run of zero
+work completes at once. An iteration that schedules no
 token is not an iteration, unless it preempted: then it is the scheduler
 step that only preempted (vLLM's `schedule()` admits nothing in a step
 with `preempted_reqs`, `scheduler.py:869`, and the oracle driver counts
@@ -1251,7 +1251,7 @@ whose first pool it admits, a gauge or a claim
 An engine is parse-time sugar for the IR's step stage
 ([the design](design/engine-device.md)): it lowers to a `step` stage and
 its pools, so the IR, the interpreter and the Lean model see only the
-kernel, whose names the IR and the claims over iterations read. From
+kernel, whose names the IR reads. From
 `examples/multi-turn/vllm.sq`:
 
 ```serq
@@ -1317,15 +1317,19 @@ read 0 as no cap, so the program would mean one thing and run another;
 `k` keeps a computed cap above 0 whatever `e` reads. An engine
 names each value one way in all its clauses, and none by the kernel's
 bare name: `running.…` is the residents as they stand, `waiting.…` the
-queues, `batch.…` the iteration's batch.
+queues, `batch.…` the iteration's batch. Only an engine's clauses and a
+claim over its iterations read these values, and both by these names, so
+a kernel's bare name (`tokens`, `decoders`) is refused wherever it is
+written, with the engine's names for it.
 
-| Value | `tokens cap` | `scheduler` | `worker` |
-|---|---|---|---|
-| `running.count`, `waiting.count` | yes | yes | no: the worker reads the batch |
-| `running.decoding`, `running.kv_decode`, `running.kv_prefill` | yes | yes | no: the batch's is `batch.…` |
-| `running.preempted`, `waiting.admitted` | no | yes | no |
-| `batch.tokens`, `batch.prefilled` | no | yes: the batch so far | yes |
-| `batch.decoding`, `batch.kv_decode`, `batch.kv_prefill`, `batch.attention` | no | no | yes |
+| Value | `tokens cap` | `scheduler` | `worker` | a claim over its iterations |
+|---|---|---|---|---|
+| `running.count` | yes | yes | no: the worker reads the batch | yes: the residents once the batch is formed |
+| `waiting.count` | yes | yes | no: the worker reads the batch | no: a claim reads a queue as `queued(P)` |
+| `running.decoding`, `running.kv_decode`, `running.kv_prefill` | yes | yes | no: the batch's is `batch.…` | no: the batch's is `batch.…` |
+| `running.preempted`, `waiting.admitted` | no | yes | no | no |
+| `batch.tokens`, `batch.prefilled` | no | yes: the batch so far | yes | yes |
+| `batch.decoding`, `batch.kv_decode`, `batch.kv_prefill`, `batch.attention` | no | no | yes | yes |
 
 `scheduler` is its statements: `if`, `while` and `set`, read as the
 iteration is planned. A schedule's `only` and `by`, read for each resident
@@ -1337,7 +1341,9 @@ iteration starts, read what `tokens cap` reads: `running.count`,
 `batch.…`. The worker times the batch the scheduler formed, which a
 budget or an `only` can leave short of the residents, so its `forward`
 reads the batch, `batch.…`, and nothing of the residents or the queues. `running.preempted` and `waiting.admitted` say what the
-schedule did, so only `scheduler` reads them. `engine` is a keyword: an
+schedule did, so only `scheduler` reads them. A claim over the engine's
+iterations is read where the worker is, and reads what it reads and
+`running.count` ([Claims](#claims)). `engine` is a keyword: an
 engine is named for what it models (`vllm`, `sglang`, `tgi`) or `llm`.
 Inside a `queue`, `device gpu` is the member's and `engine on gpu` is the
 queue's stage, named after the queue, so its pool is `pool reqs on Q`.
@@ -1737,25 +1743,33 @@ runs and the report says what it found; the same IR is the source of the
 claim's statement in Lean. There are three forms:
 
 ```
-claim work_conserving: every iteration of llm (demand < bmax || tokens == bmax);
-claim starved: some iteration of llm (demand >= bmax && tokens < bmax);
+claim work_conserving: every iteration of llm (demand < bmax || batch.tokens == bmax);
+claim starved: some iteration of llm (demand >= bmax && batch.tokens < bmax);
 claim mean_ok: at end (total(response) <= 1000000 * count(response));
 ```
 
-`every iteration of S (e)` says `e` is non-zero at every iteration of the
-step stage `S` (a member of an array is named by a constant index,
-`E[0]`); `some iteration of S (e)` says it is at one of them at least; `at
+`every iteration of E (e)` says `e` is non-zero at every iteration of the
+engine `E` (a member of an array is named by a constant index,
+`E[0]`); `some iteration of E (e)` says it is at one of them at least; `at
 end (e)` says it is when the run ends. A claim over iterations is read when
-an iteration starts, after its batch is scheduled, where the cost is read:
-it reads the cost's variables (`tokens`, `prefilled`, `decoders`,
-`residents`, `kv_decode`, `kv_prefill`, `attention`), `now` (the start),
-the observables `queue`, `busy`, `used`, `free`, `holders`, `queued` (a
-pool or stage named by a number, as in a gauge) and three variables of its
-own. `demand` is the tokens the stage's residents could take in this
-iteration if the budget were unlimited: one for a decode with work left,
-the remaining prompt (up to the `chunk`) for a prefill, summed over the
-residents after the batch is scheduled, the ones it admitted and the ones
-an `only` leaves out included. `served` is the tokens the stage
+an iteration starts, after its batch is scheduled, where the worker's
+`forward` is read, and in the engine's words: it reads the batch as the
+worker does (`batch.tokens`, `batch.prefilled`, `batch.decoding`,
+`batch.kv_decode`, `batch.kv_prefill`, `batch.attention`), the residents'
+number `running.count`, in the batch or not, as they stand once the batch
+is formed (the ones it admitted counted, the ones it preempted not), `now`
+(the start), the observables `queue`, `busy`, `used`, `free`, `holders`,
+`queued` (a pool or stage named by a number, as in a gauge) and three
+variables of its own. A kernel's name does not link there: `decoders` is
+`running.decoding` in `tokens cap` and `batch.decoding` here, so the claim
+writes the one it means (one value, one name). It reads neither the
+residents' totals `running.decoding` and `running.kv_…`, which count the
+residents in the batch or not, nor `waiting.count`: a claim reads a queue
+as `queued(P)`. `demand` is the tokens the engine's residents could take
+in this iteration if the budget were unlimited: one for a decode with work
+left, the remaining prompt (up to the `chunk`) for a prefill, summed over
+the residents after the batch is scheduled, the ones it admitted and the
+ones an `only` leaves out included. `served` is the tokens the engine
 scheduled in its earlier iterations, from the start of the run. `arrived`
 is the sessions the workload has started by the iteration's start, one
 arriving at that instant included, so `arrived * W - served` is the work

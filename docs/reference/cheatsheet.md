@@ -22,7 +22,7 @@ fn main() {
 
   server { … }                       // what one request runs
   gauge NAME = expr;                  // a time average of the state: max k in N (used(kv[k]))
-  claim NAME: every iteration of E (demand < B || tokens == B);   // checked on the run; also `some iteration of`, `at end`
+  claim NAME: every iteration of E (demand < B || batch.tokens == B);   // checked on the run; also `some iteration of`, `at end`
 }
 ```
 

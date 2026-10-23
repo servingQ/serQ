@@ -1356,6 +1356,26 @@ fn an_entry_reads_every_context_variable_as_the_languages() {
             );
             continue;
         }
+        // a name an engine's value replaced is the engine's, read by its
+        // name in the engine and a claim over its iterations alone (#437)
+        if let Some((value, ..)) = serq::frontend::parser::ENGINE_VALUES
+            .iter()
+            .find(|(_, k, _)| *k == v)
+        {
+            for src in [
+                program(&format!("set zz = {v};"), ""),
+                program("", &format!(" + {v}")),
+            ] {
+                let e = common::compile(&common::main_source(&src), workload, &ov)
+                    .expect_err(v)
+                    .to_string();
+                assert!(
+                    e.contains(&format!("`{v}` is a value of an engine, read as `{value}`")),
+                    "{v}: {e}"
+                );
+            }
+            continue;
+        }
         let cases = [
             (
                 program(&format!("set zz = {v};"), ""),

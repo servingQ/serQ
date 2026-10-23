@@ -177,7 +177,7 @@ fn a_gauge_reads_only_the_deployment() {
         ("gauge x = n;", "a gauge has no session"),
         ("gauge x = ~exp(1);", "a gauge may not draw"),
         ("gauge x = cachedin(kv[0]);", "a gauge has no session"),
-        ("gauge x = tokens;", "exists only in"),
+        ("gauge x = demand;", "exists only in"),
         ("gauge x = now;", "may not read `now`"),
         ("gauge x = work(svc[0]);", "may not read `work"),
     ] {

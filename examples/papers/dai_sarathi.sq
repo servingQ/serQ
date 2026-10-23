@@ -36,7 +36,7 @@ fn main() {
   // --8<-- [end:server]
 
   // --8<-- [start:work_conserving]
-  claim work_conserving: every iteration of sarathi (demand < bmax || tokens == bmax);
+  claim work_conserving: every iteration of sarathi (demand < bmax || batch.tokens == bmax);
   // --8<-- [end:work_conserving]
 
   // --8<-- [start:token_rate]

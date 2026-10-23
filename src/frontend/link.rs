@@ -343,9 +343,13 @@ enum Meaning {
 }
 
 /// Where the language reads `name`, when it supplies it: a context
-/// variable at its moments, `inf` in every expression, an engine's list in
-/// the engine.
+/// variable at its moments, by the engine's name for it when an engine
+/// names it (#437), `inf` in every expression, an engine's list in the
+/// engine.
 fn read_in(name: &str) -> Option<String> {
+    if let Some(values) = crate::frontend::parser::as_engine_values(name) {
+        return Some(format!("an engine, as {values}"));
+    }
     let moments = match supplied(name) {
         Some(Supplied::Inf) => &[][..],
         Some(Supplied::Ctx(var)) => var.moments(),
