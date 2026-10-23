@@ -141,6 +141,15 @@ live pool or stage state by an earlier `set`: that value may be stale by
 admission. Write the expression in the header instead; in the body, read
 `cached` for the prefix actually reused.
 
+An attribute the server sets is read in the header (`units`, `reserve`,
+`reuse`, `prefix`) only once it is set above the hold on every way to it:
+in both arms of an `if`, and not only in a loop, a `while` or a `fork`.
+Until this request sets it, it holds what an earlier request left there,
+or 0, so a header that reads what its own body or a later statement sets
+is refused at link time. To read the earlier request's value, copy it
+above the hold (`set earlier = m;`) and read the copy. The parameters are
+the header's anywhere.
+
 If the hold is preempted (`preempt lifo`, or `preempt by`) it re-enters the
 head of the queue (or, under `requeue tail`, the queue as a newcomer)
 and the statement executes again with `computed` set to the position it had

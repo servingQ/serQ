@@ -463,7 +463,10 @@ fn queue_records_keep_their_own_names_and_admission_rules() {
         &common::horizon(10.0),
     )
     .unwrap_err();
-    assert!(e.contains("admission header reads local `c.mem`"), "{e}");
+    assert!(
+        e.contains("admission header reads `A.c.mem`, which is not set above this hold"),
+        "{e}"
+    );
 }
 
 #[test]

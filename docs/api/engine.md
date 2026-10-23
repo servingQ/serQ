@@ -272,7 +272,11 @@ admit waiting … taking POOL (units) [reserve (units)], …
 `taking` names the engine's capacities and its device's, and reads the
 request as `request.input`, `request.output`, `request.known`,
 `request.hit`, `request.loaded` and `request.preempted`; `cache`, read when
-the request gives its pools back, reads `request.finished`. The engine's
+the request gives its pools back, reads `request.finished`. `taking`,
+`reuse`, `prefix` and a connector's `load` are read when the scheduler
+admits the request, so they read an attribute the server sets only once
+it is set above the call on every way to it; the linker refuses the call
+otherwise, as it does a hold whose header reads one. The engine's
 records are attributes the caller reads after the call: `ENGINE.reused`,
 `ENGINE.prefill`, `ENGINE.admitted` and `ENGINE.first` (a connector adds
 `ENGINE.loaded`, `ENGINE.saved` and `ENGINE.load_done`); `ENGINE.reused`,
