@@ -436,7 +436,7 @@ const MAX_FAMILY: usize = 10_000;
 /// parameter may not be one: a parameter is replaced token by token, and a
 /// keyword in the body is a token of the same spelling. `tests/docs_lexer.rs`
 /// keeps the list whole.
-pub const KEYWORDS: [&str; 121] = [
+pub const KEYWORDS: [&str; 122] = [
     "Cost",
     "Size",
     "admission",
@@ -553,6 +553,7 @@ pub const KEYWORDS: [&str; 121] = [
     "turn",
     "use",
     "via",
+    "visible",
     "warmup",
     "when",
     "while",
@@ -560,7 +561,7 @@ pub const KEYWORDS: [&str; 121] = [
     "workload",
 ];
 
-/// `server (P, hidden Q, R = 0) reply (S)`: what a request carries and
+/// `server (P, hidden Q, visible O) reply (S)`: what a request carries and
 /// what its reply carries (`docs/design/request-interface.md`).
 struct Signature {
     params: Vec<Param>,
@@ -572,7 +573,21 @@ struct Signature {
 struct Param {
     at: usize,
     name: String,
-    hidden: bool,
+    mark: Mark,
+}
+
+/// What a parameter's signature says the scheduler knows of it. A length
+/// the model generates says `hidden` or `visible`; any other parameter is
+/// bare or `hidden` (`Parser::generated_lengths`,
+/// `docs/design/generated-length.md`).
+#[derive(Clone, Copy, PartialEq)]
+enum Mark {
+    /// `P`: the scheduler may read it.
+    Bare,
+    /// `hidden P`: the scheduler may not read it before a run reveals it.
+    Hidden,
+    /// `visible P`: the scheduler may read it, said of a generated length.
+    Visible,
 }
 
 /// Where a statement sits: declarations, the workload session, or a server.
@@ -821,6 +836,96 @@ fn find_stmt<'a, T>(stmts: &'a [Stmt], f: &impl Fn(&'a Stmt) -> Option<T>) -> Op
     stmts
         .iter()
         .find_map(|s| f(s).or_else(|| s.blocks().find_map(|b| find_stmt(b, f))))
+}
+
+/// What each name the server sets holds of its parameters.
+type Held = std::collections::BTreeMap<String, std::collections::BTreeSet<String>>;
+
+/// The parameters each engine request's input holds where the call is
+/// (`Parser::generated_lengths`), the server walked in the order it runs:
+/// `held` is what each name the server sets holds of them there, joined
+/// over the ways to a statement (an `if`'s arms, a loop's passes, of which
+/// there may be none), and what a `fork`'s leg sets stays in the leg. A
+/// call a loop reaches again holds what any pass gives it.
+fn held_by_prompts<'a>(
+    stmts: &'a [Stmt],
+    param: &dyn Fn(&str) -> bool,
+    held: &mut Held,
+    out: &mut Vec<(&'a Stmt, std::collections::BTreeSet<String>)>,
+) {
+    let reads = |e: &Expr, held: &Held| -> std::collections::BTreeSet<String> {
+        let mut vars = vec![];
+        names(e, &mut vars, &mut vec![]);
+        vars.into_iter()
+            .flat_map(|v| {
+                if param(&v) {
+                    [v].into()
+                } else {
+                    held.get(&v).cloned().unwrap_or_default()
+                }
+            })
+            .collect()
+    };
+    let join = |into: &mut Held, other: Held| {
+        for (n, from) in other {
+            into.entry(n).or_default().extend(from);
+        }
+    };
+    for s in stmts {
+        match s {
+            Stmt::Set(n, e) => {
+                let from = reads(e, held);
+                held.insert(n.clone(), from);
+            }
+            Stmt::Choose { var, count, key } => {
+                let mut from = reads(count, held);
+                for k in key {
+                    from.extend(reads(k, held));
+                }
+                held.insert(var.clone(), from);
+            }
+            Stmt::EngineRequest { input, .. } => {
+                let prompt = reads(input, held);
+                match out.iter_mut().find(|(call, _)| std::ptr::eq(*call, s)) {
+                    Some((_, p)) => p.extend(prompt),
+                    None => out.push((s, prompt)),
+                }
+            }
+            Stmt::Branch(_, a, b) => {
+                let mut other = held.clone();
+                held_by_prompts(a, param, held, out);
+                held_by_prompts(b, param, &mut other, out);
+                join(held, other);
+            }
+            Stmt::Loop(body) | Stmt::While(_, body) => loop {
+                let before = held.clone();
+                held_by_prompts(body, param, held, out);
+                join(held, before.clone());
+                if *held == before {
+                    break;
+                }
+            },
+            Stmt::Hold { body, .. } => held_by_prompts(body, param, held, out),
+            Stmt::Fork(body) => held_by_prompts(body, param, &mut held.clone(), out),
+            // every statement is named, so a new one that holds a block
+            // does not compile until this says how its block runs (#740)
+            Stmt::Side(_)
+            | Stmt::Route(_)
+            | Stmt::Declare(..)
+            | Stmt::Turn
+            | Stmt::Request
+            | Stmt::Observe(..)
+            | Stmt::Grow(..)
+            | Stmt::Shrink(..)
+            | Stmt::Drop(_)
+            | Stmt::Release(_)
+            | Stmt::Load(..)
+            | Stmt::Run { .. }
+            | Stmt::End
+            | Stmt::Call { .. }
+            | Stmt::Unread(_) => {}
+        }
+    }
 }
 
 /// Whether `stmts` copy the KV over the NICs anywhere, an entry's
@@ -2001,7 +2106,8 @@ impl Parser {
                             .iter()
                             .map(|p| outline::Param {
                                 name: p.name.clone(),
-                                hidden: p.hidden,
+                                hidden: p.mark == Mark::Hidden,
+                                visible: p.mark == Mark::Visible,
                             })
                             .collect(),
                         reply: sig.reply.iter().map(|(_, r)| r.clone()).collect(),
@@ -2550,6 +2656,7 @@ impl Parser {
         if let Some((_, server)) = &self.server {
             assigned_in(server, &mut served.server);
         }
+        self.generated_lengths()?;
         self.interface(prog)?;
         match (self.wl_session.take(), self.server.take()) {
             (None, None) if prog.workload.is_some() => self.err("a workload needs a `server` block to handle its turns"),
@@ -2577,6 +2684,147 @@ impl Parser {
                 Ok(())
             }
         }
+    }
+
+    /// Once the queues' entries are in place: a length the model generates
+    /// says in the signature whether the scheduler knows it (#61,
+    /// `docs/design/generated-length.md`). A parameter is the scheduler's to
+    /// read unless it is `hidden`, which is right for a prompt or a flag and
+    /// wrong for the length an engine's request generates (`E (n, o);`'s
+    /// `o`) or a decode run decodes: forgotten, the scheduler knows how long
+    /// each request runs, which vLLM's does not (it knows `max_tokens`, and
+    /// `check_stop` finds the length, `sched/utils.py:98-119`). So each
+    /// parameter such a length reads is written `hidden` or `visible`, and
+    /// `visible` on any other is refused as the bare spelling's second one.
+    ///
+    /// What a length reads follows the server's `set`s and `choose`s in any
+    /// order: a parameter that could reach it is asked for, and `hidden`
+    /// answers it. What the request's prompt holds where the call is, the
+    /// input of `E (n, o);` through what was set before it, needs no word:
+    /// an engine admits a request by its input, so `hidden` there does not
+    /// link (the linker's `check(input, "admission", t)`), and the word
+    /// would have no other choice (`min(output, 4096 - input)` asks only for
+    /// `output`'s). The prompt is followed in the server's order
+    /// (`held_by_prompts`): a `set` after the call (`set ctx = ctx +
+    /// output;`, the next turn's context) is no part of it, and counting it
+    /// would excuse the very length it stores. A decode run has no input,
+    /// and its work asks for every parameter it reads.
+    fn generated_lengths(&self) -> PResult<()> {
+        use std::collections::{BTreeMap, BTreeSet};
+        let (Some(sig), Some((_, server))) = (&self.signature, &self.server) else {
+            return Ok(());
+        };
+        let param = |v: &str| sig.params.iter().any(|p| p.name == v);
+        let all = std::cell::RefCell::new(vec![]);
+        find_stmt(server, &|s| {
+            all.borrow_mut().push(s);
+            None::<()>
+        });
+        let all = all.into_inner();
+        let mut sets: BTreeMap<&str, Vec<&Expr>> = BTreeMap::new();
+        for s in &all {
+            match s {
+                Stmt::Set(n, e) => sets.entry(n).or_default().push(e),
+                Stmt::Choose { var, count, key } => {
+                    let from = sets.entry(var).or_default();
+                    from.push(count);
+                    from.extend(key);
+                }
+                _ => {}
+            }
+        }
+        // the parameters `e` reads, itself or through what the server sets
+        // anywhere
+        let reaches = |e: &Expr| -> BTreeSet<String> {
+            let (mut out, mut seen, mut work) = (BTreeSet::new(), BTreeSet::new(), vec![e]);
+            while let Some(e) = work.pop() {
+                let mut vars = vec![];
+                names(e, &mut vars, &mut vec![]);
+                for v in vars {
+                    if param(&v) {
+                        out.insert(v);
+                    } else if let Some(from) = sets.get(v.as_str())
+                        && seen.insert(v)
+                    {
+                        work.extend(from.iter().copied());
+                    }
+                }
+            }
+            out
+        };
+        let mut prompts = vec![];
+        held_by_prompts(server, &param, &mut BTreeMap::new(), &mut prompts);
+        // each parameter a generated length reads beyond its prompt, with
+        // the first such length and where it is
+        let mut lengths: Vec<(String, String)> = vec![];
+        for s in &all {
+            let (stage, what, read) = match s {
+                Stmt::EngineRequest { stage, output, .. } => (
+                    stage,
+                    format!("`{} (…)`'s output", stage.name),
+                    reaches(output),
+                ),
+                Stmt::Run {
+                    stage,
+                    mode: RunMode::Decode,
+                    work,
+                    ..
+                } => (
+                    stage,
+                    format!("`run {} decode (…)`'s work", stage.name),
+                    reaches(work),
+                ),
+                _ => continue,
+            };
+            let prompt = prompts
+                .iter()
+                .find(|(call, _)| std::ptr::eq(*call, *s))
+                .map(|(_, p)| p.clone())
+                .unwrap_or_default();
+            let at = stage
+                .span
+                .map(|at| format!(" at {}:{}", at.line, at.col))
+                .unwrap_or_default();
+            for p in read.difference(&prompt) {
+                if !lengths.iter().any(|(n, _)| n == p) {
+                    lengths.push((p.clone(), format!("{what}{at}")));
+                }
+            }
+        }
+        for p in &sig.params {
+            let length = lengths.iter().find(|(n, _)| *n == p.name);
+            match (p.mark, length) {
+                (Mark::Bare, Some((_, what))) => {
+                    return self.err_at(
+                        p.at,
+                        format!(
+                            "`{0}` is a length the model generates ({what} reads it), and the \
+                             signature does not say whether the scheduler knows it: a bare \
+                             parameter is the scheduler's to read, which makes a scheduler \
+                             that knows each request's length before it runs\nhelp: `hidden \
+                             {0}` if the scheduler learns the length when the run ends, as \
+                             vLLM's, which knows `max_tokens`; `visible {0}` if it may read it \
+                             before, as an admission that reserves the whole sequence does",
+                            p.name
+                        ),
+                    );
+                }
+                (Mark::Visible, None) => {
+                    return self.err_at(
+                        p.at,
+                        format!(
+                            "`visible {0}`: no length the model generates reads `{0}` beyond \
+                             what the request's prompt reads, and a parameter the scheduler \
+                             may read is written bare\nhelp: `{0}`; `visible` is said only of \
+                             a generated length, which says `hidden` or `visible`",
+                            p.name
+                        ),
+                    );
+                }
+                _ => {}
+            }
+        }
+        Ok(())
     }
 
     /// What `send` binds goes at the end of the `turn` block, so a request
@@ -2672,7 +2920,7 @@ impl Parser {
                     );
                 }
             }
-            if p.hidden {
+            if p.mark == Mark::Hidden {
                 w.hidden.push(p.name.clone());
             }
         }
@@ -4908,8 +5156,8 @@ impl Parser {
         Ok(())
     }
 
-    /// `(P, hidden Q) reply (S)` after `server`, either part optional: a
-    /// bare `server { … }` takes nothing and replies nothing.
+    /// `(P, hidden Q, visible O) reply (S)` after `server`, either part
+    /// optional: a bare `server { … }` takes nothing and replies nothing.
     fn signature(&mut self) -> PResult<Signature> {
         let mut sig = Signature {
             params: vec![],
@@ -4920,7 +5168,31 @@ impl Parser {
                 return self.err("`server ()` takes nothing, as `server { … }` does: write that");
             }
             while *self.peek() != Tok::RParen {
-                let hidden = self.eat_kw("hidden");
+                let mark = if self.eat_kw("hidden") {
+                    Mark::Hidden
+                } else if self.eat_kw("visible") {
+                    Mark::Visible
+                } else {
+                    Mark::Bare
+                };
+                let other = match mark {
+                    Mark::Hidden => "visible",
+                    Mark::Visible => "hidden",
+                    Mark::Bare => "",
+                };
+                if !other.is_empty() && self.is_kw(other) {
+                    let at = self.pos;
+                    self.advance();
+                    let name = self.ident()?;
+                    return self.err_at(
+                        at,
+                        format!(
+                            "`{name}` is `hidden` or `visible`, not both: `hidden` says the \
+                             scheduler learns it when a run ends, `visible` that it may read it \
+                             before"
+                        ),
+                    );
+                }
                 let at = self.pos;
                 let name = self.ident()?;
                 if sig.params.iter().any(|p| p.name == name) {
@@ -4931,7 +5203,7 @@ impl Parser {
                         "`{name} = …`: a parameter has no default; the workload sends it"
                     ));
                 }
-                sig.params.push(Param { at, name, hidden });
+                sig.params.push(Param { at, name, mark });
                 if !self.eat(&Tok::Comma) {
                     break;
                 }

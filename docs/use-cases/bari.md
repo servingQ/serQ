@@ -90,8 +90,9 @@ at `vdmax`. The workload is not in the program: it is a file of its own,
 --8<-- "examples/workloads/bari_rad.sq:workload"
 ```
 
-The server takes each request's prompt and output to the engine.
-`response` is measured from arrival to the last token:
+The server takes each request's prompt and output to the engine. RAD
+decides by the batch, never by a request's output, so the output is
+`hidden`. `response` is measured from arrival to the last token:
 
 ```serq
 --8<-- "examples/papers/bari_rad.sq:server"

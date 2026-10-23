@@ -32,7 +32,7 @@ fn main() {
   // --8<-- [end:queue]
   // --8<-- [start:server]
   stage delay : delay;
-  server (prompt, immediate, out) {
+  server (prompt, immediate, visible out) {
     run delay (cost(delay, serial == 2 ? 0.001 : serial == 3 ? 0.002 : serial >= 4 ? 0.003 : 0));
     llm (prompt, out + 1);   // the model's `out` decode steps after the prefill's token
     observe selected = serial;

@@ -38,7 +38,7 @@ fn engine(
         }}
         pool kv on gpu {{ block bs; evict lru; preempt lifo; }}
         pool reqs on llm {{ }}
-        server (prompt, o) {{
+        server (prompt, hidden o) {{
           set t0 = now;
           llm (prompt, o);
           observe admitted_at = llm.admitted - t0;
@@ -148,7 +148,7 @@ fn a_request_preempted_during_decode_resumes_from_its_outputs() {
         }
         pool kv on gpu { block bs; evict lru; preempt lifo; }
         pool reqs on llm { }
-        server (prompt, o) {
+        server (prompt, hidden o) {
           llm (prompt, o);
           observe first = llm.first;
           observe done = now;
@@ -206,7 +206,7 @@ fn preempted_twice() -> (&'static str, &'static str) {
         }
         pool kv on gpu { block bs; evict lru; preempt lifo; }
         pool reqs on llm { }
-        server (prompt, o) {
+        server (prompt, hidden o) {
           llm (prompt, o);
           observe done = now;
         }
@@ -305,7 +305,9 @@ fn preempted_twice_in_a_queue(set_kept: &str, known_is: &str) -> (String, &'stat
             }}
           }}
         }}
-        server (prompt, hidden o) {{
+        // the decode run's work reads the prompt: `visible`, as a decode
+        // run has no input to tell it from the length
+        server (visible prompt, hidden o) {{
           D.decode (prompt);
           observe done = now;
         }}
@@ -470,7 +472,7 @@ fn serve_by_orders_residents_by_the_declared_keys() {
           worker {{ forward (1); }}
         }}
         pool kv on gpu {{ }}
-        server (o) {{
+        server (visible o) {{
           llm (1, o);
           observe done = now;
           observe order = serial;
@@ -564,7 +566,7 @@ fn a_resident_admitted_mid_iteration_is_served_once_under_serve_by() {
         pool reqs on llm { }
         pool kv on gpu { }
         stage gate : delay;
-        server (arrive, o) {
+        server (arrive, visible o) {
           run gate (cost(gate, arrive));
           llm (1, o);
           observe done = now;

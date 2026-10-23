@@ -39,8 +39,9 @@ fn main() {
   }
   pool kv on gpu { evict by (waiting, size); }
 
-  // the replica: one turn's prefill and decode
-  server (K, n, o, cold, final) {
+  // the replica: one turn's prefill and decode; it holds K + n + o from
+  // the start, so the scheduler knows the output length
+  server (K, n, visible o, cold, final) {
     hold reqs (cost(reqs, 1)), kv (cost(kv, K + n + o)) {
       set warm = !cold && cached >= K;
       // prefill work in tokens: the overhead and the attention term are

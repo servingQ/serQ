@@ -151,7 +151,8 @@ workload {
 }
 
 // model.sq, in fn main()
-server (input, hidden output) reply (done) {   // hidden: the scheduler may not read it
+server (input, hidden output) reply (done) {   // hidden: the scheduler may not read it;
+                                               // a generated length says `hidden` or `visible`
   …                         // reads the parameters; sets `done`, read as `reply.done`
 }
 ```

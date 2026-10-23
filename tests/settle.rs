@@ -222,7 +222,7 @@ fn the_marks_of_a_session_turn_do_not_depend_on_the_machine() {
         }}
         pool kv on gpu {{ block 16; evict lru; preempt lifo; }}
         pool reqs on llm {{ }}
-        server (K, n, o) {{
+        server (K, n, hidden o) {{
           set prompt = K + n;
           llm (prompt, o);
         }}

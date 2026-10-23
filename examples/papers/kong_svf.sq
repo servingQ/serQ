@@ -24,7 +24,7 @@ fn main() {
   // --8<-- [end:engine]
 
   // --8<-- [start:server]
-  server (s, o) {
+  server (s, visible o) {
     observe output_tokens = o;
     observe vol = s * o + floor((o * o + o) / 2);
     hold kv (cost(kv, s + o)) { llm (0, o); }   // no prefill: o decode steps

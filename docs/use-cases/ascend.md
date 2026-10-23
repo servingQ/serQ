@@ -103,6 +103,11 @@ when it was admitted:
 --8<-- "examples/vendors/ascend.sq:server"
 ```
 
+The output length is `visible out`: the admission reserves
+`request.input + request.output - 1`, so the scheduler reads it before the
+run, where vLLM's knows only `max_tokens` (`sched/utils.py:98-119`);
+`hidden` would not link.
+
 The six requests are selected in order `0, 4, 1, 5, 2, 3`; disabling aging
 with `max_wait = 0` produces `0, 4, 2, 3, 1, 5`. Request slots, KV
 capacity, token budget and chunk size are explicit; prompt and output

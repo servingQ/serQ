@@ -23,8 +23,9 @@ fn main() {
   pool kv on gpu { block 16; evict lru; preempt lifo; }
   pool slots on llm { }
 
-  // `o` tokens decoded after the one the prefill samples
-  server (p, o) {
+  // `o` tokens decoded after the one the prefill samples, a length the
+  // scheduler learns when the run ends
+  server (p, hidden o) {
     llm (p, o + 1);
     observe first = llm.first;
     observe done = now;

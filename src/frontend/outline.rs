@@ -185,10 +185,14 @@ pub struct Param {
     pub name: String,
     /// The scheduler may not read it (`server (hidden o)`).
     pub hidden: bool,
+    /// The scheduler may read it, said of a length the model generates
+    /// (`server (visible o)`); a parameter neither `hidden` nor `visible` is
+    /// one no generated length reads.
+    pub visible: bool,
 }
 
-/// The server's signature, `server (P, hidden Q) reply (R)`: what crosses
-/// between the workload and the server.
+/// The server's signature, `server (P, hidden Q, visible O) reply (R)`:
+/// what crosses between the workload and the server.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct Signature {
     pub params: Vec<Param>,

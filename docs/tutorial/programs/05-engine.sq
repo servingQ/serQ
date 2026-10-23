@@ -47,8 +47,9 @@ fn main() {
   }
   pool reqs on llm { queue fifo; }
 
-  // a turn is one request to the engine
-  server (input, output, final) {
+  // a turn is one request to the engine; as vLLM's, the scheduler learns
+  // how long it runs when the run ends (sched/utils.py:98-119)
+  server (input, hidden output, final) {
     llm (input, output);
     // a session's last turn leaves nothing worth keeping
     if (final) { drop kv; }

@@ -83,6 +83,7 @@ arrived at 0:
 | memory $M$ | `pool kv { cap M; ... }` |
 | SVF: admit the least volume, ties in arrival order | `queue by (s * o + floor((o * o + o) / 2));` |
 | a request holds its peak $s + o$ from admission | `hold kv (cost(kv, s + o)) { ... }` |
+| the scheduler knows each $o_i$ | `server (s, visible o)`: the key and the peak read it before the run |
 | one decode token per step, every active request | `tokens cap 1000000;`, `worker { forward (1); }` and the request `llm (0, o);`: no prompt, `o` decode steps |
 | burst arrivals | `arrive batch(N);` |
 | $\mathrm{vol}_i$, $o_i$, TEL | `observe vol`, `observe output_tokens`, `observe response = now;` |
