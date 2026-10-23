@@ -67,7 +67,8 @@ def run(n, tr, seed, sets):
     resumes = o["resume_wait"]["count"] if o.get("resume_wait") else 0
     return {
         "spm": r["turns"] / (r["end"] - r["warmup"]) * 60,
-        "hit": hit if hit is not None else 0.0,
+        # null: E admitted no token, a hit rate of nothing, not of 0
+        "hit": hit if hit is not None else float("nan"),
         "resumed": resumes / r["turns"] if r["turns"] else 0.0,
     }
 
