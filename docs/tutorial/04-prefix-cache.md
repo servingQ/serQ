@@ -70,7 +70,7 @@ response  44889  0.06336  ±0.00074  0.640  0.24050
 stage   number   util   done    thru    wait  service  iters
 ------  ------  -----  -----  ------  ------  -------  -----
 engine   0.158  0.140  44889  2.4938  0.0074   0.0560      0
-tool     5.985  0.998  35986  1.9992  0.0000   2.9932      0
+sleep    5.985  0.998  35986  1.9992  0.0000   2.9932      0
 
 pool   used   cached  queue  holders    wait  admits  evict(n)  evict(u)  preempt  spill  rej  stuck
 ----  -----  -------  -----  -------  ------  ------  --------  --------  -------  -----  ---  -----
@@ -123,7 +123,7 @@ fit do not contribute completed response samples, so the lower mean alone
 does not establish better performance.
 
 The default run caches 30 195 tokens on average. Most live sessions are in
-the tool stage, so the cache stores context that the engine is not currently
+the `sleep` stage, so the cache stores context that the engine is not currently
 using. Reducing its capacity forces more of that context to be recomputed.
 
 ---

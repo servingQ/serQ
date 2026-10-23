@@ -135,8 +135,8 @@ stmt     := turn ;                           -- draw attributes, submit, wait fo
           | serving                          -- the serving vocabulary, sugar for run
 serving  := transfer [ '[' expr ']' | on STAGE [, STAGE]* ] expr from POOL to POOL ( expr ) ;
                                              -- the KV moves: run link; load; release
-          | tool     [ '[' expr ']' | on STAGE [, STAGE]* ] expr ;
-                                             -- transfer and tool on several stages: expr is ( expr , share = POLICY [, latency = expr ] )
+                                             -- on several stages: expr is ( expr , share = POLICY [, latency = expr ] )
+          | sleep ( expr ) ;                 -- the workload's session only: the client's own time, run on its own delay
 POLICY   := share.maxmin | share.bottleneck   -- std/share: how the flows of a fabric divide it (below, *Stages*)
 ```
 
@@ -253,25 +253,25 @@ The source lowers to existing assignments and conversions, with no new
 execution scope. See [attribute types](api/attributes.md#sizes-values-and-costs).
 
 The statements above are about resources: `hold` a pool, `run` a stage.
-The serving forms name a part of the request's lifecycle that is more than
-one run (a KV transfer) or that is not the engine's (a tool call). They are
-sugar: the parser rewrites each to the kernel statement it stands for, so
-the IR (`serq ir` prints the kernel), the interpreter and the Lean model
-know nothing of them. Prefill and decode are not forms: an engine keeps a
-request's state and runs its prefill and decode itself (*An engine's
-request*). The server, a gateway's `route` and a queue's entry call it,
-`E (input, output);`, a queue's engine only from the queue's own entries,
-and the session reaches it by its turns. On a step engine prefill and
-decode are the mode of a `run`, which only a queue's entry writes, on its
-own engine, for what a request cannot say (*An engine's request*).
+Two forms name what is more than one run, or no resource of the
+deployment's: a KV transfer, and the client's own time between turns
+(`sleep`). They are sugar: the parser rewrites each to the kernel
+statement it stands for, so the IR (`serq ir` prints the kernel), the
+interpreter and the Lean model know nothing of them. Prefill and decode
+are not forms: an engine keeps a request's state and runs its prefill and
+decode itself (*An engine's request*). The server, a gateway's `route` and
+a queue's entry call it, `E (input, output);`, a queue's engine only from
+the queue's own entries, and the session reaches it by its turns. On a step
+engine prefill and decode are the mode of a `run`, which only a queue's
+entry writes, on its own engine, for what a request cannot say (*An
+engine's request*).
 
 | Serving form | Kernel |
 |---|---|
 | `transfer (X) from P to Q (n);` | `run link (cost(link, X)); load Q (cost(Q, n)); release P;` — the KV of `n` tokens moves from the session's lease (or hold) on `P` to its hold on `Q`: the link takes the time, the tokens count as computed at `Q`, and `P` is given back (below, *A KV transfer*) |
-| `tool Z;` | `run tool (cost(tool, Z));` |
-| `tool[j] Z;` | `run tool[j] (cost(tool, Z));` (the index applies to the role's stage array) |
-| `tool on S[j] (Z);` | `run S[j] (cost(S, Z));` |
+| `transfer[j] (X) from P to Q (n);` | `run link[j] (cost(link, X)); …` (the index applies to the role's stage array) |
 | `transfer on egress[i], ingress[j] (X, share = s) from P to Q (n);` | `run egress[i], ingress[j] (cost(egress, ingress, X), share = s); load Q (cost(Q, n)); release P;` — one read that holds the sender's link and the receiver's at once (below, *Stages*); a link's `serve … latency x` puts `latency = x` on the `run` |
+| `sleep (Z);` | `run sleep (cost(sleep, Z));`, on the delay `sleep` the parser supplies (below, *The client's own time*) |
 
 The argument is work in the unit of the stage it runs on: the time the job
 takes alone on a `fifo`, `ps` or `delay` stage (seconds, when the program's
@@ -279,33 +279,44 @@ clock is seconds; a `ps` stage serves it at `φ(present)/present`).
 
 #### Which stage
 
-A form finds its stage among the stages declared above
-it (declarations come first in every program here): the stage whose name
-is the role's, `link` (or `transfer`), `tool`. Exactly one must qualify:
-with none (`stage svc : fifo;` and `transfer (X) from P to Q (n);`, or
-`tool Z;` in the server) or several (`link` and
-`transfer`) the parser stops at the form and says so. `on STAGE` names the
-stage explicitly; with several instances of a role, `choose j …; tool[j] Z;`
-serves an array and `tool on S2 (Z);` stages that are not one.
+A transfer finds its link among the stages declared above it
+(declarations come first in every program here): the stage named `link`
+or `transfer`. Exactly one must qualify: with none (`stage svc : fifo;`
+and `transfer (X) from P to Q (n);`) or both, the parser stops at the form
+and says so. `on STAGE` names the stage explicitly; with several links,
+`choose j …; transfer[j] (X) from P to Q (n);` serves an array and
+`transfer on S2 (X) from P to Q (n);` stages that are not one. The run is
+plain: `transfer` on a step engine is rejected by the linker as `run E
+(cost(E, X))` would be. A linker error inside a form (an unknown name in
+`X`, say) speaks of the kernel statement.
 
-A tool call in the workload needs no declaration. It is the client's time
-between turns, not a resource of the deployment: when no stage `tool` is
-declared above the workload's `tool Z;`, the parser supplies `stage tool :
-delay;` after the declared stages, and the call runs on that delay of the
-workload's own, an infinite server where no call waits for another. The IR
-is the one the declaration gives, and the report shows the stage `tool`.
-A tool server with capacity, which sessions share (a sandbox pool, a
-rate-limited API), is declared in the workload file, which runs on its own
-stages only: `stage sandbox[4] : fifo;` there, and name it,
-`tool on sandbox[j] (Z);`; the workload naming a stage of the deployment's is
-refused ("stage `sandbox` is the deployment file's"). A declared stage
-`tool` of any kind, the deployment's included, is still the one `tool Z;`
-uses; one declared below the workload's `tool Z;` is refused, since the
-call has found no stage above it and the program would have two. A `tool` in the server, or indexed,
-`tool[j] Z;`, finds a declared stage as above. The run is
-plain: `transfer` and `tool` on a step engine are rejected by the linker as
-`run E (cost(E, X))` would be. A linker error inside a form (an unknown name
-in `Z`, say) speaks of the kernel statement.
+#### The client's own time
+
+`sleep (Z);` is the time the client spends between turns, whatever it
+waits for: a person reading and typing, a tool call, the subagents a turn
+delegated to, a trace's gap between a session's requests. It is written in
+the workload's `session` and is no resource of the deployment: the parser
+supplies `stage sleep : delay;` after every stage either file declares,
+and each `sleep` runs on it, `run sleep (cost(sleep, Z));`, an infinite
+server where no client waits for another. What the client waits for is
+the program's to say, in a comment beside the form; the report has one
+row, `sleep`, for every wait of the workload. The stage is the
+workload's ([paired files](#paired-files)), so the deployment reads none
+of it.
+
+The supplied stage is a declaration too, so a declaration named `sleep`
+beside the form, in either file, is refused ("the workload's `sleep` runs
+on a delay of its own, the stage `sleep` the parser supplies, and `sleep`
+is a stage at …"), as is an attribute named `sleep`, as beside any
+declaration. So is `sleep` in the server, a queue's entry, or the
+workload's `init` and `turn`: the server's own time runs on a stage it
+declares, and `init` and `turn` draw attributes, which take no time. A
+wait the program wants a row of its own for, or one with a
+capacity clients share (a sandbox pool, a rate-limited API), is a stage
+the workload file declares and runs with the kernel, `stage sandbox :
+fifo(4);` and `run sandbox (cost(sandbox, Z));`; the workload naming a
+stage of the deployment's is refused ("stage `sandbox` is the deployment
+file's").
 
 #### A KV transfer
 
@@ -355,7 +366,7 @@ workload {
     turn;
     while (more) {
       set K = K + n + o;
-      tool (~exp(Z));
+      sleep (~exp(Z));  // a tool call
       turn;
     }
   }
@@ -430,8 +441,9 @@ compile error ("a workload is a file of its own, given when the program
 runs"), and so is running its server with no workload given. The workload
 file has no `fn main()`: its `use`s, its constants and inputs (`let`, an
 `args.number` among them), its definitions (`def`), the stages it runs on
-itself (`stage user : delay;`), the pools it holds itself (`pool live { cap
-24; }`, no `on`: a cap on live sessions is the client's) and one
+itself (`stage sandbox : fifo(4);`, a tool server its sessions share),
+the pools it holds itself (`pool live { cap 24; }`, no `on`: a cap on
+live sessions is the client's) and one
 `workload { … }`. An `engine`, a `server` or a `device` in it is the
 deployment file's and refused.
 
@@ -441,22 +453,27 @@ let Lambda = 0.3;      // conversations per second
 let p = 0.8;           // the person asks again
 let Z = 20.0;          // reading and typing time (s)
 
-stage user : delay;
-
 workload {
   arrive poisson(Lambda);
   …
   send (input: K + n, output: o);
-  …
+  session {
+    …
+      sleep (~exp(Z));  // the person reads and types
+    …
+  }
 }
 ```
 
 Each file reads its own names: no constant or definition of the workload
 file is read by the deployment, none of the deployment's by the workload, and
-both may declare `p`, each meaning its own. The workload runs on and holds
-its own stages and pools, the server none of them. The one exception is a
-declared stage `tool`: the workload's `tool Z;` uses it whichever file
-declares it ([Which stage](#which-stage)). What the server does
+both may declare `p`, each meaning its own. A word of the language is no
+file's own (`let fifo = 2;` beside the other file's `stage fifo` is one
+word for two things, and is refused), and `sleep` is one: a deployment's
+`let sleep` beside a workload that sleeps is refused. The workload runs on and holds
+its own stages and pools, the server none of them, the delay its `sleep`
+runs on among them ([The client's own time](#the-clients-own-time)). What
+the server does
 to the session's memory it does on what the workload sends (a session's
 last request sends `final`, and the server `if (final) { drop kv; }`,
 `examples/multi-turn/replica.sq`). The inputs of both are the program's
@@ -966,7 +983,7 @@ lease the pool and hold it in no scope, read for each as `preempt by`
 reads them (its attributes, `admission` its place in the pool's order,
 `position` the lease's computed position), ties to the one admitted
 last. The lease's units go back and its `cache` applies; the session is
-not interrupted, wherever it is (at a tool, in another queue, at an
+not interrupted, wherever it is (asleep, in another queue, at an
 engine), and no hold runs again. The grower is a candidate too: when its
 own lease has the least keys, the growth ends it and goes on with nothing
 to grow. What the session does next is the program's: `allocated (m)` is

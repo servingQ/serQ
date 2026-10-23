@@ -72,7 +72,7 @@ attribute used by a hold's `cache` must already be assigned before entering
 the hold, since release, rejection and preemption can end it early.
 
 Workload `init` and `turn` cannot construct or read costs. A client's
-`session` can use its own resources, such as a tool stage or a
+`session` can use its own resources, such as a tool server's stage or a
 conversation-wide reservation, but cannot create or read costs of stages
 run or pools acquired, grown or loaded by the server. Scheduling declarations, gauges and
 claims use ordinary quantities; `observe` can record a cost's numeric value.

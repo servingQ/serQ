@@ -118,9 +118,9 @@ fn an_argument_its_definition_does_not_read_is_still_resolved() {
     // from outside
     let entry = |body: &str| {
         let src = format!(
-            "def one(x) {{ 1 }}\ndef go(n) {{ run (cost(engine, 1)); }}\nqueue engine : prefill \
+            "def one(x) {{ 1 }}\ndef go(n) {{ run (cost(llm, 1)); }}\nqueue llm : prefill \
              {{\n  serve fifo;\n  prefill (prompt) {{ {body} }}\n}}\n\
-             server {{ engine.prefill(3); }}\n"
+             server {{ llm.prefill(3); }}\n"
         );
         common::compile(
             &common::main_source(&src),
@@ -171,15 +171,15 @@ fn an_argument_its_definition_does_not_read_is_still_resolved() {
     // assigns `new`, which the argument would capture)
     let err = run("take(new);", "").unwrap_err();
     assert!(err.contains("which its `turn;` assigns"), "{err}");
-    entry("run (cost(engine, one(prompt)));").unwrap();
+    entry("run (cost(llm, one(prompt)));").unwrap();
     entry("go(prompt);").unwrap();
     for body in [
-        "run (cost(engine, zz));",
-        "run (cost(engine, one(zz)));",
+        "run (cost(llm, zz));",
+        "run (cost(llm, one(zz)));",
         "go(zz);",
     ] {
         let err = entry(body).unwrap_err();
-        assert!(err.contains("`engine.prefill` reads `zz`"), "{err}");
+        assert!(err.contains("`llm.prefill` reads `zz`"), "{err}");
     }
     // in a constant it is resolved and never evaluated, so it need not be a
     // constant; an array size, which the parser folds, knows constants
@@ -234,13 +234,13 @@ fn desugaring_keeps_server_and_header_locations() {
 #[test]
 fn queue_expansion_keeps_argument_and_stage_declaration_locations() {
     let ov = common::horizon(10.0);
-    let src = "queue engine : prefill {\n  serve fifo;\n  prefill (prompt) { run (cost(engine, prompt)); }\n}\nqueue gw : gateway { route {\n  engine.prefill (missing);\n} }\nserver { gw.route(); }\n";
+    let src = "queue llm : prefill {\n  serve fifo;\n  prefill (prompt) { run (cost(llm, prompt)); }\n}\nqueue gw : gateway { route {\n  llm.prefill (missing);\n} }\nserver { gw.route(); }\n";
     let err = common::compile(&common::main_source(src), WORKLOAD, &ov).unwrap_err();
     // Parameter substitution must point to the argument at the call site,
     // rather than the parameter inside the queue's entry.
-    assert!(err.contains("6:19:"), "{err}");
+    assert!(err.contains("6:16:"), "{err}");
     assert!(err.contains("unknown name `missing`"), "{err}");
-    assert!(err.contains("6 |   engine.prefill (missing);"), "{err}");
+    assert!(err.contains("6 |   llm.prefill (missing);"), "{err}");
 
     // the queue's engine is its stage, declared where the queue is named
     let src = "queue llm : prefill {\n  device gpu { kv cap 10; }\n  engine on gpu { tokens cap inf; scheduler { advance running; admit waiting while (running.preempted == 0); } worker { forward (1); } }\n  pool kv on gpu { }\n  prefill (prompt) { hold kv (cost(kv, prompt)) { run lm prefill (cost(llm, prompt)) growing kv; } }\n}\nserver { llm.prefill (1); }\n";

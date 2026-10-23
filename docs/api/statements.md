@@ -96,8 +96,8 @@ turn;
 Loads the next trace turn (if present), then runs the workload's `turn`
 block. The server handles that turn; the next session statement waits
 for its response. Allowed only in a workload's `session`. The client's
-time between turns is [`tool Z;`](serving.md#tool), which runs on a delay
-of the workload's own unless a stage `tool` is declared.
+time between turns is [`sleep (Z);`](workload.md#sleep), which runs on a
+delay of the workload's own.
 
 ## `hold`
 

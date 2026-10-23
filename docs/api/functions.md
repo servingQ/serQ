@@ -104,7 +104,7 @@ stages together, name every affected family: `cost(kv, reqs, n)` or
 A cost of one resource cannot be used as another's or passed to `cost`
 again. See [attribute types](attributes.md#sizes-values-and-costs).
 
-Serving forms (`prefill`, `decode`, `tool`, `transfer`) perform this
+Serving forms (`transfer`, `sleep`) perform this
 conversion themselves and accept ordinary quantities. Pass an already
 converted cost to the primitive `run`, `hold`, `grow` or `load` instead.
 A stage's declarative `cost expr` specifies its iteration duration and is

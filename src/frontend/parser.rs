@@ -44,8 +44,8 @@
 //!           | 'loop' block | 'end' ';'
 //!           | 'choose' IDENT 'in' expr 'by' '(' expr (',' expr)* ')' ';'
 //!           | serving
-//! serving  := 'tool' ('[' expr ']' | 'on' ref)? expr ';'
-//!           | 'transfer' ('[' expr ']' | 'on' ref)? expr 'from' ref 'to' ref '(' expr ')' ';'
+//! serving  := 'transfer' ('[' expr ']' | 'on' ref)? expr 'from' ref 'to' ref '(' expr ')' ';'
+//!           | 'sleep' '(' expr ')' ';'          -- the workload's session: the client's own time
 //! ref      := IDENT ('[' expr ']')?
 //! atom     := NUM | '(' expr ')' | IDENT | IDENT '(' arg (',' arg)* ')' | over
 //! over     := ('max' | 'min' | 'sum') IDENT 'in' (NUM | IDENT | '(' expr ')') '(' expr ')'
@@ -54,10 +54,14 @@
 //! The serving forms (`serving`) are sugar: they are rewritten to `hold`
 //! and `run` here, so the AST, the IR and the interpreter know only the
 //! kernel. A role finds its stage among the stages declared above the
-//! statement: the stage of the role's name (`link` or `transfer`, `tool`);
-//! `on STAGE` names it explicitly. The workload's `tool` with none declared
-//! runs on a delay the parser supplies, named `tool`. The run is plain. Prefill and decode are
+//! statement: the stage of the role's name (`link` or `transfer`);
+//! `on STAGE` names it explicitly. The run is plain. Prefill and decode are
 //! not roles: they are the mode of a `run` on a step engine.
+//!
+//! `sleep (Z);` is sugar too: the client's own time between turns (a
+//! person, a tool call, the subagents, a trace's gap), a plain `run` on a
+//! delay the parser supplies after every declared stage, named `sleep`,
+//! which every `sleep` of the workload shares (`docs/design/client-sleep.md`).
 //!
 //! A workload's optional session describes complete turns and their continuation.
 //! Each source `turn;` becomes an attribute draw followed by the one server's
@@ -217,10 +221,10 @@ struct Parser {
     entry_gateway: bool,
     /// The queues whose relation gives the wait before each copy they post.
     posters: Vec<String>,
-    /// The token of the workload's first `tool` that found no stage `tool`
-    /// declared above it: it runs on the workload's own delay, which the
-    /// parser supplies after the declared stages.
-    implicit_tool: Option<usize>,
+    /// The token of the workload's first `sleep`: every `sleep` runs on
+    /// the workload's own delay, which the parser supplies after the
+    /// declared stages.
+    slept: Option<usize>,
     /// Parsing the `serve` of a link queue, which may take a `latency`.
     latency_ok: bool,
     /// `Q.x` read as an expression, with the position: what an entry of `Q` sets or a pool of `Q`.
@@ -537,6 +541,7 @@ pub const KEYWORDS: [&str; 121] = [
     "session",
     "set",
     "shrink",
+    "sleep",
     "some",
     "spill",
     "stage",
@@ -547,7 +552,6 @@ pub const KEYWORDS: [&str; 121] = [
     "tail",
     "taking",
     "to",
-    "tool",
     "trace",
     "transfer",
     "turn",
@@ -583,40 +587,18 @@ enum Side {
     Server,
 }
 
-/// A serving form: a statement that desugars to `run` on the stage that
-/// plays the role. Prefill and decode are not among them: on a step engine
-/// they are the run's mode, written `run E prefill (…)` in its own queue's
-/// entry.
-#[derive(Clone, Copy, PartialEq)]
-enum Role {
-    Transfer,
-    Tool,
-}
+/// The serving form, the KV transfer: a statement that desugars to `run`
+/// on the stage that plays it, then `load` and `release`. Prefill and
+/// decode are not forms: on a step engine they are the run's mode, written
+/// `run E prefill (…)` in its own queue's entry.
+const TRANSFER: &str = "transfer";
 
-impl Role {
-    fn of(kw: &str) -> Option<Role> {
-        match kw {
-            "transfer" => Some(Role::Transfer),
-            "tool" => Some(Role::Tool),
-            _ => None,
-        }
-    }
+/// The stage names that play `transfer` when it names none.
+const TRANSFER_STAGES: [&str; 2] = ["link", "transfer"];
 
-    fn keyword(self) -> &'static str {
-        match self {
-            Role::Transfer => "transfer",
-            Role::Tool => "tool",
-        }
-    }
-
-    /// The stage names that play the role by default.
-    fn names(self) -> &'static [&'static str] {
-        match self {
-            Role::Transfer => &["link", "transfer"],
-            Role::Tool => &["tool"],
-        }
-    }
-}
+/// The client's own time, `sleep (Z);`, and the delay stage of the
+/// workload's that the parser supplies for it.
+pub(crate) const SLEEP: &str = "sleep";
 
 pub fn parse(src: &str) -> PResult<Program> {
     parse_with(src, &[], &[])
@@ -695,7 +677,7 @@ pub fn parse_paired(
     let mut prog = parser
         .program()
         .map_err(|e| crate::frontend::paired::parse_error(p, &e))?;
-    prog.paired = Some(spliced.stages);
+    prog.paired = Some(parser.workload_stages(spliced.stages));
     if let Some(name) = parser.def_overrides.iter().find(|d| !d.2).map(|d| &d.0) {
         return Err(format!(
             "unknown `def` override `{}`",
@@ -904,7 +886,7 @@ pub(crate) fn retired(word: &str) -> Option<&'static str> {
         .map(|(_, now)| *now)
 }
 
-const RETIRED: [(&str, &str); 7] = [
+const RETIRED: [(&str, &str); 8] = [
     (
         "enter",
         "`enter` is now `hold`: `hold P (u) … { … } cache (ℓ);`",
@@ -932,6 +914,13 @@ const RETIRED: [(&str, &str); 7] = [
         "mark",
         "`mark NAME;` is gone: write `set NAME = now;` in its place, read by the caller as \
          `Q.NAME` as before, or read the engine request's records (`D.admitted`, `D.load_done`)",
+    ),
+    (
+        "tool",
+        "`tool Z;` is gone: the client's own time between turns is the workload's `sleep (Z);`, \
+         on a delay of its own the parser supplies, whatever it waits for (a tool call, a \
+         person, a trace's gap); a stage the program declares (a tool server with a capacity) \
+         runs with `run S (cost(S, Z));`",
     ),
 ];
 
@@ -1515,7 +1504,7 @@ impl Parser {
             entry_from: None,
             entry_gateway: false,
             posters: vec![],
-            implicit_tool: None,
+            slept: None,
             latency_ok: false,
             dotted_reads: vec![],
             indexed_dotted: vec![],
@@ -1638,6 +1627,16 @@ impl Parser {
             name: self.ident()?,
             index: None,
         })
+    }
+
+    /// The stages and pools of a pair's workload file, as it declares
+    /// them, and the delay the parser supplies for its `sleep`, which is
+    /// the workload's own as well.
+    fn workload_stages(&self, mut declared: Vec<String>) -> Vec<String> {
+        if self.slept.is_some() {
+            declared.push(SLEEP.into());
+        }
+        declared
     }
 
     fn ident(&mut self) -> PResult<String> {
@@ -2030,46 +2029,48 @@ impl Parser {
                 "`args` names the imported std/args module; give the declaration another name",
             );
         }
-        // the workload's tool call is the client's time: a delay the
-        // workload owns, after every stage the deployment declares
-        if let Some(at) = self.implicit_tool {
+        // the client's own time is a delay the workload owns, after every
+        // stage either file declares, whatever the client waits for
+        if let Some(at) = self.slept {
             // the supplied stage is a declaration too: its name is no
-            // other's (#483), and a stage `tool` below the call is a second
+            // other's (#483), and a declared stage `sleep`, above the form
+            // or below it, would be a second stage of the one name
             let supplied = Declaration {
                 at,
-                name: "tool".into(),
+                name: SLEEP.into(),
                 kind: Kind::Stage,
                 scope: Scope::Program,
             };
             if let Some(e) = self
                 .declared
                 .iter()
-                .find(|e| e.name == "tool" && (e.kind == Kind::Stage || e.meets(&supplied)))
+                .find(|e| e.name == SLEEP && (e.kind == Kind::Stage || e.meets(&supplied)))
             {
                 let t = &self.toks[e.at];
                 let place = format!("{}:{}", t.line, t.col);
-                let (is, help) = if e.kind == Kind::Stage {
-                    (
-                        "a stage declared below it".to_string(),
-                        "declare `stage tool` above the workload to use it, or remove that \
-                         declaration"
-                            .to_string(),
-                    )
+                let help = if e.kind == Kind::Stage {
+                    "name that stage otherwise: a stage the program declares runs with \
+                     `run S (cost(S, Z));`"
                 } else {
-                    (e.described(), e.help(&supplied))
+                    "name that declaration otherwise"
                 };
                 return self.err_at(
                     at,
                     format!(
-                        "the workload's `tool` runs on a stage `tool` the parser supplies, and \
-                         `tool` is {is} at {place}\nhelp: {help}"
+                        "the workload's `sleep` runs on a delay of its own, the stage `sleep` the \
+                         parser supplies, and `sleep` is {} at {place}: one name would be two \
+                         things\nhelp: {help}",
+                        e.described()
                     ),
                 );
             }
-            self.stages.push("tool".into());
+            // and an attribute of its name is refused with every other
+            // declaration's (`check_declared_names`, #470)
+            self.declared.push(supplied);
+            self.stages.push(SLEEP.into());
             prog.stages.push(StageDecl {
                 span: Some(self.span_at(at)),
-                name: "tool".into(),
+                name: SLEEP.into(),
                 count: 1,
                 array: false,
                 kind: StageKind::Delay,
@@ -2962,7 +2963,7 @@ impl Parser {
     }
 
     /// At `(`: whether a `,` comes before its `)`, at its own depth. A
-    /// one-stage `transfer on` or `tool on` reads its work as an expression,
+    /// one-stage `transfer on` reads its work as an expression,
     /// which would stop at the comma of a `share` it may not have.
     fn paren_holds_comma(&self) -> bool {
         if *self.peek() != Tok::LParen {
@@ -3155,7 +3156,14 @@ impl Parser {
             } else if let Some(place) = set_at(&d.name) {
                 (
                     format!("an attribute the program sets at {place}"),
-                    "rename the declaration or the attribute",
+                    // the stage `sleep (…)` runs on is the parser's: only the
+                    // attribute can move
+                    if self.slept == Some(d.at) {
+                        "name the attribute otherwise: the workload's `sleep` runs on the stage \
+                         `sleep` the parser supplies"
+                    } else {
+                        "rename the declaration or the attribute"
+                    },
                 )
             } else {
                 continue;
@@ -4121,10 +4129,21 @@ impl Parser {
     fn queue(&mut self, prog: &mut Program, at: usize) -> PResult<()> {
         let span = Some(self.span());
         let name = self.ident()?;
-        if Role::of(&name).is_some() || queue::RoleSig::named(&name).is_some() {
+        if queue::RoleSig::named(&name).is_some() {
             return self.err_at(
                 at + 1,
                 format!("`{name}` is a serving word; a queue needs another name"),
+            );
+        }
+        // a queue is called by its name (`Q.verb (…);`) and names its stage
+        // and its engine: a word of the language there reads as the word
+        // (`run.prefill (…);` as a `run`, `sleep.verb ();` as a `sleep`)
+        if KEYWORDS.contains(&name.as_str()) {
+            return self.err_at(
+                at + 1,
+                Code::ReservedWord.message(format_args!(
+                    "`{name}` is a word of the language: a queue needs another name"
+                )),
             );
         }
         if self.queues.iter().any(|q| q.name == name) {
@@ -4261,15 +4280,6 @@ impl Parser {
                     return self.err_at(
                         e_at,
                         format!("queue `{name}` has one stage: its engine or its `serve`"),
-                    );
-                }
-                if KEYWORDS.contains(&name.as_str()) {
-                    return self.err_at(
-                        at + 1,
-                        Code::ReservedWord.message(format_args!(
-                            "`{name}` is a word of the language, and a queue's engine is named \
-                             after the queue: name the queue for what it models"
-                        )),
                     );
                 }
                 let d_at = self.pos;
@@ -5109,10 +5119,8 @@ impl Parser {
             }
             return self.expand(i);
         }
-        if let Tok::Ident(s) = self.peek()
-            && let Some(role) = Role::of(s)
-        {
-            out.extend(self.serving(role)?);
+        if self.is_kw(TRANSFER) {
+            out.extend(self.serving()?);
             return Ok(());
         }
         if *self.peek() == Tok::Ident("kvt".into()) && *self.peek_at(1) == Tok::Dot {
@@ -5596,6 +5604,50 @@ impl Parser {
                     poster: None,
                 })
             }
+            // `sleep (Z);`: the client's own time between turns, whatever it
+            // waits for, on the workload's delay the parser supplies
+            SLEEP => {
+                let at = self.pos;
+                let span = Some(self.span());
+                if self.side != Side::WorkloadSession {
+                    let why = match self.wl_block {
+                        Some(block @ ("init" | "turn")) => format!(
+                            "`{block}` draws attributes, which take no time; the time between \
+                             turns is the `session`'s"
+                        ),
+                        _ => "the server's time runs on a stage it declares: \
+                              `run S (cost(S, Z));`"
+                            .to_string(),
+                    };
+                    return self.err(format!(
+                        "`sleep (…)` is the client's own time and runs only in the workload's \
+                         `session`, on a delay the workload owns; {why}"
+                    ));
+                }
+                self.advance();
+                // `tool Z;` took its time bare; `sleep` takes it as a call does
+                if *self.peek() != Tok::LParen {
+                    return self.err("`sleep` takes the client's time in parentheses: `sleep (Z);`");
+                }
+                let e = self.paren_expr()?;
+                self.expect(&Tok::Semi)?;
+                self.slept.get_or_insert(at);
+                let stage = Ref {
+                    span,
+                    name: SLEEP.into(),
+                    index: None,
+                };
+                Ok(Stmt::Run {
+                    work: Expr::cost(std::slice::from_ref(&stage), e),
+                    stage,
+                    mode: RunMode::Plain,
+                    growing: None,
+                    also: vec![],
+                    share: None,
+                    latency: None,
+                    poster: None,
+                })
+            }
             "if" => {
                 self.advance();
                 self.if_rest()
@@ -5668,13 +5720,22 @@ impl Parser {
                 }
                 Ok(Stmt::Choose { var, count, key })
             }
+            // a retired statement says what replaced it, however it goes on
+            // (`tool[j] (Z);`, `tool on S (Z);`), unless the program named a
+            // queue or an engine so
+            w if retired(w).is_some()
+                && !self.queues.iter().any(|q| q.name == w)
+                && !self.engines.iter().any(|e| e.name == w) =>
+            {
+                self.err(retired(w).expect("matched"))
+            }
             // `Q.verb (…);`, `Q[i].verb (…) from S[k] to p (m);`: a queue's entry
             _ if matches!(self.peek_at(1), Tok::Dot | Tok::LBracket) => self.call(),
             // `E (a, …);`: engine `E`'s request
             _ if *self.peek_at(1) == Tok::LParen && self.engines.iter().any(|e| e.name == kw) => {
                 self.engine_call()
             }
-            // `transfer` and `tool` are parsed by `stmt_into`, since one
+            // the serving form `transfer` is parsed by `stmt_into`, since it
             // stands for several statements, and it refuses `prefill` and
             // `decode`
             other => match retired(other) {
@@ -5963,18 +6024,17 @@ impl Parser {
         Ok(())
     }
 
-    /// `tool Z;`, `transfer[j] X from P to Q (n);`, `tool on S (Z);`: a
-    /// `run` on the stage that plays the role.
-    fn serving(&mut self, role: Role) -> PResult<Vec<Stmt>> {
+    /// `transfer[j] X from P to Q (n);`, `transfer on S X from P to Q (n);`:
+    /// a `run` on the stage that plays it, and the KV's move.
+    fn serving(&mut self) -> PResult<Vec<Stmt>> {
         let at = self.pos;
         let span = Some(self.span());
         self.advance();
-        let kw = role.keyword();
+        let kw = TRANSFER;
         let mut also = vec![];
         let mut on = false;
         // a read the queue's relation says: over the source's NIC and its own
-        let pulled = role == Role::Transfer
-            && *self.peek() == Tok::LParen
+        let pulled = *self.peek() == Tok::LParen
             && self.entry_from.is_some()
             && self.in_queue.is_some_and(|qi| self.queues[qi].nic);
         let stage = if pulled {
@@ -6001,19 +6061,7 @@ impl Parser {
             } else {
                 None
             };
-            // the workload's unindexed `tool` with none declared runs on a
-            // delay the parser supplies: the client's time between turns is
-            // no resource of the deployment
-            let name = if role == Role::Tool
-                && index.is_none()
-                && self.side == Side::WorkloadSession
-                && !self.stages.iter().any(|n| n == "tool")
-            {
-                self.implicit_tool.get_or_insert(at);
-                "tool".to_string()
-            } else {
-                self.role_stage(role, at)?
-            };
+            let name = self.role_stage(at)?;
             Ref { span, name, index }
         };
         let (raw_work, share, written) = if also.is_empty() && !self.paren_holds_comma() {
@@ -6044,7 +6092,7 @@ impl Parser {
         // the session's hold on `P` to its hold on `Q` over the link. Sugar
         // for `run link (w); load Q (n); release P;` - the link takes the
         // time, the tokens count as computed at `Q`, and `P` is free.
-        if role == Role::Transfer && self.eat_kw("from") {
+        if self.eat_kw("from") {
             if growing.is_some() {
                 return self.err_at(
                     at,
@@ -6117,31 +6165,18 @@ impl Parser {
         }
         // A KV transfer leaves one hold and enters another; a link that
         // only takes time is the kernel's `run`, and says so.
-        if role == Role::Transfer {
-            let at_stage = if stage.index.is_some() {
-                format!("{}[…]", stage.name)
-            } else {
-                stage.name.clone()
-            };
-            return self.err_at(
-                at,
-                format!(
-                    "`transfer` without `from P to Q (n)`: a KV transfer leaves the lease (or hold) on P and enters the hold on Q\n\
-                     help: write `transfer (w) from P to Q (n);`, or `run {at_stage} (cost({}, w));` for a link that only takes time", stage.name
-                ),
-            );
-        }
-        self.expect(&Tok::Semi)?;
-        Ok(vec![Stmt::Run {
-            stage,
-            mode: RunMode::Plain,
-            work,
-            growing,
-            also,
-            share,
-            latency: written,
-            poster: None,
-        }])
+        let at_stage = if stage.index.is_some() {
+            format!("{}[…]", stage.name)
+        } else {
+            stage.name.clone()
+        };
+        self.err_at(
+            at,
+            format!(
+                "`transfer` without `from P to Q (n)`: a KV transfer leaves the lease (or hold) on P and enters the hold on Q\n\
+                 help: write `transfer (w) from P to Q (n);`, or `run {at_stage} (cost({}, w));` for a link that only takes time", stage.name
+            ),
+        )
     }
 
     /// A stage named after `on`, which must be declared above.
@@ -6176,21 +6211,20 @@ impl Parser {
         Ok(also)
     }
 
-    /// The stage a role names when none is given: the stage of the role's
-    /// name; exactly one.
-    fn role_stage(&self, role: Role, at: usize) -> PResult<String> {
-        let kw = role.keyword();
+    /// The stage `transfer` runs on when it names none: the one stage
+    /// declared above of a name that plays it (`TRANSFER_STAGES`).
+    fn role_stage(&self, at: usize) -> PResult<String> {
+        let kw = TRANSFER;
         let found: Vec<&str> = self
             .stages
             .iter()
-            .filter(|n| role.names().contains(&n.as_str()))
+            .filter(|n| TRANSFER_STAGES.contains(&n.as_str()))
             .map(String::as_str)
             .collect();
         match found.len() {
             1 => Ok(found[0].to_string()),
             0 => {
-                let names = role
-                    .names()
+                let names = TRANSFER_STAGES
                     .iter()
                     .map(|n| format!("`{n}`"))
                     .collect::<Vec<_>>()
@@ -6577,7 +6611,7 @@ mod tests {
             e.msg = crate::frontend::paired::written(&e.msg);
             e
         })?;
-        prog.paired = Some(spliced.stages);
+        prog.paired = Some(parser.workload_stages(spliced.stages));
         Ok(prog)
     }
 
@@ -6680,8 +6714,8 @@ mod tests {
           hold kvD (cost(kvD, K)) {{ transfer X from kv to kvD (K); }}
         }}"
                 ),
-                "stage tool : delay; workload { session { turn;
-            if (~bernoulli(p)) { tool Z;  } else { end; }
+                "workload { session { turn;
+            if (~bernoulli(p)) { sleep (Z);  } else { end; }
 
         } }",
             ),
@@ -6691,8 +6725,10 @@ mod tests {
           hold kvD (cost(kvD, K)) {{ run link (cost(link, X)); load kvD (cost(kvD, K)); release kv; }}
         }}"
                 ),
-                "stage tool : delay; workload { session { turn;
-            if (~bernoulli(p)) { run tool (cost(tool, Z));  } else { end; }
+                // the delay `sleep` supplies, declared where it goes: after
+                // every stage of either file
+                "stage sleep : delay; workload { session { turn;
+            if (~bernoulli(p)) { run sleep (cost(sleep, Z));  } else { end; }
 
         } }",
             ),
@@ -6729,21 +6765,33 @@ mod tests {
     fn serving_forms_name_their_stage_explicitly() {
         // the role's stage array, indexed
         const WL: &str = "workload { session { turn; \n} }";
+        const AB: &str = "pool a { cap 1; } pool b { cap 1; }";
         same(
             (
-                "stage tool[2] : fifo;\nserver { choose j in 2 by (work(tool[j])); tool[j] S;\n}",
+                &format!(
+                    "{AB} stage link[2] : fifo;\nserver {{ choose j in 2 by (work(link[j])); hold b (cost(b, 1)) {{ hold a (cost(a, 1)) {{ transfer[j] S from a to b (1); }} }}\n}}"
+                ),
                 WL,
             ),
             (
-                "stage tool[2] : fifo;\nserver { choose j in 2 by (work(tool[j])); run tool[j] (cost(tool, S));\n}",
+                &format!(
+                    "{AB} stage link[2] : fifo;\nserver {{ choose j in 2 by (work(link[j])); hold b (cost(b, 1)) {{ hold a (cost(a, 1)) {{ run link[j] (cost(link, S)); load b (cost(b, 1)); release a; }} }}\n}}"
+                ),
                 WL,
             ),
         );
         // any stage
         same(
-            ("stage rep[2] : fifo;\nserver { tool on rep[1] S;\n}", WL),
             (
-                "stage rep[2] : fifo;\nserver { run rep[1] (cost(rep, S));\n}",
+                &format!(
+                    "{AB} stage rep[2] : fifo;\nserver {{ hold b (cost(b, 1)) {{ hold a (cost(a, 1)) {{ transfer on rep[1] S from a to b (1); }} }}\n}}"
+                ),
+                WL,
+            ),
+            (
+                &format!(
+                    "{AB} stage rep[2] : fifo;\nserver {{ hold b (cost(b, 1)) {{ hold a (cost(a, 1)) {{ run rep[1] (cost(rep, S)); load b (cost(b, 1)); release a; }} }}\n}}"
+                ),
                 WL,
             ),
         );
@@ -6833,16 +6881,17 @@ mod tests {
         // a serving form in a def finds its stage where the def is used
         same(
             (
-                "stage T[2] : fifo; def put(s, n) { tool on s (n); }
-        server { choose j in 2 by (work(T[j])); put(T[j], 3);
+                "pool a { cap 1; } pool b { cap 1; } stage T[2] : fifo;
+        def put(s, n) { transfer on s (n) from a to b (1); }
+        server { choose j in 2 by (work(T[j])); hold b (cost(b, 1)) { hold a (cost(a, 1)) { put(T[j], 3); } }
         }",
                 WL,
             ),
             (
-                "stage T[2] : fifo;
+                "pool a { cap 1; } pool b { cap 1; } stage T[2] : fifo;
         server {
           choose j in 2 by (work(T[j]));
-          run T[j] (cost(T, 3));
+          hold b (cost(b, 1)) { hold a (cost(a, 1)) { run T[j] (cost(T, 3)); load b (cost(b, 1)); release a; } }
         }",
                 WL,
             ),
@@ -7153,9 +7202,9 @@ mod tests {
 
     #[test]
     fn serving_forms_need_exactly_one_stage() {
-        let e = pair("stage svc : fifo; \n\nserver { tool S;\n}", TURN).unwrap_err();
+        let e = pair("stage svc : fifo; \n\nserver { transfer X;\n}", TURN).unwrap_err();
         assert!(
-            e.msg.contains("no stage declared above plays `tool`"),
+            e.msg.contains("no stage declared above plays `transfer`"),
             "{e}"
         );
         assert_eq!((e.line, e.col), (3, 10));
@@ -7174,7 +7223,7 @@ mod tests {
             e.msg.contains("no stage declared above plays `transfer`"),
             "{e}"
         );
-        let e = pair("stage tool : delay;\nserver { tool on other Z;\n}", TURN).unwrap_err();
+        let e = pair("stage link : fifo;\nserver { transfer on other X;\n}", TURN).unwrap_err();
         assert!(e.msg.contains("no stage `other` is declared above"), "{e}");
     }
 
@@ -7212,13 +7261,13 @@ mod tests {
         }}"
                 ),
                 &format!(
-                    "stage tool : delay; workload {{ {CLIENT}
+                    "workload {{ {CLIENT}
           session {{
 
             loop {{
               turn;
               set K = prompt + o;
-              if (more) {{ tool 3;  }} else {{ end; }}
+              if (more) {{ sleep (3);  }} else {{ end; }}
             }}
           }}
         }}"
@@ -7233,11 +7282,11 @@ mod tests {
         }}"
                 ),
                 &format!(
-                    "stage tool : delay; workload {{ {CLIENT}
+                    "workload {{ {CLIENT}
           session {{
 
             loop {{ turn;
-              if (more) {{ tool 3;  }} else {{ end; }}
+              if (more) {{ sleep (3);  }} else {{ end; }}
             }}
 
           }}

@@ -103,8 +103,8 @@ report's `arrivals`. The keys are short because the events are many.
 A request to an engine is its session's `wait` and `admit` at the engine's
 pools, then a `run` in `prefill` mode and, once its prefill is done, one in
 `decode` mode on the same stage; a preemption between them is a `preempt`,
-a `wait` and an `admit` again. A session at a `tool` runs on the tool's
-stage.
+a `wait` and an `admit` again. A session's `sleep` is a `run` on the
+stage `sleep`.
 
 A request is a call of an engine (`E (input, output)`, vLLM's `Request`):
 the session or leg `s` that called it, its call number `r` and the engine

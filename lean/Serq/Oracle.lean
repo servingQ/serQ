@@ -32,7 +32,7 @@ namespace Oracle
 
 open Exec
 
-/-- The vLLM request program (serQ `examples/oracle/vllm_request.sq`), translated from its IR. Attributes: 2 = turn_no, 3 = new, 4 = out, 5 = think, 6 = more, 7 = forced, 8 = computed, 9 = prompt, 10 = o, 11 = arrive, 12 = vllm.admitted, 13 = vllm.first, 14 = vllm.reused, 15 = vllm.prefill, 16 = vllm.input, 17 = vllm.output, 18 = vllm.kept, 19 = vllm.known, 20 = vllm.again. Observations: 0 = first, 1 = done, 2 = vllm.reused, 3 = vllm.prefill. Pools: 0 = reqs, 1 = kv. Stages: 0 = vllm, 1 = gate. -/
+/-- The vLLM request program (serQ `examples/oracle/vllm_request.sq`), translated from its IR. Attributes: 2 = turn_no, 3 = new, 4 = out, 5 = think, 6 = more, 7 = forced, 8 = computed, 9 = prompt, 10 = o, 11 = arrive, 12 = vllm.admitted, 13 = vllm.first, 14 = vllm.reused, 15 = vllm.prefill, 16 = vllm.input, 17 = vllm.output, 18 = vllm.kept, 19 = vllm.known, 20 = vllm.again. Observations: 0 = first, 1 = done, 2 = vllm.reused, 3 = vllm.prefill. Pools: 0 = reqs, 1 = kv. Stages: 0 = vllm, 1 = sleep. -/
 def vllmRequest : Prog := [route|
   run 1 (x.attr 11);
   turn;
@@ -126,7 +126,7 @@ theorem vllm_seqcap :
 
 /-! ### A multi-turn scenario with a prefix cache -/
 
-/-- The vLLM replay program (serQ `examples/replay/vllm_replay.sq`) on a unit step clock, translated from its IR. Attributes: 2 = turn_no, 3 = new, 4 = out, 5 = think, 6 = more, 7 = forced, 8 = computed, 9 = prev, 10 = prevout, 11 = t0, 12 = prompt, 13 = hitmax, 14 = vllm.admitted, 15 = vllm.first, 16 = vllm.reused, 17 = vllm.prefill, 18 = vllm.input, 19 = vllm.output, 20 = vllm.kept, 21 = vllm.known, 22 = vllm.again. Observations: 0 = prefix, 1 = sent, 2 = ttft, 3 = response, 4 = vllm.reused, 5 = vllm.prefill. Pools: 0 = kv, 1 = reqs. Stages: 0 = vllm, 1 = front, 2 = gate, 3 = tool. -/
+/-- The vLLM replay program (serQ `examples/replay/vllm_replay.sq`) on a unit step clock, translated from its IR. Attributes: 2 = turn_no, 3 = new, 4 = out, 5 = think, 6 = more, 7 = forced, 8 = computed, 9 = prev, 10 = prevout, 11 = t0, 12 = prompt, 13 = hitmax, 14 = vllm.admitted, 15 = vllm.first, 16 = vllm.reused, 17 = vllm.prefill, 18 = vllm.input, 19 = vllm.output, 20 = vllm.kept, 21 = vllm.known, 22 = vllm.again. Observations: 0 = prefix, 1 = sent, 2 = ttft, 3 = response, 4 = vllm.reused, 5 = vllm.prefill. Pools: 0 = kv, 1 = reqs. Stages: 0 = vllm, 1 = front, 2 = sleep. -/
 def vllmTurn : Prog := [route|
   run 2 (x.serial * 3);
   set 9 = 0;
@@ -163,7 +163,7 @@ def vllmTurn : Prog := [route|
   while (x.attr 6) {
     set 9 = x.attr 3;
     set 10 = x.attr 4;
-    run 3 (x.attr 5);
+    run 2 (x.attr 5);
     turn;
     set 11 = x.now;
     set 12 = x.attr 3;

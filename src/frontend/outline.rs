@@ -10,6 +10,7 @@
 use serde::Serialize;
 
 use crate::frontend::lexer::{Tok, Token};
+use crate::frontend::parser;
 
 /// A half-open byte range `[start, end)` of the source, written `[start, end]`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -39,7 +40,7 @@ pub struct Use {
 }
 
 /// A declaration known by its keyword and name: `let B = 8192;`, `stage
-/// tool : delay;`, `engine vllm on gpu { … }`, `pool kv on gpu { … }`,
+/// link : fifo;`, `engine vllm on gpu { … }`, `pool kv on gpu { … }`,
 /// `device gpu { … }`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Decl {
@@ -162,10 +163,10 @@ pub struct Choose {
 }
 
 /// A statement of the workload: `arrive poisson(L);`, `hidden o;`, and in
-/// its `init`, `turn` and `session`, `set n = …;`, `tool (…);`, `turn;`.
+/// its `init`, `turn` and `session`, `set n = …;`, `sleep (…);`, `turn;`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct WorkloadItem {
-    /// Its first word: `arrive`, `hidden`, `set`, `tool`, `turn`, …
+    /// Its first word: `arrive`, `hidden`, `set`, `sleep`, `turn`, …
     pub kind: String,
     /// A `set`'s or a `hidden`'s name; a `hidden` of two names is two items.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -173,7 +174,7 @@ pub struct WorkloadItem {
     /// Where it is written: `workload` at its top, or `init`, `turn`, `session`.
     pub block: String,
     /// What it says: an `arrive`'s process (`poisson(L)`), a `set`'s
-    /// right-hand side, what a `tool` or `send` takes between its parentheses.
+    /// right-hand side, what a `sleep` or `send` takes between its parentheses.
     pub value: Option<Range>,
     /// The statement, to its `;`.
     pub range: Range,
@@ -611,7 +612,7 @@ impl Recorder {
                 vec![],
                 (at < last - 1).then(|| self.range(toks, at + 1, last - 1)),
             ),
-            "tool" | "send" => (vec![], after(Tok::LParen, true)),
+            k if k == parser::SLEEP || k == "send" => (vec![], after(Tok::LParen, true)),
             _ => (vec![], None),
         };
         let item = |name: Option<String>| WorkloadItem {

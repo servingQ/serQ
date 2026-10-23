@@ -6,8 +6,6 @@ use "std/args";
 let spacing = args.number("spacing", 3.5);     // seconds between session arrivals
 let N = args.number("N", 333);           // sessions in the trace
 
-stage gate : delay;
-
 // The client: the trace's sessions, sent `spacing` apart; a turn is sent
 // `think` seconds after the previous one completes.
 workload {
@@ -15,14 +13,14 @@ workload {
   trace "../replay/data/short_base.csv" ordered;
   send (new, forced, prev, prevout, out);
   session {
-    run gate (cost(gate, serial * spacing));
+    sleep (serial * spacing);  // the session's first turn, `spacing` after the previous session's
     set prev = 0;
     set prevout = 0;
     turn;
     while (more) {
       set prev = new;
       set prevout = out;
-      tool think;
+      sleep (think);  // the trace's gap
       turn;
     }
   }

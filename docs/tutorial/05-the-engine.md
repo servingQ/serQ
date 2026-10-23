@@ -193,7 +193,7 @@ running  44889  0.0635  0.0503  0.2571   0.158
 stage  number   util   done    thru    wait  service    iters
 -----  ------  -----  -----  ------  ------  -------  -------
 llm     0.158  0.141  89549  4.9749  0.0000   0.0318  9261013
-tool    5.985  0.998  35986  1.9992  0.0000   2.9932        0
+sleep   5.985  0.998  35986  1.9992  0.0000   2.9932        0
 
 step  prefill only  decode only  mixed   idle  decodes  decode batch  decode step   itl p50   itl p99
 ----  ------------  -----------  -----  -----  -------  ------------  -----------  --------  --------

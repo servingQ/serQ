@@ -22,7 +22,7 @@ workload {
     turn;
     while (more) {
       set K = K + n + reply.produced;
-      tool (~exp(Z));
+      sleep (~exp(Z));  // a tool call
       turn;
     }
   }

@@ -12,7 +12,7 @@ mod common;
 /// Two programs lease 4 of 10 units. Serial 1 comes back at t = 2 and
 /// grows its lease by 4: 12 of 10, let through until the tick at t = 5,
 /// which takes serial 0's (the least key). Serial 1 gives its lease back
-/// at t = 7. Serial 0 is at its tool until t = 11.
+/// at t = 7. Serial 0 sleeps until t = 11.
 fn two(preempt: &str) -> String {
     format!(
         r#"
@@ -36,10 +36,10 @@ fn two(preempt: &str) -> String {
     )
 }
 
-/// The workload of `two`: serial 0 at its tool for 10 s, serial 1 for 1.
+/// The workload of `two`: serial 0 sleeps for 10 s, serial 1 for 1.
 const TWO: &str = "workload { arrive batch(2);
   send (turn_no);
-  session { turn; tool (serial == 0 ? 10 : 1); turn; tool 4; turn; }
+  session { turn; sleep (serial == 0 ? 10 : 1); turn; sleep (4); turn; }
 }";
 
 fn run(preempt: &str) -> serq::Report {
@@ -152,7 +152,7 @@ fn a_lease_set_aside_lets_go_of_the_prefix_it_read() {
 "#;
     let workload = "workload { arrive batch(2);
       send (turn_no);
-      session { turn; tool 1; turn; tool (serial == 0 ? 10 : 1); turn; tool 4; turn; }
+      session { turn; sleep (1); turn; sleep (serial == 0 ? 10 : 1); turn; sleep (4); turn; }
     }";
     // the debug build's conservation check panicked at the tick, t = 5
     common::run(&common::main_source(src), workload, &common::horizon(100.0)).unwrap();
@@ -184,7 +184,7 @@ fn a_pool_over_its_cap_between_ticks_caches_within_it() {
     // serial 0's hold ends at t = 3 and cached 4 past the cap
     let workload = "workload { arrive batch(2);
       send (turn_no);
-      session { turn; tool 1; turn; tool 10; turn; }
+      session { turn; sleep (1); turn; sleep (10); turn; }
     }";
     common::run(&common::main_source(src), workload, &common::horizon(100.0)).unwrap();
 }
@@ -213,7 +213,7 @@ fn a_holds_growth_sets_a_lease_aside_as_a_tick_does() {
         );
         let workload = "workload { arrive batch(2);
           send (turn_no);
-          session { turn; tool (serial == 0 ? 10 : 2); turn; }
+          session { turn; sleep (serial == 0 ? 10 : 2); turn; }
         }";
         common::run(
             &common::main_source(&src),
@@ -253,7 +253,7 @@ fn suspend_by_orders_the_leases_given_back() {
         );
         let workload = "workload { arrive batch(3);
           send (turn_no);
-          session { turn; tool (serial == 2 ? 1 : 10); turn; tool (serial == 2 ? 4 : 1); turn; tool 20; turn; }
+          session { turn; sleep (serial == 2 ? 1 : 10); turn; sleep (serial == 2 ? 4 : 1); turn; sleep (20); turn; }
         }";
         common::run(
             &common::main_source(&src),

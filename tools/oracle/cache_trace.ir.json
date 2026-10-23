@@ -391,15 +391,7 @@
       }
     },
     {
-      "name": "gate",
-      "kind": {
-        "Ps": {
-          "Ctx": "N"
-        }
-      }
-    },
-    {
-      "name": "tool",
+      "name": "sleep",
       "kind": {
         "Ps": {
           "Ctx": "N"
@@ -868,7 +860,7 @@
       {
         "Run": {
           "stage": {
-            "base": 3,
+            "base": 2,
             "count": 1,
             "index": null
           },
@@ -877,7 +869,7 @@
             "Cost": [
               {
                 "Stage": {
-                  "base": 3,
+                  "base": 2,
                   "count": 1
                 }
               },

@@ -1,7 +1,7 @@
 // Agents that delegate to subagents, approximated: serQ has no statement
 // that creates a session (docs/design/subagents.md), so the subagents arrive
 // as sessions of their own in the same Poisson stream, and a parent waits for
-// them at a delay stage for `W`, the time the slowest of its subagents took
+// them for `W`, the time the slowest of its subagents took
 // in a previous run. `--q 0` is the same agents without subagents
 // (examples/multi-turn/vllm.sq runs it, docs/use-cases/workloads.md).
 use "std/args";
@@ -17,9 +17,6 @@ let W = args.number("W", 15.4);          // the wait for the subagents (s): the 
                        // fixed point at seed 1, horizon 10000 s, warm-up 1000 s; seeds 1-5
                        // give 15.22 +- 0.25, so a move of this size is mostly seed noise
 let kids = q * k * p / (1 - p);   // subagents per agent session (a last turn does not delegate)
-
-stage tool : delay;      // declared, though a workload's `tool` needs none: it keeps its IR index before `delegate`
-stage delegate : delay;
 
 // --8<-- [start:workload]
 // An arrival is a subagent with probability kids / (1 + kids), so the
@@ -45,7 +42,11 @@ workload {
       turn;
       set K = K + n + o;
       if (more) {
-        if (fan) { run delegate (cost(delegate, W)); } else { tool (~exp(Z)); }
+        if (fan) {
+          sleep (W);  // the subagents
+        } else {
+          sleep (~exp(Z));  // a tool call
+        }
       } else {
         if (sub) { observe subagent = now - t_s; }
         end;

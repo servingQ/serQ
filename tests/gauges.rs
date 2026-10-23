@@ -561,15 +561,15 @@ fn a_budget_does_not_read_budget_left() {
 /// `k` argument parses as a reference.
 #[test]
 fn an_aggregate_in_a_queue_entry_reads_its_own_index() {
-    let src = "queue engine : prefill {
+    let src = "queue llm : prefill {
           serve fifo;
-          prefill (prompt) { run (cost(engine, sum k in 2 (max(k, 1)) * prompt)); }
+          prefill (prompt) { run (cost(llm, sum k in 2 (max(k, 1)) * prompt)); }
         }
-        queue gw : gateway { route { engine.prefill (1); } }
+        queue gw : gateway { route { llm.prefill (1); } }
         server { gw.route(); }
         ";
     let workload = "workload { arrive batch(1); session { turn; end; } }";
     let ov = common::horizon(10.0);
     let r = common::run(&common::main_source(src), workload, &ov).unwrap();
-    assert!((r.stage("engine").unwrap().mean_service - 2.0).abs() < 1e-12);
+    assert!((r.stage("llm").unwrap().mean_service - 2.0).abs() < 1e-12);
 }

@@ -5,8 +5,10 @@ chat, tool-using agents and an approximation of delegated subagent traffic.
 The program is the deployment: a device, the engine `vllm` on it, its pools
 and `server`. The workload, which supplies arrivals and turns, is a file of
 its own given when the program runs (`serq run DEPLOYMENT --workload
-WORKLOAD`); `examples/pairs.json` names each program's. Client delays (`tool`, `user`, `delegate`) represent time
-outside the engine.
+WORKLOAD`); `examples/pairs.json` names each program's. The client's own
+time between turns is `sleep (Z);`, whatever it waits for (a person, a
+tool call, the subagents), which the program says in a comment: time
+outside the deployment, on a delay of the workload's.
 
 One deployment, `examples/multi-turn/vllm.sq`, runs under all four
 workloads: `examples/pairs.json` lists them for it, its own `chat.sq` first
@@ -19,7 +21,7 @@ Its server hides the output length from scheduling expressions. See the
 | workload (`examples/workloads/`) | `single_turn.sq` | `human_chat.sq` | `chat.sq` | `subagents.sq` |
 | a session is | one request | a conversation | a task | a task and the subtasks it hands out |
 | carried to the next turn | nothing | the conversation, `K = K + n + o` | the same | the same |
-| between turns | — | a person, `run user (cost(user, ~exp(Z)))` | a tool, `tool (~exp(Z))` | a tool, or waiting for the subagents |
+| between turns | — | a person, `sleep (~exp(Z))` | a tool call, `sleep (~exp(Z))` | a tool call, or the subagents, `sleep (W)` |
 | who makes arrivals | the environment | the environment | the environment | a Poisson approximation of parent and child traffic |
 | the prefix cache | never read back | the last turn's prefix | the last turn's prefix | same, and a subagent misses the context it copied |
 
@@ -50,8 +52,8 @@ prefix from another request. serQ's cache is per session; see
 
 Each turn sends the conversation `K` plus a new message of mean 100 tokens.
 After the request, `set K = K + n + o` carries its input and output into the
-next turn. `run user (cost(user, ~exp(Z)))` models reading and typing time on a delay
-stage, with mean `Z = 20` seconds.
+next turn. `sleep (~exp(Z))` models reading and typing time, with mean
+`Z = 20` seconds, on the workload's own delay.
 
 ## Multi-turn agent
 
@@ -81,7 +83,7 @@ The approximation has three parts:
   `kids = q · k · p / (1 − p)` subagents. The program folds them into the
   one Poisson stream at rate `Lambda · (1 + kids)`, and marks an arrival as a
   subagent (`sub`) with probability `kids / (1 + kids)`.
-- **The parent waits a constant.** A delegating turn runs `run delegate (cost(delegate, W))`.
+- **The parent waits a constant.** A delegating turn runs `sleep (W)`.
   The supplied `W = 15.4` seconds is a model input; it does not track the
   simulated children's completion times. It was calibrated as the mean
   maximum of `k` `subagent` durations collected with `--dump`, iterated

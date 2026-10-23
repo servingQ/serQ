@@ -26,7 +26,7 @@ bracket over `P.nic`.
 ## Request flow
 
 For a program with a `server` or gateway, the figure shows one request's
-path. Workload tool calls, subsequent turns and session exits are omitted,
+path. The workload's `sleep`s, subsequent turns and session exits are omitted,
 but holds surrounding the workload's `request` remain visible. The figure
 reads the request from the IR (`sides`), and a gateway's route from it too
 (`routes`), so a program, its JSON IR and a compiled `pyserq.Program` draw
@@ -42,7 +42,7 @@ every way through holds it, whichever hold took it on each.
 
 | Element | Meaning |
 |---|---|
-| Client | The rounded box at the left, outside the server: the workload, which sends a request and waits for its reply. Its tool and think times are its own, so they are not drawn. A program has one workload, so the figure has one client. |
+| Client | The rounded box at the left, outside the server: the workload, which sends a request and waits for its reply. Its own time, `sleep` (a tool call, a person thinking), is not drawn. A program has one workload, so the figure has one client. |
 | Server frame | The frame around everything but the client: the one `server` that takes a request and gives its reply. The arrival leaves the client and crosses the server's wall; every exit crosses it back to the client. |
 | Station | A stage reached by a `run`; an array is labelled with its size. Consecutive prefill and decode runs at one engine share a station. |
 | Arrow | Request flow between stages, including branches and loop returns. Guards label alternatives. An exit is the reply going back to the client, along a lane under the row; one that ends a session inside the server carries its guard. A station a gateway's route ends at replies to the gateway, along a lane of its own, and the reply leaves by the gateway. Every station has an arrow in and one out: a stage nothing runs does not link, and a request goes on from every station it reaches. `serq check` and `serq draw` check it on every program (`deployment::checked_figure`) and refuse a figure that cuts a station off, naming it, as the view's fault; `tests/draw.rs` checks it over every example and tutorial program. |
@@ -66,8 +66,8 @@ program when you need the exact execution path.
 
 That is `examples/multi-turn/vllm.sq`. Its request slot (`reqs`) and its
 KV blocks (`kv`) are held only at `vllm`, so they are drawn in its frame.
-The tool call and the next turn are the workload's, so the figure has
-neither: a request comes from the client to `vllm`, and its reply goes back.
+The tool call (`sleep`) and the next turn are the workload's, so the
+figure has neither: a request comes from the client to `vllm`, and its reply goes back.
 
 ## Addressing the figure
 

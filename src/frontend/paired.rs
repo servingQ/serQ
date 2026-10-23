@@ -5,8 +5,9 @@
 //!
 //! The deployment file is a program without its `workload`; the workload
 //! file has no `fn main()`: its `use`s, its constants and inputs (`let`), its
-//! definitions (`def`), the stages it runs on itself (`stage user : delay;`)
-//! and `workload { … }`. The two meet only at the server's signature.
+//! definitions (`def`), the stages it runs on itself (`stage sandbox :
+//! fifo(4);`, a tool server its sessions share) and `workload { … }`. The
+//! two meet only at the server's signature.
 //!
 //! The parser reads the pair as one program: the workload file's tokens go
 //! at the end of `fn main()`'s body (its `use`s before the deployment's), so

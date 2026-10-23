@@ -28,7 +28,7 @@ workload {
     loop {
       turn;
       set K = K + n + o;
-      if (more) { tool (~exp(Z)); } else { end; }
+      if (more) { sleep (~exp(Z)); } else { end; }
     }
   }
 }";

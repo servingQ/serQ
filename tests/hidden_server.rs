@@ -655,8 +655,8 @@ fn a_lease_s_keys_read_the_lessee_wherever_it_is() {
 }
 
 /// An eviction key reads the session that wrote the entry, wherever it is:
-/// after the request, with what the server set, and in the workload's tool
-/// call, with what the workload set for its next turn.
+/// after the request, with what the server set, and while the workload
+/// sleeps, with what it set for its next turn.
 #[test]
 fn an_eviction_key_reads_the_session_after_its_request() {
     key_refused(
@@ -682,10 +682,10 @@ fn an_eviction_key_reads_the_session_after_its_request() {
     };
     key_refused(
         &src,
-        &workload("turn; set o = ~exp(10); set x = o; tool (5); turn; end;"),
+        &workload("turn; set o = ~exp(10); set x = o; sleep (5); turn; end;"),
         "`x` is set from the hidden `o` in the workload's session, but is read in an eviction key",
     );
-    // without the tool call nothing reads `x` before the turn sets it again
+    // without the sleep nothing reads `x` before the turn sets it again
     compile(
         &src,
         &workload("turn; set o = ~exp(10); set x = o; turn; end;"),

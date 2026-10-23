@@ -1594,7 +1594,7 @@ server (prompt) {{ E.prefill (prompt); }}
             .replace("cost(E,", "cost(engine,")
             .replace("E.prefill", "engine.prefill"),
         w,
-        "a queue's engine is named after the queue",
+        "`engine` is a word of the language: a queue needs another name",
     );
     refused_with(
         &pod(&format!("{device} {engine} pool kv on gpu {{ }}").replace("gpu", "schedule")),

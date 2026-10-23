@@ -244,10 +244,28 @@ fn json_cannot_retype_builtins_or_restore_workload_authority_inside_server() {
 
 #[test]
 fn serving_vocabulary_converts_quantities_not_already_converted_costs() {
-    for body in ["tool(cost(svc, 3));", "set c = cost(svc, 3); tool(c);"] {
-        let src = format!("fn main() {{ stage svc : delay; server {{ {body} }} }}");
-        // Explicit on: this stage's name need not be the vocabulary's default.
-        let src = src.replace("tool(", "tool on svc (");
+    // `sleep (Z);` is `run sleep (cost(sleep, Z));`: `Z` is a time, not a cost
+    let src = "fn main() { stage svc : delay; server { run svc (cost(svc, 1)); } }";
+    for body in [
+        "sleep (cost(sleep, 3));",
+        "set c = cost(sleep, 3); sleep (c);",
+    ] {
+        let workload = format!("workload {{ arrive batch(1); session {{ turn; {body} end; }} }}");
+        assert!(
+            common::compile(src, &workload, &common::horizon(10.0))
+                .unwrap_err()
+                .contains("ordinary quantity")
+        );
+    }
+    // Explicit on: this stage's name need not be the vocabulary's default.
+    for body in [
+        "transfer on svc (cost(svc, 3)) from a to b (1);",
+        "set c = cost(svc, 3); transfer on svc (c) from a to b (1);",
+    ] {
+        let src = format!(
+            "fn main() {{ pool a {{ cap 1; }} pool b {{ cap 1; }} stage svc : delay;
+            server {{ hold b (cost(b, 1)) {{ hold a (cost(a, 1)) {{ {body} }} }} }} }}"
+        );
         assert!(
             common::compile(&src, BATCH, &common::horizon(10.0))
                 .unwrap_err()

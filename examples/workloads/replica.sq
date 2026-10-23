@@ -42,7 +42,7 @@ workload {
         set K = K + n + o;
         set cold = 0;
         if (full) { end; }
-        tool (~exp(Z));
+        sleep (~exp(Z));  // a tool call
         if (more == 0) { end; }
       }
     }

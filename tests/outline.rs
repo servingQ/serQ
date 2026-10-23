@@ -206,7 +206,7 @@ fn a_workloads_statements_are_found_in_the_text() {
             ("send", None, "workload", Some("input: K + n, output: o")),
             ("turn", None, "session", None),
             ("set", Some("K"), "session", Some("K + n + reply.produced")),
-            ("tool", None, "session", Some("~exp(Z)")),
+            ("sleep", None, "session", Some("~exp(Z)")),
             ("turn", None, "session", None),
         ]
     );
@@ -253,16 +253,18 @@ fn a_push_relation_says_push() {
         .map(|d| text(&src, d.range))
         .collect();
     assert_eq!(stages, ["stage front : delay;"]);
-    // the stage its sessions wait at is the workload file's, in its outline
+    // its sessions' waits are the workload file's `sleep`s, in its outline;
+    // the delay they run on is the parser's, which neither file declares
     let workload = read("examples/workloads/short_base.sq");
     let (_, w) = serq::outline_paired(&src, &workload).unwrap();
-    let stages: Vec<_> = w
-        .decls
+    assert!(w.decls.iter().all(|d| d.kind != "stage"));
+    let sleeps: Vec<_> = w
+        .workload_items
         .iter()
-        .filter(|d| d.kind == "stage")
-        .map(|d| text(&workload, d.range))
+        .filter(|i| i.kind == "sleep")
+        .map(|i| i.value.map(|v| text(&workload, v)))
         .collect();
-    assert_eq!(stages, ["stage gate : delay;"]);
+    assert_eq!(sleeps, [Some("serial * spacing"), Some("think")]);
     // a call inside `fork { … }` is a call of the route
     assert!(
         o.calls

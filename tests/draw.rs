@@ -877,7 +877,7 @@ fn a_transfer_between_instances_is_drawn_between_their_boxes() {
     let node = |name: &str| net.node_of(stage(&p, name)).unwrap();
     let (pf, eg, ing, d) = (node("P"), node("P.nic"), node("D.nic"), node("D"));
     assert!(
-        net.node_of(stage(&p, "tool")).is_none(),
+        net.node_of(stage(&p, "sleep")).is_none(),
         "the tool call is the workload's"
     );
     assert_eq!(net.flows, vec![vec![eg, ing]]);
@@ -966,7 +966,7 @@ fn the_router_branches_to_a_remote_or_a_local_prefill() {
     let net = deployment::project(&p);
     let at = |name: &str| End::Node(net.node_of(stage(&p, name)).unwrap());
     let (pf, eg, ing, d) = (at("P"), at("P.nic"), at("D.nic"), at("D"));
-    assert!(net.node_of(stage(&p, "tool")).is_none());
+    assert!(net.node_of(stage(&p, "sleep")).is_none());
     let check = decision(&net).expect("the server's check");
     let route = gateway(&net).expect("the router");
     let End::Node(r) = route else { unreachable!() };
@@ -1023,7 +1023,7 @@ fn a_split_program_is_drawn_as_its_server() {
     let net = deployment::project(&p);
     let engine = End::Node(net.node_of(stage(&p, "vllm")).unwrap());
     assert_eq!(net.nodes.len(), 1);
-    assert!(net.node_of(stage(&p, "tool")).is_none());
+    assert!(net.node_of(stage(&p, "sleep")).is_none());
     assert!(net.has_edge(End::Arrival, engine));
     let out: Vec<_> = net.edges.iter().filter(|e| e.to == End::Exit).collect();
     assert_eq!(out.len(), 1);
@@ -1033,9 +1033,7 @@ fn a_split_program_is_drawn_as_its_server() {
     for st in ["front", "vllm"] {
         assert!(net.node_of(stage(&p, st)).is_some(), "{st}");
     }
-    for st in ["gate", "tool"] {
-        assert!(net.node_of(stage(&p, st)).is_none(), "{st}");
-    }
+    assert!(net.node_of(stage(&p, "sleep")).is_none(), "the workload's");
 }
 
 /// The stations a figure has, by stage name.
@@ -1942,7 +1940,7 @@ fn the_examples_start_at_their_decision() {
     let p = program("routing");
     let net = deployment::project(&p);
     let d = decision(&net).expect("routing decides first");
-    assert!(net.node_of(stage(&p, "tool")).is_none(), "the workload's");
+    assert!(net.node_of(stage(&p, "sleep")).is_none(), "the workload's");
     assert!(has(&net, &p, d, "link").is_some());
     assert!(has(&net, &p, d, "rep").is_some());
     let p = program("pd_tandem");

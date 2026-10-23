@@ -153,17 +153,15 @@ fn a_run_over_several_stages_names_its_share() {
     assert!(e.contains("`transfer on A, B` holds several stages"), "{e}");
     let e = server("run A (cost(A, 1), share = share.maxmin);");
     assert!(e.contains("`run A` holds one stage"), "{e}");
-    // a one-stage `transfer on` or `tool on` reads its work as an
-    // expression; the `, share` inside its parentheses is the same mistake
-    // as `run`'s, and says so (#582)
+    // a one-stage `transfer on` reads its work as an expression; the
+    // `, share` inside its parentheses is the same mistake as `run`'s, and
+    // says so (#582)
     let e = server("transfer on A (1, share = share.maxmin) from kvP to kvD (1);");
     assert!(e.contains("`transfer on A` holds one stage"), "{e}");
     let e = err(&format!(
         "{HEAD} stage link : ps(1); use \"std/share\";\nserver {{ transfer (1, share = share.maxmin) from kvP to kvD (1);\n}} "
     ));
     assert!(e.contains("`transfer` holds one stage"), "{e}");
-    let e = server("tool on A (1, share = share.maxmin);");
-    assert!(e.contains("`tool on A` holds one stage"), "{e}");
     let e = server("transfer on A (1, 2) from kvP to kvD (1);");
     assert!(
         e.contains("`transfer on A (w, …)` takes `share = …`"),

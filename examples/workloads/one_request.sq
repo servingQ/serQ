@@ -2,11 +2,9 @@
 // `arrive` (examples/oracle/vllm_request.sq runs it): the shape of the
 // oracle's sessions, which the IR lists in its place.
 
-stage gate : delay;
-
 workload {
   arrive batch(1);
   init { set prompt = 1; set o = 1; set arrive = 0; }
   send (prompt, o);
-  session { run gate (cost(gate, arrive)); turn; }
+  session { sleep (arrive); turn; }  // sent at `arrive`
 }

@@ -481,9 +481,9 @@ fn inlined_trace_runs_like_the_corpus() {
     assert_eq!(from_trace, from_ir);
 }
 
-/// The serving vocabulary is sugar: a program written with `admit`,
-/// `prefill`, `transfer`, `decode` and `tool` compiles to the IR of the
-/// same program written with `hold`, `run`, `load` and `release`.
+/// The serving vocabulary is sugar: a program written with `transfer` and
+/// `sleep` compiles to the IR of the same program written with `hold`,
+/// `run`, `load` and `release`.
 #[test]
 fn serving_forms_compile_to_the_kernel_ir() {
     let deployment = r#"
@@ -495,8 +495,8 @@ fn serving_forms_compile_to_the_kernel_ir() {
 
 
     "#;
-    // the client's own station, which its session runs
-    let deployment_workload = r#"stage tool : delay; workload { arrive poisson(0.5);
+    // the client's, whose session sleeps
+    let deployment_workload = r#"workload { arrive poisson(0.5);
           init { set K = 0; }
           turn { set n = ceil(~exp(100)); set o = ~exp(20); set Z = ~exp(3); set T = K + n; }
           send (K, n, o, T);"#;
@@ -510,7 +510,7 @@ fn serving_forms_compile_to_the_kernel_ir() {
     let serving_workload = format!(
         "{deployment_workload} session {{
             loop {{ turn; set K = T;
-              if (~bernoulli(0.8)) {{ tool Z; }} else {{ end; }}
+              if (~bernoulli(0.8)) {{ sleep (Z); }} else {{ end; }}
             }}
 
         }} }}"
@@ -522,10 +522,12 @@ fn serving_forms_compile_to_the_kernel_ir() {
           hold memD (cost(memD, T)) {{ run link (cost(link, T / 100)); load memD (cost(memD, T)); release memP; run decode (cost(decode, o)); }}
         }}"
     );
+    // the delay `sleep` supplies, declared where it goes: after the
+    // deployment's stages
     let kernel_workload = format!(
-        "{deployment_workload} session {{
+        "stage sleep : delay; {deployment_workload} session {{
             loop {{ turn; set K = T;
-              if (~bernoulli(0.8)) {{ run tool (cost(tool, Z)); }} else {{ end; }}
+              if (~bernoulli(0.8)) {{ run sleep (cost(sleep, Z)); }} else {{ end; }}
             }}
 
         }} }}"
@@ -551,81 +553,269 @@ fn serving_forms_compile_to_the_kernel_ir() {
     assert_eq!(a.to_json(), b.to_json());
 }
 
-/// The workload's `tool` is the client's time, not a resource of the
-/// deployment (#500): with no stage `tool` declared, it runs on a delay the
-/// parser supplies after the declared stages, which links to the IR and the
-/// run of the program that declares `stage tool : delay;` last.
+/// `sleep (Z);` is the client's own time, not a resource of the deployment
+/// (#500, #508): it runs on a delay the parser supplies after the declared
+/// stages, which links to the IR and the run of the program that declares
+/// `stage sleep : delay;` last and runs it with the kernel.
 #[test]
-fn a_workload_tool_runs_on_its_own_delay() {
+fn sleep_runs_on_the_workloads_own_delay() {
     let src = "stage svc : fifo; server { run svc (cost(svc, 1)); }";
-    let body = "workload { arrive poisson(0.5); turn { set Z = ~exp(3); }
-          session { loop { turn; if (~bernoulli(0.8)) { tool (Z); } else { end; } } }
-        }";
-    let declared = format!("stage tool : delay; {body}");
+    let body = |wait: &str| {
+        format!(
+            "workload {{ arrive poisson(0.5); turn {{ set Z = ~exp(3); }}
+          session {{ loop {{ turn; if (~bernoulli(0.8)) {{ {wait} }} else {{ end; }} }} }}
+        }}"
+        )
+    };
+    let declared = format!(
+        "stage sleep : delay; {}",
+        body("run sleep (cost(sleep, Z));")
+    );
+    let slept = body("sleep (Z);");
     let ov = Overrides {
         seed: Some(1),
         ..common::horizon(200.0)
     };
     let src = common::main_source(src);
     let a = common::compile(&src, &declared, &ov).unwrap();
-    let b = common::compile(&src, body, &ov).expect("nothing to declare");
+    let b = common::compile(&src, &slept, &ov).expect("nothing to declare");
     assert_eq!(a.to_json(), b.to_json());
     let one = common::run(&src, &declared, &ov).unwrap();
-    let two = common::run(&src, body, &ov).unwrap();
+    let two = common::run(&src, &slept, &ov).unwrap();
     assert_eq!(one.text(), two.text());
 }
 
-/// A declared stage `tool` is still the one `tool Z;` uses, whatever its
-/// kind: a tool server with capacity is the deployment's.
+/// Every `sleep` of the workload runs on the one delay, whatever it waits
+/// for: the program says what in a comment, not in a stage's name.
 #[test]
-fn a_declared_fifo_tool_is_still_used() {
-    let src = "stage svc : fifo;
-        server { run svc (cost(svc, 1)); }";
-    let workload = "stage tool : fifo;
-        workload { arrive poisson(0.5); turn { set Z = ~exp(3); }
-          session { loop { turn; if (~bernoulli(0.8)) { tool (Z); } else { end; } } }
+fn every_sleep_shares_one_stage() {
+    let src = common::main_source("stage svc : fifo; server { run svc (cost(svc, 1)); }");
+    let workload = "workload { arrive poisson(0.5); turn { set fan = ~bernoulli(0.3); }
+          session { loop { turn; if (fan) { sleep (15); } else { sleep (~exp(3)); } } }
         }";
-    let ov = common::horizon(10.0);
-    let p = common::compile(&common::main_source(src), workload, &ov).unwrap();
-    let tools: Vec<_> = p.stages.iter().filter(|s| s.name == "tool").collect();
-    assert_eq!(tools.len(), 1, "no second, implicit `tool`");
-    assert!(!tools[0].kind.is_delay(), "the declared fifo, not a delay");
+    let p = common::compile(&src, workload, &common::horizon(10.0)).unwrap();
+    let names: Vec<_> = p.stages.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(names, ["svc", "sleep"], "one supplied stage, last");
+    assert!(p.stages[1].kind.is_delay());
 }
 
-/// The workload's delay stands in only where nothing is declared: a stage
-/// `tool` below the call would be a second, and a server's or an indexed
-/// `tool` still names a declared stage.
+/// A queue that links (`PQ` its name): its entry runs on the queue's stage.
+const PREFILL_QUEUE: &str = "queue PQ : prefill { pool kv { cap 1000; } serve fifo;
+      prefill (prompt) { hold kv (cost(kv, prompt)) { run (cost(PQ, prompt)); } } }
+    server (prompt) { PQ.prefill (prompt); }";
+
+/// The workload's `sleep` runs on the stage `sleep` the parser supplies, so
+/// a declaration of that name, in either file, above the form or below it,
+/// would be a second thing the word names: it is refused, where the old
+/// `tool` silently used a stage `tool` declared above it.
 #[test]
-fn the_workload_delay_stands_in_only_for_an_undeclared_tool() {
+fn a_declaration_named_sleep_beside_the_form_is_refused() {
     let svc = "stage svc : fifo; server { run svc (cost(svc, 1)); }";
+    let slept = "workload { arrive batch(1); session { turn; sleep (1); turn; } }";
     let refused = |src: &str, workload: &str| {
         common::compile(&common::main_source(src), workload, &common::horizon(10.0))
             .expect_err(workload)
     };
-    let below = "workload { arrive batch(1); session { turn; tool (1); turn; } }
-        stage tool : fifo;";
-    let e = refused(svc, below);
-    assert!(e.contains("declared below"), "{e}");
-    // the supplied stage's name is no other declaration's (#483)
-    let pool = "stage svc : fifo; pool tool { cap 4; }
-        server { run svc (cost(svc, 1)); }";
+    let supplied = "the workload's `sleep` runs on a delay of its own, the stage `sleep` the \
+                    parser supplies, and `sleep` is";
+    // the workload's own stage, above the form and below it
+    for workload in [
+        format!("stage sleep : fifo; {slept}"),
+        format!("{slept} stage sleep : delay;"),
+    ] {
+        let e = refused(svc, &workload);
+        assert!(e.contains(&format!("{supplied} a stage at")), "{e}");
+        assert!(e.contains("name that stage otherwise"), "{e}");
+    }
+    // the deployment's stage
     let e = refused(
-        pool,
-        "workload { arrive batch(1); session { turn; tool (1); turn; } }",
+        "stage svc : fifo; stage sleep : delay; server { run svc (cost(svc, 1)); }",
+        slept,
     );
-    assert!(
-        e.contains("runs on a stage `tool` the parser supplies, and `tool` is a pool at"),
-        "{e}"
+    assert!(e.contains(&format!("{supplied} a stage at")), "{e}");
+    // another declaration of the name (#483)
+    let e = refused(
+        "stage svc : fifo; pool sleep { cap 4; } server { run svc (cost(svc, 1)); }",
+        slept,
     );
-    let server = "stage svc : fifo;
-        server { run svc (cost(svc, 1)); tool (1); }";
-    let e = refused(server, "workload { arrive batch(1); }");
-    assert!(e.contains("no stage declared above plays `tool`"), "{e}");
+    assert!(e.contains(&format!("{supplied} a pool at")), "{e}");
+    // an attribute of the name, which `sleep (sleep);` linked beside the
+    // stage before the supplied stage was a declaration (#470's rule)
     let e = refused(
         svc,
-        "workload { arrive batch(1); session { turn; tool[0] (1); turn; } }",
+        "workload { arrive batch(1); init { set sleep = 1; } session { turn; sleep (sleep); turn; } }",
     );
-    assert!(e.contains("no stage declared above plays `tool`"), "{e}");
+    assert!(
+        e.contains("`sleep` is an attribute the program sets at 1:40"),
+        "{e}"
+    );
+    assert!(e.contains("name the attribute otherwise"), "{e}");
+    // a queue `sleep` would be called as the statement, as any word of the
+    // language would (`queue_names_are_no_words_of_the_language`)
+    let e = refused(
+        &PREFILL_QUEUE.replace("PQ", "sleep"),
+        "workload { arrive batch(1); init { set prompt = 4; } send (prompt); }",
+    );
+    assert!(
+        e.contains("`sleep` is a word of the language: a queue needs another name"),
+        "{e}"
+    );
+    // without the form, a stage `sleep` is any stage
+    common::compile(
+        &common::main_source(svc),
+        "stage sleep : delay; workload { arrive batch(1); session { turn; run sleep (cost(sleep, 1)); turn; } }",
+        &common::horizon(10.0),
+    )
+    .expect("the kernel on a declared stage");
+}
+
+/// `sleep` is the client's time: the server's time, or a queue's, runs on a
+/// stage the deployment declares, and the workload's `init` and `turn`
+/// draw a session's and a turn's attributes, which take no time.
+#[test]
+fn sleep_is_the_workload_sessions_alone() {
+    let refused = |src: &str, workload: &str| {
+        common::compile(&common::main_source(src), workload, &common::horizon(10.0))
+            .expect_err(workload)
+    };
+    let why = "`sleep (…)` is the client's own time and runs only in the workload's `session`";
+    let e = refused(
+        "stage svc : fifo; server { run svc (cost(svc, 1)); sleep (1); }",
+        "workload { arrive batch(1); }",
+    );
+    assert!(e.contains(why), "{e}");
+    assert!(e.contains("`run S (cost(S, Z));`"), "{e}");
+    let e = refused(
+        &PREFILL_QUEUE
+            .replace("PQ", "P")
+            .replace("run (cost(P, prompt));", "sleep (1);"),
+        "workload { arrive batch(1); init { set prompt = 4; } send (prompt); }",
+    );
+    assert!(e.contains(why), "{e}");
+    let svc = "stage svc : fifo; server { run svc (cost(svc, 1)); }";
+    for block in ["init", "turn"] {
+        let e = refused(
+            svc,
+            &format!(
+                "workload {{ arrive batch(1); {block} {{ sleep (1); }} session {{ turn; }} }}"
+            ),
+        );
+        assert!(e.contains(why), "{block}: {e}");
+        assert!(
+            e.contains(&format!("`{block}` draws attributes, which take no time")),
+            "{block}: {e}"
+        );
+    }
+    // the retired `tool Z;` took its time bare
+    let e = refused(
+        svc,
+        "workload { arrive batch(1); session { turn; sleep 3; turn; } }",
+    );
+    assert!(
+        e.contains("`sleep` takes the client's time in parentheses: `sleep (Z);`"),
+        "{e}"
+    );
+}
+
+/// `tool` is retired (#508): the client's time it named is `sleep`, and a
+/// tool server is a stage the program declares. Whatever follows the word,
+/// the message says so; a stage may still be named `tool`.
+#[test]
+fn tool_is_retired() {
+    let svc = common::main_source("stage svc : fifo; server { run svc (cost(svc, 1)); }");
+    let session =
+        |body: &str| format!("workload {{ arrive batch(1); session {{ turn; {body} turn; }} }}");
+    for body in ["tool (1);", "tool 1;", "tool on svc (1);", "tool[0] (1);"] {
+        let e = common::compile(&svc, &session(body), &common::horizon(10.0)).expect_err(body);
+        assert!(e.contains("`tool Z;` is gone"), "{body}: {e}");
+        assert!(e.contains("`sleep (Z);`"), "{body}: {e}");
+    }
+    let e = common::compile(
+        &common::main_source("stage svc : fifo; server { run svc (cost(svc, 1)); tool (1); }"),
+        "workload { arrive batch(1); }",
+        &common::horizon(10.0),
+    )
+    .expect_err("the server's `tool`");
+    assert!(e.contains("`tool Z;` is gone"), "{e}");
+    let e = common::compile(&svc, &session("set tool = 1;"), &common::horizon(10.0))
+        .expect_err("a name");
+    assert!(
+        e.contains("`tool` is a retired word and names nothing"),
+        "{e}"
+    );
+    common::compile(
+        &svc,
+        "stage tool : delay; workload { arrive batch(1); session { turn; run tool (cost(tool, 1)); turn; } }",
+        &common::horizon(10.0),
+    )
+    .expect("a stage named `tool`, run with the kernel");
+}
+
+/// The waits `sleep` merged were delay stages, which serve every job at
+/// once at rate 1: a job's time there is its work, whoever else is there.
+/// So the subagents' wait and the tool calls on one delay, rather than on
+/// two, change no session's time, and the report moves only in its stage
+/// table (vllm.sq with subagents.sq, seed 1). There the merged row is the
+/// two rows' jobs together: its jobs present and its completions are their
+/// sums, its service time their mean weighted by completions. Its
+/// utilisation is not a sum: the time either row had a job, at least the
+/// larger of the two.
+#[test]
+fn merged_waits_change_only_the_stage_table() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let src = read(&root.join("examples/multi-turn/vllm.sq"));
+    let slept = read(&root.join("examples/workloads/subagents.sq"));
+    // the spelling before #508: a declared delay for each wait
+    let declared = format!("stage tool : delay; stage delegate : delay;\n{slept}")
+        .replace("sleep (W);", "run delegate (cost(delegate, W));")
+        .replace("sleep (~exp(Z));", "run tool (cost(tool, ~exp(Z)));");
+    assert!(!declared.contains("sleep ("), "every wait rewritten");
+    let ov = Overrides {
+        seed: Some(1),
+        ..common::horizon(300.0)
+    };
+    let outside_stages = |text: String| -> Vec<String> {
+        let mut out = vec![];
+        let mut in_stages = false;
+        for line in text.lines() {
+            if line.starts_with("stage ") {
+                in_stages = true;
+            } else if line.trim().is_empty() {
+                in_stages = false;
+            }
+            if !in_stages {
+                out.push(line.to_string());
+            }
+        }
+        out
+    };
+    let before = common::run(&src, &declared, &ov).unwrap();
+    let after = common::run(&src, &slept, &ov).unwrap();
+    let (tool, delegate) = (
+        before.stage("tool").expect("a row"),
+        before.stage("delegate").expect("a row"),
+    );
+    let sleep = after.stage("sleep").expect("the merged row");
+    let close = |x: f64, y: f64| (x - y).abs() <= 1e-9 * y.abs().max(1.0);
+    assert!(close(
+        sleep.mean_number,
+        tool.mean_number + delegate.mean_number
+    ));
+    assert_eq!(sleep.completed, tool.completed + delegate.completed);
+    assert!(close(
+        sleep.throughput,
+        tool.throughput + delegate.throughput
+    ));
+    let done = |s: &serq::engine::report::StageReport| s.completed as f64;
+    assert!(close(
+        sleep.mean_service * done(sleep),
+        tool.mean_service * done(tool) + delegate.mean_service * done(delegate)
+    ));
+    assert!(sleep.utilization >= tool.utilization.max(delegate.utilization) - 1e-12);
+    assert!(sleep.utilization < tool.utilization + delegate.utilization);
+    let (a, b) = (before.text(), after.text());
+    assert_ne!(a, b, "the stage tables differ");
+    assert_eq!(outside_stages(a), outside_stages(b));
 }
 
 /// `delay` is `ps(present)`, every job at rate 1. The two spellings link to
@@ -662,9 +852,9 @@ fn else_if_is_the_nested_if() {
         )
     };
     let ov = common::horizon(100.0);
-    let flat = session("if (k == 0) { end; } else if (k == 1) { tool (1); } else { tool (2); }");
+    let flat = session("if (k == 0) { end; } else if (k == 1) { sleep (1); } else { sleep (2); }");
     let nested =
-        session("if (k == 0) { end; } else { if (k == 1) { tool (1); } else { tool (2); } }");
+        session("if (k == 0) { end; } else { if (k == 1) { sleep (1); } else { sleep (2); } }");
     let a = common::compile(&common::main_source(src), &flat, &ov).expect("`else if` compiles");
     let b =
         common::compile(&common::main_source(src), &nested, &ov).expect("the nested form compiles");
@@ -774,7 +964,7 @@ fn the_request_boundary_preserves_size_ownership() {
         pool kv on gpu { block 16; evict lru; }
         pool reqs on llm { }
         ";
-    let client = "stage tool : delay; workload { arrive poisson(0.3); init { set K = 0; }
+    let client = "workload { arrive poisson(0.3); init { set K = 0; }
         turn { set n = ceil(~exp(500)); set o = floor(~exp(200)) + 1; set more = ~bernoulli(0.9); }
         send (K, n, o);";
     let split = format!(
@@ -794,7 +984,7 @@ fn the_request_boundary_preserves_size_ownership() {
             loop {{
               turn;
               set K = reply.prompt + o;
-              if (more) {{ tool (~exp(3));  }} else {{ end; }}
+              if (more) {{ sleep (~exp(3));  }} else {{ end; }}
             }}
           }}
         }}"
@@ -815,7 +1005,7 @@ fn the_request_boundary_preserves_size_ownership() {
           session {{
 
             loop {{ turn;
-              if (more) {{ tool (~exp(3));  }} else {{ end; }}
+              if (more) {{ sleep (~exp(3));  }} else {{ end; }}
             }}
 
           }}
