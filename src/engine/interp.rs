@@ -5639,14 +5639,16 @@ impl<'p> Interp<'p> {
         self.served[st] += ntok;
         if self.log.is_some() {
             // each request with its tokens, in one pass so the two lists
-            // line up; the memory pool once the iteration is scheduled, in
-            // units
+            // line up (every job is one: no spill goes via an engine,
+            // #733, so `each` sums to `tokens`); the memory pool once the
+            // iteration is scheduled, in units
             let (reqs, each): (Vec<Who>, Vec<f64>) = assign
                 .iter()
-                .filter_map(|&(id, t)| {
-                    self.stages[st].jobs[&id]
+                .map(|&(id, t)| {
+                    let sid = self.stages[st].jobs[&id]
                         .owner
-                        .map(|sid| (self.who(sid), t))
+                        .expect("validation: a job on an engine is a request's");
+                    (self.who(sid), t)
                 })
                 .unzip();
             let memory = spec
