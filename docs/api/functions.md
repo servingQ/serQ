@@ -47,6 +47,7 @@ holds the index and each function's section equal to it.
 | [`free(p: pool)`](#free) | `cap - used`. Cached units are reclaimable and are not subtracted. |
 | [`cachedin(p: pool)`](#cachedin) | The cached units in `p` of this session's chain there (its waiting hold's if that hold asks for `p`, else its innermost hold of `p`'s, else the chain it or one of its legs last cached along in `p`, else its own), in whole blocks; 0 when evaluated without a session. |
 | [`allocated(p: pool)`](#allocated) | This session's own allocated units in `p`, in its holds and its leases; 0 when evaluated without a session. |
+| [`counted(p: pool)`](#counted) | What `p` counts as taken under its `suspend by (…) counting (c)`: its units, with each session that leases `p` and holds it in no scope counted as `c` reads for it, in place of what it has allocated there. |
 | [`holders(p: pool)`](#holders) | Sessions holding units in `p`. |
 | [`queued(p: pool)`](#queued) | Sessions waiting in `p`'s admission queue. |
 
@@ -317,6 +318,16 @@ allocated(p: pool) -> number
 **Returns:** This session's own allocated units in `p`, in its holds and its leases; 0 when evaluated without a session.
 
 Under the pool's [`preempt leases by`](pool.md#preempt), a growth may end another session's lease, while that session goes on. `allocated` is how the session finds out: `examples/multi-turn/thunderagent.sq` grows a program's lease when it still has one and lets the program in again when it does not.
+
+#### `counted` {#counted}
+
+```text
+counted(p: pool) -> number
+```
+
+**Returns:** What `p` counts as taken under its `suspend by (…) counting (c)`: its units, with each session that leases `p` and holds it in no scope counted as `c` reads for it, in place of what it has allocated there.
+
+`c` is read for each such session as a [`preempt`](pool.md#preempt) key is, when `counted` is read. `cap - counted(p)` is the room a tick of `p` gives set-aside leases back to; under `counting (allocated(p))` it is `free(p)`. `counted` does not link on a pool without `counting`, in a pool's keys or `counting`, which it would read, nor in a gauge, since `c` may read `now`. Where `c` reads `now`, an engine's `only` and its scheduler's guards may not read `counted` either, as they may not read `now`. A `c` read below 0 fails the run. `examples/multi-turn/thunderagent.sq` reads it for a program its router's tick lets in from the waiting queue, under `--use-acting-token-decay`: `room - counted(prog[r])`.
 
 #### `holders` {#holders}
 

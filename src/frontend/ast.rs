@@ -327,13 +327,14 @@ pub enum PreemptOrder {
     /// with the least keys is the victim; `tail` re-queues it as a
     /// newcomer. `preempt lifo` is `By { keys: [-admission], tail: false }`.
     By { keys: Vec<Expr>, tail: bool },
-    /// `preempt leases by (k, …) [every (dt) [suspend by (k, …)]]`: the
-    /// lease with the least keys ends, or at the ticks only, or is set
-    /// aside there and given back in the `suspend` keys' order.
+    /// `preempt leases by (k, …) [every (dt) [suspend by (k, …) counting
+    /// (c)]]`: the lease with the least keys ends, or at the ticks only, or
+    /// is set aside there and given back in the `suspend` keys' order, each
+    /// that fits the room left when each lease the pool has counts for `c`.
     Leases {
         keys: Vec<Expr>,
         every: Option<Expr>,
-        suspend: Option<Vec<Expr>>,
+        suspend: Option<(Vec<Expr>, Expr)>,
     },
 }
 

@@ -4395,29 +4395,7 @@ impl<'p> Interp<'p> {
     fn victim(&mut self, pl: usize, keys: &[CExpr], candidates: Vec<usize>) -> Option<usize> {
         let mut best: Option<(KeyOrd, usize)> = None;
         for (place, s) in candidates.into_iter().enumerate() {
-            let position = match self.sessions[s].innermost(pl) {
-                Some((hi, k)) => self.sessions[s].holds[hi].pools[k].pos,
-                None => self.sessions[s]
-                    .leases
-                    .iter()
-                    .rev()
-                    .find(|l| l.pool == pl)
-                    .map_or(0.0, |l| l.computed),
-            };
-            let decoding = match self.sessions[s].status {
-                Status::InStage(st, j) => self.stages[st]
-                    .jobs
-                    .get(&j)
-                    .is_some_and(|job| job.mode == RunMode::Decode),
-                _ => false,
-            };
-            let ctx = Ctx {
-                sid: Some(s),
-                admission: place as f64,
-                decoding: if decoding { 1.0 } else { 0.0 },
-                position,
-                ..Default::default()
-            };
+            let ctx = self.victim_ctx(pl, s, place);
             let key = KeyOrd(
                 keys.iter()
                     .map(|k| self.eval(k, &ctx, Which::Session))
@@ -4428,6 +4406,68 @@ impl<'p> Interp<'p> {
             }
         }
         best.map(|(_, s)| s)
+    }
+
+    /// What `Moment::Victim` supplies for `s`, the `place`-th candidate on
+    /// `pl` in admission order: its attributes, `admission` (the place),
+    /// `decoding`, and its `position` on `pl`.
+    fn victim_ctx(&self, pl: usize, s: usize, place: usize) -> Ctx {
+        let position = match self.sessions[s].innermost(pl) {
+            Some((hi, k)) => self.sessions[s].holds[hi].pools[k].pos,
+            None => self.sessions[s]
+                .leases
+                .iter()
+                .rev()
+                .find(|l| l.pool == pl)
+                .map_or(0.0, |l| l.computed),
+        };
+        let decoding = match self.sessions[s].status {
+            Status::InStage(st, j) => self.stages[st]
+                .jobs
+                .get(&j)
+                .is_some_and(|job| job.mode == RunMode::Decode),
+            _ => false,
+        };
+        Ctx {
+            sid: Some(s),
+            admission: place as f64,
+            decoding: if decoding { 1.0 } else { 0.0 },
+            position,
+            ..Default::default()
+        }
+    }
+
+    /// `counted(pl)`: what `pl` counts as taken under its `suspend by …
+    /// counting (c)`, its units with each lessee's lease counted as `c`
+    /// reads for it (`Moment::Victim`, as the lessee is a candidate) in
+    /// place of what the lessee has allocated there. A count below 0, or
+    /// not a number, fails the run: it would make room the pool does not
+    /// have. `counting (allocated(m))` counts `used` exactly.
+    fn counted(&mut self, pl: usize) -> f64 {
+        let p = self.p;
+        let Some(count) = p.pools[pl].preempt.count() else {
+            unreachable!("Program::validate refuses `counted` of a pool without `counting`")
+        };
+        let mut taken = self.pools[pl].used;
+        for (place, s) in self.lessees(pl).into_iter().enumerate() {
+            let ctx = self.victim_ctx(pl, s, place);
+            let c = self.eval(count, &ctx, Which::Session);
+            if c.is_nan() || c < 0.0 {
+                if self.error.is_none() {
+                    self.error = Some(format!(
+                        "pool `{}`: `counting ({})` read {c} for session {}'s lease: a lease \
+                         counts for nothing at least, and less would make room the pool does \
+                         not have",
+                        p.pools[pl].name,
+                        p.show_expr(count),
+                        self.sessions[s].serial
+                    ));
+                }
+                return f64::NAN;
+            }
+            taken += c - self.allocated_by(pl, s);
+        }
+        taken
     }
 
     fn retry_growers(&mut self, pl: usize) {
@@ -4694,9 +4734,10 @@ impl<'p> Interp<'p> {
     }
 
     /// A tick of `pl`: under `suspend by`, the leases set aside come back
-    /// in its keys' order, each that fits; then, while the pool is over its
-    /// cap, the lease with the least keys ends, or is set aside. The next
-    /// tick is due while the pool has a lease.
+    /// in its keys' order, each that fits the room its `counting` leaves;
+    /// then, while the pool is over its cap, the lease with the least keys
+    /// ends, or is set aside. The next tick is due while the pool has a
+    /// lease.
     fn pool_tick(&mut self, pl: usize) {
         let p = self.p;
         let Preempt::Leases {
@@ -4708,7 +4749,7 @@ impl<'p> Interp<'p> {
             return;
         };
         let k = self.pools[pl].next_tick.take().expect("a tick was due");
-        if let Some(back_keys) = suspend {
+        if let Some(back) = suspend {
             let mut aside: Vec<usize> = vec![];
             for (s, ss) in self.sessions.iter().enumerate() {
                 // one that holds the pool anew has what it needs there
@@ -4723,16 +4764,29 @@ impl<'p> Interp<'p> {
             }
             // in admission order, as `lessees` is: `admission` reads it
             aside.sort_by_key(|&s| self.sessions[s].adm_seq);
-            for s in self.in_order(pl, back_keys, aside) {
+            // the room is taken once, as the pool's `counting` counts what
+            // it has; each lease that comes back takes its units from it
+            // (`_greedy_resume`), and may take the pool past its cap
+            let mut room = if aside.is_empty() {
+                0.0
+            } else {
+                self.pools[pl].cap - self.counted(pl)
+            };
+            if self.error.is_some() {
+                return;
+            }
+            for s in self.in_order(pl, &back.keys, aside) {
                 let Some(i) = self.set_aside_of(s, pl) else {
                     continue;
                 };
                 let alloc = self.sessions[s].leases[i].alloc;
-                if self.pools[pl].used + alloc > self.pools[pl].cap + EPS {
+                if alloc > room + EPS {
                     continue;
                 }
-                // cached units give way, as to any admission
-                self.make_room(pl, alloc);
+                room -= alloc;
+                // cached units give way, as to any admission, all of them
+                // past the cap
+                self.evict_for(pl, alloc);
                 self.pools[pl].used += alloc;
                 self.pools[pl].holders.push(s);
                 self.sessions[s].leases[i].suspended = false;
@@ -6475,6 +6529,10 @@ impl<'p> Interp<'p> {
                     Some(sid) => self.allocated_by(p, sid),
                     None => 0.0,
                 }
+            }
+            Fun::Counted => {
+                let p = pool(self, 0);
+                self.counted(p)
             }
             Fun::Holders => {
                 let p = pool(self, 0);

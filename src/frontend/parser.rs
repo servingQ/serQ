@@ -436,7 +436,7 @@ const MAX_FAMILY: usize = 10_000;
 /// parameter may not be one: a parameter is replaced token by token, and a
 /// keyword in the body is a token of the same spelling. `tests/docs_lexer.rs`
 /// keeps the list whole.
-pub const KEYWORDS: [&str; 121] = [
+pub const KEYWORDS: [&str; 122] = [
     "Cost",
     "Size",
     "admission",
@@ -458,6 +458,7 @@ pub const KEYWORDS: [&str; 121] = [
     "closed",
     "connector",
     "cost",
+    "counting",
     "decode",
     "def",
     "delay",
@@ -4104,7 +4105,20 @@ impl Parser {
                                 keys.push(self.expr()?);
                             }
                             self.expect(&Tok::RParen)?;
-                            Some(keys)
+                            // what comes back is judged by the program's
+                            // count, which has no default to leave out
+                            if !self.eat_kw("counting") {
+                                return self.err(
+                                    "`suspend by (…)` needs `counting (…)`: what each lease \
+                                     the pool has counts for when a tick judges whether a \
+                                     set-aside one fits; `counting (allocated(m))`, `m` this \
+                                     pool, lets back each that fits its units",
+                                );
+                            }
+                            self.expect(&Tok::LParen)?;
+                            let count = self.expr()?;
+                            self.expect(&Tok::RParen)?;
+                            Some((keys, count))
                         } else {
                             None
                         };

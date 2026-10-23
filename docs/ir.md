@@ -17,7 +17,7 @@ than host-language code, and every input passes `Program::validate`.
 The source model and externally supplied execution settings resolve to one
 complete `Program`; its JSON records the experiment as well as the deployment.
 
-Source: `src/ir.rs`. Current version: `IR_VERSION = 15`.
+Source: `src/ir.rs`. Current version: `IR_VERSION = 16`.
 
 ## Format
 
@@ -68,7 +68,7 @@ runs identically (`tests/ir.rs`).
 | `name`, `index?` | Resource name and optional array-member label. `index` is present even for a one-member array; it labels reports and does not affect execution. |
 | `cap`, `block` | Capacity in units and optional allocation granularity. |
 | `evict` | `Lru` or `By([keys])`, read at `Evict`. |
-| `preempt` | `None`, `By {keys, tail}` or `Leases {keys, every?, suspend?}`. The least keys at `Victim` select the victim; ties select the last admitted. Under `By`, the victim is a hold, which runs again; `tail` defaults to false (requeue at the head); true requeues as a newcomer. Under `Leases`, the candidates are the sessions that lease the pool and hold it in no scope, and the victim's lease ends while its session goes on. With `every: dt` (seconds) the pool acts at every multiple of `dt` instead: a lease's growth is let through past the cap, and at a tick leases end in the keys' order while the pool is over its cap; `every` does not link with `reserve_held`; with `suspend: [keys]` (which needs `every`) a lease taken, at a tick or by a hold's growth, is set aside, its units back, a prefix it read let go and `Allocated` 0, and a later tick, before it takes any, gives set-aside leases back in the order of the `suspend` keys (read at `Victim`), each that fits; `Release` or the session's end drops one. |
+| `preempt` | `None`, `By {keys, tail}` or `Leases {keys, every?, suspend?: {keys, count}}`. The least keys at `Victim` select the victim; ties select the last admitted. Under `By`, the victim is a hold, which runs again; `tail` defaults to false (requeue at the head); true requeues as a newcomer. Under `Leases`, the candidates are the sessions that lease the pool and hold it in no scope, and the victim's lease ends while its session goes on. With `every: dt` (seconds) the pool acts at every multiple of `dt` instead: a lease's growth is let through past the cap, and at a tick leases end in the keys' order while the pool is over its cap; `every` does not link with `reserve_held`; with `suspend: {keys, count}` (which needs `every`) a lease taken, at a tick or by a hold's growth, is set aside, its units back, a prefix it read let go and `Allocated` 0, and a later tick, before it takes any, takes its room once, the cap less `Counted` (the pool's units, with each lessee's allocation there replaced by `count` read for it at `Victim`), and gives set-aside leases back in the order of the `suspend` keys (read at `Victim`), each whose units fit what is left of the room, which they take; what comes back may pass the cap, and the same tick's pause sets the excess aside; a `count` below 0 or NaN fails the run; `Release` or the session's end drops a set-aside lease. |
 | `queue` | `null` for FIFO, otherwise nonempty pure selection keys, read at `Select`. |
 | `queue_every` | Optional seconds: the pool admits only at every multiple, the holds that waited when the tick began in the queue's order, each admitted one run until it blocks before the next is tried, one that does not fit passed over; a hold queued during a tick waits for the next. At an instant the pools' ticks follow its other events, in pool order, a pool's `queue_every` tick before its `Leases` `every` tick. Not on a pool with `admit_via`. |
 | `spill` | Optional `CSpill {to, via, work, when}`: destination pool, transfer stage, work and predicate. |
@@ -227,7 +227,7 @@ attributes must be ready at hold entry, including for early release paths.
 `Served`, `Arrived`, and a request's `Input`, `Output`, `Known`, `Hit`,
 `Finished`, `Loaded`, `Requeued`: availability is defined by the moments below), `Sample(dist, args)`,
 `Reg(register)` (a stage register by index), `Call(fun, args)` (arithmetic functions, pool and stage queries such as
-`CachedIn(pool)`, `Allocated(pool)`, `BudgetLeft(stage)`), `Unary`, `Binary`, `Cond`, and
+`CachedIn(pool)`, `Allocated(pool)`, `Counted(pool)` (only of a pool with `suspend`), `BudgetLeft(stage)`), `Unary`, `Binary`, `Cond`, and
 `Agg(agg, observation)`: `Total`, `Count`, `Largest`, `Smallest` (0 when
 none) or `PrefixTotal` (`Σ_k Σ_{i≤k} v_i` over the values sorted
 ascending) of every value the run observed under the observation, warm-up
@@ -347,10 +347,10 @@ predicates and iteration-body guards, admission gates and assignments:
 | `Ps` | a `ps` stage's capacity, read for the stage's jobs (no `Attr`: no one session is read) | `N`, `Now` |
 | `Budget` | a step stage's `budget` and `chunk`, evaluated before the iteration from its residents (no `Attr`; a `BudgetLeft` is rejected: it is planned from a budget) | `Nres`, `Ndec`, `Kvb`, `Kvp`, `Now` |
 | `Step` | a step stage's `cost`, evaluated after the iteration is scheduled (no `Attr`) | `Ntok`, `Ndec`, `Npre`, `Nres`, `Kvb`, `Kvp`, `Attn`, `Now` |
-| `Serve` | a step stage's `serve by` keys and `only`, evaluated for one resident at its turn, the totals as the residents stand then (a session the iteration admitted included) | `Decoding`, `Admission`, `Remaining`, `Nres`, `Ndec`, `Kvb`, `Kvp`, `Now` (`only` not `Now`) |
-| `Victim` | a pool's preemption keys, evaluated for each candidate when growth cannot fit, and at a pool's tick over its lessees and the leases it set aside | `Decoding`, `Admission`, `Position`, `Now` |
-| `Plan` | iteration-body branch guards, admission gates and register assignments (no `Attr`) | `Nres`, `Ndec`, `Kvb`, `Kvp`, `Ntok`, `Npre`, `Admitted`, `Preempted` |
-| `Gauge` | a gauge, evaluated on the state an instant ends with and held until the next, with no session (an `Attr`, a `Sample`, `CachedIn`, `Allocated`, `Now`, `Work` or `BudgetLeft` is rejected, and an index is a `Num` in range, so reading it cannot fail the run) | none |
+| `Serve` | a step stage's `serve by` keys and `only`, evaluated for one resident at its turn, the totals as the residents stand then (a session the iteration admitted included) | `Decoding`, `Admission`, `Remaining`, `Nres`, `Ndec`, `Kvb`, `Kvp`, `Now` (`only` not `Now`, nor `Work` or a `Counted` whose pool's count reads either) |
+| `Victim` | a pool's preemption keys and `suspend` count, evaluated for each candidate when growth cannot fit, and at a pool's tick over its lessees and the leases it set aside, the count wherever `Counted` is read (no `Counted`: the count would read itself) | `Decoding`, `Admission`, `Position`, `Now` |
+| `Plan` | iteration-body branch guards, admission gates and register assignments (no `Attr`; no `Work`, nor a `Counted` whose pool's count reads `Now` or `Work`) | `Nres`, `Ndec`, `Kvb`, `Kvp`, `Ntok`, `Npre`, `Admitted`, `Preempted` |
+| `Gauge` | a gauge, evaluated on the state an instant ends with and held until the next, with no session (an `Attr`, a `Sample`, `CachedIn`, `Allocated`, `Counted`, `Now`, `Work` or `BudgetLeft` is rejected, and an index is a `Num` in range, so reading it cannot fail the run) | none |
 | `Given` | a claim's `given`, evaluated for each session once its `init` has run (and its preset attributes are set), on its attributes (`hidden` ones included: a claim is no scheduler) and the constants; no `Sample`, no `Call` but arithmetic | none (not `Now`) |
 | `Iteration` | a claim over the iterations of a step stage, evaluated when an iteration starts, after its batch is scheduled (where the cost is read); no `Attr`, no `Sample`, of the calls only arithmetic, `Queue`, `Busy`, `Used`, `Free`, `Holders`, `Queued`, an index a `Num` in range | `Ntok`, `Ndec`, `Npre`, `Nres`, `Kvb`, `Kvp`, `Attn`, `Demand`, `Served`, `Arrived`, `Now` |
 | `End` | a claim `at end`, evaluated once when the run ends, when no session is live; no `Attr`, no `Sample`, no `Call` but arithmetic; the only moment that reads `Agg` | `Now` |

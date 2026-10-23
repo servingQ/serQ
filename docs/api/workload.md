@@ -188,7 +188,7 @@ before the `hold` does.
 | a pool's `preempt by` | wherever the session waits holding it; during a request to an engine that takes it |
 | an engine's `advance running by`, `advance running only`, `admit waiting only` | during a request to it |
 | an engine's `taking`, `reuse`, `prefix`, its connector's `load` | at the request |
-| a pool's `evict by`, `spill … when`, `preempt leases by`, `suspend by` | wherever the session is: at each wait, at each `release`, `shrink` and hold's end, which admit what waits, after the request, and in the workload's own waits and releases |
+| a pool's `evict by`, `spill … when`, `preempt leases by`, `suspend by`, `counting` | wherever the session is: at each wait, at each `release`, `shrink` and hold's end, which admit what waits, after the request, and in the workload's own waits and releases |
 | a hold's header | at the hold; on a pool that preempts, wherever its body waits too, since a preempted hold is admitted again |
 | a hold's `lease` time | at the hold and at its end, where the lease starts |
 

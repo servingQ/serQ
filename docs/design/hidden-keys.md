@@ -123,7 +123,7 @@ the `if` is checked where it stands:
 | an engine's `advance running by`, `advance running only`, `admit waiting only` | `Serve` | during a request to the engine, before its end reveals the output |
 | an engine's `taking`, `reuse`, `prefix`, its connector's `load` | `Request` | at the request (as before; `load` is new) |
 | a pool's `evict by`, its `spill … when` | `Evict` | everywhere the session is (below) |
-| a pool's `preempt leases by`, `suspend by` | `Victim` | everywhere the session is |
+| a pool's `preempt leases by`, `suspend by`, its `counting` (#587) | `Victim` | everywhere the session is |
 | a hold's units, `reserve`, `reuse`, `prefix`, its pools' index | `Admit` | at the hold (as before); on a pool that preempts, wherever its body waits too (new) |
 | a hold's `lease` time | `Session` | at the hold (as before) and at its end (new) |
 

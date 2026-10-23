@@ -43,7 +43,7 @@ STATEMENTS = (
 
 # Pool and stage options, workload forms, and the resource cost constructor.
 OPTIONS = (
-    "cap", "per_token", "save", "block", "evict", "lru", "preempt", "lifo", "leases", "suspend", "held", "requeue", "head", "tail", "none", "queue", "fifo",
+    "cap", "per_token", "save", "block", "evict", "lru", "preempt", "lifo", "leases", "suspend", "counting", "held", "requeue", "head", "tail", "none", "queue", "fifo",
     "admit", "while", "state", "taking", "via", "spill", "when", "ps", "delay", "cost",
     "granule", "serve", "latency", "nic", "exclusive", "first", "only", "arrive", "arrivals", "poisson", "renewal", "closed", "hidden", "send", "reply",
     "batch", "trace", "ordered", "init", "horizon", "warmup", "seed",
@@ -86,7 +86,7 @@ ARITHMETIC = ("min", "max", "abs", "floor", "ceil", "sqrt", "exp", "ln")
 
 BUILTINS = (
     # functions
-    "busy", "work", "used", "free", "cachedin", "allocated", "holders", "queued",
+    "busy", "work", "used", "free", "cachedin", "allocated", "counted", "holders", "queued",
     "price", "budget_left", "est_lambda", "est_rho", "est_wait", "blocksize",
     # context variables
     "now", "waited", "size", "age", "last", "waiting", "present", "tokens",

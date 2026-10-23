@@ -73,7 +73,7 @@ fn a_growth_goes_past_the_cap_until_the_tick() {
 
 #[test]
 fn a_lease_set_aside_comes_back_at_a_tick_before_its_lessee_asks() {
-    let r = run("every (5) suspend by (serial)");
+    let r = run("every (5) suspend by (serial) counting (allocated(prog))");
     // set aside at t = 5, back at t = 10 once serial 1 has given its own
     // back: at t = 11 serial 0 still has its 4 and grows them
     assert!(
@@ -117,7 +117,7 @@ fn a_tick_is_positive_and_suspend_needs_one_and_reserve_held_none() {
         "a tick is a positive, finite number of seconds",
     );
     refused(
-        "pool prog { cap 10; preempt leases by (serial) suspend by (serial); }",
+        "pool prog { cap 10; preempt leases by (serial) suspend by (serial) counting (allocated(prog)); }",
         "`suspend` without `every`",
     );
     refused(
@@ -134,7 +134,7 @@ fn a_tick_is_positive_and_suspend_needs_one_and_reserve_held_none() {
 fn a_lease_set_aside_lets_go_of_the_prefix_it_read() {
     let src = r#"
         stage svc : fifo(2);
-        pool prog { cap 10; preempt leases by (serial) every (5) suspend by (serial); }
+        pool prog { cap 10; preempt leases by (serial) every (5) suspend by (serial) counting (allocated(prog)); }
         server (turn_no) {
           if (serial == 1 && turn_no == 4) { release prog; end; }
           if (serial == 0 && turn_no == 1) {
@@ -225,48 +225,209 @@ fn a_holds_growth_sets_a_lease_aside_as_a_tick_does() {
         .unwrap()
         .samples[0]
     };
-    assert_eq!(run("every (5) suspend by (serial)"), 4.0);
+    assert_eq!(
+        run("every (5) suspend by (serial) counting (allocated(prog))"),
+        4.0
+    );
     assert_eq!(run("every (5)"), 0.0);
 }
 
-/// `suspend by` orders what comes back, apart from the victim's keys.
 /// Three programs lease 3 of 10; at t = 2 serial 2 grows to 10, and the
 /// tick at t = 5 sets aside serial 0's, then serial 1's (the least serial
-/// first). At t = 7 serial 2 shrinks to 6: the tick at t = 10 has room for
-/// one of the two, the first in the `suspend` keys' order. Serials 0 and 1
-/// read their leases at t = 11.
+/// first). At t = 7 serial 2 shrinks to 6. Serials 0 and 1 read their
+/// leases at t = 11. `suspend` is the pool's `suspend by … counting …`.
+fn three(suspend: &str) -> Result<serq::Report, String> {
+    let src = format!(
+        r#"
+        stage svc : fifo(3);
+        pool prog {{ cap 10; preempt leases by (serial) every (5) {suspend}; }}
+        server (turn_no) {{
+          if (turn_no == 1) {{ hold prog (cost(prog, 3)) {{ }} lease prog (inf); }}
+          if (serial == 2 && turn_no == 2) {{ grow prog (cost(prog, 7)); }}
+          if (serial == 2 && turn_no == 3) {{ shrink prog (cost(prog, 4)); }}
+          if (serial < 2 && turn_no == 2) {{ observe back = allocated(prog); }}
+          run svc (cost(svc, 1));
+        }}
+"#
+    );
+    let workload = "workload { arrive batch(3);
+      send (turn_no);
+      session { turn; tool (serial == 2 ? 1 : 10); turn; tool (serial == 2 ? 4 : 1); turn; tool 20; turn; }
+    }";
+    common::run(
+        &common::main_source(&src),
+        workload,
+        &common::horizon(100.0),
+    )
+}
+
+/// What serials 0 and 1 have of the pool at t = 11.
+fn back(r: &serq::Report) -> Vec<f64> {
+    r.observe("back").unwrap().samples.clone()
+}
+
+/// `suspend by` orders what comes back, apart from the victim's keys: the
+/// tick at t = 10 has room for one of the two, the first in the `suspend`
+/// keys' order.
 #[test]
 fn suspend_by_orders_the_leases_given_back() {
     let back = |keys: &str| {
-        let src = format!(
-            r#"
-            stage svc : fifo(3);
-            pool prog {{ cap 10; preempt leases by (serial) every (5) suspend by ({keys}); }}
-            server (turn_no) {{
-              if (turn_no == 1) {{ hold prog (cost(prog, 3)) {{ }} lease prog (inf); }}
-              if (serial == 2 && turn_no == 2) {{ grow prog (cost(prog, 7)); }}
-              if (serial == 2 && turn_no == 3) {{ shrink prog (cost(prog, 4)); }}
-              if (serial < 2 && turn_no == 2) {{ observe back = allocated(prog); }}
-              run svc (cost(svc, 1));
-            }}
-"#
-        );
-        let workload = "workload { arrive batch(3);
-          send (turn_no);
-          session { turn; tool (serial == 2 ? 1 : 10); turn; tool (serial == 2 ? 4 : 1); turn; tool 20; turn; }
-        }";
-        common::run(
-            &common::main_source(&src),
-            workload,
-            &common::horizon(100.0),
-        )
-        .unwrap()
-        .observe("back")
-        .unwrap()
-        .samples
-        .clone()
+        back(&three(&format!("suspend by ({keys}) counting (allocated(prog))")).unwrap())
     };
     // (serial 0's, serial 1's)
     assert_eq!(back("serial"), vec![3.0, 0.0]);
     assert_eq!(back("-serial"), vec![0.0, 3.0]);
+}
+
+/// `counting` is what the room a set-aside lease comes back to is judged
+/// by (#587, ThunderAgent's `remaining_capacity_with_decay` at its
+/// `_greedy_resume`). At t = 10 serial 2 has 6 of 10. Counted for its
+/// units it leaves room for one of the two set-aside leases; counted for
+/// nothing it leaves room for both, which come back and take the pool to
+/// 12 of 10, and the same tick's pause, by the units, sets aside serial
+/// 0's again (the least key). So does every tick after, at t = 15, 20 and
+/// 25, until serial 2 ends at t = 29: the pool's 2 preemptions are 6.
+#[test]
+fn counting_judges_what_comes_back_and_the_tick_trims_by_the_units() {
+    let units = three("suspend by (serial) counting (allocated(prog))").unwrap();
+    let nothing =
+        three("suspend by (serial) counting (serial == 2 ? 0 : allocated(prog))").unwrap();
+    assert_eq!(back(&units), vec![3.0, 0.0], "{}", units.text());
+    assert_eq!(back(&nothing), vec![0.0, 3.0], "{}", nothing.text());
+    let preempted = |r: &serq::Report| r.pool("prog").unwrap().preemptions;
+    assert_eq!((preempted(&units), preempted(&nothing)), (2, 6));
+}
+
+/// `counted(m)` is the pool's units with each lease counted as its
+/// `counting` reads: three leases of 3, the third counted for 1.
+#[test]
+fn counted_reads_the_pool_as_its_counting_counts_it() {
+    let src = r#"
+        stage svc : fifo(3);
+        pool prog { cap 10; preempt leases by (serial) every (5) suspend by (serial) counting (serial == 2 ? 1 : allocated(prog)); }
+        server (turn_no) {
+          if (turn_no == 1) { hold prog (cost(prog, 3)) { } lease prog (inf); }
+          if (serial == 0 && turn_no == 2) {
+            observe u = used(prog);
+            observe c = counted(prog);
+          }
+          run svc (cost(svc, 1));
+        }
+"#;
+    let workload = "workload { arrive batch(3);
+      send (turn_no);
+      session { turn; tool 1; turn; }
+    }";
+    let r = common::run(&common::main_source(src), workload, &common::horizon(100.0)).unwrap();
+    assert_eq!(r.observe("u").unwrap().samples, vec![9.0], "{}", r.text());
+    assert_eq!(r.observe("c").unwrap().samples, vec![7.0], "{}", r.text());
+}
+
+/// A `counting` is read for every lessee at every tick and wherever
+/// `counted` is: it is written, it may not draw nor be a resource cost
+/// nor read `counted`, and `counted` reads a pool that has one, outside a
+/// gauge. The `suspend by` key that is a resource cost is the gap #591
+/// left, as it was found: it linked, where the same victim key did not.
+#[test]
+fn a_counting_is_written_and_read_as_a_key_is() {
+    // `more` is a gauge, or what the server observes in place of `free`
+    let refused = |pool: &str, more: &str, needle: &str| {
+        let src = two("").replace("pool prog { cap 10; preempt leases by (serial) ; }", pool);
+        let src = match more.strip_prefix("observe ") {
+            Some(read) => src.replace("free(prog)", read),
+            None => format!("{src}\n{more}"),
+        };
+        let e =
+            common::compile(&common::main_source(&src), TWO, &common::horizon(10.0)).unwrap_err();
+        assert!(e.contains(needle), "{pool} {more}: {e}");
+    };
+    let with = |clause: &str| {
+        format!("pool prog {{ cap 10; preempt leases by (serial) every (5) {clause}; }}")
+    };
+    refused(
+        &with("suspend by (serial)"),
+        "",
+        "`suspend by (…)` needs `counting (…)`",
+    );
+    refused(
+        &with("suspend by (serial) counting (~exp(1))"),
+        "",
+        "a `counting` may not draw",
+    );
+    refused(
+        &with("suspend by (serial) counting (cost(prog, 1))"),
+        "",
+        "ordinary quantities, not session resource costs",
+    );
+    refused(
+        &with("suspend by (cost(prog, serial)) counting (allocated(prog))"),
+        "",
+        "ordinary quantities, not session resource costs",
+    );
+    refused(
+        &with("suspend by (serial) counting (counted(prog))"),
+        "",
+        "may not read `counted(…)`",
+    );
+    refused(
+        &with(""),
+        "observe counted(prog)",
+        "has no `suspend by (…) counting (…)`",
+    );
+    refused(
+        &with("suspend by (serial) counting (allocated(prog))"),
+        "gauge g = counted(prog);",
+        "a gauge may not read `counted(…)`",
+    );
+}
+
+/// A count below nothing would make room the pool does not have: the run
+/// fails at the tick that reads it.
+#[test]
+fn a_count_below_nothing_fails_the_run() {
+    let e = three("suspend by (serial) counting (-1)").unwrap_err();
+    assert!(e.contains("counts for nothing at least"), "{e}");
+}
+
+/// `counted(m)` reads each lessee's `counting`, which may read `now`. An
+/// engine's `only` that read it would read the clock, and an engine whose
+/// requests it all excludes waits for an event, which time passing is not
+/// (#263): it does not link, as an `only` that reads `now` does not. A
+/// `counting` that does not read the clock is read there as `used` is.
+#[test]
+fn an_only_reads_the_clock_through_counted_as_through_now() {
+    let src = |count: &str| {
+        format!(
+            r#"
+        pool prog {{ cap 10; preempt leases by (serial) every (5) suspend by (serial) counting ({count}); }}
+        pool reqs {{ cap 4; }}
+        device gpu {{ }}
+        engine llm on gpu {{
+          tokens cap 8;
+          scheduler {{
+            advance running only (counted(prog) < 10);
+            admit waiting only (counted(prog) < 10) while (running.preempted == 0);
+          }}
+          worker {{ forward (1); }}
+        }}
+        server {{
+          hold prog (cost(prog, 1)) {{ }} lease prog (inf);
+          hold reqs (cost(reqs, 1)) {{ llm (3, 3); }}
+        }}
+"#
+        )
+    };
+    let compile = |count: &str| {
+        common::compile(
+            &common::main_source(&src(count)),
+            "workload { arrive batch(2); session { turn; end; } }",
+            &common::horizon(20.0),
+        )
+    };
+    let e = compile("now > 3 ? 0 : allocated(prog)").unwrap_err();
+    assert!(
+        e.contains("nor `counted(…)` of a pool whose `counting` reads them"),
+        "{e}"
+    );
+    compile("allocated(prog)").unwrap();
 }

@@ -2185,8 +2185,9 @@ const BACK_DROP: f64 = 26.0;
 const CACHE_ROOM: f64 = 20.0;
 /// Baseline-to-baseline for the stacked pool options.
 const NOTE_LINE: f64 = 11.0;
-/// Characters of a pool's queue keys a label writes before it cuts them.
-const QUEUE_KEYS_MAX: usize = 40;
+/// Characters of a pool's queue keys, or of its `counting`, a label writes
+/// before it cuts them.
+const KEYS_MAX: usize = 40;
 /// A framed station: the room above its glyph for its name, its margin,
 /// and the height of one resident pool's row under it.
 const FRAME_HEAD: f64 = 26.0;
@@ -2475,12 +2476,13 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
         } else {
             0.0
         };
-    // a row's options on one line, its queue order on one of its own: a
-    // `queue by` key can be as long as the station is wide
+    // a row's options on one line, its queue order and a lease's comeback
+    // on one of their own each: a `queue by` key or a `counting` can be as
+    // long as the station is wide
     let row_notes = |q: usize| -> Vec<String> {
         let (queue, rest): (Vec<String>, Vec<String>) = pool_notes(p, q, net.cached.contains(&q))
             .into_iter()
-            .partition(|n| n.starts_with("queue by"));
+            .partition(|n| n.starts_with("queue by") || n.starts_with("suspend by"));
         std::iter::once(rest.join(" · ")).chain(queue).collect()
     };
     let row_h = |q: usize| ROW_H + (row_notes(q).len() as f64 - 1.0) * NOTE_LINE;
@@ -3410,6 +3412,18 @@ fn show_keys(p: &Program, keys: &[crate::ir::CExpr]) -> String {
         .join(", ")
 }
 
+/// `all` cut short past `KEYS_MAX` characters, at a space, not inside a
+/// name or a number: an expression the IR writes out whole (a `def`
+/// inlined), which the program says in full.
+fn cut_short(all: String) -> String {
+    if all.chars().count() <= KEYS_MAX {
+        return all;
+    }
+    let cut: String = all.chars().take(KEYS_MAX).collect();
+    let cut = cut.rsplit_once(' ').map_or(cut.as_str(), |(head, _)| head);
+    format!("{} …", cut.trim_end())
+}
+
 /// A pool's options, one short line each. They are stacked in the glyph
 /// column rather than run together beside the name: `evict by (waiting, size)`
 /// is wider than a station, and a note that reaches the next glyph is worse
@@ -3424,16 +3438,7 @@ fn pool_notes(p: &Program, i: usize, cached: bool) -> Vec<String> {
     // key the IR writes out whole (a `def` inlined) is cut short: the
     // program says it in full
     if let Some(keys) = &pool.queue {
-        let all = show_keys(p, keys);
-        let shown = if all.chars().count() > QUEUE_KEYS_MAX {
-            let cut: String = all.chars().take(QUEUE_KEYS_MAX).collect();
-            // at a space, not inside a name or a number
-            let cut = cut.rsplit_once(' ').map_or(cut.as_str(), |(head, _)| head);
-            format!("{} …", cut.trim_end())
-        } else {
-            all
-        };
-        parts.push(format!("queue by ({shown})"));
+        parts.push(format!("queue by ({})", cut_short(show_keys(p, keys))));
     }
     if let Some(dt) = pool.queue_every {
         parts.push(format!("queue every ({dt})"));
@@ -3457,15 +3462,22 @@ fn pool_notes(p: &Program, i: usize, cached: bool) -> Vec<String> {
             keys,
             every,
             suspend,
-        } => parts.push(format!(
-            "preempt leases by ({}){}{}",
-            show_keys(p, keys),
-            every.map_or(String::new(), |dt| format!(" every ({dt})")),
-            suspend.as_ref().map_or(String::new(), |ks| format!(
-                " suspend by ({})",
-                show_keys(p, ks)
-            ))
-        )),
+        } => {
+            parts.push(format!(
+                "preempt leases by ({}){}",
+                show_keys(p, keys),
+                every.map_or(String::new(), |dt| format!(" every ({dt})")),
+            ));
+            // the comeback, a line of its own as a queue order is: what a
+            // lease counts for is an expression, often a `def` inlined
+            if let Some(s) = suspend {
+                parts.push(format!(
+                    "suspend by ({}) counting ({})",
+                    show_keys(p, &s.keys),
+                    cut_short(p.show_expr(&s.count))
+                ));
+            }
+        }
     }
     // the title says `on S` only for a pool that is no memory
     if let (Some(_), Some(s)) = (memory_of(p, i), pool.admit_via) {

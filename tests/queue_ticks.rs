@@ -179,7 +179,7 @@ fn the_pools_ticks_go_in_declaration_order() {
         run(3, &src).observe("seen").unwrap().samples[0]
     };
     let gate = "pool gate { queue fifo every (5); }";
-    let prog = "pool prog { cap 10; preempt leases by (serial) every (5) suspend by (serial); }";
+    let prog = "pool prog { cap 10; preempt leases by (serial) every (5) suspend by (serial) counting (allocated(prog)); }";
     assert_eq!(seen(&format!("{gate} {prog}")), -2.0);
     assert_eq!(seen(&format!("{prog} {gate}")), 6.0);
 }

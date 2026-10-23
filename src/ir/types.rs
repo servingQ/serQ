@@ -642,9 +642,9 @@ impl Program {
             if let CEvict::By(keys) = &p.evict {
                 es.extend(keys);
             }
-            if let Some(keys) = p.preempt.keys() {
-                es.extend(keys);
-            }
+            // its victim keys, `suspend` keys and count, one list (#591's
+            // `suspend` keys were left out here)
+            es.extend(p.preempt.exprs());
             if let Some(spill) = &p.spill {
                 es.extend([&spill.work, &spill.when]);
             }

@@ -66,9 +66,10 @@ poolopt  := cap expr ;                       -- capacity in units (default inf)
           | evict lru ; | evict by ( expr , ... ) ;   -- eviction order (ascending keys)
           | preempt none ; | preempt lifo ;  -- what a failed growth does
           | preempt by ( expr , ... ) [requeue head | requeue tail] ;   -- the victim: least keys
-          | preempt leases by ( expr , ... ) [every ( expr ) [suspend by ( expr , ... )]] ;
+          | preempt leases by ( expr , ... ) [every ( expr ) [suspend by ( expr , ... ) counting ( expr )]] ;
                                              -- the victim: the lease with the least keys, which ends;
                                              -- every: at the pool's ticks; suspend: set aside, given back
+                                             -- to the room left with each lease counted as `counting` reads
           | queue fifo [every ( expr )] ; | queue by ( expr (, expr)* ) [every ( expr )] ;
                                              -- waiting selection; every: admissions at the pool's ticks
           | reserve held ;                   -- a hold's unallocated reservation counts against later admissions
@@ -1015,20 +1016,38 @@ positive). A lease's growth is let through at once, past the cap if it
 must: `free` reads below 0 until the tick. A hold that is admitted still
 needs room, and a hold's growth takes a lease at once, as without
 `every`. At each tick, while the pool is over its cap, the lease with
-the least keys ends, as at a growth. With `suspend by (s₁, …)` too, a
-lease taken, at a tick or by a hold's growth, is set aside instead: its
-units are the pool's again, a cached prefix it read is let go as at a
-release, `allocated` reads 0 and it is no victim, and at each later
-tick, before the pool takes any, the leases set aside come back in the
-order of the `s` keys (read as the victim's are), each that fits, to a
-session that neither holds nor leases the pool again; one that does not
-fit is passed over. A `release` of the pool, or the session's end, drops one; a hold
-of it anew does not. `suspend` needs `every`, and `every` does not link
-on a pool with `reserve held`, whose reservations a growth let past the
-cap would take. A pool over its cap caches nothing until it is back
-within it. ThunderAgent's router acts at a 5 s tick: it pauses then, and lets
-a paused program in again at a tick before its next request when it
-fits, the smallest first (`suspend by (prompt)`).
+the least keys ends, as at a growth. With `suspend by (s₁, …) counting
+(c)` too, a lease taken, at a tick or by a hold's growth, is set aside
+instead: its units are the pool's again, a cached prefix it read is let
+go as at a release, `allocated` reads 0 and it is no victim. At each
+later tick, before the pool takes any, the leases set aside come back to
+a session that neither holds nor leases the pool again. The pool takes
+its room once, as the tick begins: its cap less `counted(m)`, its units
+with each session that leases it and holds it in no scope counted as `c`
+reads for it (read as the victim's keys are) in place of what it has
+allocated there. The leases set aside are then tried in the order of the
+`s` keys: one whose units fit what is left of the room comes back and
+takes its units from it, and one that does not is passed over. What
+comes back may take the pool past its cap, and the same tick's pause,
+which reads the units, sets the excess aside again. `counting
+(allocated(m))` counts each lease for its units, so that the room is
+`free(m)` and what comes back fits the cap. A `c` read below 0, or not
+a number, fails the run: a lease counts for nothing at least. `c` may
+not draw, be a resource cost, nor read `computed` or `counted`, as a
+key may not; `counted(m)` does not link on a pool without `counting`,
+where `used(m)` is what it would read, nor in a gauge. A `release` of the pool, or the session's
+end, drops a lease set aside; a hold of it anew does not. `suspend`
+needs `every`, and `every` does not link on a pool with `reserve held`,
+whose reservations a growth let past the cap would take. A pool over its
+cap caches nothing until it is back within it. ThunderAgent's router
+acts at a 5 s tick: it pauses then, and lets a paused program in again
+at a tick before its next request when it fits, the smallest first
+(`suspend by (prompt)`). With its `--use-acting-token-decay` it counts a
+program at its tool for 2^-t of its tokens there, t seconds since its
+response, and in full when it pauses: `counting (tokens_at_tick())`, and
+`room - counted(prog[r])` for a program the tick lets in from its
+waiting queue ([the ThunderAgent use case](use-cases/thunderagent.md),
+[What a pool's tick counts](design/tick-count.md)).
 
 ### Waiting selection
 
@@ -1191,7 +1210,8 @@ arrived while it prefilled (`SerqLang.Papers.DaiChain.absSlot_leaves_shape`).
 the iteration serves; the order says in what order:
 
 - `p` is read for each request when its turn comes, from the values a key
-  reads, and may not draw or read `now` or `work(…)`.
+  reads, and may not draw or read `now` or `work(…)`, nor `counted(m)`
+  of a pool whose `counting` reads them.
 - A key and `p` read `running.count`, `running.decoding` and
   `running.kv_…` as the running requests stand at that read. This counts a
   session the iteration admitted through `admit waiting` and leaves out one
@@ -1721,8 +1741,9 @@ one; what the instant passes through on the way is not read), so
 `gauge u = used(kv);` is the pool's time-average `used`. The expression has
 no session and is held constant between events: it reads pool and stage
 observables and constants, and an attribute, a draw, `cachedin` (the
-session's own prefix), `now` or `work(…)` (both move between events), or
-`budget_left(…)` (it plans an iteration, which may draw) is a link error. A
+session's own prefix), `now` or `work(…)` (both move between events),
+`counted(…)` (a `counting` may read `now`), or `budget_left(…)` (it plans
+an iteration, which may draw) is a link error. A
 pool or stage it names has a number for its index (`kv[0]`, or the `kv[k]`
 an aggregate writes out), so reading a gauge cannot fail the run. What to call an imbalance is the program's: the time fraction some
 decoder is full is `gauge full = max j in N (free(reqs[j]) == 0);`, the

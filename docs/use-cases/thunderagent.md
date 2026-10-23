@@ -77,6 +77,10 @@ run the paper's scale:
   subtracted. `room` is the router's capacity either way.
 - `w` is `--acting-token-weight`: a program calling a tool counts `w` of its
   tokens.
+- `decay` is `--use-acting-token-decay`, by its base: when the router lets
+  programs in at its tick, a program calling a tool counts `decay`^-t of its
+  tokens, t seconds into the call. The code's base is 2; 0, the code's
+  default, is off.
 - `dt` is `--scheduler-interval`: the router lets paused programs in at its
   ticks.
 - The router counts a request's tokens before it is sent as its characters
@@ -156,20 +160,36 @@ those reasoning, the smaller first in each (`_pause_until_safe`). A paused
 program's tokens are no longer counted. At a later tick it is let in again,
 the smaller first, if it fits (`_greedy_resume`'s last group), and else its
 next request waits. In serQ that count is a pool per replica, whose
-[`preempt leases by`](../api/pool.md#preempt) is the pause and whose
-`suspend by` is the early resume:
+[`preempt leases by`](../api/pool.md#preempt) is the pause, whose
+`suspend by` is the early resume, and whose `counting` is what the tick
+counts each program on the replica for when it judges whether a paused
+one fits:
 
 ```serq
 --8<-- "examples/multi-turn/thunderagent.sq:prog"
 ```
 
+The tick counts a program's tokens, `allocated(prog[home])`, unless the
+decay is on (`--use-acting-token-decay`, `decay` above 0). Then a program
+calling a tool counts its buffer and `decay`^-t of the rest, t seconds
+after its response (`remaining_capacity_with_decay`): `total_tokens` is
+what the program had then, before the acting weight `w`, and
+`acting_since` the time, both set after the response below. The decay is
+read only when programs are let in; the pause counts every program in
+full.
+
 A program holds its tokens there as a
 [`lease`](../api/statements.md#hold), which outlives the request so that
 the tokens stay counted through the tool call.
 [`allocated`](../api/functions.md#allocated) tells a program whose lease
-has gone that it must be let in again. `count_as(x)` makes the router's
-count of the program `x` (`state.total_tokens = x`), growing or shrinking
-the lease:
+has gone that it must be let in again. `room_of(r)` is the room the router
+sees on replica `r`: for a program a tick lets through the waiting queue
+(`ticked`), the capacity less what the tick counts,
+[`counted`](../api/functions.md#counted)`(prog[r])`; for one placed at
+once, the capacity less every program's tokens, `free(prog[r])`
+(`remaining_capacity()`). The two are equal while the decay is off.
+`count_as(x)` makes the router's count of the program `x`
+(`state.total_tokens = x`), growing or shrinking the lease:
 
 ```serq
 --8<-- "examples/multi-turn/thunderagent.sq:helpers"
@@ -203,10 +223,11 @@ is the router's: it releases it. It waits for the router's next tick, and
 so does a new program when another program waits or no replica has room for
 it (`_select_backend_for_new_program`). Each wait is a hold of
 `waiting_queue`: the next tick, at its place in the router's order. At each
-tick the program goes to the replica with the most room if one has room for
-it, wherever it was before (`_greedy_resume`), and else waits for the next
-tick. After 30 minutes it is let in whatever the capacity
-(`_wait_for_resume`), on the replica it chooses. A new one let in at once
+tick the program goes to the replica with the most room as the tick counts
+it (`room_of`) if one has room for it, wherever it was before
+(`_greedy_resume`), and else waits for the next tick. After 30 minutes it
+is let in whatever the capacity (`_wait_for_resume`), on the replica it
+chooses. A new one let in at once
 goes to the replica with the fewest program tokens among those it fits; in
 default mode, to the one with the fewest programs. It goes in with its
 buffer, then the rest: past the capacity only after 30 minutes, when
@@ -221,8 +242,10 @@ After the request, the response's usage, the answer included, replaces the
 estimate (`update_program_after_request`), up to what a replica holds.
 Calling its tool now, the program counts at the acting weight, its buffer
 whole (`active_program_tokens`, `remaining_capacity`); its next request
-grows it back. The program is released when the session ends
-(`/programs/release`). The snippet closes the `server` block:
+grows it back. What it had before the weight, and when, are what the
+decay reads (`state.total_tokens`, `acting_since`). The program is
+released when the session ends (`/programs/release`). The snippet closes
+the `server` block:
 
 ```serq
 --8<-- "examples/multi-turn/thunderagent.sq:response"
@@ -248,14 +271,15 @@ programs, no capacity.
 | A replica's capacity, `cache_config.total_tokens_capacity`, against `active_program_tokens + buffer` ([`backend/state.py#L185-L194`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/backend/state.py#L185-L194)) | `pool prog[J] { cap tr ? room : inf; … }`, one member per replica, `room` the replica's `kv` less the shared prompt when it is counted once |
 | `BUFFER_PER_PROGRAM = 100` per active program ([`backend/state.py#L23`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/backend/state.py#L23)) | `let buffer = 100;`, in every amount of `prog` |
 | The scheduler loop: every `--scheduler-interval`, 5 s by default, it lets waiting programs in, then pauses ([`__main__.py#L28`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/__main__.py#L28), [`scheduler/router.py#L746-L771`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L746-L771)) | `pool waiting_queue { queue by (…) every (dt); }`: a hold on it waits for the next tick |
-| A new program goes to the replica with the fewest active tokens among those where it fits, if no program waits; else it waits in the global queue ([`scheduler/router.py#L330-L362`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L330-L362)) | `choose j in J by (free(prog[j]) >= charged ? 0 : 1, used(prog[j]))`, then a `hold` of `prog[j]`, unless `queued(waiting_queue) > 0` or no replica has room |
+| A new program goes to the replica with the fewest active tokens among those where it fits, if no program waits; else it waits in the global queue ([`scheduler/router.py#L330-L362`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L330-L362)) | `choose j in J by (room_of(j) >= charged ? 0 : 1, -room_of(j))`, `room_of(j)` being `free(prog[j])` for a program placed at once, then a `hold` of `prog[j]`, unless `queued(waiting_queue) > 0` or no replica has room |
 | The global waiting queue ([`scheduler/router.py#L560-L571`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L560-L571)) | `pool waiting_queue`, in whose queue a program waits for ticks |
 | The program's tokens are counted while it reasons and while it calls a tool, at `acting_token_weight` 1.0, the default ([`backend/state.py#L104-L107`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/backend/state.py#L104-L107), [`__main__.py#L30`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/__main__.py#L30)) | `lease prog[home] (inf)`: the allocation outlives the hold |
 | A running program's next request is let through without a capacity check; its count becomes the new prompt's estimate, its characters over a ratio learnt from earlier responses ([`scheduler/router.py#L384-L389`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L384-L389), [`#L450-L458`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L450-L458), [`#L479-L491`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L479-L491)) | `charged`, the prompt off by at most `est` (0: exact), to which the lease grows or shrinks |
 | After the response, the count is the response's usage, the answer included ([`scheduler/router.py#L493-L494`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L493-L494)) | the lease grows or shrinks to `prompt + o + buffer` after the engine's request |
 | An ACTING program counts `acting_token_weight` of its tokens ([`backend/state.py#L104-L107`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/backend/state.py#L104-L107)) | `shrink prog[home] (cost(prog, (1 - w) * (allocated(prog[home]) - buffer)))` after the response, grown back at the next request |
-| Over capacity, pause the ACTING programs, the smallest first, then the REASONING ones ([`scheduler/router.py#L773-L805`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L773-L805)) | `preempt leases by (reasoning, prompt) every (dt) suspend by (prompt);` on `prog`: a growth goes through, and at the tick idle programs' leases are set aside first, the smaller first |
-| A paused program with no request pending is let in again at a later tick if it fits, last of the groups, smallest first ([`scheduler/router.py#L851-L866`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L851-L866)) | `suspend by (prompt)`: the tick gives set-aside leases back, the smaller first, before it pauses, each that fits |
+| `--use-acting-token-decay`: where the tick lets programs in, an ACTING program counts its tokens times 2^-t, t seconds since its response, a REASONING one and every buffer in full; placing a new program and pausing count it whole ([`backend/state.py#L196-L214`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/backend/state.py#L196-L214), [`scheduler/router.py#L475-L477`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L475-L477), [`#L759-L771`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L759-L771), [`#L833-L837`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L833-L837)) | `decay` 2: `counting (tokens_at_tick())` on `prog`, and `room - counted(prog[r])` (`room_of`) for a program a tick lets in |
+| Over capacity, pause the ACTING programs, the smallest first, then the REASONING ones ([`scheduler/router.py#L773-L805`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L773-L805)) | `preempt leases by (reasoning, prompt) every (dt)` on `prog`: a growth goes through, and at the tick idle programs' leases are set aside first, the smaller first |
+| A paused program with no request pending is let in again at a later tick if it fits, last of the groups, smallest first ([`scheduler/router.py#L851-L866`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L851-L866)) | `suspend by (prompt) counting (tokens_at_tick())`: the tick gives set-aside leases back, the smaller first, before it pauses, each that fits the room as it counts it |
 | A paused program's next request waits for a tick that lets it in, on the replica with the most room if one has room for it, wherever it was before ([`scheduler/router.py#L411-L424`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L411-L424), [`#L807-L932`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L807-L932)) | `allocated(prog[home])` is 0: the program releases what is set aside, waits for the next tick, then for the next while `no_room(charged)`, and is placed as a new one |
 | A program that has waited 30 minutes is let in whatever the capacity; at a tick, programs with a pending request, then new ones, each group smallest first ([`#L934-L956`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L934-L956), [`scheduler/router.py#L851-L866`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L851-L866)) | after 1 800 s the program stops waiting for ticks and is let in on the replica it chooses, past the capacity if it must; the waiting queue lets programs in at a tick in its order, `queue by (K > 0 ? 0 : 1, charged)` |
 | `/programs/release` at the end of the trajectory ([`scheduler/router.py#L514-L547`](https://github.com/ThunderAgent-org/ThunderAgent/blob/7ddc8610270e56d3b109eed8796b3a4360fc67c9/ThunderAgent/scheduler/router.py#L514-L547)) | the session's end ends the lease |
@@ -297,6 +321,7 @@ measurement.
 | `S` | 0 | tokens of a system prompt every program starts with, which vLLM caches once |
 | `count_shared` | 1 | 1: the router counts the shared prompt in every program, as the code does; 0: once, as ThunderAgent's wiki writes the capacity |
 | `w` | 1 | `--acting-token-weight`: a program calling a tool counts this share of its tokens |
+| `decay` | 0 | `--use-acting-token-decay`, its base (2 in the code; 0 off): where the tick lets programs in, a program calling a tool counts `decay`^-t of its tokens, t seconds into the call |
 | `dt` | 5 | `--scheduler-interval`: seconds between the router's ticks, at which waiting programs are let in |
 | `est` | 0 | the router's relative error, at most, in estimating a request's tokens before it is sent (0: exact) |
 
@@ -384,12 +409,36 @@ depends on one argument:
 - **The tick's interval does not agree with the paper's ablation.** At
   `dt` 2, 5 and 10 s TR mode serves 318, 319 and 318 steps/min, against
   the paper's 363, 378 and 343 (Fig. 6b): the paper's rises 4 % from 2 to
-  5 and then falls, and the program's is flat.
-  The paper's runs have the decay, which the program does not write.
+  5 and then falls, and the program's is flat. With the decay on, as in
+  the paper's runs, it serves 112, 114 and 131 at N = 96: a third of the
+  paper's, and rising with the interval.
 - **The headline ratio rests on two estimates.** 3.2 is with `g` at the
   pessimistic end of its range and `S` chosen; with `g` 1.1e-9 it is 1.9.
   The tables show which mechanisms produce a gain of the paper's size,
   not that the program reproduces a panel.
+
+### The acting-token decay
+
+With the decay on (`tools/thunderagent/sweep.py --preset paper decay=2`,
+and the other bases), at the paper's scale, TR mode loses its gain:
+
+| `decay` | TR steps/min, N = 96, 144, 192 | ratio | TR token hit | TR resumed/turn | pauses a turn | prefilled tokens a turn |
+|---|---|---|---|---|---|---|
+| 0 (off) | 319.7, 319.1, 318.5 | 3.18-3.21 | 0.93 | 0.05-0.06 | 0.07-0.08 | 1 260-1 295 |
+| 2 | 113.8, 102.6, 102.6 | 1.03-1.13 | 0.24-0.34 | 0.63-0.81 | 1.26-1.40 | 12 007-13 920 |
+| 4 | 111.1, 101.1, 101.3 | 1.02-1.10 | 0.24-0.32 | 0.65-0.83 | 1.38-1.49 | 12 406-14 077 |
+| 6 | 109.7, 101.3, 100.8 | 1.01-1.09 | 0.23-0.32 | 0.66-0.83 | 1.42-1.51 | 12 564-14 121 |
+| 8 | 109.8, 101.0, 100.7 | 1.01-1.09 | 0.24-0.32 | 0.67-0.83 | 1.43-1.52 | 12 566-14 119 |
+
+A program a few seconds into its tool counts for almost nothing, so each
+tick lets in nearly every program that waits, past what the replica's KV
+holds, and its pause, which counts every program whole, sets the excess
+aside at once. Most turns then come from a paused program, whose prefix
+the others have evicted, and a turn prefills ten times the tokens.
+Default mode serves 99-101 steps/min. The paper's runs have the decay on
+and serve 373, 382, 360 and 333 steps/min at bases 2, 4, 6 and 8
+(Fig. 6b). At the example's configuration, where a tool takes 3 s on
+average, the decay costs less: 24.5 steps/min against 27.7 at 32 agents.
 
 ## Limitations
 
@@ -404,17 +453,17 @@ depends on one argument:
 - **A pause ends the count at once.** ThunderAgent counts a reasoning
   program it has marked for a pause until its response arrives; at the
   paper's scale a reasoning program is paused in 0.02 % of turns.
-- **The decay is not written.** `w` is ThunderAgent's
-  acting weight, which the router reads wherever it reads a replica's
-  room. Counting idle programs for less costs throughput here: at the
-  paper's scale the ratio is 3.2 at `w` 1, 2.6 at 0.5 and 1.3 at 0,
-  because their next requests grow back and pause others. The `2^-t`
-  decay the paper's experiments use weighs idle programs by the time they
-  have waited, and only when programs are let in; it is off in the code
-  by default, and the program does not write it. Under it ThunderAgent
-  resumes every paused program and its pause trims the excess, where the
-  program gives a paused one back only while it fits (the design record,
-  item 4; #587).
+- **Counting idle programs for less costs throughput here.** `w` is
+  ThunderAgent's acting weight, which the router reads wherever it reads a
+  replica's room: at the paper's scale the ratio is 3.2 at `w` 1, 2.6 at
+  0.5 and 1.3 at 0, because their next requests grow back and pause
+  others. The decay, which the paper's experiments use, weighs idle
+  programs only when programs are let in, and loses the gain here
+  ([The acting-token decay](#the-acting-token-decay)), where the paper
+  reports its best numbers with it. What differs is not known; the
+  candidates are what the program does not write: ThunderAgent's
+  placement at a tick and the reasoning programs it counts until their
+  responses (the two items above), and how long the paper's tools take.
 - **The paper is not fitted.** It does not state its KV capacity, context
   lengths, output lengths, coding tools' times, system prompts or vLLM
   version, so `g` and `S` are estimates and no panel is reproduced.
