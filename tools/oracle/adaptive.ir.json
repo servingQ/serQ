@@ -462,5 +462,73 @@
   "slot_computed": 8,
   "hidden": [
     10
+  ],
+  "consts": [
+    {
+      "name": "bs",
+      "side": "Server",
+      "value": 16.0,
+      "written": "16",
+      "arg": {
+        "key": "bs",
+        "supplied": true
+      },
+      "doc": "block_size"
+    },
+    {
+      "name": "B",
+      "side": "Server",
+      "value": 4096.0,
+      "written": "1024",
+      "arg": {
+        "key": "B",
+        "supplied": true
+      },
+      "doc": "max_num_batched_tokens"
+    },
+    {
+      "name": "blocks",
+      "side": "Server",
+      "value": 1999.0,
+      "written": "999",
+      "arg": {
+        "key": "blocks",
+        "supplied": true
+      },
+      "doc": "num_gpu_blocks less the null block"
+    },
+    {
+      "name": "max_seqs",
+      "side": "Server",
+      "value": 16.0,
+      "written": "16",
+      "arg": {
+        "key": "max_seqs",
+        "supplied": true
+      },
+      "doc": "max_num_seqs"
+    },
+    {
+      "name": "chunk",
+      "side": "Server",
+      "value": 1000.0,
+      "written": "inf",
+      "arg": {
+        "key": "chunk",
+        "supplied": true
+      },
+      "doc": "long_prefill_token_threshold (inf: none)"
+    },
+    {
+      "name": "adaptive",
+      "side": "Server",
+      "value": 1.0,
+      "written": "0",
+      "arg": {
+        "key": "adaptive",
+        "supplied": true
+      },
+      "doc": "long_prefill_token_threshold_adaptive (0: off)"
+    }
   ]
 }

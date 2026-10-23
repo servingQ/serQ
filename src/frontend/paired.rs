@@ -207,10 +207,21 @@ impl<'a> Paired<'a> {
             t.line = t.line.min(self.lines);
         }
         let mut wl = lex(self.workload).map_err(|e| at_line(e.line + self.lines, e.col, &e.msg))?;
-        wl.retain(|t| t.tok != Tok::Eof);
+        // its trivia are numbered as its tokens are, the comments after its
+        // last token among them: the parser finds the comment that ends a
+        // `let`'s line by its line (`Program::consts`)
         for t in &mut wl {
             t.line += self.lines;
+            for tr in &mut t.leading {
+                tr.line += self.lines;
+            }
         }
+        let tail = wl
+            .iter_mut()
+            .filter(|t| t.tok == Tok::Eof)
+            .flat_map(|t| std::mem::take(&mut t.leading))
+            .collect::<Vec<_>>();
+        wl.retain(|t| t.tok != Tok::Eof);
         // the workload file's `use`s, which belong before `fn main()`
         let mut uses = vec![];
         let mut rest = vec![];
@@ -267,7 +278,8 @@ impl<'a> Paired<'a> {
         // each file's own constants and definitions: the workload's at its
         // top level, the deployment's at its top level and in `fn main()`
         // a word of the language keeps its spelling, so the parser refuses
-        // it as it would in one file (`def min`)
+        // it as it would in one file (`def min`), and a `let` of one that
+        // both files declare (`let cap`), which would be one constant
         let named = |toks: &[Token], depth| {
             let mut own = names(toks, &["let", "def"], depth);
             own.retain(|(_, n)| !word(n));
@@ -302,7 +314,9 @@ impl<'a> Paired<'a> {
         let mut toks = uses;
         toks.extend(dep[..close].iter().cloned());
         toks.extend(rest);
+        let at = toks.len();
         toks.extend(dep[close..].iter().cloned());
+        toks[at].leading.splice(0..0, tail);
         Ok(Spliced {
             toks,
             split: self.lines,

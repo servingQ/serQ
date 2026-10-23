@@ -517,5 +517,52 @@
         ]
       }
     }
+  ],
+  "consts": [
+    {
+      "name": "bcol",
+      "side": "Server",
+      "value": 128.0,
+      "doc": "b_col = b_row = b_red = b_lcm"
+    },
+    {
+      "name": "tlin",
+      "side": "Server",
+      "value": 4000.0,
+      "doc": "µs per pass over a tile, 1 / c_Lin"
+    },
+    {
+      "name": "tnl",
+      "side": "Server",
+      "value": 5.0,
+      "doc": "µs per token of non-linear operations, 1 / c_nLin"
+    },
+    {
+      "name": "tile",
+      "side": "Workload",
+      "value": 128.0,
+      "doc": "b_col: a tile, in tokens (the server's `bcol`)"
+    },
+    {
+      "name": "vpmax",
+      "side": "Workload",
+      "value": 8.0,
+      "doc": "prompts are 1 .. vpmax tiles (Assumption 3)"
+    },
+    {
+      "name": "vdmax",
+      "side": "Workload",
+      "value": 512.0,
+      "doc": "the largest output"
+    },
+    {
+      "name": "rate",
+      "side": "Workload",
+      "value": 0.00002,
+      "arg": {
+        "key": "rate"
+      },
+      "doc": "requests per µs (20 per second)"
+    }
   ]
 }

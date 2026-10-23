@@ -989,3 +989,214 @@ fn a_relations_copy_names_its_poster() {
         "{by_hand:?}"
     );
 }
+
+// --- the constants, for a reader (`Program::consts`, #15) -------------------
+
+/// A small pair: `deployment` is what the deployment declares before
+/// `fn main()` and at the end of its body, around a server; `workload` the
+/// workload file's lines before its `workload { … }` and after it.
+fn pair_of(deployment: (&str, &str), workload: (&str, &str)) -> (String, String) {
+    let src = format!(
+        "{}\nfn main() {{\n  stage svc : fifo;\n  server {{ run svc (cost(svc, ~exp(1))); }}\n{}\n}}\n",
+        deployment.0, deployment.1
+    );
+    let workload = format!(
+        "{}\nworkload {{\n  arrive poisson(0.5);\n  session {{ turn; end; }}\n}}\n{}",
+        workload.0, workload.1
+    );
+    (src, workload)
+}
+
+/// The constants `pair_of` keeps.
+fn consts_of(deployment: (&str, &str), workload: (&str, &str)) -> Vec<serq::ir::Const> {
+    let (src, workload) = pair_of(deployment, workload);
+    common::compile(&src, &workload, &common::horizon(10.0))
+        .unwrap_or_else(|e| panic!("{e}\n{src}\n{workload}"))
+        .consts
+}
+
+/// Each constant the text declares is in the IR by its file, with its
+/// value, how it is written when that is not one number, and the comment
+/// that ends its line; a reader that ignores them runs the same program.
+#[test]
+fn the_constants_keep_their_names_for_the_legend() {
+    use serq::ir::Side;
+    let p = compiled(&serq::program_path("replica"), &common::horizon(10.0));
+    let names: Vec<(&str, Side)> = p.consts.iter().map(|c| (c.name.as_str(), c.side)).collect();
+    let server = ["B", "C", "s0", "a", "b", "omega", "beta"];
+    let workload = ["Lambda", "maxctx", "cap"];
+    let want: Vec<(&str, Side)> = server
+        .iter()
+        .map(|n| (*n, Side::Server))
+        .chain(workload.iter().map(|n| (*n, Side::Workload)))
+        .collect();
+    // `cap`, a word of the language the pair does not rename, is the
+    // workload file's all the same: a constant's file is where it is
+    assert_eq!(names, want);
+    let c = |n: &str| p.consts.iter().find(|c| c.name == n).unwrap();
+    assert_eq!(c("C").value, 6e5);
+    assert_eq!(c("C").written, None, "one number says it all");
+    assert_eq!(
+        c("omega").doc.as_deref(),
+        Some("weights read per iteration (s)")
+    );
+    let q = Program::from_json(&p.to_json()).unwrap();
+    assert_eq!(q.consts, p.consts);
+    // an infinite default reads back
+    let v = compiled(&serq::program_path("vllm"), &common::horizon(10.0));
+    let j = v.to_json();
+    assert!(
+        j.contains(
+            "\"name\": \"chunk_cap\",\n      \"side\": \"Server\",\n      \"value\": \"inf\""
+        ),
+        "{j}"
+    );
+    assert_eq!(Program::from_json(&j).unwrap().consts, v.consts);
+}
+
+/// An input the run supplies says so, and keeps the default the program
+/// writes: `serq draw vllm.sq --max_seqs 32` draws `cap 32` beside a text
+/// that says 16, and every oracle IR is built from supplied inputs.
+#[test]
+fn a_supplied_input_says_so() {
+    let mut ov = common::horizon(10.0);
+    ov.set("max_seqs", "32").unwrap();
+    let p = compiled(&serq::program_path("vllm"), &ov);
+    let c = |n: &str| p.consts.iter().find(|c| c.name == n).unwrap().clone();
+    let m = c("max_seqs");
+    assert_eq!(m.value, 32.0);
+    assert_eq!(m.written.as_deref(), Some("16"));
+    assert_eq!(
+        m.arg,
+        Some(serq::ir::ConstArg {
+            key: "max_seqs".into(),
+            supplied: true
+        })
+    );
+    // one left at its default
+    let b = c("blocks");
+    assert_eq!((b.value, b.written), (10000.0, None));
+    assert!(b.arg.is_some_and(|a| a.key == "blocks" && !a.supplied));
+}
+
+/// The comment that ends a `let`'s line is its, wherever the pair puts the
+/// tokens after it: the last `let` of the deployment's `fn main()` is
+/// followed by the workload's tokens, the workload's comments are
+/// numbered as its tokens are (without, a workload `let` had none), and
+/// the comment after the workload's last token goes with it.
+#[test]
+fn a_constants_comment_survives_the_pair() {
+    let consts = consts_of(
+        ("", "  let m = 4;  // members"),
+        (
+            "let Lambda = 0.3;  // sessions per second",
+            "let z = 1;  // zed",
+        ),
+    );
+    let docs: Vec<(&str, Option<&str>)> = consts
+        .iter()
+        .map(|c| (c.name.as_str(), c.doc.as_deref()))
+        .collect();
+    assert_eq!(
+        docs,
+        [
+            ("m", Some("members")),
+            ("Lambda", Some("sessions per second")),
+            ("z", Some("zed"))
+        ]
+    );
+}
+
+/// Both files may declare one name, each meaning its own; one file's name
+/// declared again is its last declaration, which the linker folds into
+/// every expression that reads it.
+#[test]
+fn a_constant_is_its_files_last_declaration() {
+    use serq::ir::Side;
+    let consts = consts_of(
+        (
+            "let p = 1;  // the deployment's\nlet q = 2;\nlet p = 3;",
+            "",
+        ),
+        ("let p = 0.9;  // the workload's", ""),
+    );
+    let got: Vec<(&str, Side, f64)> = consts
+        .iter()
+        .map(|c| (c.name.as_str(), c.side, c.value))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            ("q", Side::Server, 2.0),
+            ("p", Side::Server, 3.0),
+            ("p", Side::Workload, 0.9)
+        ]
+    );
+}
+
+/// A constant the parser makes for itself (a relation's `latency`,
+/// `D.pull.time`) is no constant the text declares.
+#[test]
+fn a_latencys_own_constant_is_not_the_programs() {
+    let path = serq::program_path("llmd_nixl_pull");
+    let src = read(&path);
+    let wl = read(&workload(&path));
+    let ast = serq::frontend::parser::parse_paired(
+        &serq::frontend::paired::Paired::new(&src, &wl, common::NAMES),
+        &[],
+        &[],
+    )
+    .unwrap();
+    assert!(ast.lets.iter().any(|(n, _)| n.ends_with(".time")));
+    let p = compiled(&path, &common::horizon(10.0));
+    assert!(p.consts.iter().any(|c| c.name == "x0"));
+    assert!(
+        p.consts.iter().all(|c| !c.name.contains('.')),
+        "{:?}",
+        p.consts
+    );
+}
+
+/// A name given twice on one side would give the legend one name two
+/// values: an IR that skips the linker is refused it.
+#[test]
+fn a_constant_twice_on_one_side_is_refused() {
+    let p = compiled(&serq::program_path("replica"), &common::horizon(10.0));
+    let mut bad = p.clone();
+    let mut again = bad.consts[0].clone();
+    again.value += 1.0;
+    bad.consts.push(again);
+    let e = Program::from_json(&bad.to_json()).unwrap_err();
+    assert!(
+        e.contains("constant `B`: declared twice among the deployment's constants"),
+        "{e}"
+    );
+    // the other file's is another constant
+    let mut other = p.clone();
+    let mut theirs = other.consts[0].clone();
+    theirs.side = serq::ir::Side::Workload;
+    other.consts.push(theirs);
+    Program::from_json(&other.to_json()).unwrap();
+}
+
+/// A word of the language keeps its spelling in a pair, so both files'
+/// `let cap` would be one constant: the deployment's `cap cap` read the
+/// workload's 24 while the legend said its own 8 (#15). Refused where the
+/// workload declares it, naming the deployment's.
+#[test]
+fn a_word_both_files_declare_is_refused() {
+    let (src, workload) = pair_of(
+        ("let cap = 8;", "  pool live { cap cap; }"),
+        ("let cap = 24;", ""),
+    );
+    let e = common::compile(&src, &workload, &common::horizon(10.0)).unwrap_err();
+    assert!(
+        e.contains("`cap` is declared by the deployment too (at deployment.sq:1:5)")
+            && e.contains("not a word of the language"),
+        "{e}"
+    );
+    // one file's, either, is its own
+    for (d, w) in [("let cap = 8;", ""), ("", "let cap = 24;")] {
+        consts_of((d, "  pool live { cap 4; }"), (w, ""));
+    }
+}

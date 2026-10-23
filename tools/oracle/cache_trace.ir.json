@@ -1098,5 +1098,145 @@
   "slot_computed": 8,
   "hidden": [
     4
+  ],
+  "consts": [
+    {
+      "name": "bs",
+      "side": "Server",
+      "value": 16.0,
+      "doc": "block_size"
+    },
+    {
+      "name": "B",
+      "side": "Server",
+      "value": 64.0,
+      "written": "512",
+      "arg": {
+        "key": "B",
+        "supplied": true
+      },
+      "doc": "max_num_batched_tokens"
+    },
+    {
+      "name": "max_seqs",
+      "side": "Server",
+      "value": 4.0,
+      "written": "64",
+      "arg": {
+        "key": "max_seqs",
+        "supplied": true
+      },
+      "doc": "max_num_seqs"
+    },
+    {
+      "name": "blocks",
+      "side": "Server",
+      "value": 20.0,
+      "written": "8010",
+      "arg": {
+        "key": "blocks",
+        "supplied": true
+      },
+      "doc": "128 160 tokens / 16"
+    },
+    {
+      "name": "c_it",
+      "side": "Server",
+      "value": 1.0,
+      "written": "0.004",
+      "arg": {
+        "key": "c_it",
+        "supplied": true
+      },
+      "doc": "s per iteration on the served path (13.9 ms stepped by hand, less what async scheduling hides; fitted on the 5 s and 4.2 s runs)"
+    },
+    {
+      "name": "d",
+      "side": "Server",
+      "value": 0.0,
+      "written": "4.1053e-5",
+      "arg": {
+        "key": "d",
+        "supplied": true
+      },
+      "doc": "s per decoding request"
+    },
+    {
+      "name": "e",
+      "side": "Server",
+      "value": 0.0,
+      "written": "1.3786e-7",
+      "arg": {
+        "key": "e",
+        "supplied": true
+      },
+      "doc": "s per KV token held by the decoders"
+    },
+    {
+      "name": "a",
+      "side": "Server",
+      "value": 0.0,
+      "written": "5.1527e-5",
+      "arg": {
+        "key": "a",
+        "supplied": true
+      },
+      "doc": "s per prefill token"
+    },
+    {
+      "name": "b",
+      "side": "Server",
+      "value": 0.0,
+      "written": "4.0196e-9",
+      "arg": {
+        "key": "b",
+        "supplied": true
+      },
+      "doc": "s per prefill token per context token (attention)"
+    },
+    {
+      "name": "c0",
+      "side": "Server",
+      "value": 0.0,
+      "written": "0.04",
+      "arg": {
+        "key": "c0",
+        "supplied": true
+      },
+      "doc": "s per request outside the engine (fitted with c_it, data/exp/seq/calibration.txt)"
+    },
+    {
+      "name": "f",
+      "side": "Server",
+      "value": 0.0,
+      "written": "0",
+      "arg": {
+        "key": "f",
+        "supplied": true
+      },
+      "doc": "s per prompt token outside the engine (0: not separable from c0 on these runs)"
+    },
+    {
+      "name": "spacing",
+      "side": "Workload",
+      "value": 3.0,
+      "written": "3.5",
+      "arg": {
+        "key": "spacing",
+        "supplied": true
+      },
+      "doc": "seconds between session arrivals"
+    },
+    {
+      "name": "N",
+      "side": "Workload",
+      "value": 3.0,
+      "written": "333",
+      "arg": {
+        "key": "N",
+        "supplied": true
+      },
+      "doc": "sessions in the trace"
+    }
   ]
 }

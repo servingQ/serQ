@@ -2,16 +2,19 @@
 //! with queues compiles to the IR the same program written with pools,
 //! stages and a server compiles to, up to the names the queue gives its
 //! pools (`Q.p`), its stage (`Q`) and its entries' attributes (`Q.x`), and
-//! up to where a gateway's route stands (`Program::routes`), which the
-//! figure draws and nothing runs.
+//! up to where a gateway's route stands (`Program::routes`) and what the
+//! text says of its constants (`Program::consts`), which the figure draws
+//! and nothing runs.
 
 mod common;
 
 use serq::{Overrides, frontend::parser::parse_expr};
 
-/// A program's IR as JSON, its gateways' routes left out.
+/// A program's IR as JSON, what only the figure reads left out: its
+/// gateways' routes and its constants' legend.
 fn run_json(mut p: serq::Program) -> String {
     p.routes.clear();
+    p.consts.clear();
     p.to_json()
 }
 
@@ -142,9 +145,9 @@ fn a_queue_family_sized_by_an_aggregate() {
         )
     };
     let ir = |src: &str| {
-        common::compile(&common::main_source(src), WORKLOAD, &common::horizon(100.0))
-            .unwrap()
-            .to_json()
+        run_json(
+            common::compile(&common::main_source(src), WORKLOAD, &common::horizon(100.0)).unwrap(),
+        )
     };
     assert_eq!(ir(&queue("max i in 2 (i + 1)")), ir(&queue("2")));
 }

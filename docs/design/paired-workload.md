@@ -224,6 +224,9 @@ file's `pool`, `serq::paired_workload` (a program's workload from
   other file; messages take the renaming off.
 - **Refusing a name both declare.** With each file its own namespace there
   is nothing to refuse: the chat workload and the engine may both say `p`.
+  A word of the language (`cap`) is not renamed, so a `let` of it in both
+  files was one constant, the workload's value read by the deployment;
+  the parser refuses the workload's (#15, [the legend](constants-legend.md)).
 - **`serq fmt` on half a pair.** A half links only with its other half;
   `fmt` parses it for its syntax beside an empty other half
   (`parser::parse_half`), and `serq check D --workload W` checks the rest.

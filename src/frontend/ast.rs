@@ -866,6 +866,10 @@ pub struct Program {
     /// parser's; the linker asks each aggregate's index of the whole
     /// program, as it does in an expression (#561).
     pub folded: Vec<Expr>,
+    /// What the text says of each `let` the program writes, for the
+    /// figure's legend (`ir::Program::consts`); none for a constant the
+    /// parser makes for itself.
+    pub let_notes: Vec<LetNote>,
     pub pools: Vec<PoolDecl>,
     pub stages: Vec<StageDecl>,
     pub workload: Option<Workload>,
@@ -886,6 +890,26 @@ pub struct Program {
     /// deployment none of them.
     /// `None` for one file.
     pub paired: Option<Vec<String>>,
+}
+
+/// A `let` as its text writes it: the source of a legend line.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LetNote {
+    /// The declaration's index in `Program::lets`.
+    pub index: usize,
+    /// The file it is in: `Workload` for a paired workload file's, `Server`
+    /// for the deployment's (`frontend::paired`). Read from its place, not
+    /// from the pair's renaming, which a word of the language escapes
+    /// (`let cap = 24;`).
+    pub side: crate::ir::Side,
+    /// The definition (an input's default) as written, before a `def`'s
+    /// use in it is expanded: `blocks * bs`.
+    pub written: String,
+    /// The definition is one number (`8`, `6e5`, `-1`, `inf`): the value
+    /// says all it does.
+    pub number: bool,
+    /// The `//` comment that ends the line of its `;`, without the `//`.
+    pub doc: Option<String>,
 }
 
 /// The attributes each side keeps to itself
@@ -980,6 +1004,8 @@ pub(crate) fn without_locations(mut p: Program) -> Program {
         );
     }
     p.definitions.clear();
+    // the text as written, as a location is: two spellings differ in it
+    p.let_notes.clear();
     for (_, e) in &mut p.lets {
         expr(e);
     }

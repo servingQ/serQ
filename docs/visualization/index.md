@@ -32,6 +32,8 @@ See the [CLI reference](../reference/cli.md) for all options.
   enclosures. Its name identifies the shared resource.
 - Stations occupy one row; large deployments can produce wide diagrams.
 - Long expressions are shortened with `~`.
-- Constants are folded: `cap blocks * bs` shows its value rather than
-  the original names.
+- Labels show values: `cap blocks * bs` shows `cap 160000`. The
+  [legend](deployment.md#the-legend) under the figure names each constant
+  with its value, but a label does not say which constants it was computed
+  from: `cap 16` and `block 16` are both 16.
 - The deployment view does not show an iteration-by-iteration trace.

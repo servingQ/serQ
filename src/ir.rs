@@ -571,7 +571,9 @@ pub enum CArg {
 }
 
 /// The side executing a statement; requests lower to statements without
-/// losing the authority under which each statement runs.
+/// losing the authority under which each statement runs. For a constant
+/// (`Const.side`), the file that declares it: `Server` the deployment's,
+/// `Workload` the workload file's.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Side {
     Workload,
@@ -704,8 +706,8 @@ impl CExpr {
 
 /// An `f64` in JSON, infinities included: a number when finite, the string
 /// `"inf"` or `"-inf"` otherwise (JSON has no infinity, and serde_json
-/// writes `null`, which does not read back). Used for `CExpr::Num` and a
-/// pool's `cap`.
+/// writes `null`, which does not read back). Used for `CExpr::Num`, a
+/// pool's `cap` and a constant's value.
 mod real {
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -1297,7 +1299,8 @@ pub enum CArrival {
 /// (arrival, `init`/`turn` blocks, trace, or explicit sessions), the session
 /// (statement blocks) and the run parameters. Every name is resolved to an
 /// index and every constant is folded; the tables `attrs` and `observes`
-/// keep the names for tools.
+/// keep the names for tools, and `consts` the constants' names for a
+/// reader.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Program {
     /// IR format version (`IR_VERSION`).
@@ -1370,6 +1373,13 @@ pub struct Program {
     /// Stability). The deployment figure draws them as the gateway.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub routes: Vec<Route>,
+    /// The program's constants (`let`, an `args.number` input among them),
+    /// each file's in the order it declares them, for a reader: the
+    /// figure's legend names the numbers its labels print (#15). Every
+    /// expression has its constants folded already, so a reader that
+    /// ignores them runs the same program (`docs/ir.md`, Stability).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub consts: Vec<Const>,
     /// Not the IR's: the kernel blocks of its transfers, appended to
     /// `blocks` by `Program::kernel`, which the interpreter and the figure
     /// run and walk. `None` in a program as linked or read.
@@ -1386,6 +1396,48 @@ pub struct Route {
     pub block: BlockId,
     pub from: usize,
     pub to: usize,
+}
+
+/// A constant of the program as its text declares it, for a reader (the
+/// figure's legend, #15): what a label's number is called, what it is
+/// computed from, and what the program says it is. Nothing reads it to
+/// run: every expression holds the value already (`docs/ir.md`,
+/// Stability).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Const {
+    /// The name as its file writes it.
+    pub name: String,
+    /// Whose it is: `Server` for the deployment file's, `Workload` for the
+    /// workload file's (`serq draw DEPLOYMENT --workload WORKLOAD`). Both
+    /// may declare one name, each meaning its own, but a word of the
+    /// language, which the pair does not rename apart: the parser refuses
+    /// that.
+    pub side: Side,
+    /// The value every expression that reads it has, folded.
+    #[serde(with = "real")]
+    pub value: f64,
+    /// The definition as written (`blocks * bs`), when it is not the value
+    /// written as one number; for an input the run supplied, the default
+    /// the program writes, a number too.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub written: Option<String>,
+    /// For an input (`args.number`): its key, and whether the run supplied
+    /// a value in place of the program's default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arg: Option<ConstArg>,
+    /// The `//` comment that ends the line of its `;`, without the `//`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub doc: Option<String>,
+}
+
+/// A constant that is an input: `args.number("KEY", default)`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConstArg {
+    /// The key a run supplies it by (`--KEY value`).
+    pub key: String,
+    /// The run supplied it: the value is not the program's default.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub supplied: bool,
 }
 
 /// A step stage's register: its name, the stage whose body sets it, and its
@@ -2649,6 +2701,24 @@ impl Program {
             if self.observes.contains(&g.name) {
                 return Err(at(
                     "is also an `observe`: one name would be two statistics".into()
+                ));
+            }
+        }
+        // a constant is one name of its file: nothing reads it to run, so a
+        // second would only draw a wrong legend
+        for (k, c) in self.consts.iter().enumerate() {
+            if self.consts[..k]
+                .iter()
+                .any(|d| d.side == c.side && d.name == c.name)
+            {
+                let file = match c.side {
+                    Side::Server => "deployment's",
+                    Side::Workload => "workload's",
+                };
+                return Err(format!(
+                    "constant `{}`: declared twice among the {file} constants: the legend would \
+                     give one name two values",
+                    c.name
                 ));
             }
         }
@@ -4061,6 +4131,8 @@ impl Validator<'_> {
 // Printing expressions back to source form.
 //
 // The IR keeps no source text: names are slots and `let` constants are folded.
+// (`Program::consts` keeps each constant's name, value and definition as
+// written, for the figure's legend; no expression reads it.)
 // Anything that shows a program to a person - a figure's label, an error that
 // wants to quote the expression it is about - needs them back. The precedence
 // levels below are those of `parser.rs`, so the output re-parses to the same

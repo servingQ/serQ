@@ -1855,8 +1855,8 @@ impl Parser {
                 }
                 continue;
             }
-            if let Some(split) = self.paired {
-                self.paired_item(self.toks[item_at].line > split)?;
+            if self.paired.is_some() {
+                self.paired_item(self.in_workload(item_at))?;
             }
             if !in_main && !self.is_kw("use") && !self.is_kw("def") && !self.is_kw("let") {
                 return self.err("executable declarations belong inside `fn main() { … }`; only `use`, `def` and constants belong outside it");
@@ -1875,8 +1875,31 @@ impl Parser {
                 let at = self.pos;
                 let name = self.definition()?;
                 self.declare(at, &name, Kind::Constant)?;
+                // the pair renames each file's constants apart, but not a
+                // word of the language (`frontend::paired`): both files'
+                // `let cap` would be one constant, the last value read by
+                // the deployment's expressions too (#15)
+                if self.in_workload(at)
+                    && let Some(d) = self.declared.iter().find(|d| {
+                        d.kind == Kind::Constant && d.name == name && !self.in_workload(d.at)
+                    })
+                {
+                    let t = &self.toks[d.at];
+                    return self.err_at(
+                        at,
+                        format!(
+                            "`{name}` is declared by the deployment too (at {}:{}): the pair \
+                             renames each file's constants apart, but not a word of the language, \
+                             so the deployment would read this one's value; rename one",
+                            t.line, t.col
+                        ),
+                    );
+                }
                 self.expect(&Tok::Assign)?;
                 let mut supplied_input = false;
+                // the definition as written, before a `def`'s use in it
+                // expands (an input's: its default)
+                let written;
                 let e = if matches!(self.peek(), Tok::Ident(n) if n == "args")
                     && *self.peek_at(1) == Tok::Dot
                 {
@@ -1898,15 +1921,29 @@ impl Parser {
                         ));
                     }
                     self.expect(&Tok::Comma)?;
+                    written = self.written_from(self.pos);
                     let default = self.expr()?;
                     self.expect(&Tok::RParen)?;
                     supplied_input = self.supplied_inputs.contains(&key);
                     prog.inputs.push((key, prog.lets.len()));
                     default
                 } else {
+                    written = self.written_from(self.pos);
                     self.expr()?
                 };
                 self.expect(&Tok::Semi)?;
+                let (written, number) = written;
+                prog.let_notes.push(LetNote {
+                    index: prog.lets.len(),
+                    side: if self.in_workload(at) {
+                        crate::ir::Side::Workload
+                    } else {
+                        crate::ir::Side::Server
+                    },
+                    written,
+                    number,
+                    doc: self.trailing_comment(self.pos - 1),
+                });
                 let mut vars = vec![];
                 names(&e, &mut vars, &mut Vec::new());
                 let varies =
@@ -3813,6 +3850,63 @@ impl Parser {
         }
     }
 
+    /// Whether the token at `at` is a paired workload file's: past the
+    /// deployment's last line (`paired`).
+    fn in_workload(&self, at: usize) -> bool {
+        self.paired.is_some_and(|split| self.toks[at].line > split)
+    }
+
+    /// A `let`'s definition as written, from the token at `from` to the `;`,
+    /// `,` or `)` that ends it, the tokens' own spelling a space apart where
+    /// the text has one (`blocks * bs`, `max(a, b)`), and whether it is one
+    /// number (`8`, `-1`, `inf`). Read before the definition is parsed, so
+    /// a `def`'s use in it reads as it is written, not as its expansion.
+    fn written_from(&self, from: usize) -> (String, bool) {
+        let mut depth = 0usize;
+        let mut toks = vec![];
+        for t in &self.toks[from..] {
+            match t.tok {
+                Tok::Semi | Tok::Comma | Tok::RParen | Tok::Eof if depth == 0 => break,
+                Tok::LParen | Tok::LBracket | Tok::LBrace => depth += 1,
+                Tok::RParen | Tok::RBracket | Tok::RBrace => depth = depth.saturating_sub(1),
+                _ => {}
+            }
+            toks.push(t);
+        }
+        let mut out = String::new();
+        for (k, t) in toks.iter().enumerate() {
+            if k > 0 && !t.leading.is_empty() {
+                out.push(' ');
+            }
+            out.push_str(&t.text);
+        }
+        let unsigned = match toks.split_first() {
+            Some((t, rest)) if t.tok == Tok::Minus => rest,
+            _ => &toks[..],
+        };
+        let number = matches!(unsigned, [t] if matches!(&t.tok, Tok::Num(_))
+            || matches!(&t.tok, Tok::Ident(w) if supplied(w) == Some(Supplied::Inf)));
+        (out, number)
+    }
+
+    /// The `//` comment that ends the line of the token at `semi`, without
+    /// the `//`, when that token is the last on its line: the comment of
+    /// `let a = 2e-5;  // prefill compute per token (s)`. Found by line,
+    /// not as the next token's trivia: in a pair (`frontend::paired`) the
+    /// token after a `let` in `fn main()` can be the workload's.
+    fn trailing_comment(&self, semi: usize) -> Option<String> {
+        let (line, col) = (self.toks[semi].line, self.toks[semi].col);
+        // a later token on the line: the comment is not this one's
+        if self.toks.iter().any(|t| t.line == line && t.col > col) {
+            return None;
+        }
+        let comment = self.toks.iter().flat_map(|t| &t.leading).find(|tr| {
+            tr.kind == crate::frontend::lexer::TriviaKind::Line && tr.line == line && tr.col > col
+        })?;
+        let text = comment.text.trim_start_matches('/').trim();
+        (!text.is_empty()).then(|| text.to_string())
+    }
+
     /// The value of a constant expression over numbers and `let` constants,
     /// if it is one: the linker's evaluator over the `let`s folded so far,
     /// so that a `let` the linker folds sizes an array here too (#274).
@@ -3865,7 +3959,7 @@ impl Parser {
             if !on_ok {
                 return self.err("a queue's pool is its own: `pool NAME on …` is a deployment's");
             }
-            if self.paired.is_some_and(|l| self.toks[at].line > l) {
+            if self.in_workload(at) {
                 // the workload's own capacity (a session cap), not the
                 // deployment's memory
                 return self.err_at(
@@ -6665,6 +6759,71 @@ mod tests {
         assert_eq!(p.stages[2].name, "tool");
         assert_eq!(crate::frontend::paired::written(&p.lets[0].0), "a");
         assert!(matches!(p.session[0], Stmt::Loop(_)));
+    }
+
+    /// What the text says of each `let` of `src`, a deployment read alone
+    /// (the legend's source, #15): its definition as written, whether that
+    /// is one number, and the comment that ends its line.
+    fn let_notes(src: &str) -> Vec<(String, bool, Option<String>)> {
+        parse(src)
+            .unwrap()
+            .let_notes
+            .into_iter()
+            .map(|n| (n.written, n.number, n.doc))
+            .collect()
+    }
+
+    #[test]
+    fn a_lets_comment_is_the_one_that_ends_its_line() {
+        let doc = |s: &str| Some(s.to_string());
+        assert_eq!(
+            let_notes("let a = 2e-5;  // prefill compute per token (s)\n"),
+            [("2e-5".into(), true, doc("prefill compute per token (s)"))]
+        );
+        // two on one line: the comment is the last one's
+        assert_eq!(
+            let_notes("let a = 1; let b = 2; // c\n"),
+            [("1".into(), true, None), ("2".into(), true, doc("c"))]
+        );
+        // a comment on the next line, or above, is no `let`'s
+        assert_eq!(
+            let_notes("// the batch\nlet a = 1;\n// not a's\nlet b = 2;\n"),
+            [("1".into(), true, None), ("2".into(), true, None)]
+        );
+        // an empty comment says nothing
+        assert_eq!(let_notes("let a = 1; //\n"), [("1".into(), true, None)]);
+    }
+
+    #[test]
+    fn a_lets_definition_is_kept_as_written() {
+        assert_eq!(
+            let_notes("let blocks = 10; let bs = 16;\nlet C = blocks * bs;\n")[2],
+            ("blocks * bs".into(), false, None)
+        );
+        // one space where the text has any, and the tokens' own spelling
+        assert_eq!(
+            let_notes("let C = max(1e3,\n   2) *2;\n")[0],
+            ("max(1e3, 2) *2".into(), false, None)
+        );
+        for one in ["8", "6e5", "-1", "inf"] {
+            assert_eq!(
+                let_notes(&format!("let n = {one};"))[0],
+                (one.into(), true, None),
+                "{one} is one number"
+            );
+        }
+        // a `def`'s use reads as it is written, not as its expansion
+        assert_eq!(
+            let_notes("def twice(x) { 2 * x }\nlet a = twice(3);\n")[0],
+            ("twice(3)".into(), false, None)
+        );
+        // an input's: its default
+        assert_eq!(
+            let_notes(
+                "use \"std/args\";\nfn main() {\n  let m = args.number(\"max_seqs\", 16);  // max_num_seqs\n}\n"
+            ),
+            [("16".into(), true, Some("max_num_seqs".into()))]
+        );
     }
 
     #[test]
