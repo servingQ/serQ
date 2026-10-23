@@ -165,9 +165,9 @@ def on_config(config, **_):
     sys.modules["pygments.lexers.sq"] = module
     _mapping.LEXERS["SerqLexer"] = (
         "pygments.lexers.sq",
-        "serQ",
-        ("serq", "seq"),
-        ("*.sq",),
+        SerqLexer.name,
+        tuple(SerqLexer.aliases),
+        tuple(SerqLexer.filenames),
         (),
     )
     return config

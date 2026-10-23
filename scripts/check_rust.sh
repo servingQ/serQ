@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # The serQ interpreter and CLI (crate serq): fmt + clippy + tests (pool
 # semantics, the vLLM scheduler scenarios against the upstream oracle in
-# tools/oracle), a static check of every program in examples/, the
-# agreement of the CPU vLLM oracle with the A100 engine, and the language's
-# size against tools/metrics.json.
+# tools/oracle), a static check of every program in examples/ and of the
+# programs the site's pages show, the agreement of the CPU vLLM oracle with
+# the A100 engine, and the language's size against tools/metrics.json.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export PATH="$HOME/.cargo/bin:$PATH"
@@ -55,6 +55,12 @@ for f in docs/tutorial/programs/*.sq; do
     || { echo "FAIL: $f with $w does not link"; exit 1; }
   t=$((t + 1))
 done
+# The site's own programs, written in the page rather than included: each
+# page's "model.sq" and "workload.sq" fences link, and the page's
+# `serq … model.sq` commands run on them; any other fence that declares
+# `fn main` writes `…` for what it leaves out.
+python3 scripts/test_check_docs_examples.py
+python3 scripts/check_docs_examples.py
 # Experimental runners must explicitly select their execution conditions too.
 python3 tools/pd_batching/test_runners.py
 python3 scripts/check_oracle_gpu.py

@@ -2,7 +2,7 @@ SHELL := /bin/bash
 export PATH := $(HOME)/.cargo/bin:$(PATH)
 
 .PHONY: check lean drt oracle-ir claims-ir draw-golden citations citation-drift metrics unused
-check:   ## fmt, clippy, tests, every program links with its workload (examples/pairs.json), the oracles agree
+check:   ## fmt, clippy, tests, every program links with its workload (examples/pairs.json), the site's example programs link and run, the oracles agree
 	scripts/check_rust.sh
 lean:              ## the Lean model (lean/, docs/lean.md): oracle theorems current, lake build, no sorry, axiom audit
 	PATH=$(HOME)/.elan/bin:$$PATH scripts/check_lean.sh
