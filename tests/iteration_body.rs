@@ -617,7 +617,7 @@ fn a_register_is_the_stage_s_own() {
         engine other on tpu {{
           tokens cap 8;
           state r = 0;
-          scheduler {{ advance running; admit waiting; }}
+          scheduler {{ advance running; admit waiting; set r = r + 1; }}
           worker {{ forward (1); }}
         }}
         server {{ llm (2, 1); other (1, 1); {session}
@@ -643,6 +643,14 @@ fn a_register_is_the_stage_s_own() {
         .is_ok()
     );
     assert!(err("state k = 0; scheduler { advance running; admit waiting while (running.preempted == 0); }", "").contains("is set by nothing"));
+    // nor does a body that does not say `set k` (#746)
+    assert!(
+        err(
+            "state k = 0; scheduler { advance running; admit waiting; }",
+            ""
+        )
+        .contains("is set by nothing")
+    );
     // an `only` is a body, but none that sets the register
     assert!(
         err(

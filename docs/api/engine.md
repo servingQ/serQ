@@ -232,7 +232,10 @@ A register may be read in:
 
 Other reads are link errors. Each register name must be unique and cannot
 also name an attribute, constant, context variable, pool or stage. Engine
-families cannot declare registers.
+families cannot declare registers. A register the schedule never writes
+with `set` (in an `if` or not) does not link: it would keep its first
+value, which is a `let`. vLLM's procedure sets none, so its engine declares
+none.
 
 A guard based on a register must allow recovery when the engine empties.
 TGI's engine skips admission after an iteration that admitted, unless no

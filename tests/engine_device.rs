@@ -947,6 +947,50 @@ fn an_aggregate_index_is_no_register() {
     }
 }
 
+/// A register no `set` writes keeps its first value, a `let` spelt a second
+/// way. The linker refused one for vLLM's procedure alone, so
+/// `examples/multi-turn/vllm.sq` with `state k = 0;` linked once its gate
+/// was spelt `!running.preempted`, `0 == running.preempted` or
+/// `running.preempted < 1`, each a body (#746). Every spelling is refused
+/// now, and a `set` in an `if` sets it.
+#[test]
+fn a_register_no_schedule_sets_does_not_link() {
+    let (src, ov) = example(
+        &root().join("examples/multi-turn/vllm.sq"),
+        &common::horizon(100.0),
+    );
+    let src = replaced(
+        &src,
+        &[("tokens cap B;", "tokens cap B;\n    state k = 0;")],
+    );
+    for gate in [
+        "running.preempted == 0",
+        "!running.preempted",
+        "0 == running.preempted",
+        "running.preempted < 1",
+    ] {
+        let prog = replaced(
+            &src,
+            &[("while (running.preempted == 0)", &format!("while ({gate})"))],
+        );
+        refused_example(
+            &prog,
+            &ov,
+            "engine `vllm`: register `k` is set by nothing: a schedule that sets it is \
+             written with `set k = …;`",
+        );
+    }
+    let prog = replaced(
+        &src,
+        &[(
+            "advance running each at most (threshold);",
+            "advance running each at most (threshold);\n      \
+             if (waiting.count > 0) { set k = k + 1; }",
+        )],
+    );
+    compile_paired(&prog, &ov).unwrap_or_else(|e| panic!("{e}"));
+}
+
 #[test]
 fn the_design_refuses_what_it_says() {
     let ok = "advance running; admit waiting while (running.preempted == 0);";
