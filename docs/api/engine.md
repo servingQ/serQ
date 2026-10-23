@@ -274,7 +274,8 @@ records are attributes the caller reads after the call: `ENGINE.reused`,
 `ENGINE.prefill`, `ENGINE.admitted` and `ENGINE.first` (a connector adds
 `ENGINE.loaded`, `ENGINE.saved` and `ENGINE.load_done`); `ENGINE.reused`,
 `ENGINE.prefill` and `ENGINE.loaded` are observations of the report too,
-one per admission.
+one per admission, which the report's engine table sums per engine
+([engine statistics](../reference/cli.md#engine-statistics)).
 
 An engine that is a KV relation's source
 ([`kvt.nixl_pull`](std/kvt.md)) keeps its memory past each request's end,

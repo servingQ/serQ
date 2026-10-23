@@ -1389,7 +1389,11 @@ engine's records are attributes the caller reads after the call: `E.reused`
 prefill computes), `E.admitted` (when) and `E.first` (when its first token
 was sampled); a connector adds `E.loaded`, `E.saved` and `E.load_done`
 (below). `E.reused`, `E.prefill` and `E.loaded` are observations of the
-report too, one per admission.
+report too, one per admission. The report's engine table reads them per
+engine: its admissions, the re-admissions after a preemption, and
+`token_hit`, `Σ E.reused / Σ request.known`, the share of the admitted
+tokens its cache gave; tokens a connector loaded count in the denominator,
+not as hits ([engine statistics](reference/cli.md#engine-statistics)).
 
 The server, a gateway's `route` and the session may not run an engine's
 prefill or decode, nor hold a pool an engine admits (`pool P on E`, `pool

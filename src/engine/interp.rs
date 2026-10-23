@@ -697,6 +697,21 @@ struct StageState {
     /// waiting for an event that may not come (#263).
     idle_with_work: bool,
     steps: StepStats,
+    admissions: Admissions,
+}
+
+/// What an engine member's admissions after warm-up had and read, for the
+/// report's engine table (`EngineReport`): the same admissions its records
+/// `E.reused` and `E.prefill` sample.
+#[derive(Default)]
+struct Admissions {
+    /// Admissions, and of them those of a request preempted since its call.
+    count: u64,
+    readmissions: u64,
+    /// The requests' tokens at each admission (`request.known`), and of
+    /// them the ones read from the engine's cache (`E.reused`).
+    tokens: f64,
+    reused: f64,
 }
 
 /// What a step stage's iterations carried: how long each kind of batch
@@ -1069,6 +1084,7 @@ impl<'p> Interp<'p> {
                 iterations: 0,
                 idle_with_work: false,
                 steps: StepStats::new(),
+                admissions: Admissions::default(),
             })
             .collect();
         Interp {
@@ -2465,15 +2481,8 @@ impl<'p> Interp<'p> {
                         return;
                     }
                     // an engine that takes nothing admits the request as it
-                    // is called
-                    if let Some(r) = spec {
-                        self.observe_for(sid, r.records.reused, 0.0);
-                        self.observe_for(sid, r.records.prefill, input);
-                        let attrs = &mut self.sessions[sid].attrs;
-                        attrs[r.records.admitted] = self.now;
-                        attrs[r.records.last_reused] = 0.0;
-                        attrs[r.records.last_prefill] = input;
-                    }
+                    // is called: it reads nothing and computes its input
+                    self.request_admitted(sid);
                     if !self.request_next(sid) {
                         return;
                     }
@@ -2740,12 +2749,15 @@ impl<'p> Interp<'p> {
     }
 
     /// The request is admitted: what the engine records of the admission.
+    /// Every admission comes here, an engine's that takes nothing as it is
+    /// called, so its records and the report's engine table count the same.
     fn request_admitted(&mut self, sid: usize) {
         let pos = self.request_pos(sid);
         let now = self.now;
         let r = self.sessions[sid].req.as_mut().expect("a request");
         r.phase = Phase::Admitted;
-        let (known, spec, loaded, st) = (r.known, r.spec, r.loaded, r.stage);
+        let (known, spec, loaded, st, readmitted) =
+            (r.known, r.spec, r.loaded, r.stage, r.preempted);
         if let Some(spec) = spec {
             // what it computes: past what it read and loads, and its last
             // token again when a load brings every one (`load_ended`)
@@ -2754,6 +2766,14 @@ impl<'p> Interp<'p> {
             } else {
                 known - pos - loaded
             };
+            // the admissions `observe_for` samples: after warm-up
+            if self.warm {
+                let a = &mut self.stages[st].admissions;
+                a.count += 1;
+                a.readmissions += u64::from(readmitted);
+                a.tokens += known;
+                a.reused += pos;
+            }
             self.observe_for(sid, spec.records.reused, pos);
             self.observe_for(sid, spec.records.prefill, prefill);
             let attrs = &mut self.sessions[sid].attrs;
@@ -6574,6 +6594,40 @@ impl<'p> Interp<'p> {
                 }
             })
             .collect();
+        // one row per engine that takes requests, a family's members summed,
+        // as its records `E.reused` and `E.prefill` are one per family
+        let mut sums: Vec<(&str, Admissions)> = vec![];
+        for (s, cs) in self.stages.iter().zip(&p.stages) {
+            if !matches!(&cs.kind, CStageKind::Step(step) if step.request.is_some()) {
+                continue;
+            }
+            let k = match sums.iter().position(|(name, _)| *name == cs.name) {
+                Some(k) => k,
+                None => {
+                    sums.push((&cs.name, Admissions::default()));
+                    sums.len() - 1
+                }
+            };
+            let (a, b) = (&mut sums[k].1, &s.admissions);
+            a.count += b.count;
+            a.readmissions += b.readmissions;
+            a.tokens += b.tokens;
+            a.reused += b.reused;
+        }
+        let engines = sums
+            .into_iter()
+            .map(|(name, a)| EngineReport {
+                name: name.into(),
+                admissions: a.count,
+                readmissions: a.readmissions,
+                // no admission, or none with a token: no share to give
+                token_hit: if a.tokens > 0.0 {
+                    a.reused / a.tokens
+                } else {
+                    f64::NAN
+                },
+            })
+            .collect();
         let claims = (0..p.claims.len()).map(|k| self.claim_report(k)).collect();
         let stages = self
             .stages
@@ -6653,6 +6707,7 @@ impl<'p> Interp<'p> {
             client,
             gauges,
             statuses,
+            engines,
             claims,
             stages,
             pools,
