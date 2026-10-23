@@ -1114,7 +1114,7 @@ fn transfer(amount: CExpr, blocks: Vec<Vec<CStmt>>) -> crate::ir::CTransfer {
             let room = crate::ir::CRoom {
                 held: pools[0].1.clone(),
                 grow: grow.clone(),
-                cache: cache.clone().expect("a save caches"),
+                cache: cache.clone().expect("a save caches").1,
             };
             (body[1..].to_vec(), Some(room))
         }
@@ -1282,7 +1282,7 @@ fn stmt_names(s: &Stmt) -> Vec<(String, Span)> {
             .iter()
             .flat_map(|(_, u, r)| std::iter::once(u).chain(r))
             .chain(reuse)
-            .chain(cache)
+            .chain(cache.as_ref().map(|(_, e)| e))
             .chain(lease.as_ref().map(|(_, t)| t))
             .collect(),
         Stmt::Grow(_, e) | Stmt::Load(_, e) | Stmt::Set(_, e) | Stmt::Observe(_, e) => vec![e],
@@ -2172,7 +2172,10 @@ fn request_member(r: &mut crate::ir::CRequest, i: usize, n: usize, who: &str) ->
             expr(x, i, n, who)?;
         }
     }
-    for x in r.reuse.iter_mut().chain(&mut r.cache) {
+    if let Some((q, _)) = &mut r.cache {
+        at(q, i, n, who)?;
+    }
+    for x in r.reuse.iter_mut().chain(r.cache.as_mut().map(|(_, x)| x)) {
         expr(x, i, n, who)?;
     }
     for (k, m) in r.prefix.iter_mut().flatten() {
@@ -2903,7 +2906,10 @@ impl Linker<'_> {
         Ok(crate::ir::CRequest {
             pools,
             reuse: r.reuse.as_ref().map(|e| self.expr(e)).transpose()?,
-            cache: r.cache.as_ref().map(|e| self.expr(e)).transpose()?,
+            cache: match &r.cache {
+                None => None,
+                Some((q, e)) => Some((self.pool_ref(q)?, self.expr(e)?)),
+            },
             prefix,
             // a KV relation's source: set with the relations
             send: None,
@@ -3052,7 +3058,7 @@ impl Linker<'_> {
                         l2_copy(stage, link.as_ref(), &own, new.clone(), per_token),
                         Stmt::Load(kv.clone(), Expr::cost(one(kv), new)),
                     ],
-                    cache: Some(Expr::cost(one(kv), var(&saved))),
+                    cache: Some((kv.clone(), Expr::cost(one(kv), var(&saved)))),
                     prefix: None,
                     lease: None,
                 }];
@@ -3259,7 +3265,10 @@ impl Linker<'_> {
                         })
                         .collect::<LResult<Vec<_>>>()?;
                     let reuse = reuse.as_ref().map(|c| self.expr(c)).transpose()?;
-                    let cache = cache.as_ref().map(|c| self.expr(c)).transpose()?;
+                    let cache = match cache {
+                        None => None,
+                        Some((r, c)) => Some((self.pool_ref(r)?, self.expr(c)?)),
+                    };
                     let prefix = prefix
                         .as_ref()
                         .map(|segs| {

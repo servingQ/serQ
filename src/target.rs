@@ -212,16 +212,11 @@ pub fn vllm(p: &Program) -> Result<Value, String> {
         count(blocks, &format!("pool `{}`'s blocks", kvp.name))?,
     );
     // an admission, or a hold, that caches its KV at release keeps a prefix
-    // the next turn reuses
-    let caches = |pools: &[(CRef, CExpr, Option<CExpr>)], cache: &Option<CExpr>| {
-        cache.is_some() && pools.iter().any(|(r, _, _)| r.base == kv)
-    };
-    let prefix_caching = step
-        .request
-        .as_ref()
-        .is_some_and(|r| caches(&r.pools, &r.cache))
+    // the next turn reuses: its `cache` names the KV pool (#366)
+    let caches = |cache: &Option<(CRef, CExpr)>| cache.as_ref().is_some_and(|(r, _)| r.base == kv);
+    let prefix_caching = step.request.as_ref().is_some_and(|r| caches(&r.cache))
         || p.blocks.iter().flatten().any(|s| match s {
-            CStmt::Hold { pools, cache, .. } => caches(pools, cache),
+            CStmt::Hold { cache, .. } => caches(cache),
             _ => false,
         });
     let mut out = json!({

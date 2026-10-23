@@ -49,7 +49,7 @@ fn main() {
       set P = s0 / a + (warm ? n + (b / a) * n * (K + n / 2)
                             : (K + n) + (b / a) * (K + n) * (K + n) / 2);
       llm (ceil(P), o + 1);   // the model's o decode steps after the prefill's sampled token
-    } cache (cost(reqs, kv, K + n + o));
+    } cache kv (cost(kv, K + n + o));
     if (!cold) { observe hit = warm; }
     // the session's last request: nothing of its prefix is read again
     if (final) { drop kv; }

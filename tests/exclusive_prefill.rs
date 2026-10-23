@@ -10,10 +10,10 @@ use serq::{Program, run_ir, run_ir_logged};
 
 /// The schedule that takes a waiting prefill alone, in chunks of 4: the
 /// stage's `serve exclusive prefill`.
-const EXCLUSIVE: &str = "exclusive prefill each at most (4); admit waiting while (running.preempted == 0) each at most (4) taking reqs (1), kv (min(request.input, budget_left(llm))) reserve (request.input) cache (100);";
+const EXCLUSIVE: &str = "exclusive prefill each at most (4); admit waiting while (running.preempted == 0) each at most (4) taking reqs (1), kv (min(request.input, budget_left(llm))) reserve (request.input) cache kv (100);";
 
 /// The default schedule, in chunks of 4.
-const MIXED: &str = "advance running each at most (4); admit waiting while (running.preempted == 0) each at most (4) taking reqs (1), kv (min(request.input, budget_left(llm))) reserve (request.input) cache (100);";
+const MIXED: &str = "advance running each at most (4); admit waiting while (running.preempted == 0) each at most (4) taking reqs (1), kv (min(request.input, budget_left(llm))) reserve (request.input) cache kv (100);";
 
 fn source(schedule: &str, slot_cap: usize, kv_cap: usize) -> String {
     format!(
@@ -264,7 +264,7 @@ fn preemption_keeps_only_committed_progress_and_defers_readmission() {
             exclusive prefill each at most (2);
             admit waiting while (running.preempted == 0) each at most (2)
               taking reqs (1), kv (min(request.known, budget_left(llm))) reserve (request.known)
-              reuse (0) cache (100);
+              reuse (0) cache kv (100);
           }
           worker { forward (1); }
         }

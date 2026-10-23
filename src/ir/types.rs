@@ -533,13 +533,17 @@ impl Program {
                                 amount(e, CostTarget::pool(r))?;
                             }
                         }
-                        for e in reuse.iter().chain(cache) {
-                            amount(
-                                e,
-                                CostTarget::joint(
-                                    pools.iter().map(|(r, _, _)| CostTarget::pool(r)).collect(),
-                                ),
-                            )?;
+                        // `cache P (ℓ)` is units of the one pool it caches, and
+                        // `reuse` bounds what that pool reads (#366); without a
+                        // `cache`, `reuse` reads nothing, and the lint says so
+                        let target = match cache {
+                            Some((r, _)) => CostTarget::pool(r),
+                            None => CostTarget::joint(
+                                pools.iter().map(|(r, _, _)| CostTarget::pool(r)).collect(),
+                            ),
+                        };
+                        for e in reuse.iter().chain(cache.as_ref().map(|(_, e)| e)) {
+                            amount(e, target.clone())?;
                         }
                         if let Some((_, e)) = lease {
                             if expression(e)?.is_some() {
@@ -747,7 +751,7 @@ impl Program {
                         }
                         // Release, rejection, end and preemption may evaluate
                         // the cache clause before the body reaches its last set.
-                        if let Some(e) = cache {
+                        if let Some((_, e)) = cache {
                             read(e, ready)?;
                         }
                         walk(p, *body, ready)?;
@@ -804,10 +808,16 @@ fn references(st: &CStmt) -> Vec<&CRef> {
             growing,
             ..
         } => std::iter::once(stage).chain(also).chain(growing).collect(),
-        CStmt::Hold { pools, lease, .. } => pools
+        CStmt::Hold {
+            pools,
+            lease,
+            cache,
+            ..
+        } => pools
             .iter()
             .map(|(r, _, _)| r)
             .chain(lease.iter().map(|(r, _)| r))
+            .chain(cache.iter().map(|(r, _)| r))
             .collect(),
         CStmt::Grow(r, _)
         | CStmt::Shrink(r, _)

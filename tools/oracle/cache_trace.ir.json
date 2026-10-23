@@ -1,5 +1,5 @@
 {
-  "version": 15,
+  "version": 16,
   "attrs": [
     "cached",
     "serial",
@@ -351,25 +351,32 @@
                 ]
               ]
             },
-            "cache": {
-              "Binary": [
-                "Sub",
-                {
-                  "Binary": [
-                    "Add",
-                    {
-                      "Ctx": "Input"
-                    },
-                    {
-                      "Ctx": "Output"
-                    }
-                  ]
-                },
-                {
-                  "Num": 1.0
-                }
-              ]
-            },
+            "cache": [
+              {
+                "base": 0,
+                "count": 1,
+                "index": null
+              },
+              {
+                "Binary": [
+                  "Sub",
+                  {
+                    "Binary": [
+                      "Add",
+                      {
+                        "Ctx": "Input"
+                      },
+                      {
+                        "Ctx": "Output"
+                      }
+                    ]
+                  },
+                  {
+                    "Num": 1.0
+                  }
+                ]
+              }
+            ],
             "records": {
               "reused": 4,
               "prefill": 5,

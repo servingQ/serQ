@@ -164,7 +164,10 @@ fn qualify_request(r: &mut RequestSpec, f: &dyn Fn(&mut Ref)) {
             expr(x, f);
         }
     }
-    for x in r.reuse.iter_mut().chain(&mut r.cache) {
+    if let Some((q, _)) = &mut r.cache {
+        f(q);
+    }
+    for x in r.reuse.iter_mut().chain(r.cache.as_mut().map(|(_, x)| x)) {
         expr(x, f);
     }
     for (k, n) in r.prefix.iter_mut().flatten() {
@@ -509,7 +512,7 @@ impl Parser {
                 return self.err(
                     "an engine keeps a request's state, as vLLM's scheduler does: no `request \
                      (…) { … }` says what it does with one. What its admission takes is \
-                     `taking … [reuse (e)] [prefix (…)] [cache (e)]` on `admit waiting`, and the \
+                     `taking … [reuse (e)] [prefix (…)] [cache M (e)]` on `admit waiting`, and the \
                      server calls `E (input, output);` (docs/design/scheduler-worker.md)",
                 );
             } else if self.eat_kw("tokens") {

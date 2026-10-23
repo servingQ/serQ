@@ -4,7 +4,7 @@ use "std/args"; let N = args.number("N", 2);
              server {
                hold kv[j] (cost(kv, min(prompt, budget_left(E[j])))) reserve (cost(kv, prompt)) {
                  run E[j] prefill (cost(E, prompt)) growing kv[j]; run E[j] decode (cost(E, o - 1)) growing kv[j];
-               } cache (cost(kv, prompt + o));
+               } cache kv (cost(kv, prompt + o));
                observe done = now;
              }
              workload { arrive batch(1); hidden o; init { set prompt = 32; set o = 4; set j = 0; } session { turn; end; } }  

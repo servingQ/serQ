@@ -7,8 +7,6 @@
 //!
 //! See `tests/draw.rs`.
 
-use std::collections::BTreeMap;
-
 use crate::engine::dist::Dist;
 use crate::frontend::queue::GATEWAY_VERB;
 use crate::ir::{
@@ -1827,15 +1825,7 @@ pub fn project(p: &Program) -> Net {
             });
         }
     }
-    let mut cached: Vec<usize> = vec![];
-    for pools in cache_targets(p).values() {
-        for &pool in pools {
-            if !cached.contains(&pool) {
-                cached.push(pool);
-            }
-        }
-    }
-    w.net.cached = cached;
+    w.net.cached = cache_targets(p);
     let mut net = w.net;
     decisions_first(&mut net);
     keep_instances(&mut net);
@@ -2069,104 +2059,55 @@ fn instance_order(net: &Net) -> Vec<usize> {
     order
 }
 
-/// For every `hold` with a `cache` clause, the pools that clause can leave
-/// units in - keyed by the hold's body block, which is unique to it.
-///
-/// `release_hold` (`interp.rs`) caches `min(cache, computed)` per pool, where
-/// `computed` is the allocation unless the hold grew, and then it is the
-/// position the growing run reached, which only a grown pool has. `grow`
-/// advances the *innermost* hold holding that pool, so a `growing` run deep
-/// inside nested holds can belong to an outer one, and a hold may be grown in
-/// more than one pool. `examples/multi-turn/replica.sq` is the case that makes this
-/// visible: its `hold batch (1), kv (...)` has no `growing` at all and really
-/// does keep a unit of `batch` cached.
-pub(crate) fn cache_targets(p: &Program) -> BTreeMap<usize, Vec<usize>> {
-    struct Frame {
-        body: usize,
-        pools: Vec<usize>,
-        grown: Vec<usize>,
-    }
-    fn walk(
-        p: &Program,
-        block: usize,
-        stack: &mut Vec<Frame>,
-        out: &mut BTreeMap<usize, Vec<usize>>,
-    ) {
+/// The pools a prefix is cached in: the one each `hold`'s `cache` names,
+/// and each engine's request's, its memory, in the order the session
+/// reaches them. A release caches `min(ℓ, computed)` in that pool alone
+/// (`release_hold`, `interp.rs`); the hold's other pools are memory, and
+/// keep nothing (#366: `examples/multi-turn/replica.sq`'s `hold reqs (1),
+/// kv (…)` used to keep a unit of `reqs` per session, which this copy of
+/// the rule followed).
+pub(crate) fn cache_targets(p: &Program) -> Vec<usize> {
+    fn walk(p: &Program, block: usize, out: &mut Vec<usize>) {
         let Some(stmts) = p.blocks.get(block) else {
             return;
         };
+        let add = |q: usize, out: &mut Vec<usize>| {
+            if !out.contains(&q) {
+                out.push(q);
+            }
+        };
         for s in stmts {
             match s {
-                CStmt::Hold {
-                    pools, body, cache, ..
-                } => {
-                    stack.push(Frame {
-                        body: *body,
-                        pools: pools.iter().map(|(r, _, _)| r.base).collect(),
-                        grown: vec![],
-                    });
-                    walk(p, *body, stack, out);
-                    let f = stack.pop().expect("pushed above");
-                    if cache.is_some() {
-                        let targets = if f.grown.is_empty() {
-                            f.pools.clone()
-                        } else {
-                            f.grown.clone()
-                        };
-                        out.insert(f.body, targets);
+                CStmt::Hold { body, cache, .. } => {
+                    walk(p, *body, out);
+                    if let Some((r, _)) = cache {
+                        add(r.base, out);
                     }
                 }
-                CStmt::Run {
-                    growing: Some(g), ..
-                } => {
-                    // the innermost hold that holds this pool is the one that grows
-                    if let Some(f) = stack.iter_mut().rev().find(|f| f.pools.contains(&g.base))
-                        && !f.grown.contains(&g.base)
-                    {
-                        f.grown.push(g.base);
-                    }
-                }
-                // a load computes into the hold the way a growing run does
-                CStmt::Grow(g, _) | CStmt::Load(g, _) => {
-                    if let Some(f) = stack.iter_mut().rev().find(|f| f.pools.contains(&g.base))
-                        && !f.grown.contains(&g.base)
-                    {
-                        f.grown.push(g.base);
-                    }
-                }
-                // an engine's request caches in its memory pool, which grows
-                // with it, or in every pool it takes when it holds no memory;
-                // it has no body, so it is keyed past every block
+                // an engine's request has no body: its `cache` names the
+                // engine's memory
                 CStmt::Request { stage, .. } => {
                     if let CStageKind::Step(st) = &p.stages[stage.base].kind
-                        && let Some(r) = &st.request
-                        && r.cache.is_some()
+                        && let Some((r, _)) = st.request.as_ref().and_then(|r| r.cache.as_ref())
                     {
-                        let pools: Vec<usize> = r.pools.iter().map(|(q, _, _)| q.base).collect();
-                        let targets = match st.memory {
-                            Some(m) if pools.contains(&m) => vec![m],
-                            _ => pools,
-                        };
-                        out.insert(p.blocks.len() + stage.base, targets);
+                        add(r.base, out);
                     }
                 }
                 CStmt::Branch(_, t, e) => {
-                    walk(p, *t, stack, out);
-                    walk(p, *e, stack, out);
+                    walk(p, *t, out);
+                    walk(p, *e, out);
                 }
-                CStmt::Loop(b) | CStmt::While(_, b) => walk(p, *b, stack, out),
-                // a leg's holds are its own
-                CStmt::Fork(b) => walk(p, *b, &mut vec![], out),
+                CStmt::Loop(b) | CStmt::While(_, b) | CStmt::Fork(b) => walk(p, *b, out),
                 _ => {}
             }
         }
     }
-    let mut out = BTreeMap::new();
-    walk(p, p.session, &mut vec![], &mut out);
+    let mut out = vec![];
+    walk(p, p.session, &mut out);
     // a connector's save is a hold on its L2's pool that caches
     let p = &p.kernel();
     for b in (0..p.stages.len()).flat_map(|i| p.connector_blocks(i)) {
-        walk(p, b, &mut vec![], &mut out);
+        walk(p, b, &mut out);
     }
     out
 }

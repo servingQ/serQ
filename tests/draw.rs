@@ -345,13 +345,13 @@ fn compile(src: &str, workload: &str) -> Program {
         .expect("the fixture compiles")
 }
 
-/// `grow` advances the *innermost* hold holding the pool, so a `growing` run
-/// nested inside another hold still belongs to the outer one. Walking only
-/// `Run`/`Branch`/`Loop` misses it and the figure claims a prefix cache on
-/// pools the interpreter never caches in. The nested hold is written as a
+/// A hold of several pools caches the one its `cache` names, however deep
+/// the `growing` run that computes it: the figure draws the prefix cache on
+/// that pool alone (#366; the view used to follow the growing run to tell,
+/// which `cache kv` now says). The nested hold is written as a
 /// queue's entry: an engine's request holds only the pools it takes.
 #[test]
-fn growing_is_found_through_nested_holds() {
+fn a_hold_caches_the_pool_its_cache_names() {
     let p = compile(
         r#"
         queue llm : prefill {
@@ -361,7 +361,7 @@ fn growing_is_found_through_nested_holds() {
           prefill (n) {
             hold kv (cost(kv, 32)), reqs (cost(reqs, 1)) {
               hold gate (cost(gate, 1)) { run llm prefill (cost(llm, n)) growing kv; }
-            } cache (cost(kv, reqs, n + o));
+            } cache kv (cost(kv, n + o));
           }
         }
         server (n, hidden o) { llm.prefill (n); }
@@ -545,22 +545,20 @@ fn negative_constants_reparse() {
     ));
 }
 
-/// `release_hold` caches the growing run's position when a hold grew, and the
-/// allocation otherwise, so a hold with `growing` caches in that pool alone.
-/// `replica.sq` has no `growing` and really does keep a unit of `reqs`.
+/// A release caches in the pool its `cache` names, and the figure draws the
+/// prefix cache there: an engine's request in its memory, a hold in the
+/// pool it names. `replica.sq`'s `hold reqs (1), kv (…)` has no `growing`,
+/// and used to keep a unit of `reqs` per session, which the figure drew
+/// (#366); its `cache kv` keeps none.
 #[test]
 fn cache_targets_follow_the_release_rule() {
     let p = program("vllm");
     let net = deployment::project(&p);
-    assert_eq!(net.cached, vec![pool(&p, "kv")], "growing kv, so not reqs");
+    assert_eq!(net.cached, vec![pool(&p, "kv")], "the memory, not reqs");
 
     let p = program("replica");
     let net = deployment::project(&p);
-    let mut cached = net.cached.clone();
-    cached.sort_unstable();
-    let mut want = vec![pool(&p, "reqs"), pool(&p, "kv")];
-    want.sort_unstable();
-    assert_eq!(cached, want);
+    assert_eq!(net.cached, vec![pool(&p, "kv")], "`cache kv`, not reqs");
 }
 
 /// A pool held across two stations, and one held inside it at the first.
@@ -1706,7 +1704,7 @@ fn a_gateway_routes_and_the_reply_comes_back_by_it() {
             scheduler {
               advance running;
               admit waiting while (running.preempted == 0)
-                taking reqs (1), kv (request.known) reuse (0) cache (0);
+                taking reqs (1), kv (request.known) reuse (0) cache kv (0);
             }
             worker { forward (compute(batch.tokens)); }
           }

@@ -11,7 +11,7 @@
 //!       taking reqs (1), kv (min(request.known, request.hit + budget_left(vllm)))
 //!         reserve (request.known)
 //!       reuse (floor(request.known - 1, blocksize(kv)))
-//!       cache (request.input + request.output);
+//!       cache kv (request.input + request.output);
 //!   }
 //! }
 //! ```
@@ -40,11 +40,12 @@ impl Parser {
         Ok(())
     }
 
-    /// `P (u) [reserve (r)], … [reuse (e)] [prefix (k: n, …)] [cache (e)]`:
+    /// `P (u) [reserve (r)], … [reuse (e)] [prefix (k: n, …)] [cache M (e)]`:
     /// the pools the admission takes and how much, what it may reuse of the
     /// cache, what its sequence is made of, and what its release leaves
-    /// cached. The pools are checked where the engine ends, with its
-    /// capacities.
+    /// cached on the engine's memory `M`. The pools are checked where the
+    /// engine ends, with its capacities, and `M` where the program is
+    /// linked, with the engine's memory.
     fn taking(&mut self) -> PResult<RequestSpec> {
         let mut pools = vec![];
         loop {
@@ -95,7 +96,18 @@ impl Parser {
             None
         };
         let cache = if self.eat_kw("cache") {
-            Some(self.engine_expr("cache", |p| p.paren_expr())?)
+            if *self.peek() == Tok::LParen {
+                let taken: Vec<&str> = pools.iter().map(|(r, _, _)| r.name.as_str()).collect();
+                return self.err(cache_names_no_pool(&taken, true));
+            }
+            let span = Some(self.span());
+            let name = self.ident()?;
+            let pool = Ref {
+                span,
+                name,
+                index: None,
+            };
+            Some((pool, self.engine_expr("cache", |p| p.paren_expr())?))
         } else {
             None
         };

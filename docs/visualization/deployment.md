@@ -145,9 +145,11 @@ over an empty cache says nothing.
 
 ### Which pool holds the cache
 
-A hold with a `growing` run caches in that pool alone. A hold without one
-caches in all its pools. The cache strip follows this behavior, rather
-than assuming every cached pool represents KV memory.
+The pool a hold's `cache` names, and an engine's memory, which its
+request's `cache` names: the program says it, and the strip is drawn
+there. A hold's other pools keep nothing, so `replica.sq`'s `reqs` has no
+strip; before #366 a hold cached in all its pools unless a `growing` run
+grew one, and the figure followed that rule.
 
 ## Nesting
 

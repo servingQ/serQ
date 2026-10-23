@@ -103,7 +103,7 @@ fn engine(server: &str, turn: &str) -> Result<serq::Program, String> {
             advance running;
             admit waiting while (running.preempted == 0)
               taking reqs (1), kv (request.known) reserve (request.known + 0.5 * holders(reqs))
-              cache (request.input + request.output);
+              cache kv (request.input + request.output);
           }}
           worker {{ forward (1e-3); }}
         }}
@@ -163,7 +163,7 @@ fn a_kv_pool_has_whole_units() {
         &common::main_source(
             "pool kv { cap 100.5; evict lru; }
         stage svc : fifo;
-        server { hold kv (cost(kv, 10)) { run svc (cost(svc, 1)); } cache (cost(kv, 10)); }",
+        server { hold kv (cost(kv, 10)) { run svc (cost(svc, 1)); } cache kv (cost(kv, 10)); }",
         ),
         "workload { arrive batch(1); session { turn; end; } }",
         &common::horizon(10.0),
@@ -210,7 +210,7 @@ fn what_makes_a_pool_hold_tokens_is_named() {
         stage svc : fifo;
         stage link : fifo;
         server (n) {
-          hold kv (cost(kv, n)) { run svc (cost(svc, 1)); } cache (cost(kv, n));
+          hold kv (cost(kv, n)) { run svc (cost(svc, 1)); } cache kv (cost(kv, n));
           hold tier (cost(tier, n / 2)) { run svc (cost(svc, 1)); }
         }",
         &[

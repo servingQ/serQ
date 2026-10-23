@@ -1,6 +1,6 @@
 //! An engine's request (`docs/design/scheduler-worker.md`, step 3): the
 //! engine keeps a request's state as vLLM does; what its admission takes is
-//! `taking … [reuse (e)] [prefix (…)] [cache (e)]` on `admit waiting`, read
+//! `taking … [reuse (e)] [prefix (…)] [cache M (e)]` on `admit waiting`, read
 //! as `request.…`, and the server calls it, `llm (prompt, o);`. A request
 //! runs as the hold a queue's entry writes in the kernel, and what the
 //! design refuses does not link.
@@ -77,7 +77,7 @@ engine llm on gpu {
     advance running;
     admit waiting while (running.preempted == 0)
       taking reqs (1), kv (min(request.known, budget_left(llm))) reserve (request.known)
-      cache (request.input + request.output);
+      cache kv (request.input + request.output);
   }
   worker { forward (1); }
 }
@@ -116,7 +116,7 @@ queue llm : prefill {
       set kept = known;
       run llm prefill (cost(llm, known - cached)) growing kv;
       run llm decode (cost(llm, o - 1 - (known - prompt))) growing kv;
-    } cache (cost(reqs, kv, prompt + o));
+    } cache kv (cost(kv, prompt + o));
   }
 }
 server (n, hidden o) {
@@ -208,7 +208,7 @@ server (n) {{ llm (n, 1); }}
 
 /// The cache may read whether the request has finished: a retracted one
 /// leaves what `cache` says of it, a finished one all of it (SGLang's
-/// `cache (request.finished ? … : request.input)`, which no run of
+/// `cache kv (request.finished ? … : request.input)`, which no run of
 /// `sglang.sq` preempts). Two requests of 16 tokens that generate 24 outgrow
 /// four blocks: the second is preempted with two blocks computed, the first
 /// takes one of them, and the second, admitted again when the first ends,
@@ -226,7 +226,7 @@ fn the_cache_reads_whether_the_request_finished() {
                scheduler {{
                  advance running;
                  admit waiting while (running.preempted == 0)
-                   taking kv (request.known) reuse (floor(request.known - 1, 16)) cache ({cache});
+                   taking kv (request.known) reuse (floor(request.known - 1, 16)) cache kv ({cache});
                }}
                worker {{ forward (1); }}
              }}
@@ -302,8 +302,8 @@ fn a_register_is_read_by_the_admission_alone() {
     // the release is the session's, as a hold's `cache` is (#592 review)
     refused(
         &with_ratio(&[(
-            "cache (request.input + request.output);",
-            "cache (request.input + request.output + ratio);",
+            "cache kv (request.input + request.output);",
+            "cache kv (request.input + request.output + ratio);",
         )]),
         "`ratio` is an engine's register (`state`), which its schedule reads; it is read in \
          an engine's `cache` or a connector's `save`",
@@ -392,8 +392,8 @@ fn the_request_s_names_are_read_where_it_has_them() {
         refused(&replaced(&program(), &[(from, to)]), said);
     };
     at(
-        "cache (request.input + request.output)",
-        "cache (request.hit)",
+        "cache kv (request.input + request.output)",
+        "cache kv (request.hit)",
         "`request.hit` is read at the request's admission",
     );
     at(
@@ -804,8 +804,8 @@ fn a_bound_of_the_hit_does_not_read_it() {
         replaced(
             &program(),
             &[(
-                "      cache (request.input + request.output);",
-                &format!("      {clause}\n      cache (request.input + request.output);"),
+                "      cache kv (request.input + request.output);",
+                &format!("      {clause}\n      cache kv (request.input + request.output);"),
             )],
         )
     };

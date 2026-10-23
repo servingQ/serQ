@@ -266,13 +266,15 @@ each:
 
 ```serq
 admit waiting … taking POOL (units) [reserve (units)], …
-  [reuse (e)] [prefix (k: n, …)] [cache (e)];
+  [reuse (e)] [prefix (k: n, …)] [cache MEMORY (e)];
 ```
 
 `taking` names the engine's capacities and its device's, and reads the
 request as `request.input`, `request.output`, `request.known`,
-`request.hit`, `request.loaded` and `request.preempted`; `cache`, read when
-the request gives its pools back, reads `request.finished`. The engine's
+`request.hit`, `request.loaded` and `request.preempted`; `cache` names the
+engine's memory, the pool on its device that the request's KV is in (a
+`cache` on another pool does not link), and, read when the request gives
+its pools back, reads `request.finished`. The engine's
 records are attributes the caller reads after the call: `ENGINE.reused`,
 `ENGINE.prefill`, `ENGINE.admitted` and `ENGINE.first` (a connector adds
 `ENGINE.loaded`, `ENGINE.saved` and `ENGINE.load_done`); `ENGINE.reused`,
@@ -295,7 +297,7 @@ admit waiting while (running.preempted == 0)
   taking reqs (1),
          kv (min(request.known, request.hit + budget_left(P))) reserve (request.known)
   reuse (floor(request.known - 1, bs))
-  cache (request.input);
+  cache kv (request.input);
 ```
 
 (`examples/pd-disaggregation/llmd_nixl_pull.sq`'s prefiller, whose entry is
@@ -380,7 +382,7 @@ engine vllm on gpu {
       taking reqs (1), kv (min(request.known, request.hit + budget_left(vllm)))
         reserve (request.known)
       reuse (floor(request.known - 1, blocksize(kv)))
-      cache (request.input + request.output);
+      cache kv (request.input + request.output);
   }
   worker {
     forward (c0 + max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));

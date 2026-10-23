@@ -15,7 +15,7 @@ fn main() {
         taking reqs (1), kv (min(request.known, request.hit + min(128, budget_left(llm))))
           reserve (request.known)
         reuse (floor(request.known - 1, blocksize(kv)))
-        cache (request.input + request.output - 1);
+        cache kv (request.input + request.output - 1);
     }
     worker {
       forward (0.002 + 0.00001 * batch.tokens);

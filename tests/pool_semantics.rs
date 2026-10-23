@@ -63,10 +63,10 @@ fn eviction_order_is_the_declared_key() {
         stage gate : delay;
         server (c) {{
           run gate (cost(gate, serial));                 // 0, 1, 2: sequential first turns
-          hold kv (cost(kv, c)) {{ run svc (cost(svc, 0.1)); }} cache (cost(kv, c));
+          hold kv (cost(kv, c)) {{ run svc (cost(svc, 0.1)); }} cache kv (cost(kv, c));
           run gate (cost(gate, 10));
           if (serial == 1) {{
-            hold kv (cost(kv, c)) {{ observe hit = cached >= c; run svc (cost(svc, 0.1)); }} cache (cost(kv, c));
+            hold kv (cost(kv, c)) {{ observe hit = cached >= c; run svc (cost(svc, 0.1)); }} cache kv (cost(kv, c));
           }}
         }}
 
@@ -102,15 +102,15 @@ fn queued_sessions_are_evicted_after_suspended_ones() {
         stage gate : delay;
         server {{
           if (serial == 0) {{
-            hold slot (cost(slot, 1)) {{ hold kv (cost(kv, 8)) {{ run svc (cost(svc, 1)); }} cache (cost(kv, 8)); }}
+            hold slot (cost(slot, 1)) {{ hold kv (cost(kv, 8)) {{ run svc (cost(svc, 1)); }} cache kv (cost(kv, 8)); }}
             run gate (cost(gate, 2));                                   // t = 3: queue for the slot
-            hold slot (cost(slot, 1)) {{ hold kv (cost(kv, 8)) {{ observe hit0 = cached >= 8; run svc (cost(svc, 0.1)); }} cache (cost(kv, 0)); }}
+            hold slot (cost(slot, 1)) {{ hold kv (cost(kv, 8)) {{ observe hit0 = cached >= 8; run svc (cost(svc, 0.1)); }} cache kv (cost(kv, 0)); }}
           }}
           if (serial == 1) {{
             run gate (cost(gate, 1));
-            hold slot (cost(slot, 1)) {{ hold kv (cost(kv, 10)) {{ run svc (cost(svc, 1)); }} cache (cost(kv, 10)); }}
+            hold slot (cost(slot, 1)) {{ hold kv (cost(kv, 10)) {{ run svc (cost(svc, 1)); }} cache kv (cost(kv, 10)); }}
             run gate (cost(gate, 5));                                   // tool call t = 2..7
-            hold slot (cost(slot, 1)) {{ hold kv (cost(kv, 10)) {{ observe hit1 = cached >= 10; run svc (cost(svc, 0.1)); }} cache (cost(kv, 0)); }}
+            hold slot (cost(slot, 1)) {{ hold kv (cost(kv, 10)) {{ observe hit1 = cached >= 10; run svc (cost(svc, 0.1)); }} cache kv (cost(kv, 0)); }}
           }}
           if (serial == 2) {{
             run gate (cost(gate, 3.5));
@@ -159,9 +159,9 @@ fn block_pools_round_and_evict_by_block() {
           run gate (cost(gate, serial));
           // s0 takes 55 -> 60 allocated, caches 55 -> 50 (five full blocks)
           // s1 takes 70 -> needs 70 of 100 - 0 used; cached 50 -> evict 2 blocks
-          hold kv (cost(kv, serial == 0 ? 55 : 70)) { observe used = used(kv); run svc (cost(svc, 1)); } cache (cost(kv, serial == 0 ? 55 : 0));
+          hold kv (cost(kv, serial == 0 ? 55 : 70)) { observe used = used(kv); run svc (cost(svc, 1)); } cache kv (cost(kv, serial == 0 ? 55 : 0));
           run gate (cost(gate, 10));
-          if (serial == 0) { hold kv (cost(kv, 55)) { observe cached0 = cached; run svc (cost(svc, 0.1)); } cache (cost(kv, 0)); }
+          if (serial == 0) { hold kv (cost(kv, 55)) { observe cached0 = cached; run svc (cost(svc, 0.1)); } cache kv (cost(kv, 0)); }
         }
 
 "#;
@@ -196,7 +196,7 @@ fn spill_to_a_tier_and_fetch_back() {
         stage gate : delay;
         server (c) {
           run gate (cost(gate, serial));
-          hold kv (cost(kv, c)) { run svc (cost(svc, 1)); } cache (cost(kv, c));
+          hold kv (cost(kv, c)) { run svc (cost(svc, 1)); } cache kv (cost(kv, c));
           run gate (cost(gate, 5));
           if (serial == 0) {
             observe in_tier = cachedin(tier);
@@ -297,7 +297,7 @@ fn a_spill_predicate_sees_whether_the_session_is_queued() {
         stage gate : delay;
         server (pri) {{
           if (serial == 0) {{
-            hold kv (cost(kv, 6)) {{ run svc (cost(svc, 0.5)); }} cache (cost(kv, 6));
+            hold kv (cost(kv, 6)) {{ run svc (cost(svc, 0.5)); }} cache kv (cost(kv, 6));
             run gate (cost(gate, 0.6));
             hold kv (cost(kv, 20)) {{ run svc (cost(svc, 0.1)); }}
           }}
@@ -376,7 +376,7 @@ fn a_preempted_hold_caches_what_it_computed() {
               observe cached_at_admission = cached;
               observe computed_at_admission = computed;
               run d (cost(d, 5));
-            } cache (cost(kv, 12));
+            } cache kv (cost(kv, 12));
           }
         }
 
@@ -735,14 +735,14 @@ fn a_boolean_guard_and_a_declared_draw_run() {
 
 /// #230: a hold without a `cache` clause takes no part in the prefix
 /// cache. One session sends the same 1000-token prompt every second; the
-/// request's admission keeps `cache (1000)`, i.e. 992 (62 full blocks of 16).
+/// request's admission keeps `cache kv (1000)`, i.e. 992 (62 full blocks of 16).
 /// Alone, turn 1 misses and every later turn hits: `cached` = min(992,
 /// 992) > 0. Wrapped in an outer hold on the same pool, with or without a
 /// `release kv;` first, the outer hold has no `cache` clause, so it leaves
 /// the 992 cached units where they are and the inner hold finds them: the
 /// same hits. (Before: the outer admission consumed the entry, so the inner
 /// hold found none and every turn missed; the inner hold cached 992 again,
-/// which the outer hold's end, without a clause, left alone.) With `cache (0)`
+/// which the outer hold's end, without a clause, left alone.) With `cache kv (0)`
 /// on the outer hold the program says the opposite, consume and keep
 /// nothing, and every turn misses.
 #[test]
@@ -756,7 +756,7 @@ fn a_hold_without_cache_leaves_the_prefix_to_the_hold_that_caches() {
             1.0,
         ),
         (
-            format!("hold kv (cost(kv, 0)) {{ {request} }} cache (cost(kv, 0));"),
+            format!("hold kv (cost(kv, 0)) {{ {request} }} cache kv (cost(kv, 0));"),
             0.0,
         ),
     ] {
@@ -768,7 +768,7 @@ fn a_hold_without_cache_leaves_the_prefix_to_the_hold_that_caches() {
           scheduler {{
             advance running;
             admit waiting while (running.preempted == 0)
-              taking kv (request.hit + 8) reuse (992) cache (1000);
+              taking kv (request.hit + 8) reuse (992) cache kv (1000);
           }}
           worker {{ forward (batch.tokens * 1e-5 + 1e-4); }}
         }}
@@ -1133,7 +1133,7 @@ fn a_held_reservation_counts_against_later_admissions() {
           scheduler {{
             advance running;
             admit waiting while (running.preempted == 0)
-              taking reqs (1), kv (4) reserve (10) cache (0);
+              taking reqs (1), kv (4) reserve (10) cache kv (0);
           }}
           worker {{ forward (1); }}
         }}
@@ -1259,7 +1259,12 @@ fn a_run_ends_at_its_start_plus_its_work() {
     // #479's prompt is refused: the language says what the run would have
     // read an ulp short
     let e = common::compile(
-        &common::main_source(&prog("0.4 + 1.2", 10, " cache (100)", "llm (prompt, 1);")),
+        &common::main_source(&prog(
+            "0.4 + 1.2",
+            10,
+            " cache kv (100)",
+            "llm (prompt, 1);",
+        )),
         &workload(1),
         &common::horizon(20.0),
     )
@@ -1274,7 +1279,7 @@ fn a_run_ends_at_its_start_plus_its_work() {
     let src = prog(
         "1 + 1",
         10,
-        " cache (100)",
+        " cache kv (100)",
         "llm (prompt, 1);
          observe extent = cachedin(kv);",
     );
@@ -1311,7 +1316,7 @@ fn a_resumed_growth_moves_the_position_once() {
           tokens cap 4;
           scheduler {
             advance running;
-            admit waiting taking reqs (1), kv (0) cache (100);
+            admit waiting taking reqs (1), kv (0) cache kv (100);
           }
           worker { forward (1); }
         }
@@ -1334,4 +1339,150 @@ fn a_resumed_growth_moves_the_position_once() {
     );
     assert_eq!(r.ended, 2, "{}", r.text());
     assert_eq!(r.observe("extent").unwrap().samples, [6.0], "{}", r.text());
+}
+
+/// Two turns of one session through `hold reqs (1), kv (40)`, the shape of
+/// `examples/multi-turn/replica.sq`, whose `cache kv` keeps the KV alone:
+/// the slot pool keeps nothing (#366). With `cache (ℓ)` on both pools, as
+/// it was, `reqs` kept a slot per session (`slots` read 1, and replica's
+/// `reqs` row evicted 317 of them), and a turn whose KV entry had gone
+/// read `cached = 1`, the slot's "prefix", the most of the two (`drop kv`
+/// below: `got` read 0, then 1).
+#[test]
+fn a_hold_caches_only_the_pool_its_cache_names() {
+    for (drop, want) in [("", [0.0, 40.0]), (" drop kv;", [0.0, 0.0])] {
+        let src = format!(
+            "pool reqs {{ cap 4; }}
+        pool kv {{ cap 1000; }}
+        stage d : delay;
+        server {{
+          hold reqs (cost(reqs, 1)), kv (cost(kv, 40)) {{
+            observe got = cached;
+            run d (cost(d, 1));
+          }} cache kv (cost(kv, 40));
+          observe slots = cachedin(reqs);
+          observe kept = cachedin(kv);{drop}
+        }}"
+        );
+        let workload = "workload { arrive batch(1); session { turn; turn; end; } }";
+        let r = run(&src, workload, &common::horizon(20.0));
+        let samples = |n: &str| r.observe(n).unwrap().samples.clone();
+        assert_eq!(samples("got"), want, "{drop}: {}", r.text());
+        assert_eq!(samples("slots"), [0.0, 0.0], "{drop}: {}", r.text());
+        assert_eq!(samples("kept"), [40.0, 40.0], "{drop}: {}", r.text());
+        let reqs = r.pool("reqs").unwrap();
+        assert_eq!(reqs.mean_cached, 0.0, "{}", r.text());
+        assert_eq!(reqs.evicted_entries, 0, "{}", r.text());
+    }
+}
+
+/// What a pool of a hold has computed is its own: `aux`, which no run
+/// grows, caches its allocation however far `kv`'s growing run went. With
+/// one flag per hold, `kv`'s growth made `aux` cache its position, 0
+/// (#366: the issue's title).
+#[test]
+fn a_pools_computed_is_its_own_not_the_holds() {
+    for growing in [" growing kv", ""] {
+        let src = format!(
+            "queue llm : prefill {{
+          device gpu {{ kv cap 1000; }}
+          pool kv on gpu {{ }}
+          pool aux {{ cap 10; }}
+          engine on gpu {{
+            tokens cap 64;
+            scheduler {{ advance running; admit waiting while (running.preempted == 0); }}
+            worker {{ forward (1); }}
+          }}
+          prefill (n) {{
+            hold kv (cost(kv, 32)), aux (cost(aux, 4)) {{
+              run llm prefill (cost(llm, n)){growing};
+            }} cache aux (cost(aux, 4));
+            observe kept = cachedin(aux);
+          }}
+        }}
+        server {{ llm.prefill (32); }}"
+        );
+        let r = run(&src, ONE, &common::horizon(200.0));
+        assert_eq!(
+            r.observe("kept").unwrap().samples,
+            [4.0],
+            "{growing}: {}",
+            r.text()
+        );
+    }
+}
+
+/// `cache P (ℓ)` names one pool of its hold, an engine's its memory, and
+/// the spelling without a pool says which to write (#366).
+#[test]
+fn a_cache_names_one_pool_of_its_hold() {
+    let hold = |header: &str, cache: &str| {
+        common::compile(
+            &common::main_source(&format!(
+                "pool reqs {{ cap 4; }} pool kv {{ cap 1000; }} stage d : delay;
+        server {{ hold {header} {{ run d (cost(d, 1)); }} {cache};
+        }}"
+            )),
+            ONE,
+            &common::horizon(10.0),
+        )
+    };
+    let both = "reqs (cost(reqs, 1)), kv (cost(kv, 40))";
+    // the KV alone, which the cost of every pool of the hold used to be
+    // the only way to write
+    hold(both, "cache kv (cost(kv, 40))").unwrap();
+    let e = hold(both, "cache kv (cost(reqs, kv, 40))").unwrap_err();
+    assert!(e.contains("requires its cost type"), "{e}");
+    let e = hold("kv (cost(kv, 40))", "cache reqs (cost(reqs, 1))").unwrap_err();
+    assert!(
+        e.contains("`cache reqs`: the hold does not take that pool"),
+        "{e}"
+    );
+    // the spelling before: the hold's pool, or which one to choose
+    let e = hold("kv (cost(kv, 40))", "cache (cost(kv, 40))").unwrap_err();
+    assert!(
+        e.contains("`cache (ℓ)` names no pool") && e.contains("write `cache kv (ℓ)`"),
+        "{e}"
+    );
+    let e = hold(both, "cache (cost(reqs, kv, 40))").unwrap_err();
+    assert!(
+        e.contains("write `cache P (ℓ)`, P the one of `reqs`, `kv`"),
+        "{e}"
+    );
+    let engine = |taking: &str| {
+        common::compile(
+            &common::main_source(&format!(
+                "device gpu {{ kv cap 1000; }}
+        engine llm on gpu {{
+          reqs cap 4;
+          tokens cap 64;
+          scheduler {{ advance running; admit waiting while (running.preempted == 0) taking {taking}; }}
+          worker {{ forward (1); }}
+        }}
+        pool kv on gpu {{ block 16; }}
+        pool reqs on llm {{ }}
+        server {{ llm (32, 4); }}"
+            )),
+            ONE,
+            &common::horizon(10.0),
+        )
+    };
+    engine("reqs (1), kv (request.known) cache kv (request.input)").unwrap();
+    let e = engine("reqs (1), kv (request.known) cache reqs (request.input)").unwrap_err();
+    assert!(
+        e.contains("`cache reqs`: an engine's `cache` keeps the KV its requests compute")
+            && e.contains("its memory (`kv`)"),
+        "{e}"
+    );
+    let e = engine("reqs (1) cache kv (request.input)").unwrap_err();
+    assert!(
+        e.contains("`cache kv`: the request does not take that pool"),
+        "{e}"
+    );
+    let e = engine("reqs (1), kv (request.known) cache (request.input)").unwrap_err();
+    assert!(
+        e.contains("`cache (ℓ)` names no pool")
+            && e.contains("an engine's `cache` names its memory"),
+        "{e}"
+    );
 }

@@ -190,7 +190,7 @@ deployment's edits in `sessions.csv`.
   prompt tokens computed a turn 5051, 1339 and 2337. A colocated pod
   caches the prompt and the answer of a turn, and the next turn's prompt
   is them and the new tokens; a prefill pod caches the prompt only
-  (`cache (request.input)`), so the split computes the previous answer
+  (`cache kv (request.input)`), so the split computes the previous answer
   again.
   Routed by load, the colocated pods lose the prefix and prefill most of
   every prompt: their decodes then wait behind prefills, 187 ms of decode

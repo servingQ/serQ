@@ -39,7 +39,7 @@ fn multi_turn() -> String {
     engine_workload("K, n, o", "loop { turn; set K = K + n + o; end; }")
 }
 /// The admission of the stale-header programs below.
-const CACHED_PREFIX: &str = "reqs (1), kv (c + min(request.input - c, budget_left(llm))) cache (request.input + request.output)";
+const CACHED_PREFIX: &str = "reqs (1), kv (c + min(request.input - c, budget_left(llm))) cache kv (request.input + request.output)";
 
 /// `examples/multi-turn/vllm.sq` shipped with a prefix-cache lookup bound before the
 /// session queued, under a comment citing the admission-time lookup. The
@@ -65,7 +65,7 @@ fn a_stale_header_read_is_rejected() {
 fn the_request_s_hit_is_the_way_through() {
     let llm = engine(
         "reqs (1), kv (request.hit + min(request.input - request.hit, budget_left(llm))) \
-         reuse (request.input - 1) cache (request.input + request.output)",
+         reuse (request.input - 1) cache kv (request.input + request.output)",
     );
     let src = format!(
         "{llm}
@@ -81,7 +81,7 @@ fn the_request_s_hit_is_the_way_through() {
 /// admission.
 #[test]
 fn a_reassignment_clears_the_lint() {
-    let llm = engine("reqs (1), kv (c + request.input) cache (request.input)");
+    let llm = engine("reqs (1), kv (c + request.input) cache kv (request.input)");
     let src = format!(
         "{llm}
         server (K, n, o) {{
@@ -97,7 +97,7 @@ fn a_reassignment_clears_the_lint() {
 /// A read after the request is not a header's.
 #[test]
 fn a_read_after_the_request_is_fine() {
-    let llm = engine("reqs (1), kv (request.input) cache (request.input)");
+    let llm = engine("reqs (1), kv (request.input) cache kv (request.input)");
     let src = format!(
         "{llm}
         server (K, n, o) {{
@@ -410,7 +410,7 @@ fn a_hidden_attribute_is_not_read_by_the_scheduler() {
     // the request's output may be it, and its release may cache by it
     let ok = format!(
         "{}\nserver (n, hidden o) {{ llm (n, o);\n}}",
-        wl("reqs (1), kv (request.input) cache (request.input + request.output)")
+        wl("reqs (1), kv (request.input) cache kv (request.input + request.output)")
     );
     check(&ok, wl_workload).expect("links");
     // the admission may not: the reservation is the scheduler's
@@ -621,7 +621,7 @@ fn holding(body: &str, clause: &str) -> String {
 
 /// #230: a hold without a `cache` clause consumes nothing of the session's
 /// prefix, so `cached` is 0 in its body; reading it there is the old idiom
-/// for a probe that consumed and kept nothing, which is now `cache (0)`.
+/// for a probe that consumed and kept nothing, which is now `cache kv (0)`.
 #[test]
 fn cached_in_a_hold_without_cache_is_rejected() {
     let src = holding("observe hit = cached > 0; run user (cost(user, 1));", "");
@@ -630,13 +630,16 @@ fn cached_in_a_hold_without_cache_is_rejected() {
         e.contains("`cached` is read in a hold on `kv` that has no `cache` clause"),
         "{e}"
     );
-    assert!(e.contains("`cache (0)`"), "names the spelling for it: {e}");
+    assert!(
+        e.contains("`cache kv (0)`"),
+        "names the spelling for it: {e}"
+    );
 }
 
-/// `cache (0)` is that spelling, and the usual request links as before.
+/// `cache kv (0)` is that spelling, and the usual request links as before.
 #[test]
 fn cache_zero_is_the_way_through() {
-    for clause in [" cache (cost(kv, 0));", " cache (cost(kv, 1000));"] {
+    for clause in [" cache kv (cost(kv, 0));", " cache kv (cost(kv, 1000));"] {
         let src = holding(
             "observe hit = cached > 0; run user (cost(user, 1));",
             clause,
@@ -657,7 +660,7 @@ fn cached_in_a_nested_hold_on_another_pool_is_rejected() {
         cache_server(
             "",
             "pool reqs { cap 4; }",
-            &format!("hold kv (cost(kv, 1000)) {{ {inner} }} cache (cost(kv, 1000));"),
+            &format!("hold kv (cost(kv, 1000)) {{ {inner} }} cache kv (cost(kv, 1000));"),
         )
     };
     let src = nested("hold reqs (cost(reqs, 1)) { llm (1000 - cached, 1); }");
@@ -704,7 +707,7 @@ fn reuse_without_cache_is_rejected() {
     .expect_err("rejected");
     assert!(e.contains("`reuse`"), "{e}");
     check(
-        &cache_engine("kv (1000) reuse (512) cache (1000)"),
+        &cache_engine("kv (1000) reuse (512) cache kv (1000)"),
         CACHE_ENGINE_WORKLOAD,
     )
     .expect("links");

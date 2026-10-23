@@ -1,5 +1,5 @@
 {
-  "version": 15,
+  "version": 16,
   "attrs": [
     "cached",
     "serial",
@@ -223,27 +223,36 @@
           ],
           "reuse": null,
           "body": 3,
-          "cache": {
-            "Cost": [
-              {
-                "Pool": {
-                  "base": 0,
-                  "count": 2
-                }
-              },
-              {
-                "Binary": [
-                  "Add",
-                  {
-                    "Attr": 9
-                  },
-                  {
-                    "Attr": 10
-                  }
-                ]
+          "cache": [
+            {
+              "base": 0,
+              "count": 2,
+              "index": {
+                "Attr": 11
               }
-            ]
-          },
+            },
+            {
+              "Cost": [
+                {
+                  "Pool": {
+                    "base": 0,
+                    "count": 2
+                  }
+                },
+                {
+                  "Binary": [
+                    "Add",
+                    {
+                      "Attr": 9
+                    },
+                    {
+                      "Attr": 10
+                    }
+                  ]
+                }
+              ]
+            }
+          ],
           "lease": null
         }
       },

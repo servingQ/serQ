@@ -75,7 +75,7 @@ fn main() {
                    + min(M - (request.known - request.input), clip) + 1
                    + ratio * min(M, clip) * holders(reqs))
         reuse (request.known - 1)
-        cache (request.finished ? request.input + request.output : request.input);
+        cache kv (request.finished ? request.input + request.output : request.input);
       if (batch.tokens == 0) {                       // no prefill: a decode batch
         advance running;
         if (running.preempted > 0) {

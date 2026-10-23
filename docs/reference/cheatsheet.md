@@ -82,7 +82,7 @@ set x = expr;                      // a session attribute
 observe name = expr;               // record a sample
 
 hold P (cost(P, u)) [reserve (r)] [, Q (v)]* [reuse (cost(P, ρ))]
-     { … } [cache (ℓ)] [lease P (t)];   // lease: P's units outlive the scope until released, t seconds, or the end
+     { … } [cache P (ℓ)] [lease P (t)]; // cache: P alone keeps a prefix; lease: P's units outlive the scope until released, t seconds, or the end
 grow P (cost(P, d));                        // enlarge the innermost hold
 drop P;                            // discard the own cached prefix
 release P;                         // give the enclosing hold's units of P back now, or end a lease of P

@@ -82,9 +82,11 @@ fn header_using(p: &Program, block: usize, from: usize, slot: usize) -> Option<S
                         return Some(p.show_pool_ref(r));
                     }
                 }
-                let rest = reuse.iter().chain(cache.iter());
+                // `reuse` and `cache` are read for the pool the hold caches
+                let rest = reuse.iter().chain(cache.iter().map(|(_, e)| e));
                 if rest.into_iter().any(|e| mentions_attr(e, slot)) {
-                    return Some(p.show_pool_ref(&pools[0].0));
+                    let r = cache.as_ref().map_or(&pools[0].0, |(r, _)| r);
+                    return Some(p.show_pool_ref(r));
                 }
             }
             CStmt::Request {
@@ -215,7 +217,7 @@ fn exprs_of(s: &CStmt) -> Vec<&CExpr> {
             .iter()
             .flat_map(|(_, u, r)| std::iter::once(u).chain(r.iter()))
             .chain(reuse.iter())
-            .chain(cache.iter())
+            .chain(cache.iter().map(|(_, e)| e))
             .chain(lease.iter().map(|(_, t)| t))
             .collect(),
         CStmt::Run { work, latency, .. } => std::iter::once(work).chain(latency.iter()).collect(),
@@ -242,14 +244,14 @@ fn exprs_of(s: &CStmt) -> Vec<&CExpr> {
 /// its admission, so the request found none). So `cached` in such a body is
 /// always 0, and `reuse` bounds
 /// nothing. A hold that consumed and kept nothing, which is what the body
-/// used to see, is `cache (0)`.
+/// used to see, is `cache P (0)`.
 ///
 /// `nested`: a hold inside the enclosing hold's body that was passed before
 /// this block, and set `cached` by its own admission (#237).
 fn cached_in_a_hold_without_cache(
     p: &Program,
     block: usize,
-    hold: Option<(&str, bool)>,
+    hold: Option<(&str, &str, bool)>,
     nested: Option<String>,
     out: &mut Vec<String>,
 ) {
@@ -261,21 +263,21 @@ fn cached_in_a_hold_without_cache(
         let reads_cached = exprs_of(s)
             .into_iter()
             .any(|e| mentions_attr(e, p.slot_cached));
-        if let (Some((pool, _)), Some(inner), true) = (hold, &nested, reads_cached) {
+        if let (Some((pool, _, _)), Some(inner), true) = (hold, &nested, reads_cached) {
             out.push(format!(
                 "`cached` is read after the hold on `{inner}` in the body of the hold on \
                  `{pool}`: every admission sets it, so here it is the admission of `{inner}`. \
                  Read it above that hold (`set c = cached;`), as `llmd_nixl_pull.sq` does."
             ));
-        } else if let Some((pool, false)) = hold
+        } else if let Some((pool, named, false)) = hold
             && reads_cached
         {
             out.push(format!(
                 "`cached` is read in a hold on `{pool}` that has no `cache` clause: such a \
                  hold consumes nothing of the session's cached prefix, so `cached` is 0 \
-                 there. Write `cache (0)` to consume the prefix and keep nothing, \
-                 `cache (ℓ)` to keep ℓ of what was computed, or read `cached` above the \
-                 hold, where the admission that set it is the enclosing hold's."
+                 there. Write `cache {named} (0)` to consume the prefix and keep nothing, \
+                 `cache {named} (ℓ)` to keep ℓ of what was computed, or read `cached` above \
+                 the hold, where the admission that set it is the enclosing hold's."
             ));
         }
         match s {
@@ -288,23 +290,29 @@ fn cached_in_a_hold_without_cache(
                 ..
             } => {
                 let pool = p.show_pool_ref(&pools[0].0);
+                // the pool a `cache` would name: the hold's, or `P` among several
+                let named = match &pools[..] {
+                    [(r, _, _)] => p.show_pool_ref(r),
+                    _ => "P".to_string(),
+                };
                 if prefix.is_some() && cache.is_none() {
                     out.push(format!(
                         "`prefix` on a hold on `{pool}` that has no `cache` clause: such a hold \
                          reads and keeps nothing of the cache, so its chain says nothing. Write \
-                         `cache (ℓ)` to read the chain's cached prefix and keep ℓ along it."
+                         `cache {named} (ℓ)` to read the chain's cached prefix and keep ℓ along \
+                         it."
                     ));
                 }
                 if reuse.is_some() && cache.is_none() {
                     out.push(format!(
                         "`reuse` on a hold on `{pool}` that has no `cache` clause: such a hold \
                          consumes nothing of the session's cached prefix, so the bound has \
-                         nothing to bound. Write `cache (0)` to consume the prefix and keep \
-                         nothing, or `cache (ℓ)` to keep ℓ."
+                         nothing to bound. Write `cache {named} (0)` to consume the prefix and \
+                         keep nothing, or `cache {named} (ℓ)` to keep ℓ."
                     ));
                 }
                 // its `cached` is its own admission's
-                let inner = Some((pool.as_str(), cache.is_some()));
+                let inner = Some((pool.as_str(), named.as_str(), cache.is_some()));
                 cached_in_a_hold_without_cache(p, *body, inner, None, out);
             }
             CStmt::Branch(_, t, e) => {
@@ -354,13 +362,19 @@ fn admission_without_cache(p: &Program, out: &mut Vec<String>) {
         let Some(r) = admission(p, k).filter(|r| r.cache.is_none()) else {
             continue;
         };
+        // the pool an engine caches is its memory, where its requests' KV is
+        let mem = match &st.kind {
+            CStageKind::Step(s) => s.memory.map(|m| p.pools[m].name.as_str()),
+            _ => None,
+        }
+        .unwrap_or("P");
         for (clause, written) in [("reuse", r.reuse.is_some()), ("prefix", r.prefix.is_some())] {
             if written {
                 out.push(format!(
                     "`{clause}` on engine `{}`'s admission, which has no `cache` clause: it \
                      reads and keeps nothing of the cache, so `{clause}` has nothing to bound. \
-                     Write `cache (0)` to read the cached prefix and keep nothing, or \
-                     `cache (ℓ)` to keep ℓ.",
+                     Write `cache {mem} (0)` to read the cached prefix and keep nothing, or \
+                     `cache {mem} (ℓ)` to keep ℓ.",
                     st.name
                 ));
             }

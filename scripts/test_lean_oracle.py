@@ -24,6 +24,24 @@ class ResourceCosts(unittest.TestCase):
 
 
 
+def written_at(ir, version):
+    """`ir` as a file of `version` writes it: before 16 a hold's and an
+    engine's `cache` were `ℓ` alone, where 16 names the pool, `[pool, ℓ]`
+    (serQ #366)."""
+    ir = copy.deepcopy(ir)
+    ir["version"] = version
+    if version < 16:
+        for block in ir["blocks"]:
+            for stmt in block:
+                if isinstance(stmt, dict) and "Hold" in stmt and stmt["Hold"]["cache"] is not None:
+                    stmt["Hold"]["cache"] = stmt["Hold"]["cache"][1]
+        for stage in ir["stages"]:
+            spec = stage["kind"].get("Step", {}).get("request") if isinstance(stage["kind"], dict) else None
+            if spec is not None and spec.get("cache") is not None:
+                spec["cache"] = spec["cache"][1]
+    return ir
+
+
 class FragmentBoundaries(unittest.TestCase):
     def setUp(self):
         self.ir, _ = generator.load("mixed")
@@ -31,8 +49,7 @@ class FragmentBoundaries(unittest.TestCase):
     def test_fifo_translates_the_same_across_supported_versions(self):
         reference = generator.Lean(self.ir)
         for version in generator.SUPPORTED_IR_VERSIONS:
-            ir = copy.deepcopy(self.ir)
-            ir["version"] = version
+            ir = written_at(self.ir, version)
             with tempfile.TemporaryDirectory() as directory:
                 Path(directory, "mixed.ir.json").write_text(json.dumps(ir))
                 with patch.object(generator, "ODIR", directory):
@@ -90,6 +107,55 @@ class FragmentBoundaries(unittest.TestCase):
         step = ir["stages"][0]["kind"]["Step"]
         step["request"]["send"] = {"ttl": {"Num": 1}}
         with self.assertRaisesRegex(generator.Fragment, "sent"):
+            generator.Lean(ir).block(ir["session"], 1)
+
+    def hold(self, ir, pools, cache):
+        """A server's own hold of `pools` (pool indices), caching `cache`,
+        put first in the session; its Lean text."""
+        body = len(ir["blocks"])
+        ir["blocks"].append([])
+        ref = lambda p: {"base": p, "count": 1, "index": None}
+        ir["blocks"][ir["session"]].insert(0, {"Hold": {
+            "pools": [[ref(p), {"Num": 1}, None] for p in pools],
+            "reuse": None, "body": body,
+            "cache": None if cache is None else cache(ref)}})
+        return generator.Lean(ir).block(ir["session"], 1)
+
+    def test_a_hold_caches_the_pool_its_cache_names(self):
+        # 16: the clause names the pool, which the model's hold names
+        ir = copy.deepcopy(self.ir)
+        text = self.hold(ir, [0, 1], lambda ref: [ref(1), {"Num": 4}])
+        self.assertIn("} cache 1 (4);", text)
+
+    def test_an_ir_15_hold_of_one_pool_caches_it(self):
+        # 15: `ℓ` alone, for every pool of the hold, which is the one
+        ir = written_at(self.ir, 15)
+        self.assertIn("} cache 0 (4);", self.hold(ir, [0], lambda ref: {"Num": 4}))
+        self.assertEqual(
+            self.hold(written_at(self.ir, 15), [0], lambda ref: {"Num": 4}),
+            self.hold(copy.deepcopy(self.ir), [0], lambda ref: [ref(0), {"Num": 4}]))
+
+    def test_an_ir_15_hold_of_several_pools_with_cache_is_outside(self):
+        # each of its pools kept a prefix of its own, which the model's one
+        # cached pool cannot say (serQ #366)
+        ir = written_at(self.ir, 15)
+        with self.assertRaisesRegex(generator.Fragment, "several pools"):
+            self.hold(ir, [0, 1], lambda ref: {"Num": 4})
+
+    def test_an_engines_cache_names_its_memory(self):
+        ir = copy.deepcopy(self.ir)
+        step = ir["stages"][0]["kind"]["Step"]
+        mem = step["memory"]
+        ref = lambda p: {"base": p, "count": 1, "index": None}
+        step["request"]["cache"] = [ref(mem), {"Num": 4}]
+        text = generator.Lean(ir).block(ir["session"], 1)
+        self.assertIn(f"}} cache {mem} (4);", text)
+        # 15 wrote `ℓ` alone, which only the memory kept
+        old = written_at(ir, 15)
+        self.assertEqual(generator.Lean(old).block(old["session"], 1), text)
+        other = next(r for r, _, _ in step["request"]["pools"] if r["base"] != mem)
+        step["request"]["cache"][0] = other
+        with self.assertRaisesRegex(generator.Fragment, "not its memory"):
             generator.Lean(ir).block(ir["session"], 1)
 
     def test_prefix_chains_are_not_silently_discarded(self):

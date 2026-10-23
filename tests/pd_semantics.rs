@@ -60,8 +60,8 @@ fn release_caches_per_the_hold_clause() {
         pool kv { cap 100; }
         stage svc : delay;
         server {
-          hold kv (cost(kv, 8)) { run svc (cost(svc, 1)); release kv; run svc (cost(svc, 1)); } cache (cost(kv, 8));
-          hold kv (cost(kv, 8)) { observe hit = cached; } cache (cost(kv, 0));
+          hold kv (cost(kv, 8)) { run svc (cost(svc, 1)); release kv; run svc (cost(svc, 1)); } cache kv (cost(kv, 8));
+          hold kv (cost(kv, 8)) { observe hit = cached; } cache kv (cost(kv, 0));
         }
 
 "#;
@@ -115,8 +115,8 @@ fn load_advances_the_computed_position() {
         pool kv { cap 100; }
         stage svc : delay;
         server {
-          hold kv (cost(kv, 40)) { run svc (cost(svc, 1)); load kv (cost(kv, 30)); } cache (cost(kv, 40));
-          hold kv (cost(kv, 40)) { observe hit = cached; } cache (cost(kv, 0));
+          hold kv (cost(kv, 40)) { run svc (cost(svc, 1)); load kv (cost(kv, 30)); } cache kv (cost(kv, 40));
+          hold kv (cost(kv, 40)) { observe hit = cached; } cache kv (cost(kv, 0));
         }
 
 "#;
@@ -688,10 +688,10 @@ fn an_untaken_lease_ends_at_its_bound_and_keeps_its_cache() {
         stage gate : delay;
         server {
           if (serial == 0) {
-            hold kv (cost(kv, 10)) { run svc (cost(svc, 1)); } cache (cost(kv, 10)) lease kv (2);
+            hold kv (cost(kv, 10)) { run svc (cost(svc, 1)); } cache kv (cost(kv, 10)) lease kv (2);
             observe leased = used(kv);
             run svc (cost(svc, 5));
-            hold kv (cost(kv, 10)) { observe hit = cached; } cache (cost(kv, 0));
+            hold kv (cost(kv, 10)) { observe hit = cached; } cache kv (cost(kv, 0));
           } else {
             run gate (cost(gate, 0.5));
             hold kv (cost(kv, 10)) { observe admitted_at = now; }
@@ -720,7 +720,7 @@ fn a_lease_ends_with_the_session() {
         stage svc : delay;
         server {
           if (serial == 0) {
-            hold kv (cost(kv, 10)) { run svc (cost(svc, 1)); } cache (cost(kv, 10)) lease kv (inf);
+            hold kv (cost(kv, 10)) { run svc (cost(svc, 1)); } cache kv (cost(kv, 10)) lease kv (inf);
             run svc (cost(svc, 1));
           } else {
             run svc (cost(svc, 0.5));

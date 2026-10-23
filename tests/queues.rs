@@ -114,7 +114,7 @@ fn a_queue_is_its_pools_its_stage_and_the_server_statements() {
                decode (prompt) {{
                  hold kv (cost(kv, min(prompt, budget_left(E)))) reserve (cost(kv, prompt)) {{
                    run E prefill (cost(E, prompt)) growing kv; run E decode (cost(E, o - 1)) growing kv;
-                 }} cache (cost(kv, prompt + o));
+                 }} cache kv (cost(kv, prompt + o));
                }}
              }}
              {SERVER}"
@@ -165,7 +165,7 @@ fn a_transfer_between_queues_is_the_flat_transfer() {
       queue P : prefill {
         pool kv { cap 1000; }
         serve fifo;
-        prefill (prompt) { hold kv (cost(kv, prompt)) { run (cost(P, prompt)); } cache (cost(kv, prompt)) lease kv (inf); }
+        prefill (prompt) { hold kv (cost(kv, prompt)) { run (cost(P, prompt)); } cache kv (cost(kv, prompt)) lease kv (inf); }
       }
       queue D[ND] : agg, decode {
         device gpu { kv cap 1000; } pool kv on gpu { block 16; }
@@ -214,7 +214,7 @@ fn a_read_over_both_links_is_the_flat_read() {
       queue P[NP] : prefill {
         pool kv { cap 1000; }
         serve fifo;
-        prefill (prompt) { hold kv (cost(kv, prompt)) { run (cost(P, prompt)); } cache (cost(kv, prompt)) lease kv (inf); }
+        prefill (prompt) { hold kv (cost(kv, prompt)) { run (cost(P, prompt)); } cache kv (cost(kv, prompt)) lease kv (inf); }
       }
       queue D[ND] : agg, decode {
         device gpu { kv cap 1000; } pool kv on gpu { block 16; }
@@ -253,7 +253,7 @@ fn a_link_latency_is_a_wait_before_the_read() {
       queue P[2] : prefill {
         pool kv { cap 1000; }
         serve fifo;
-        prefill (prompt) { hold kv (cost(kv, prompt)) { run (cost(P, prompt)); } cache (cost(kv, prompt)) lease kv (inf); }
+        prefill (prompt) { hold kv (cost(kv, prompt)) { run (cost(P, prompt)); } cache kv (cost(kv, prompt)) lease kv (inf); }
       }
       queue D[2] : agg, decode {
         device gpu { kv cap 1000; } pool kv on gpu { block 16; }
@@ -290,7 +290,7 @@ fn a_latency_is_the_links_constant() {
       queue P : prefill {{
         pool kv {{ cap 1000; }}
         serve fifo;
-        prefill (prompt) {{ hold kv (cost(kv, prompt)) {{ run (cost(P, prompt)); }} cache (cost(kv, prompt)) lease kv (inf); }}
+        prefill (prompt) {{ hold kv (cost(kv, prompt)) {{ run (cost(P, prompt)); }} cache kv (cost(kv, prompt)) lease kv (inf); }}
       }}
       queue D : agg, decode {{
         device gpu {{ kv cap 1000; }} pool kv on gpu {{ }}
@@ -451,7 +451,7 @@ fn a_link_has_a_cost() {
     let calls = "
       queue gw : gateway { route { P.prefill (prompt); D.decode (prompt) from P; } }
       queue nic : link { serve ps(1); }
-      queue P : prefill { pool kv { cap 100; } serve fifo; prefill (p) { hold kv (cost(kv, p)) { run (cost(P, p)); } cache (cost(kv, p)) lease kv (inf); } }
+      queue P : prefill { pool kv { cap 100; } serve fifo; prefill (p) { hold kv (cost(kv, p)) { run (cost(P, p)); } cache kv (cost(kv, p)) lease kv (inf); } }
       queue D : agg, decode { device gpu { kv cap 100; } pool kv on gpu { } engine on gpu { tokens cap inf; scheduler { advance running; admit waiting while (running.preempted == 0); } worker { forward (1); } }
         decode (p) { hold kv (cost(kv, p)) { run D prefill (cost(D, p)) growing kv; } }
         decode (p) from P { hold kv (cost(kv, p)) { BODY } } }
@@ -876,7 +876,7 @@ fn roles_and_entries_agree() {
 #[test]
 fn a_call_is_checked_against_the_entry() {
     let decls = "
-      queue P : prefill { pool kv { cap 10; } serve fifo; prefill (p) { hold kv (cost(kv, p)) { run (cost(P, p)); } cache (cost(kv, p)) lease kv (inf); } }
+      queue P : prefill { pool kv { cap 10; } serve fifo; prefill (p) { hold kv (cost(kv, p)) { run (cost(P, p)); } cache kv (cost(kv, p)) lease kv (inf); } }
       queue D[2] : agg, decode { device gpu { kv cap 10; } pool kv on gpu { } engine on gpu { tokens cap inf; scheduler { advance running; admit waiting while (running.preempted == 0); } worker { forward (1); } }
         decode (p) { hold kv (cost(kv, p)) { run D prefill (cost(D, p)) growing kv; } }
         decode (p) from P { hold kv (cost(kv, p)) { run D prefill (cost(D, p)) growing kv; } } }";
@@ -916,8 +916,8 @@ fn a_call_is_checked_against_the_entry() {
     // is refused, whatever calls it
     refused(
         &program("D[j].decode (prompt);").replace(
-            "cache (cost(kv, p)) lease kv (inf);",
-            "cache (cost(kv, p));",
+            "cache kv (cost(kv, p)) lease kv (inf);",
+            "cache kv (cost(kv, p));",
         ),
         workload,
         "`D.decode (…) from P`: no entry of `P` leases a pool",
@@ -1468,7 +1468,7 @@ fn the_contract_holds_at_every_edge() {
         &format!(
             "pool shared {{ cap 100; }} stage nic : ps(1);
              queue gw : gateway {{ route {{ P.prefill (prompt); hold shared (cost(shared, 1)) {{ transfer on nic (1) from P.kv to shared (1); }} }} }}
-             queue P : prefill {{ pool kv {{ cap 100; }} serve fifo; prefill (p) {{ hold kv (cost(kv, p)) {{ run (cost(P, p)); }} cache (cost(kv, p)) lease kv (inf); }} }}
+             queue P : prefill {{ pool kv {{ cap 100; }} serve fifo; prefill (p) {{ hold kv (cost(kv, p)) {{ run (cost(P, p)); }} cache kv (cost(kv, p)) lease kv (inf); }} }}
              {server}"
         ),
         &wl("turn; end;"),
@@ -1480,7 +1480,7 @@ fn the_contract_holds_at_every_edge() {
             "stage nic : delay;
              queue gw : gateway {{ route {{ P.prefill (prompt); D.decode (prompt) from P; }} }}
              queue P : prefill {{ pool kv {{ cap 100; }} serve fifo;
-               prefill (p) {{ if (p > 1) {{ hold kv (cost(kv, p)) {{ run (cost(P, p)); }} cache (cost(kv, p)) lease kv (inf); }} else {{ run (cost(P, p)); }} }} }}
+               prefill (p) {{ if (p > 1) {{ hold kv (cost(kv, p)) {{ run (cost(P, p)); }} cache kv (cost(kv, p)) lease kv (inf); }} else {{ run (cost(P, p)); }} }} }}
              queue D : agg, decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; scheduler {{ advance running; admit waiting while (running.preempted == 0); }} worker {{ forward (1); }} }}
                decode (p) {{ hold kv (cost(kv, p)) {{ run D prefill (cost(D, p)) growing kv; }} }}
                decode (p) from P {{ hold kv (cost(kv, p)) {{ transfer on nic (p) from P to kv (p); }} }} }}
@@ -1534,7 +1534,7 @@ fn the_contract_holds_at_four_more_edges() {
         &format!(
             "stage nic : delay;
              queue gw : gateway {{ route {{ P.prefill (prompt); D.decode (prompt) from P.kv; }} }}
-             queue P : prefill {{ pool kv {{ cap 100; }} serve fifo; prefill (p) {{ hold kv (cost(kv, p)) {{ run (cost(P, p)); }} cache (cost(kv, p)) lease kv (inf); }} }}
+             queue P : prefill {{ pool kv {{ cap 100; }} serve fifo; prefill (p) {{ hold kv (cost(kv, p)) {{ run (cost(P, p)); }} cache kv (cost(kv, p)) lease kv (inf); }} }}
              queue D : agg, decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; scheduler {{ advance running; admit waiting while (running.preempted == 0); }} worker {{ forward (1); }} }}
                decode (p) {{ hold kv (cost(kv, p)) {{ run D prefill (cost(D, p)) growing kv; }} }}
                decode (p) from P {{ hold kv (cost(kv, p)) {{ transfer on nic (p) from P to kv (p); }} }} }}
@@ -1573,7 +1573,7 @@ fn a_pull_relation_is_the_flat_read() {
         pool kv { cap 1000; }
         serve fifo;
         nic ps(100);
-        prefill (prompt) { hold kv (cost(kv, prompt)) { run (cost(P, prompt)); } cache (cost(kv, prompt)) lease kv (inf); }
+        prefill (prompt) { hold kv (cost(kv, prompt)) { run (cost(P, prompt)); } cache kv (cost(kv, prompt)) lease kv (inf); }
       }
       queue D[2] : agg, decode {
         device gpu { kv cap 1000; } pool kv on gpu { block 16; }
@@ -1612,9 +1612,9 @@ fn a_pull_relation_says_what_it_couples() {
         format!(
             "queue gw : gateway {{ route {{ P.prefill (prompt); Q.prefill (prompt); D.decode (prompt) from {call_from}; }} }}
              queue P : prefill {{ pool kv {{ cap 100; }} serve fifo; {p_nic}
-               prefill (p) {{ hold kv (cost(kv, p)) {{ run (cost(P, p)); }} cache (cost(kv, p)) lease kv (inf); }} }}
+               prefill (p) {{ hold kv (cost(kv, p)) {{ run (cost(P, p)); }} cache kv (cost(kv, p)) lease kv (inf); }} }}
              queue Q : prefill {{ pool kv {{ cap 100; }} serve fifo;
-               prefill (p) {{ hold kv (cost(kv, p)) {{ run (cost(Q, p)); }} cache (cost(kv, p)) lease kv (inf); }} }}
+               prefill (p) {{ hold kv (cost(kv, p)) {{ run (cost(Q, p)); }} cache kv (cost(kv, p)) lease kv (inf); }} }}
              queue D : agg, decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; scheduler {{ advance running; admit waiting while (running.preempted == 0); }} worker {{ forward (1); }} }} nic ps(1);
                decode (p) {{ hold kv (cost(kv, p)) {{ run D prefill (cost(D, p)) growing kv; }} }}
                decode (p) from P {{ hold kv (cost(kv, p)) {{ transfer (p) from P to kv (p); run D prefill (cost(D, 1)) growing kv; }} }} }}
@@ -1774,7 +1774,7 @@ fn std_kvt_names_the_relation() {
         format!(
             "queue gw : gateway {{ route {{ P.prefill (prompt); D.decode (prompt) from P; }} }}
              queue P : prefill {{ pool kv {{ cap 100; }} serve fifo; nic ps(1);
-               prefill (p) {{ hold kv (cost(kv, p)) {{ run (cost(P, p)); }} cache (cost(kv, p)) lease kv (inf); }} }}
+               prefill (p) {{ hold kv (cost(kv, p)) {{ run (cost(P, p)); }} cache kv (cost(kv, p)) lease kv (inf); }} }}
              queue D : decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; scheduler {{ advance running; admit waiting while (running.preempted == 0); }} worker {{ forward (1); }} }} nic ps(1);
                decode (p) from P {{ hold kv (cost(kv, p)) {{ transfer (p) from P to kv (p); }} }} }}
              {rel}
@@ -1861,7 +1861,7 @@ fn an_entry_reaches_only_its_own() {
         &format!(
             "stage nic : delay;
              queue gw : gateway {{ route {{ P[0].prefill (prompt); D.decode (prompt) from P[0]; }} }}
-             queue P[2] : prefill {{ pool kv {{ cap 100; }} serve fifo; prefill (p) {{ hold kv (cost(kv, p)) {{ run (cost(P, p)); }} cache (cost(kv, p)) lease kv (inf); }} }}
+             queue P[2] : prefill {{ pool kv {{ cap 100; }} serve fifo; prefill (p) {{ hold kv (cost(kv, p)) {{ run (cost(P, p)); }} cache kv (cost(kv, p)) lease kv (inf); }} }}
              queue D : agg, decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; scheduler {{ advance running; admit waiting while (running.preempted == 0); }} worker {{ forward (1); }} }}
                decode (p) {{ hold kv (cost(kv, p)) {{ run D prefill (cost(D, p)) growing kv; }} }}
                decode (p) from P {{ observe x = P; hold kv (cost(kv, p)) {{ transfer on nic (p) from P to kv (p); }} }} }}
@@ -1910,7 +1910,7 @@ fn an_entry_reaches_only_its_own() {
             "stage nic : delay;
              queue gw : gateway {{ route {{ if (prompt > 5) {{ P.prefill (prompt); }} else {{ P.decode (prompt); }} D.decode (prompt) from P; }} }}
              queue P : prefill, agg {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; scheduler {{ advance running; admit waiting while (running.preempted == 0); }} worker {{ forward (1); }} }}
-               prefill (p) {{ hold kv (cost(kv, p)) {{ run P prefill (cost(P, p)) growing kv; }} cache (cost(kv, p)) lease kv (inf); }}
+               prefill (p) {{ hold kv (cost(kv, p)) {{ run P prefill (cost(P, p)) growing kv; }} cache kv (cost(kv, p)) lease kv (inf); }}
                decode (p) {{ hold kv (cost(kv, p)) {{ run P prefill (cost(P, p)) growing kv; }} }} }}
              queue D : agg, decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; scheduler {{ advance running; admit waiting while (running.preempted == 0); }} worker {{ forward (1); }} }}
                decode (p) {{ hold kv (cost(kv, p)) {{ run D prefill (cost(D, p)) growing kv; }} }}

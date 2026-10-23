@@ -46,7 +46,7 @@ fn program(cap: u32, stagger: &str, prefix: &str) -> String {
             observe got = cached;
             observe together = holders(kv);
             run llm (cost(llm, 1));
-          }} cache (cost(kv, 1600));
+          }} cache kv (cost(kv, 1600));
         }}
 "#
     )
@@ -138,7 +138,7 @@ fn the_own_chain_is_the_default() {
           hold kv (cost(kv, min(cachedin(kv), 992) + 8)) {prefix} {{
             observe got = cached;
             run llm (cost(llm, 1));
-          }} cache (cost(kv, 1000)); }}
+          }} cache kv (cost(kv, 1000)); }}
         }}
 "#
         )
@@ -198,12 +198,12 @@ fn two_requests(reuse: &str, inner: &str) -> String {
           hold kv (cost(kv, 1600)) {CHAIN} {reuse} {{
             run llm (cost(llm, 1));
             {inner}
-          }} cache (cost(kv, 1600));
+          }} cache kv (cost(kv, 1600));
           run user (cost(user, 40 - serial * 10));
           hold kv (cost(kv, 2000)) {CHAIN} {{
             observe second = cached;
             run llm (cost(llm, 1));
-          }} cache (cost(kv, 2000));
+          }} cache kv (cost(kv, 2000));
         }}
 "#
     )
@@ -242,7 +242,7 @@ fn a_shared_prefix_is_no_session_s_consumed_entry() {
     let inner = "if (serial == 1) {
                    hold kv (cost(kv, 1216)) prefix (sys: 1200, serial: inf) {
                      observe inner = cached;
-                   } cache (cost(kv, 1600));
+                   } cache kv (cost(kv, 1600));
                  }";
     let r = run(&two_requests("", inner), &prompted(3, "7"), &options(200.0));
     assert_eq!(
@@ -276,7 +276,7 @@ fn a_hold_reads_at_most_what_it_allocates() {
             observe got = cached;
             run user (cost(user, 1));
             observe u = used(kv);
-          } cache (cost(kv, serial == 0 ? 1600 : 16));
+          } cache kv (cost(kv, serial == 0 ? 1600 : 16));
         }
 "#;
     let r = run(src, &prompted(3, "7"), &options(200.0));
@@ -310,13 +310,13 @@ fn a_key_is_its_attribute_and_its_value() {
           if (serial == 1) {{
             hold kv (cost(kv, 1600)) {{
               run llm (cost(llm, 1));
-            }} cache (cost(kv, 1600));
+            }} cache kv (cost(kv, 1600));
           }}
           if (serial == 2) {{
             hold kv (cost(kv, 1600)) {CHAIN} {{
               observe got = cached;
               run llm (cost(llm, 1));
-            }} cache (cost(kv, 1600));
+            }} cache kv (cost(kv, 1600));
           }}
         }}
 "#
@@ -363,12 +363,12 @@ fn the_first_writer_does_not_own_the_shared_prompt() {
                  hold kv (cost(kv, serial == 1 ? 1200 : 1600)) {CHAIN} {{
                    if (serial == 2) {{ observe late = cached; }}
                    run llm (cost(llm, 1));
-                 }} cache (cost(kv, 1600));
+                 }} cache kv (cost(kv, 1600));
                  if (serial == 0) {{
                    run user (cost(user, 15));
                    hold kv (cost(kv, {units})) {CHAIN} {{
                      observe short = cached;
-                   }} cache (cost(kv, {keep}));
+                   }} cache kv (cost(kv, {keep}));
                  }}"
             ),
         );
@@ -395,7 +395,7 @@ fn drop_takes_the_session_s_entry_alone() {
              hold kv (cost(kv, 1600)) {CHAIN} {{
                if (serial == 1) {{ observe mid = cached; }}
                run llm (cost(llm, 1));
-             }} cache (cost(kv, 1600));
+             }} cache kv (cost(kv, 1600));
              run user (cost(user, 1));
              if (serial == 0) {{ drop kv; }}"
         ),
@@ -419,7 +419,7 @@ fn an_empty_segment_is_left_out() {
            hold kv (cost(kv, ctx)) prefix (sys: 0, serial: inf) {
              observe got = cached;
              run llm (cost(llm, 1));
-           } cache (cost(kv, ctx));
+           } cache kv (cost(kv, ctx));
            run user (cost(user, 1));
          }",
     );
@@ -432,10 +432,12 @@ fn an_empty_segment_is_left_out() {
     );
 }
 
-/// A slot pool held with a chain keeps its slots: its `cache` holds a slot,
-/// per session, not a shared segment every hold would read as allocated
-/// already. Five sessions on two slots used to hold them all at once (the
-/// second review of #374).
+/// A slot pool held with a chain keeps its slots: the hold caches `kv`, and
+/// `slots` is memory alone, not a shared segment every hold would read as
+/// allocated already. Five sessions on two slots used to hold them all at
+/// once (the second review of #374). A chain on the slot pool itself is
+/// refused, though the hold takes a pool with `block` besides (#366: the
+/// check read every pool of the hold, and `cache` named none).
 #[test]
 fn a_chain_leaves_a_slot_pool_its_cap() {
     let src = deployment(
@@ -446,7 +448,7 @@ fn a_chain_leaves_a_slot_pool_its_cap() {
              hold slots (cost(slots, 1)), kv (cost(kv, 1600)) {CHAIN} {{
                observe together = holders(slots);
                run user (cost(user, 5));
-             }} cache (cost(slots, kv, 1600));"
+             }} cache kv (cost(kv, 1600));"
         ),
     );
     let r = run(&src, &prompted(6, "7"), &options(100.0));
@@ -457,14 +459,14 @@ fn a_chain_leaves_a_slot_pool_its_cap() {
         r.text()
     );
     let error = fails(
-        &src.replace(
-            &format!("slots (cost(slots, 1)), kv (cost(kv, 1600)) {CHAIN}"),
-            &format!("slots (cost(slots, 1)) {CHAIN}"),
-        ),
+        &src.replace("cache kv (cost(kv, 1600))", "cache slots (cost(slots, 1))"),
         &prompted(6, "7"),
         &options(10.0),
     );
-    assert!(error.contains("no pool with `block`"), "{error}");
+    assert!(
+        error.contains("caches `slots`, a pool without `block`"),
+        "{error}"
+    );
 }
 
 /// Without `prefix` a hold consumes its session's entry whole, though it
@@ -479,11 +481,11 @@ fn the_own_chain_is_consumed_whole() {
         "",
         "hold kv (cost(kv, 1600)) {
            run llm (cost(llm, 1));
-         } cache (cost(kv, 1600));
+         } cache kv (cost(kv, 1600));
          run user (cost(user, 1));
          hold kv (cost(kv, 320)) {
            observe got = cached;
-         } cache (cost(kv, 320));",
+         } cache kv (cost(kv, 320));",
     );
     let r = run(&src, &prompted(1, "7"), &options(100.0));
     assert_eq!(r.observe("got").unwrap().samples, [1600.0], "{}", r.text());
@@ -504,7 +506,7 @@ fn a_preempted_reader_reads_the_prompt_again() {
                observe got = cached;
                run llm (cost(llm, 1));
                grow kv (cost(kv, 600)); run llm (cost(llm, 1));
-             }} cache (cost(kv, 2200));"
+             }} cache kv (cost(kv, 2200));"
         ),
     );
     let r = run(&src, &prompted(5, "7"), &options(200.0));
@@ -534,7 +536,7 @@ fn serial_is_not_set() {
           run user (cost(user, d * 10));
           hold kv (cost(kv, 1600)) prefix (serial: 1e12) {
             observe got = cached;
-          } cache (cost(kv, 1600));
+          } cache kv (cost(kv, 1600));
         }
 "#;
     let workload = "workload { arrive batch(3); init { set d = serial; set serial = 0; } send (d); session { turn; } }";
@@ -559,7 +561,7 @@ fn a_request_s_chain_reads_nothing_the_admission_reads() {
           scheduler {
             advance running;
             admit waiting while (running.preempted == 0)
-              taking kv (request.input) prefix (sys: request.hit, serial: inf) cache (request.input);
+              taking kv (request.input) prefix (sys: request.hit, serial: inf) cache kv (request.input);
           }
           worker { forward (batch.tokens * 1e-5 + 1e-4); }
         }
@@ -582,8 +584,8 @@ fn a_chain_without_cache_or_with_an_endless_middle_does_not_link() {
     let base = program(100_000, "0", CHAIN);
     for (src, said) in [
         (
-            base.replace("}} cache (cost(kv, 1600));", "}}")
-                .replace("} cache (cost(kv, 1600));", "}"),
+            base.replace("}} cache kv (cost(kv, 1600));", "}}")
+                .replace("} cache kv (cost(kv, 1600));", "}"),
             "no `cache` clause",
         ),
         (
@@ -613,7 +615,7 @@ fn an_engine_s_request_takes_a_chain() {
             advance running;
             admit waiting while (running.preempted == 0)
               taking kv (request.input) reuse (floor(request.input - 1, 16)) {prefix}
-              cache (request.input);
+              cache kv (request.input);
           }}
           worker {{ forward (batch.tokens * 1e-5 + 1e-4); }}
         }}
@@ -660,7 +662,7 @@ fn lpm_admits_the_longest_cached_chain_first() {
             observe start = now;
             observe got = cached;
             run user (cost(user, 10));
-          }} cache (cost(kv, 1600));
+          }} cache kv (cost(kv, 1600));
         }}
 "#
         )
@@ -708,7 +710,7 @@ fn an_entry_keys_its_prefix_by_the_requests_serial() {
           decode (prompt) {{
             hold kv (cost(kv, {units})), reqs (cost(reqs, 1)) prefix (0: 32, {key}: inf) {{
               run E prefill (cost(E, prompt)) growing kv;
-            }} cache (cost(kv, reqs, prompt));
+            }} cache kv (cost(kv, prompt));
           }}
         }}
         server {{ E.decode (48); }}
@@ -758,11 +760,11 @@ fn cachedin_outside_a_hold_reads_the_chain_cached_along() {
         pool kv { cap 1000; block 16; }
         server {
           hold kv (cost(kv, 32)) prefix (0: 16, serial: inf) { run svc (cost(svc, 1)); }
-            cache (cost(kv, 32)) lease kv (inf);
+            cache kv (cost(kv, 32)) lease kv (inf);
           release kv;
           observe released = cachedin(kv);
           hold kv (cost(kv, 64)) prefix (1: 16, serial: inf) { run svc (cost(svc, 1)); }
-            cache (cost(kv, 64));
+            cache kv (cost(kv, 64));
           observe after_leg = cachedin(kv);
         }
 "#,
@@ -786,8 +788,8 @@ fn a_lease_does_not_hide_the_entry_cached_after_it() {
         pool kv { cap 1000; block 16; }
         server {
           hold kv (cost(kv, 200)) prefix (0: 16, serial: inf) { run svc (cost(svc, 1)); }
-            cache (cost(kv, 200)) lease kv (inf);
-          hold kv (cost(kv, 50)) { run svc (cost(svc, 1)); } cache (cost(kv, 50));
+            cache kv (cost(kv, 200)) lease kv (inf);
+          hold kv (cost(kv, 50)) { run svc (cost(svc, 1)); } cache kv (cost(kv, 50));
           observe after_own = cachedin(kv);
         }
 "#,

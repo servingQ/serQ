@@ -503,7 +503,7 @@ fn serving_forms_compile_to_the_kernel_ir() {
     let serving = format!(
         "{deployment}
         server (K, n, o, T) {{
-          hold memP (cost(memP, T)) {{ run prefill (cost(prefill, n + K)); }} cache (cost(memP, T)) lease memP (inf);
+          hold memP (cost(memP, T)) {{ run prefill (cost(prefill, n + K)); }} cache memP (cost(memP, T)) lease memP (inf);
           hold memD (cost(memD, T)) {{ transfer (T / 100) from memP to memD (T); run decode (cost(decode, o)); }}
         }}"
     );
@@ -518,7 +518,7 @@ fn serving_forms_compile_to_the_kernel_ir() {
     let kernel = format!(
         "{deployment}
         server (K, n, o, T) {{
-          hold memP (cost(memP, T)) {{ run prefill (cost(prefill, n + K)); }} cache (cost(memP, T)) lease memP (inf);
+          hold memP (cost(memP, T)) {{ run prefill (cost(prefill, n + K)); }} cache memP (cost(memP, T)) lease memP (inf);
           hold memD (cost(memD, T)) {{ run link (cost(link, T / 100)); load memD (cost(memD, T)); release memP; run decode (cost(decode, o)); }}
         }}"
     );
@@ -750,7 +750,7 @@ fn admit_as_a_statement_says_what_to_write() {
         ";
     let ov = common::horizon(10.0);
     let e = common::compile(&common::main_source(src), POISSON, &ov).expect_err("rejected");
-    assert!(e.contains("is now `hold … { … } cache (ℓ)`"), "{e}");
+    assert!(e.contains("is now `hold P … { … } cache P (ℓ)`"), "{e}");
 }
 
 /// `workload { session { … turn; … } }` with `server { … }` is the
@@ -767,7 +767,7 @@ fn the_request_boundary_preserves_size_ownership() {
             admit waiting while (running.preempted == 0)
               taking reqs (1), kv (min(request.input, request.hit + budget_left(llm)))
               reuse (request.input - 1)
-              cache (request.input + request.output);
+              cache kv (request.input + request.output);
           }
           worker { forward (1e-3); }
         }
@@ -987,5 +987,56 @@ fn a_relations_copy_names_its_poster() {
     assert!(
         !by_hand.is_empty() && by_hand.iter().all(Option::is_none),
         "{by_hand:?}"
+    );
+}
+
+/// IR 16's `cache` names its pool (#366): a hold's is one of the pools it
+/// takes, an engine's is the memory its requests take. JSON that names
+/// another is refused on load, as text cannot write it.
+#[test]
+fn a_cache_names_a_pool_its_hold_takes() {
+    let src = "pool reqs { cap 4; } pool kv { cap 100; } stage d : delay;
+        server { hold kv (cost(kv, 8)) { run d (cost(d, 1)); } cache kv (cost(kv, 8));
+        }";
+    let ov = common::horizon(1.0);
+    let p = common::compile(&common::main_source(src), BATCH, &ov).unwrap();
+    let (reqs, kv) = (p.pool_index("reqs").unwrap(), p.pool_index("kv").unwrap());
+    let mut v: serde_json::Value = serde_json::from_str(&p.to_json()).unwrap();
+    let cache = v["blocks"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .flat_map(|b| b.as_array_mut().unwrap().iter_mut())
+        .find_map(|s| s.get_mut("Hold"))
+        .map(|h| &mut h["cache"])
+        .unwrap();
+    assert_eq!(cache[0]["base"], kv, "{cache}");
+    cache[0]["base"] = reqs.into();
+    let e = Program::from_json(&v.to_string()).unwrap_err();
+    assert!(
+        e.contains("`cache reqs`: the hold does not take that pool"),
+        "{e}"
+    );
+
+    let src = "device gpu { kv cap 1000; }
+        engine llm on gpu {
+          reqs cap 4;
+          tokens cap 64;
+          scheduler { advance running; admit waiting while (running.preempted == 0)
+            taking reqs (1), kv (request.known) cache kv (request.input); }
+          worker { forward (1); }
+        }
+        pool kv on gpu { block 16; }
+        pool reqs on llm { }
+        server { llm (32, 4); }";
+    let p = common::compile(&common::main_source(src), BATCH, &ov).unwrap();
+    let reqs = p.pool_index("reqs").unwrap();
+    let mut v: serde_json::Value = serde_json::from_str(&p.to_json()).unwrap();
+    let request = &mut v["stages"][0]["kind"]["Step"]["request"];
+    request["cache"][0]["base"] = reqs.into();
+    let e = Program::from_json(&v.to_string()).unwrap_err();
+    assert!(
+        e.contains("`cache reqs`: an engine's `cache` keeps the KV its requests compute"),
+        "{e}"
     );
 }

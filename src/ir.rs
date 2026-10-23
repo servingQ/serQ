@@ -40,8 +40,12 @@ use serde::{Deserialize, Serialize};
 /// where they were blocks of statements; an engine that is a KV relation's
 /// source registers a send at each request's end (`CRequest::send`), which
 /// keeps its blocks until the reader's load ends it or its `ttl` does; and
-/// `Join` goes, the push mode's reader waiting for the send instead.
-pub const IR_VERSION: u32 = 15;
+/// `Join` goes, the push mode's reader waiting for the send instead. 16
+/// makes `Hold.cache` and `CRequest.cache` name the one pool they keep
+/// cached, `(pool, ℓ)`: the admission consumes the session's prefix there
+/// alone, `cached` is that pool's consumed prefix, and each pool's computed
+/// prefix is its own (#366, `docs/design/cache-names-its-pool.md`).
+pub const IR_VERSION: u32 = 16;
 
 /// A reason `Program::validate` refuses a program, and the statement it is
 /// about (block, index in it) when it is about one.
@@ -749,7 +753,13 @@ pub enum CStmt {
         pools: Vec<(CRef, CExpr, Option<CExpr>)>,
         reuse: Option<CExpr>,
         body: BlockId,
-        cache: Option<CExpr>,
+        /// `cache P (ℓ)`: the pool (one of `pools`) whose computed prefix
+        /// stays cached when the hold ends, and how much of it, `min(ℓ,
+        /// computed)`. Only that pool takes part in the prefix cache: the
+        /// admission consumes the session's prefix there, and `cached` is
+        /// what it consumed. The other pools are memory alone. `None`: the
+        /// hold reads and keeps nothing of the cache.
+        cache: Option<(CRef, CExpr)>,
         /// `prefix (k₁: n₁, …)`: what the hold's sequence is made of, as a
         /// chain of segments, each a key and a length. Two holds share the
         /// first `j` segments of their pool's prefix cache when their first
@@ -1103,7 +1113,7 @@ impl CTransfer {
                     pools: vec![(self.into.clone(), r.held.clone(), None)],
                     reuse: None,
                     body: blocks.len() - 1,
-                    cache: Some(r.cache.clone()),
+                    cache: Some((self.into.clone(), r.cache.clone())),
                     prefix: None,
                     lease: None,
                 }]
@@ -1132,8 +1142,11 @@ pub struct CRequest {
     pub pools: Vec<(CRef, CExpr, Option<CExpr>)>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reuse: Option<CExpr>,
+    /// `cache P (ℓ)`: the pool (one of `pools`, the engine's memory) whose
+    /// computed prefix stays cached when the request ends, and how much
+    /// (`CStmt::Hold::cache`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cache: Option<CExpr>,
+    pub cache: Option<(CRef, CExpr)>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prefix: Option<Vec<(CExpr, CExpr)>>,
     /// The engine is a KV relation's source (`kvt.nixl_pull (P, D, …)`):
@@ -1705,16 +1718,24 @@ impl Program {
             let here = |m: String| Invalid::at(m, b, k);
             match s {
                 CStmt::Hold {
-                    pools, body, lease, ..
+                    pools,
+                    body,
+                    lease,
+                    cache,
+                    ..
                 } => {
-                    if let Some((r, _)) = lease
-                        && !pools.iter().any(|(q, _, _)| q == r)
+                    // `lease P` and `cache P` each name one pool of the hold
+                    for (what, r) in [("lease", lease), ("cache", cache)]
+                        .into_iter()
+                        .filter_map(|(w, x)| x.as_ref().map(|(r, _)| (w, r)))
                     {
-                        return Err(here(format!(
-                            "`lease {}`: the hold does not take that pool (write it as the hold \
-                             does, index included)",
-                            self.pools[r.base].name
-                        )));
+                        if !pools.iter().any(|(q, _, _)| q == r) {
+                            return Err(here(format!(
+                                "`{what} {}`: the hold does not take that pool (write it as the \
+                                 hold does, index included)",
+                                self.pools[r.base].name
+                            )));
+                        }
                     }
                     let depth = held.len();
                     // a hold that a pool of its own or of a hold around it may
@@ -2536,7 +2557,7 @@ impl Program {
                     v.expr(&st.chunk, Moment::Budget).map_err(at)?;
                     v.expr(&st.cost, Moment::Step).map_err(at)?;
                     if let Some(r) = &st.request {
-                        v.request(r).map_err(at)?;
+                        v.request(st, r).map_err(at)?;
                     }
                     if let Some(c) = &st.connector {
                         v.connector(st, c).map_err(at)?;
@@ -3338,7 +3359,7 @@ impl Validator<'_> {
 
     /// An engine's request: a hold's header, read for the request at its
     /// admission and its release.
-    fn request(&self, r: &CRequest) -> Result<(), String> {
+    fn request(&self, st: &CStep, r: &CRequest) -> Result<(), String> {
         let np = self.p.pools.len();
         let no_draw = |e: &CExpr, what: &str| {
             if draws(e) {
@@ -3379,8 +3400,30 @@ impl Validator<'_> {
                 v.name()
             ));
         }
-        if let Some(e) = &r.cache {
+        if let Some((q, e)) = &r.cache {
+            self.cref(q, np, "pool", Moment::Release)?;
             self.expr(e, Moment::Release)?;
+            let shown = self.p.show_pool_ref(q);
+            if !r.pools.iter().any(|(t, _, _)| t == q) {
+                return Err(format!(
+                    "`cache {shown}`: the request does not take that pool; an engine caches \
+                     its memory, which its requests take"
+                ));
+            }
+            // the request's position, which its prefill and decode advance
+            // and `request.hit` reads, is on the memory: a cache on another
+            // pool would keep a prefix no prefill skips (#366)
+            if st.memory != Some(q.base) {
+                let mem = st.memory.map_or_else(
+                    || "it has none".to_string(),
+                    |m| format!("`{}`", self.p.pools[m].name),
+                );
+                return Err(format!(
+                    "`cache {shown}`: an engine's `cache` keeps the KV its requests compute, \
+                     whose position is on its memory ({mem}); name the memory (a slot pool \
+                     has no prefix, #366)"
+                ));
+            }
         }
         for (k, n) in r.prefix.iter().flatten() {
             for e in [k, n] {
@@ -3625,7 +3668,8 @@ impl Validator<'_> {
                     self.expr(e, Moment::Admit)?;
                     no_draw(e, "`reuse`")?;
                 }
-                if let Some(e) = cache {
+                if let Some((r, e)) = cache {
+                    self.cref(r, np, "pool", m)?;
                     self.expr(e, m)?;
                 }
                 // a key names what a segment holds: it is read while the
@@ -3680,26 +3724,37 @@ impl Validator<'_> {
                             .into(),
                     );
                 }
+                // the pools the chain keys: the one the hold caches (#366),
+                // else every pool it takes
+                let keyed: Vec<&CRef> = match cache {
+                    Some((r, _)) => vec![r],
+                    None => pools.iter().map(|(r, _, _)| r).collect(),
+                };
                 // a chain is a sequence of blocks: a pool without them (a slot
-                // pool) caches per session, and a hold with nothing else
-                // would share nothing it says it does
+                // pool) caches per session, and a hold that caches nothing
+                // else would share nothing it says it does
                 if prefix.is_some()
-                    && !pools.iter().any(|(r, _, _)| {
+                    && !keyed.iter().any(|r| {
                         self.p.pools[r.base..r.base + r.count]
                             .iter()
                             .all(|q| q.block.is_some())
                     })
                 {
-                    return Err(
-                        "a hold with `prefix` takes no pool with `block`: a chain is \
-                                cached in blocks, and a pool without them caches per session"
+                    return Err(match cache {
+                        Some((r, _)) => format!(
+                            "a hold with `prefix` caches `{}`, a pool without `block`: a chain \
+                             is cached in blocks, and a pool without them caches per session",
+                            self.p.show_pool_ref(r)
+                        ),
+                        None => "a hold with `prefix` takes no pool with `block`: a chain is \
+                                 cached in blocks, and a pool without them caches per session"
                             .into(),
-                    );
+                    });
                 }
                 // a spilled block goes to the tier under its session's
                 // serial, which a chain of shared segments does not have
                 if prefix.is_some()
-                    && let Some((r, _, _)) = pools.iter().find(|(r, _, _)| {
+                    && let Some(r) = keyed.into_iter().find(|r| {
                         self.p.pools[r.base..r.base + r.count]
                             .iter()
                             .enumerate()

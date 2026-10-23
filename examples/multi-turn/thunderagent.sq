@@ -42,7 +42,7 @@ fn main() {
                  reqs (1)
           reuse (floor(request.known - 1, bs))
           prefix (system: S, serial: inf)
-          cache (request.input + request.output);
+          cache kv (request.input + request.output);
       }
       worker {
         forward (c0 + max(hbm(batch.kv_decode + batch.kv_prefill),

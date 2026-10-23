@@ -138,13 +138,13 @@ fn a_lease_set_aside_lets_go_of_the_prefix_it_read() {
         server (turn_no) {
           if (serial == 1 && turn_no == 4) { release prog; end; }
           if (serial == 0 && turn_no == 1) {
-            hold prog (cost(prog, 4)) { run svc (cost(svc, 1)); } cache (cost(prog, 4));
+            hold prog (cost(prog, 4)) { run svc (cost(svc, 1)); } cache prog (cost(prog, 4));
           }
           if (allocated(prog) > 0) {
             if (serial == 1 && turn_no == 3) { grow prog (cost(prog, 4)); }
           } else {
             if (serial == 1 || turn_no == 2) {
-              hold prog (cost(prog, 4)) { observe c = cached; } cache (cost(prog, 4)) lease prog (inf);
+              hold prog (cost(prog, 4)) { observe c = cached; } cache prog (cost(prog, 4)) lease prog (inf);
             }
           }
           run svc (cost(svc, 1));
@@ -168,7 +168,7 @@ fn a_pool_over_its_cap_between_ticks_caches_within_it() {
         pool prog { cap 10; preempt leases by (serial) every (5); }
         server (turn_no) {
           if (serial == 0 && turn_no == 1) {
-            hold prog (cost(prog, 4)) { run slow (cost(slow, 3)); } cache (cost(prog, 4));
+            hold prog (cost(prog, 4)) { run slow (cost(slow, 3)); } cache prog (cost(prog, 4));
           }
           if (serial == 1) {
             if (allocated(prog) > 0) {

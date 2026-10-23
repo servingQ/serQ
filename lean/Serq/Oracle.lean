@@ -157,7 +157,7 @@ def vllmTurn : Prog := [route|
     };
     run 0 decode (((x.attr 19) - 1) - ((x.attr 21) - (x.attr 18))) growing 0;
     done
-  } cache (((x.attr 18) + (x.attr 19)) - 1);
+  } cache 0 (((x.attr 18) + (x.attr 19)) - 1);
   observe 2 = (x.attr 15) - (x.attr 11);
   observe 3 = x.now - (x.attr 11);
   while (x.attr 6) {
@@ -190,7 +190,7 @@ def vllmTurn : Prog := [route|
       };
       run 0 decode (((x.attr 19) - 1) - ((x.attr 21) - (x.attr 18))) growing 0;
       done
-    } cache (((x.attr 18) + (x.attr 19)) - 1);
+    } cache 0 (((x.attr 18) + (x.attr 19)) - 1);
     observe 2 = (x.attr 15) - (x.attr 11);
     observe 3 = x.now - (x.attr 11);
     done

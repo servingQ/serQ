@@ -154,7 +154,7 @@ theorem key_release (m : Machine) (i : ℕ) (h : HoldRec) : key (release D m i h
   repeat' split
   all_goals rfl
 
-theorem key_admitPool (i serial : ℕ) (cache : Option (Env → ℕ)) (r? : Option ℕ)
+theorem key_admitPool (i serial : ℕ) (cache : Option (ℕ × (Env → ℕ))) (r? : Option ℕ)
     (acc : Machine × List (ℕ × ℕ × ℕ) × ℕ) (x : ℕ × ℕ × ℕ) :
     key (admitPool D i serial cache r? acc x).1 = key acc.1 := by
   unfold admitPool

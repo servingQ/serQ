@@ -17,8 +17,9 @@ module formalises:
   admission with eviction of cached prefixes (the guard counts allocated
   units only, so a cached prefix never blocks), release with caching of
   `ℓ ≤ c` units, dropping a prefix and leaving. `Step.admit` is the
-  admission of a hold with a `cache` clause, which consumes the session's
-  own prefix; a hold without the clause leaves it (serQ IR 10, modelled in
+  admission of a hold whose `cache` clause names this pool, which consumes
+  the session's own prefix; a hold without the clause, or one whose clause
+  names another of its pools, leaves it (serQ IR 10 and 16, modelled in
   `Serq/Exec.lean`'s `admit`) and is, for this pool model, an admission that
   finds no entry of its own. The memory invariant
   `allocated + cached ≤ capacity` is preserved by every step
@@ -72,10 +73,12 @@ executable semantics on the step clock). Every statement carries its
 continuation `k`.
 
 * `hold ps reuse body cache k` waits until every pool of `ps` has room,
-  consumes the session's own cached prefix (at most `reuse` of it; the rest
-  stays cached, unusable, until evicted), allocates, runs `body` holding
-  the units, releases them keeping `cache` units cached, and continues
-  with `k` (the scoped form of the lecture's `admit`/`free`);
+  allocates, runs `body` holding the units, releases them, and continues
+  with `k` (the scoped form of the lecture's `admit`/`free`); `cache`, when
+  there is one, names one pool `p` of `ps` and an amount `ℓ`: on `p` alone
+  the admission consumes the session's own cached prefix (at most `reuse`
+  of it; the rest stays cached, unusable, until evicted) and the release
+  keeps `ℓ` units cached (serQ IR 16; the other pools are memory alone);
 * `run s mode w g k` joins stage `s` with `w` units of work; `g` is the pool
   whose hold the job grows as it advances (`growing`);
 * `set`, `observe` assign an attribute and record a measurement. -/
@@ -87,7 +90,7 @@ inductive Route (Env V : Type)
   | observe (name : ℕ) (e : Env → V) (k : Route Env V)
   | run (stage : ℕ) (mode : Mode) (work : Env → V) (growing : Option ℕ) (k : Route Env V)
   | hold (pools : List (HoldPool Env V)) (reuse : Option (Env → V)) (body : Route Env V)
-      (cache : Option (Env → V)) (k : Route Env V)
+      (cache : Option (ℕ × (Env → V))) (k : Route Env V)
   | branch (p : Env → V) (yes no : Route Env V) (k : Route Env V)
   | loop (body : Route Env V)
   | whileLoop (p : Env → V) (body k : Route Env V)
@@ -128,10 +131,10 @@ end Route
 
 /-! ## Program helpers -/
 
-/-- A single-pool hold, as the lecture writes it. -/
+/-- A single-pool hold, as the lecture writes it: it caches its pool. -/
 def hold1 {Env V : Type} (m : ℕ) (c : Env → V) (body : Route Env V) (l : Env → V)
     (k : Route Env V) : Route Env V :=
-  .hold [(m, c, none)] none body (some l) k
+  .hold [(m, c, none)] none body (some (m, l)) k
 
 /-- A plain run, as the lecture writes it. -/
 def run1 {Env V : Type} (s : ℕ) (w : Env → V) (k : Route Env V) : Route Env V :=
@@ -159,8 +162,8 @@ syntax &"observe" num "=" term ";" route : route
 syntax &"run" num "(" term ")" ";" route : route
 syntax &"run" num &"prefill" "(" term ")" (&"growing" num)? ";" route : route
 syntax &"run" num &"decode" "(" term ")" (&"growing" num)? ";" route : route
-syntax &"hold" routePool,+ (&"reuse" "(" term ")")? "{" route "}" (&"cache" "(" term ")")? ";"
-  route : route
+syntax &"hold" routePool,+ (&"reuse" "(" term ")")? "{" route "}"
+  (&"cache" num "(" term ")")? ";" route : route
 syntax &"branch" "(" term ")" "{" route "}" &"else" "{" route "}" ";" route : route
 syntax &"loop" "{" route "}" : route
 syntax &"while" "(" term ")" "{" route "}" ";" route : route
@@ -201,15 +204,15 @@ macro_rules
         | some g => `(some $g)
         | none => `(none)
       `(Route.run $s Mode.decode (fun $x => $w) $gr [route| $k])
-  | `([route| hold $ps:routePool,* $[reuse ( $r )]? { $body } $[cache ( $l )]? ; $k]) => do
+  | `([route| hold $ps:routePool,* $[reuse ( $r )]? { $body } $[cache $cp:num ( $l )]? ; $k]) => do
       let x := mkIdent `x
       let pools ← ps.getElems.mapM fun p => `([routePool| $p])
       let ru ← match r with
         | some r => `(some (fun $x => $r))
         | none => `(none)
-      let ca ← match l with
-        | some l => `(some (fun $x => $l))
-        | none => `(none)
+      let ca ← match cp, l with
+        | some cp, some l => `(some ($cp, fun $x => $l))
+        | _, _ => `(none)
       `(Route.hold [$pools,*] $ru [route| $body] $ca [route| $k])
   | `([route| branch ( $p ) { $a } else { $b } ; $k]) =>
       let x := mkIdent `x

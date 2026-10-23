@@ -2,7 +2,7 @@
 
 Names for the parts of a request's life that are not one engine run. An
 admission is the kernel's
-[`hold … { … } cache (…)`](statements.md#hold), which an
+[`hold … { … } cache POOL (…)`](statements.md#hold), which an
 engine's scheduler writes as `taking`, `reuse` and `cache`, reading the
 engine's state of the request (`request.known`, `request.hit`). Prefill and
 decode are the mode of a [`run`](statements.md#run) on a step engine, which
