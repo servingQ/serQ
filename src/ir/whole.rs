@@ -172,7 +172,9 @@ impl Whole {
                     Fun::BudgetLeft => (!refs
                         .all(|r| members(r).all(|i| self.budget.get(i) == Some(&true))))
                     .then_some(e),
-                    Fun::Work
+                    // what a `counting` reads may be any number
+                    Fun::Counted
+                    | Fun::Work
                     | Fun::Sqrt
                     | Fun::Exp
                     | Fun::Ln

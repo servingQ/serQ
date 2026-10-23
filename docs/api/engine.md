@@ -145,8 +145,10 @@ shortest-remaining-first; `by (-remaining)` is the opposite.
 
 `only (p)` is read for each request at its turn, on the running requests
 as they stand at that read (one the iteration admitted included). Unlike
-a key it may not read `now` or `work(…)`: an engine whose requests it all
-excludes waits for the next event, and the clock moving is none. It may
+a key it may not read `now` or `work(…)`, nor
+[`counted(m)`](functions.md#counted) of a pool whose `counting` reads
+them: an engine whose requests it all excludes waits for the next event,
+and the clock moving is none. It may
 not draw. A request it excludes gets no token this iteration, keeps its
 allocation and advances no computed KV. A predicate both statements read
 is named with a `def`, read where it stands

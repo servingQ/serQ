@@ -5,7 +5,7 @@ pool NAME [ '[' N ']' ] {
   cap expr;
   block expr;
   evict lru;  |  evict by (expr, …);
-  preempt none;  |  preempt lifo;  |  preempt by (expr, …) [requeue head | tail];  |  preempt leases by (expr, …) [every (expr) [suspend by (expr, …)]];
+  preempt none;  |  preempt lifo;  |  preempt by (expr, …) [requeue head | tail];  |  preempt leases by (expr, …) [every (expr) [suspend by (expr, …) counting (expr)]];
   queue fifo [every (expr)];  |  queue by (key, …) [every (expr)];
   reserve held;
   spill POOL via STAGE (expr) when (expr);
@@ -75,7 +75,7 @@ preempt by (key, …) [requeue head | requeue tail];
 preempt lifo;
 preempt leases by (key, …);
 preempt leases by (key, …) every (dt);
-preempt leases by (key, …) every (dt) suspend by (key, …);
+preempt leases by (key, …) every (dt) suspend by (key, …) counting (c);
 ```
 
 What a [`grow`](statements.md#grow) (or a `growing` run) does when the pool has no room.
@@ -87,7 +87,7 @@ What a [`grow`](statements.md#grow) (or a `growing` run) does when the pool has 
 | `lifo` | Shorthand for `by (-admission) requeue head`: preempt the last admitted. |
 | `leases by (k, …)` | End the lease with the least keys, compared in order; ties go to the last admitted. No hold is preempted. |
 | `leases by (k, …) every (dt)` | A lease's growth goes through, past the cap if it must; at every multiple of `dt` seconds, end leases in that order while the pool is over its cap. A hold's growth takes a lease at once. Not on a pool with `reserve held`. |
-| `leases by (k, …) every (dt) suspend by (s, …)` | As `every`, but a lease taken is set aside, and each later tick, before it takes any, gives set-aside leases back in the order of the `s` keys, each that fits; `release` or the session's end drops one. |
+| `leases by (k, …) every (dt) suspend by (s, …) counting (c)` | As `every`, but a lease taken is set aside. Each later tick, before it takes any, takes its room once, the cap less [`counted`](functions.md#counted) (its units with each lease counted as `c` reads for its session), and gives set-aside leases back in the order of the `s` keys, each whose units fit what is left of that room; what comes back may pass the cap, and the same tick's pause sets the excess aside. `counting (allocated(m))`, `m` this pool, lets back each that fits the cap. A `c` below 0 fails the run. `release` or the session's end drops a set-aside lease. |
 
 Candidates are holders resident in the stage whose `memory` is this pool.
 If no stage names it as memory, candidates are holders with an active hold

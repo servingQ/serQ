@@ -144,7 +144,7 @@ pub const STATEMENTS: [&str; 41] = [
 /// engine is written instead. `queue`, `admit` and `while` are options too,
 /// but a list above takes them first; they stay so that the list is the
 /// docs lexer's word for word.
-pub const OPTIONS: [&str; 63] = [
+pub const OPTIONS: [&str; 64] = [
     "cap",
     "per_token",
     "save",
@@ -155,6 +155,7 @@ pub const OPTIONS: [&str; 63] = [
     "lifo",
     "leases",
     "suspend",
+    "counting",
     "held",
     "requeue",
     "head",
@@ -493,6 +494,11 @@ fn summary(f: Fun) -> &'static str {
         Fun::Allocated => {
             "This session's own allocated units in `p`, in its holds and its leases; 0 when \
              evaluated without a session."
+        }
+        Fun::Counted => {
+            "What `p` counts as taken under its `suspend by (…) counting (c)`: its units, \
+             with each session that leases `p` and holds it in no scope counted as `c` reads \
+             for it, in place of what it has allocated there."
         }
         Fun::Holders => "Sessions holding units in `p`.",
         Fun::Queued => "Sessions waiting in `p`'s admission queue.",

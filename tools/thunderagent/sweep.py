@@ -2,13 +2,16 @@
 """ThunderAgent's TR mode against its default mode
 (examples/multi-turn/thunderagent.sq, docs/design/thunderagent.md): run
 both over the agent counts and print, per count, the steps per minute of
-each, their ratio, the token hit rate of each, and how often TR mode
-lets a paused program in again.
+each, their ratio, the token hit rate of each, and, a turn, how often TR
+mode lets a paused program in again, how many programs its router pauses,
+and how many tokens it prefills.
 
     cargo build --release
     tools/thunderagent/sweep.py                       # the example as committed
     tools/thunderagent/sweep.py --preset paper        # the paper's scale
     tools/thunderagent/sweep.py --preset paper g=1.1e-9 S=0
+    tools/thunderagent/sweep.py --preset paper decay=2        # --use-acting-token-decay
+    tools/thunderagent/sweep.py --preset paper decay=2 dt=10  # and --scheduler-interval 10
 
 `k=v` sets an argument of the program after the preset's. Every number is
 a simulation of the program as committed, not a measurement: a steps/min
@@ -64,12 +67,19 @@ def run(n, tr, seed, sets):
     r = json.loads(subprocess.run(args, capture_output=True, text=True, check=True).stdout)
     o = r["observes"]
     hit = r["engines"]["E"]["token_hit"]
+    # the tokens E prefilled, the admissions' `E.prefill` summed
+    fresh = o["E.prefill"]["mean"] * o["E.prefill"]["count"] if o.get("E.prefill") else 0.0
     resumes = o["resume_wait"]["count"] if o.get("resume_wait") else 0
+    # the router's pauses: the leases the replicas' `prog` pools set aside
+    pauses = sum(p.get("preemptions") or 0 for p in r.get("pools", []) if p["name"] == "prog")
+    per_turn = lambda x: x / r["turns"] if r["turns"] else 0.0
     return {
         "spm": r["turns"] / (r["end"] - r["warmup"]) * 60,
         # null: E admitted no token, a hit rate of nothing, not of 0
         "hit": hit if hit is not None else float("nan"),
-        "resumed": resumes / r["turns"] if r["turns"] else 0.0,
+        "resumed": per_turn(resumes),
+        "paused": per_turn(pauses),
+        "prefilled": per_turn(fresh),
     }
 
 
@@ -90,14 +100,16 @@ def main(argv):
         res = dict(zip(jobs, ex.map(lambda j: run(*j, sets), jobs)))
     mean = lambda rows, k: sum(r[k] for r in rows) / len(rows)
     print(f"preset {preset}, seeds {seeds}, {' '.join(f'{k}={v}' for k, v in sets.items())}")
-    print("| N | TR steps/min | default steps/min | ratio | TR hit | default hit | TR resumed/turn |")
-    print("|---|---|---|---|---|---|---|")
+    print("| N | TR steps/min | default steps/min | ratio | TR hit | default hit | TR resumed/turn"
+          " | TR paused/turn | TR prefilled/turn |")
+    print("|---|---|---|---|---|---|---|---|---|")
     for n in ns:
         t = [res[(n, 1, s)] for s in seeds]
         d = [res[(n, 0, s)] for s in seeds]
         print(f"| {n} | {mean(t, 'spm'):.1f} | {mean(d, 'spm'):.1f} | "
               f"{mean(t, 'spm') / mean(d, 'spm'):.2f} | {mean(t, 'hit'):.2f} | "
-              f"{mean(d, 'hit'):.2f} | {mean(t, 'resumed'):.3f} |")
+              f"{mean(d, 'hit'):.2f} | {mean(t, 'resumed'):.3f} | {mean(t, 'paused'):.3f} | "
+              f"{mean(t, 'prefilled'):.0f} |")
 
 
 if __name__ == "__main__":

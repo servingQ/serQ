@@ -171,3 +171,32 @@ fn an_estimate_past_the_capacity_counts_the_capacity() {
         off.turns
     );
 }
+
+/// `--use-acting-token-decay` (`decay`, the base, 2 in the code): when the
+/// router lets programs in at its tick it counts a program at its tool for
+/// 2^-t of its tokens, t seconds since its response, and when it pauses, in
+/// full. A program a few seconds into its tool counts for almost nothing,
+/// so the tick lets in nearly every program waiting and the pause sets the
+/// excess aside again: more turns come from a paused program, fewer
+/// prefixes stay cached, and fewer turns are served (at this horizon, seed
+/// 1: 210 against 360 steps/min, hit 0.58 against 0.93, resumed per turn
+/// 0.43 against 0.045) (docs/design/tick-count.md).
+#[test]
+fn the_acting_token_decay_lets_programs_in_past_the_kv_and_loses_the_gain() {
+    let run = |decay: &str| paper("tr=1", &["g=3.3e-9", "S=3968", decay]);
+    let resumed =
+        |r: &serq::Report| r.observe("resume_wait").map_or(0, |o| o.count) as f64 / r.turns as f64;
+    let (off, on) = (run("decay=0"), run("decay=2"));
+    assert!(
+        (on.turns as f64) < 0.75 * off.turns as f64
+            && token_hit(&on) < 0.75
+            && resumed(&on) > 5.0 * resumed(&off),
+        "turns: decay 2 {}, off {}; hit {} against {}; resumed/turn {} against {}",
+        on.turns,
+        off.turns,
+        token_hit(&on),
+        token_hit(&off),
+        resumed(&on),
+        resumed(&off)
+    );
+}

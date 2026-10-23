@@ -671,7 +671,12 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
                     .transpose()?,
                 suspend: suspend
                     .as_ref()
-                    .map(|ks| ks.iter().map(|k| lk.expr(k)).collect::<LResult<_>>())
+                    .map(|(ks, count)| -> LResult<_> {
+                        Ok(crate::ir::Suspend {
+                            keys: ks.iter().map(|k| lk.expr(k)).collect::<LResult<_>>()?,
+                            count: lk.expr(count)?,
+                        })
+                    })
                     .transpose()?,
             },
         };

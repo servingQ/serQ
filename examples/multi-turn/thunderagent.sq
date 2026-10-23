@@ -24,6 +24,7 @@ fn main() {
   let S = args.number("S", 0);               // shared system prompt (tokens)
   let count_shared = args.number("count_shared", 1);  // 1: S in every program, 0: once
   let w = args.number("w", 1);               // --acting-token-weight
+  let decay = args.number("decay", 0);       // --use-acting-token-decay: its base, 2 (0: off)
   let room = blocks * bs - (count_shared ? 0 : S);   // the router's capacity
   let dt = args.number("dt", 5);             // --scheduler-interval (s)
   let est = args.number("est", 0);           // the router's token estimate's relative error, at most
@@ -62,13 +63,20 @@ fn main() {
   pool waiting_queue { queue by (K > 0 ? 0 : 1, charged) every (dt); }
   // --8<-- [end:waiting_queue]
   // --8<-- [start:prog]
+  def tokens_at_tick() {
+    decay > 0 && !reasoning
+      ? buffer + (total_tokens - buffer) * decay ^ (acting_since - now)
+      : allocated(prog[home])
+  }
   pool prog[J] {
     cap tr ? room : inf;
-    preempt leases by (reasoning, prompt) every (dt) suspend by (prompt);
+    preempt leases by (reasoning, prompt) every (dt)
+      suspend by (prompt) counting (tokens_at_tick());
   }
   // --8<-- [end:prog]
   // --8<-- [start:helpers]
-  def no_room(x) { max r in J (free(prog[r])) < x }
+  def room_of(r) { ticked ? room - counted(prog[r]) : free(prog[r]) }
+  def no_room(x) { max r in J (room_of(r)) < x }
   def count_as(x) {
     if (x >= allocated(prog[home])) {
       grow prog[home] (cost(prog, x - allocated(prog[home])));
@@ -95,13 +103,15 @@ fn main() {
       // --8<-- [start:let_in]
       if (K > 0) { release prog[home]; }
       set t_q = now;
+      set ticked = 0;
       set waits = tr && (K > 0 || queued(waiting_queue) > 0 || no_room(charged));
       while (waits) {
         hold waiting_queue (cost(waiting_queue, 1)) { }
+        set ticked = 1;
         set waits = no_room(charged) && now - t_q < force_resume;
       }
-      choose j in J by (tr ? (free(prog[j]) >= charged ? 0 : 1) : 0,
-                        tr ? used(prog[j]) : holders(prog[j]));
+      choose j in J by (tr ? (room_of(j) >= charged ? 0 : 1) : 0,
+                        tr ? -room_of(j) : holders(prog[j]));
       set home = j;
       hold prog[home] (cost(prog, tr ? buffer : charged)) {
         if (K > 0) { observe resume_wait = now - t_q; }
@@ -113,6 +123,8 @@ fn main() {
     E[home].decode (prompt);
     set usage = min(prompt + o + buffer - (count_shared ? 0 : S), room);
     if (allocated(prog[home]) > 0) { count_as(usage); }
+    set total_tokens = allocated(prog[home]);
+    set acting_since = now;
     if (w < 1 && allocated(prog[home]) > 0) {
       shrink prog[home] (cost(prog, (1 - w) * (allocated(prog[home]) - buffer)));
     }

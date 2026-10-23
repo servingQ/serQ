@@ -1,7 +1,4 @@
 {
-  "BinOp": [
-    "Pow"
-  ],
   "RunMode": [
     "Prefill",
     "Decode"

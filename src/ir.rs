@@ -41,7 +41,12 @@ use serde::{Deserialize, Serialize};
 /// source registers a send at each request's end (`CRequest::send`), which
 /// keeps its blocks until the reader's load ends it or its `ttl` does; and
 /// `Join` goes, the push mode's reader waiting for the send instead.
-pub const IR_VERSION: u32 = 15;
+/// 16 makes `Preempt::Leases.suspend` a `Suspend`, its keys and the
+/// `count` a tick judges a set-aside lease's comeback by (`counting`), so
+/// that the room a lease comes back to is the program's, and adds
+/// `Fun::Counted`, what such a pool counts as taken
+/// (`docs/design/tick-count.md`).
+pub const IR_VERSION: u32 = 16;
 
 /// A reason `Program::validate` refuses a program, and the statement it is
 /// about (block, index in it) when it is about one.
@@ -172,18 +177,33 @@ pub enum Preempt {
     /// if it must, and at a tick the pool ends leases in the same order
     /// while it is over its cap (ThunderAgent's periodic `_pause_until_safe`).
     /// With `suspend` too, a lease taken is set aside, not ended: its units
-    /// go back and `allocated` reads 0, and at each later tick, before it
-    /// pauses, the pool gives set-aside leases back in the order of the
-    /// `suspend` keys (read at `Moment::Victim`), each that fits; a
-    /// `release` or the session's end drops one (ThunderAgent's resume of a
-    /// paused program before its next request).
+    /// go back and `allocated` reads 0. At each later tick, before it
+    /// pauses, the pool takes its room once, the cap less what it counts as
+    /// taken under the `suspend` count (`Fun::Counted`), and gives
+    /// set-aside leases back in the order of the `suspend` keys, each whose
+    /// units fit what is left of that room, which they then take in full.
+    /// What comes back may pass the cap, and the same tick's pause sets the
+    /// excess aside again. A `release` or the session's end drops a
+    /// set-aside lease (ThunderAgent's resume of a paused program before
+    /// its next request: `_greedy_resume`, then `_pause_until_safe`).
     Leases {
         keys: Vec<CExpr>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         every: Option<f64>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        suspend: Option<Vec<CExpr>>,
+        suspend: Option<Suspend>,
     },
+}
+
+/// `suspend by (keys) counting (count)`: the order set-aside leases come
+/// back in, and what each lease the pool has counts for when a tick judges
+/// whether one fits. Both are read at `Moment::Victim`, for each session
+/// that leases the pool and holds it in no scope; `counting
+/// (allocated(m))`, `m` the pool, counts each lease for its units.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Suspend {
+    pub keys: Vec<CExpr>,
+    pub count: CExpr,
 }
 
 impl Preempt {
@@ -195,15 +215,36 @@ impl Preempt {
         }
     }
 
-    /// The keys a `suspend by` gives set-aside leases back in.
-    pub fn suspend_keys(&self) -> Option<&[CExpr]> {
+    /// The `suspend by … counting …` clause, if the pool has one.
+    pub fn suspend(&self) -> Option<&Suspend> {
         match self {
             Preempt::Leases {
-                suspend: Some(keys),
-                ..
-            } => Some(keys),
+                suspend: Some(s), ..
+            } => Some(s),
             _ => None,
         }
+    }
+
+    /// The keys a `suspend by` gives set-aside leases back in.
+    pub fn suspend_keys(&self) -> Option<&[CExpr]> {
+        self.suspend().map(|s| s.keys.as_slice())
+    }
+
+    /// What a tick counts each lease for (`counting`), under `suspend`.
+    pub fn count(&self) -> Option<&CExpr> {
+        self.suspend().map(|s| &s.count)
+    }
+
+    /// Every expression the preemption reads, all at `Moment::Victim`: the
+    /// victim keys, the `suspend` keys and the count. A check over a pool's
+    /// expressions reads this list, so that one added here is checked by
+    /// each (#591's `suspend` keys reached two of the three).
+    pub fn exprs(&self) -> impl Iterator<Item = &CExpr> {
+        self.keys()
+            .into_iter()
+            .flatten()
+            .chain(self.suspend_keys().into_iter().flatten())
+            .chain(self.count())
     }
 
     /// Whether a failed growth preempts a hold, which then runs again.
@@ -534,6 +575,9 @@ pub enum Fun {
     CachedIn,
     /// this session's allocated units in a pool: its holds and its leases
     Allocated,
+    /// what a pool under `suspend by … counting (c)` counts as taken: its
+    /// units, each lessee's lease counted as `c` reads for it
+    Counted,
     Holders,
     /// sessions waiting at a pool
     Queued,
@@ -2199,10 +2243,7 @@ impl Program {
             if let CEvict::By(keys) = &p.evict {
                 exprs.extend(keys);
             }
-            if let Some(keys) = p.preempt.keys() {
-                exprs.extend(keys);
-            }
-            exprs.extend(p.preempt.suspend_keys().into_iter().flatten());
+            exprs.extend(p.preempt.exprs());
             if let Some(s) = &p.spill {
                 exprs.extend([&s.work, &s.when]);
             }
@@ -2457,33 +2498,43 @@ impl Program {
                 Preempt::Leases { .. } => "preempt leases by",
                 _ => "preempt by",
             };
-            // the victim's keys, and those a set-aside lease comes back in
+            // the victim's keys, those a set-aside lease comes back in, and
+            // what a tick counts each lease for: each read for one lessee
             let groups = [
                 (p.preempt.keys(), form),
                 (p.preempt.suspend_keys(), "suspend by"),
             ];
             for (keys, form) in groups {
-                let Some(keys) = keys else { continue };
-                if keys.is_empty() {
+                if keys.is_some_and(|k| k.is_empty()) {
                     return Err(at(format!("{form} needs at least one key")));
                 }
-                for key in keys {
-                    v.expr(key, Moment::Victim).map_err(at)?;
-                    if draws(key) {
-                        return Err(at(
-                            "a preempt key may not draw (`~`): it is read for every candidate \
-                             at every growth that does not fit; sample into an attribute first"
-                                .to_string(),
-                        ));
-                    }
-                    if key.any(&|x| matches!(x, CExpr::Attr(a) if *a == self.slot_computed)) {
-                        return Err(at(
-                            "a preempt key reads `computed`, the position at the session's last \
-                             preemption (0 for one never preempted); a preempt key reads \
-                             `position`, where the candidate is now"
-                                .to_string(),
-                        ));
-                    }
+            }
+            let count = p.preempt.count();
+            for e in p.preempt.exprs() {
+                let (what, read) = if count.is_some_and(|c| std::ptr::eq(c, e)) {
+                    (
+                        "a `counting`",
+                        "for every lessee at every tick, and wherever `counted` is",
+                    )
+                } else {
+                    (
+                        "a preempt key",
+                        "for every candidate at every growth that does not fit",
+                    )
+                };
+                v.expr(e, Moment::Victim).map_err(at)?;
+                if draws(e) {
+                    return Err(at(format!(
+                        "{what} may not draw (`~`): it is read {read}; sample into an \
+                         attribute first"
+                    )));
+                }
+                if e.any(&|x| matches!(x, CExpr::Attr(a) if *a == self.slot_computed)) {
+                    return Err(at(format!(
+                        "{what} reads `computed`, the position at the session's last \
+                         preemption (0 for one never preempted); {what} reads `position`, \
+                         where the candidate is now"
+                    )));
                 }
             }
             if let CEvict::By(keys) = &p.evict {
@@ -2775,9 +2826,17 @@ fn draws(e: &CExpr) -> bool {
 }
 
 /// Whether an expression reads a value that moves while no event happens
-/// (`now`, `work(…)`).
-fn reads_clock(e: &CExpr) -> bool {
-    e.any(&|x| matches!(x, CExpr::Ctx(CtxVar::Now) | CExpr::Call(Fun::Work, _)))
+/// (`now`, `work(…)`), itself or through `counted(m)` of a pool whose
+/// `counting` reads one (a `counting` may not read `counted`).
+fn reads_clock(p: &Program, e: &CExpr) -> bool {
+    let clock = |x: &CExpr| matches!(x, CExpr::Ctx(CtxVar::Now) | CExpr::Call(Fun::Work, _));
+    e.any(&|x| {
+        clock(x)
+            || matches!(x, CExpr::Call(Fun::Counted, a) if matches!(a.as_slice(),
+                [CArg::Pool(r)] if p.pools[r.base..r.base + r.count]
+                    .iter()
+                    .any(|q| q.preempt.count().is_some_and(|c| c.any(&clock)))))
+    })
 }
 
 /// The value of an expression of numbers and operators, if it is one.
@@ -2885,10 +2944,11 @@ impl Validator<'_> {
                     .into(),
             );
         }
-        if reads_clock(e) {
+        if reads_clock(self.p, e) {
             return Err(
-                "an `only` may not read `now` or `work(…)`: an engine whose requests it \
-                 all excludes waits for the next event, and time passing is not one"
+                "an `only` may not read `now` or `work(…)`, nor `counted(…)` of a pool \
+                 whose `counting` reads them: an engine whose requests it all excludes \
+                 waits for the next event, and time passing is not one"
                     .into(),
             );
         }
@@ -2909,10 +2969,11 @@ impl Validator<'_> {
                     "{what} may not draw (`~`): it is read at every iteration"
                 ));
             }
-            if reads_clock(e) {
+            if reads_clock(self.p, e) {
                 return Err(format!(
-                    "{what} may not read `now` or `work(…)`: an engine whose `scheduler` \
-                     schedules nothing waits for an event, and the clock moving is none"
+                    "{what} may not read `now` or `work(…)`, nor `counted(…)` of a pool \
+                     whose `counting` reads them: an engine whose `scheduler` schedules \
+                     nothing waits for an event, and the clock moving is none"
                 ));
             }
             let own = |r: &CRef| (r.base..r.base + r.count).contains(&st);
@@ -3132,6 +3193,19 @@ impl Validator<'_> {
             CExpr::Call(Fun::Allocated, _) if m == Moment::Gauge => Err(
                 "`allocated` is the session's own allocation, and a gauge has no session".into(),
             ),
+            CExpr::Call(Fun::Counted, _) if m == Moment::Gauge => Err(
+                "a gauge may not read `counted(…)`: it reads each lessee's `counting`, which \
+                 may read `now`, and a gauge is held constant between events"
+                    .into(),
+            ),
+            // `counted` reads the `counting` of every lessee, which is read
+            // at this moment: a `counting` that read it would read itself
+            CExpr::Call(Fun::Counted, _) if m == Moment::Victim => Err(
+                "a pool's keys and its `counting` may not read `counted(…)`: `counted` reads \
+                 every lessee's `counting`, and a `counting` read for each lessee would read \
+                 itself"
+                    .into(),
+            ),
             // a claim reads and does not act: no draw, and what its moment
             // supplies (a `given` the session, an iteration claim the stage
             // as the iteration starts, a claim `at end` the run)
@@ -3273,6 +3347,20 @@ impl Validator<'_> {
                     return Err(format!(
                         "`budget_left({n})`: {what} is a {kind} stage; only an engine has \
                          a token budget (`tokens cap`)"
+                    ));
+                }
+                // what a pool counts is its `counting`'s: a pool without one
+                // counts what it uses, which `used` reads (#587)
+                if let (Fun::Counted, [CArg::Pool(r)]) = (f, args.as_slice())
+                    && let Some(q) = self.p.pools[r.base..r.base + r.count]
+                        .iter()
+                        .find(|q| q.preempt.count().is_none())
+                {
+                    let n = &q.name;
+                    return Err(format!(
+                        "`counted({n})`: `{n}` has no `suspend by (…) counting (…)`; `counted` \
+                         reads what a pool's `counting` counts, and `used({n})` is what `{n}` \
+                         uses"
                     ));
                 }
                 Ok(())
@@ -4168,7 +4256,7 @@ impl FunGroup {
 
 /// Every function a call may name, for lookup by name; `Fun::entry` is
 /// the definition and a match, so a new `Fun` without one does not compile.
-const FUNS: [Fun; 22] = [
+const FUNS: [Fun; 23] = [
     Fun::Min,
     Fun::Max,
     Fun::Abs,
@@ -4184,6 +4272,7 @@ const FUNS: [Fun; 22] = [
     Fun::Free,
     Fun::CachedIn,
     Fun::Allocated,
+    Fun::Counted,
     Fun::Holders,
     Fun::Queued,
     Fun::Price,
@@ -4246,6 +4335,7 @@ impl Fun {
             Fun::Free => f("free", &[P], &["p"], Po),
             Fun::CachedIn => f("cachedin", &[P], &["p"], Po),
             Fun::Allocated => f("allocated", &[P], &["p"], Po),
+            Fun::Counted => f("counted", &[P], &["p"], Po),
             Fun::Holders => f("holders", &[P], &["p"], Po),
             Fun::Queued => f("queued", &[P], &["p"], Po),
             Fun::Price => f("price", &[S, E, E], &["s", "s_hit", "ds"], St),

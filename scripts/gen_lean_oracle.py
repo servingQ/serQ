@@ -55,8 +55,13 @@ OUT = os.path.join(ROOT, "lean", "Serq", "Oracle.lean")
 # statement `Join`. A connector was outside the fragment and stays so (below),
 # a send is, and no oracle program had a `Join`: a 14 file and a 15 file
 # translate alike.
-IR_VERSION = 15
-SUPPORTED_IR_VERSIONS = (7, 8, 9, 10, 11, 12, 13, 14, IR_VERSION)
+# 16 (docs/design/tick-count.md) makes `Preempt::Leases.suspend` a
+# `{keys, count}`, the count a tick judges a set-aside lease's comeback by,
+# and adds the call `Counted`. A pool whose preempt is not lifo is outside
+# the fragment (below), as is a call it does not know, and no oracle program
+# has either: a 15 file and a 16 file translate alike.
+IR_VERSION = 16
+SUPPORTED_IR_VERSIONS = (7, 8, 9, 10, 11, 12, 13, 14, 15, IR_VERSION)
 
 
 def is_delay(kind):
