@@ -41,7 +41,10 @@ use serde::{Deserialize, Serialize};
 /// source registers a send at each request's end (`CRequest::send`), which
 /// keeps its blocks until the reader's load ends it or its `ttl` does; and
 /// `Join` goes, the push mode's reader waiting for the send instead.
-pub const IR_VERSION: u32 = 15;
+/// 16 removes `Fun::Price`, one paper's `missPrice` as a builtin: a
+/// program writes it as a `def` over `est_lambda`, `est_rho` and
+/// `est_wait` (`docs/design/miss-price.md`, #67).
+pub const IR_VERSION: u32 = 16;
 
 /// A reason `Program::validate` refuses a program, and the statement it is
 /// about (block, index in it) when it is about one.
@@ -537,8 +540,6 @@ pub enum Fun {
     Holders,
     /// sessions waiting at a pool
     Queued,
-    /// online price of a miss at a stage: `price(stage, s_hit, ds)`
-    Price,
     /// step stage: tokens the next iteration leaves after its residents
     BudgetLeft,
     EstLambda,
@@ -4168,7 +4169,7 @@ impl FunGroup {
 
 /// Every function a call may name, for lookup by name; `Fun::entry` is
 /// the definition and a match, so a new `Fun` without one does not compile.
-const FUNS: [Fun; 22] = [
+const FUNS: [Fun; 21] = [
     Fun::Min,
     Fun::Max,
     Fun::Abs,
@@ -4186,7 +4187,6 @@ const FUNS: [Fun; 22] = [
     Fun::Allocated,
     Fun::Holders,
     Fun::Queued,
-    Fun::Price,
     Fun::BudgetLeft,
     Fun::EstLambda,
     Fun::EstRho,
@@ -4248,7 +4248,6 @@ impl Fun {
             Fun::Allocated => f("allocated", &[P], &["p"], Po),
             Fun::Holders => f("holders", &[P], &["p"], Po),
             Fun::Queued => f("queued", &[P], &["p"], Po),
-            Fun::Price => f("price", &[S, E, E], &["s", "s_hit", "ds"], St),
             Fun::BudgetLeft => f("budget_left", &[S], &["s"], En),
             Fun::EstLambda => f("est_lambda", &[S], &["s"], St),
             Fun::EstRho => f("est_rho", &[S], &["s"], St),

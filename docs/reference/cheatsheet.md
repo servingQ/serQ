@@ -120,7 +120,7 @@ Arithmetic, comparisons (0/1), `&&`, `||`, `!`, `c ? a : b`.
 |---|---|---|
 | `queue(s)` `busy(s)` `work(s)` | `used(p)` `free(p)` | `budget_left(s)` |
 | `est_lambda(s)` `est_rho(s)` `est_wait(s)` | `cachedin(p)` `holders(p)` `queued(p)` | |
-| `price(s, s_hit, ds)` | `blocksize(p)` (folded) | |
+| | `blocksize(p)` (folded) | |
 
 [Context variables](../api/context.md) depend on the evaluation moment:
 `waited` in queue keys, `size` and `age` in eviction keys, `present` in `ps`

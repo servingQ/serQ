@@ -176,7 +176,6 @@ impl Whole {
                     | Fun::Sqrt
                     | Fun::Exp
                     | Fun::Ln
-                    | Fun::Price
                     | Fun::EstLambda
                     | Fun::EstRho
                     | Fun::EstWait => Some(e),

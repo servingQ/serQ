@@ -496,7 +496,6 @@ fn summary(f: Fun) -> &'static str {
         }
         Fun::Holders => "Sessions holding units in `p`.",
         Fun::Queued => "Sessions waiting in `p`'s admission queue.",
-        Fun::Price => "An online estimate of the added cost of a cache miss, in clock units.",
         Fun::BudgetLeft => {
             "Tokens available to admissions after planning service for the running requests."
         }

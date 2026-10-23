@@ -52,8 +52,8 @@ product. Argued in #8, in the order they bite:
    construct, can a program state the opposite? The language may supply a
    *mechanism* a program selects and parameterises, not a *rule* it would
    otherwise write. Two shipped constructs still fail this (#65
-   head-of-line blocking, #67 `price()`): apply it to them before using it
-   against something new.
+   head-of-line blocking, #756 the estimates' fixed smoothing and cap):
+   apply it to them before using it against something new.
 3. **Checkability.** A claim the program makes should be mechanically checkable.
    This is what earns an IR change.
 

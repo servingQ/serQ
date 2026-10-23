@@ -6484,12 +6484,6 @@ impl<'p> Interp<'p> {
                 let p = pool(self, 0);
                 self.pools[p].queue.len() as f64
             }
-            Fun::Price => {
-                let s = stage(self, 0);
-                let sh = num(self, 1);
-                let ds = num(self, 2);
-                self.stages[s].est.price(sh, ds)
-            }
             Fun::BudgetLeft => {
                 let s = stage(self, 0);
                 if let Some((bs, left)) = self.admit_budget
@@ -6805,8 +6799,7 @@ fn static_key(e: &CExpr) -> bool {
     !e.any(&|x| match x {
         CExpr::Sample(..) | CExpr::Agg(..) => true,
         CExpr::Call(f, _) => {
-            !(f.is_arithmetic()
-                || matches!(f, Fun::Price | Fun::EstLambda | Fun::EstRho | Fun::EstWait))
+            !(f.is_arithmetic() || matches!(f, Fun::EstLambda | Fun::EstRho | Fun::EstWait))
         }
         _ => false,
     })

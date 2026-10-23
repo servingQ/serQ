@@ -55,8 +55,11 @@ OUT = os.path.join(ROOT, "lean", "Serq", "Oracle.lean")
 # statement `Join`. A connector was outside the fragment and stays so (below),
 # a send is, and no oracle program had a `Join`: a 14 file and a 15 file
 # translate alike.
-IR_VERSION = 15
-SUPPORTED_IR_VERSIONS = (7, 8, 9, 10, 11, 12, 13, 14, IR_VERSION)
+# 16 removes the function `Price` (serQ #67): a call was never in the
+# fragment (`call {f}` below), and no oracle program had one, so a 15 file
+# and a 16 file translate alike.
+IR_VERSION = 16
+SUPPORTED_IR_VERSIONS = (7, 8, 9, 10, 11, 12, 13, 14, 15, IR_VERSION)
 
 
 def is_delay(kind):
