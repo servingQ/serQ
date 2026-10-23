@@ -119,7 +119,7 @@ def ε {N : ℕ} (A : Arrivals N) : ℝ := 128 - A.load
 greedy fill of the residents RAD serves. -/
 def Busy (_ : ℕ → ℕ × ℕ) (_ : Ghost) (m : Machine) : Prop :=
   m.last.stats.tokens = tokSum m.iter ∧
-    (tokSum m.iter = 128 ∨ ((∀ j ∈ m.jobs, j.mode = .decode) ∧ tokSum m.iter = m.jobs.length)) ∧
+    (tokSum m.iter = M.B ∨ ((∀ j ∈ m.jobs, j.mode = .decode) ∧ tokSum m.iter = m.jobs.length)) ∧
     m.iter = fillIter D (m.jobs.filter (serves D m)) M.B
 
 /-- The invariant of a slot's end. -/
@@ -387,7 +387,8 @@ theorem backlog_lt_of_F (x : State) (hx : F x) : backlog x.1 < 128 * 512 := by
     obtain ⟨hb1, hb2, -⟩ := hB.busy hbusy
     rw [hb1] at htok
     rcases hb2 with h | ⟨hdec, hlen⟩
-    · omega
+    · have hMB : M.B = 128 := rfl
+      omega
     · have hle : ∀ v ∈ x.1.jobs.map (fun j => j.left + if j.mode = .prefill then (getS x.1 j.owner).attr.get 11 else 0),
           v ≤ 512 := by
         intro v hv

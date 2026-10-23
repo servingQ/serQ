@@ -62,7 +62,7 @@ theorem reach_dur {m : Machine} (h : Reach m) : Slot.Dur D m := by
   | empty => intro a q h; simp [BariStable.empty, Slot.empty, Exec.initial] at h
   | @slot m rs hf hm _ =>
     obtain ⟨L, g, hB⟩ := reach_sb hm
-    exact Slot.slot_dur ci_start hB _ (fits_attrs hf)
+    exact Slot.slot_dur hB _ (fits_attrs hf)
 
 /-- A full batch lasts `4640`. -/
 theorem dur_full (x : State) (hx : ¬ F x) : Slot.dur x.1 = 4640 := by

@@ -114,7 +114,7 @@ def wantG (g : Ghost) (i : ℕ) : ℕ :=
 
 /-- A running iteration is the greedy fill of the residents. -/
 abbrev Busy (_ : ℕ → ℕ × ℕ) (g : Ghost) (m : Machine) : Prop :=
-  m.last.stats.tokens = tokSum m.iter ∧ tokSum m.iter = min 128 (∑ i ∈ Finset.range m.sess.size, wantG g i) ∧
+  m.last.stats.tokens = tokSum m.iter ∧ tokSum m.iter = min M.B (∑ i ∈ Finset.range m.sess.size, wantG g i) ∧
     m.iter = fillIter D m.jobs M.B
 
 /-- The invariant of a slot's end. -/
@@ -299,6 +299,7 @@ theorem backlog_lt_of_sb {L : ℕ → ℕ × ℕ} {g : Ghost} {m : Machine} (hB 
     obtain ⟨hb1, hb2, -⟩ := hB.busy hbusy
     obtain ⟨hW1, hW2⟩ := ci_wn_le hB.toCI hB.rdy
     have hS : ∑ i ∈ Finset.range m.sess.size, wantG g i < 128 := by
+      have hMB : M.B = 128 := rfl
       rw [hb1] at htok; rw [hb2] at htok; omega
     unfold backlog
     rw [ci_backlog hB.toCI hB.rdy]
