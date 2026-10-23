@@ -600,7 +600,20 @@ impl Program {
             }
             if let Some(c) = &sp.connector {
                 let what = |x: &str| u(format!("engine `{n}`'s connector's `{x}`"), None);
-                check(c.load.as_ref().map(|l| &l.amount), what("load"), request)?;
+                for l in &c.loads {
+                    // of several, the one through its stage
+                    let what = match c.loads.len() {
+                        1 => what("load"),
+                        _ => u(
+                            format!(
+                                "engine `{n}`'s connector's `load` at `{}`",
+                                self.stages[l.stage.base].name
+                            ),
+                            None,
+                        ),
+                    };
+                    check(Some(&l.amount), what, request)?;
+                }
                 check(c.save.as_ref().map(|s| &s.amount), what("save"), request)?;
             }
         }

@@ -238,9 +238,9 @@ fn a_swapped_second_relation_is_not_swapped() {
     assert!(!e.contains("fix-it"), "{e}");
 }
 
-/// The reader's engine with an L2's connector and a relation: which
-/// connector the engine keeps is a choice, so a help that names both ways
-/// and no fix-it.
+/// The reader's engine with an L2's connector and a relation: it lacks the
+/// source's connector, and where that goes among its connectors is a choice
+/// (#599: an engine has several), so a help that says so and no fix-it.
 #[test]
 fn a_reader_whose_connector_is_an_l2s_has_no_fix() {
     let l2 = "  queue lmc : l2 {\n    device host { kv cap 1e6; }\n    pool kv on host { block bs; \
@@ -254,10 +254,12 @@ fn a_reader_whose_connector_is_an_l2s_has_no_fix() {
     ]);
     let e = refused(&src, &w);
     assert!(e.contains("error[E-copy-no-connector]"), "{e}");
+    assert!(e.contains("and `D`'s engine has no `connector P`"), "{e}");
     assert!(
         e.contains(
-            "help: an engine has one connector: replace `connector lmc` with `connector P { load \
-             (…); }`, or keep it and give `D` an entry that `transfer`s the KV `from P`"
+            "help: in `D`'s engine, write `connector P { load (…); }`, the tokens a request \
+             loads from `P` (`request.input - request.hit`), before or after `connector lmc`: \
+             a request loads from the first that has tokens"
         ),
         "{e}"
     );

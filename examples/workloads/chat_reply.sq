@@ -1,7 +1,7 @@
 // examples/workloads/chat.sq's sessions, a session's context growing by the
 // tokens the server reports it produced (`reply.produced`), which a
 // too-long prompt cuts short (examples/pd-disaggregation/llmd_nixl_pull.sq
-// runs it).
+// and llmd_nixl_lmcache.sq run it).
 use "std/args";
 
 let p = 0.9;  // continue after a turn

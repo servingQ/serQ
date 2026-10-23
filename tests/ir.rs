@@ -960,7 +960,7 @@ fn a_relations_copy_names_its_poster() {
         // a connector's copy is its load's transfer, a hand-written one a run
         let copies = p
             .connectors()
-            .filter_map(|(_, c)| c.load.as_ref())
+            .flat_map(|(_, c)| &c.loads)
             .filter(|t| !t.also.is_empty())
             .map(|t| t.poster);
         p.blocks

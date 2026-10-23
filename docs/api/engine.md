@@ -7,7 +7,7 @@ engine NAME on DEVICE {
   tokens cap expr;           // required: the tokens one iteration computes (inf: no cap)
   granule c;                 // a prefill gets all it has left or a multiple of c
   state NAME = c;            // a register the schedule sets
-  connector QUEUE { … }      // its KV connector: an L2 queue, or its queue's KV source (below)
+  connector QUEUE { … }      // a KV connector: an L2 queue, or its queue's KV source; several, in order (below)
   scheduler { stmt … }        // required: what each iteration does (below)
   worker {
     forward (expr);            // required: how long the iteration takes
@@ -55,7 +55,7 @@ the [IR](../ir.md) and the Lean model see only that.
 | `state NAME = c` | `const` | | A register; see below. |
 | `scheduler` | statements | as the iteration is planned | Whom the iteration serves, in what order, and when it admits. |
 | `worker { forward (T); }` | `expr` | after the batch is formed | What the worker does with the batch the scheduler formed (vLLM's `SchedulerOutput`): its forward's clock time. Reads `batch.…` and the device's time resources, not `running.…` or `waiting.…`. |
-| `connector QUEUE { … }` | clauses | at a request's admission and its end | Its KV connector to an L2 queue or from its queue's KV source; see below. |
+| `connector QUEUE { … }` | clauses | at a request's admission and its end | A KV connector to an L2 queue or from its queue's KV source, several asked in their order; see below. |
 
 The values an engine reads, and in which clause, are in
 [Engines on devices](../language.md#engines-on-devices): `running.…` is
@@ -357,6 +357,27 @@ and the decoder of `examples/pd-disaggregation/llmd_nixl_pull.sq`, whose
 
 ```serq
 connector P { load (request.preempted ? 0 : request.input - request.hit); }
+```
+
+An engine may have several connectors (vLLM's `MultiConnector`,
+`multi_connector.py:134-141`), each naming its queue once, one of them at
+most with `save`. At the admission each `load` is read in the order
+written, and the first above 0 is the request's load, `request.loaded`;
+the others load nothing (`multi_connector.py:429-448`). The source's
+connector is not asked for a request its entry took from no source. A
+finished request runs the one `save`. In a push, the source's connector
+is written first, or the program does not link: one before it that has
+tokens would pass the leg's send over. The decoder of
+`examples/pd-disaggregation/llmd_nixl_lmcache.sq` reads a remote request
+from its prefiller and a local one from the L2, and saves to the L2:
+
+```serq
+connector P { load (request.preempted ? 0 : request.input - request.hit); }
+connector lmc {
+  per_token (r);
+  load (request.preempted ? 0 : beyond(request.known, request.hit));
+  save (floor(request.input + request.output, chunk));
+}
 ```
 
 ## Examples

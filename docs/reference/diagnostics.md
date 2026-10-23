@@ -62,7 +62,7 @@ the pair compiles as `serq check` compiles it, else a
 
 | Code | The rule | Fix-it |
 |---|---|---|
-| `E-copy-no-connector` | A KV relation (`kvt.nixl_pull (S, R, …)` or `kvt.nixl_push`) copies only through `R`'s engine's `connector S`, which loads each copy, or an entry of `R` that `transfer`s it; an L2 link (`kvt.l2_link (C, Q, …)`) is crossed only by `Q`'s engine's `connector C` | none (what a request loads, and which connector an engine keeps, are the program's) |
+| `E-copy-no-connector` | A KV relation (`kvt.nixl_pull (S, R, …)` or `kvt.nixl_push`) copies only through `R`'s engine's `connector S`, which loads each copy, or an entry of `R` that `transfer`s it; an L2 link (`kvt.l2_link (C, Q, …)`) is crossed only by `Q`'s engine's `connector C` | none (what a request loads, and where the connector stands among the engine's connectors, are the program's) |
 | `E-connector-untaken` | What an engine's connector loads goes into the engine's memory, the KV pool on its device, so its `taking` takes that pool | none (how much of it a request takes is the program's) |
 | `E-nic-unused` | A queue's `nic` carries a copy: a KV relation, an L2 link (`kvt.l2_link`) or a `transfer` runs on it | none (removing it leaves what reads `Q.nic`, and a relation names another queue) |
 | `E-reserved-word` | A name the language uses for itself (a keyword, a function, a distribution) is not a name the program can give a constant, a parameter, a queue, a device or a pool | none (the name is the program's) |
@@ -70,7 +70,7 @@ the pair compiles as `serq check` compiles it, else a
 | `E-pool-no-capacity` | A pool on a device or an engine (`pool NAME on OWNER`) is one of its capacities, `NAME cap …;` | none (how much it holds is the program's); a capacity of a nearby name is named |
 | `E-copy-no-entry` | A KV relation (`kvt.nixl_pull (S, R, …)`) is read by an entry of `R` written `… from S` | none (the entry's body is the program's) |
 | `E-copy-swapped` | A KV relation names the source first, then the reader: `(S, R)`, written `(R, S)` when `R` has the entry `… from S` and no relation into it; an L2 link names the L2 first, then the queue: `(C, Q)`, written `(Q, C)` when `C` plays `l2` and `Q` does not | swap the two queues of the relation |
-| `E-connector-misnamed` | An engine's `connector` names the queue its queue's relation reads from (`kvt.nixl_pull (S, R, …)`: `connector S`) | rename the connector to `S` |
+| `E-connector-misnamed` | An engine's `connector` names the queue its queue's relation reads from (`kvt.nixl_pull (S, R, …)`: `connector S`) | rename the connector to `S`; none when the engine has `connector S` already (the queue reads from `S` alone) |
 | `E-reader-two-sources` | A reader takes its KV from one source: one relation per reader, and its entries `… from` the same queue | none, in either form (which source stays is the program's) |
 | `E-connector-no-copy` | An engine's `connector S` (not an L2's) loads what a KV relation from `S` to its queue copies, so the relation is declared | none (a pull or a push is the program's) |
 | `E-copy-no-queue` | A KV relation, an L2 link, or an entry's `from`, names queues declared above it | none (which queue is the program's) |

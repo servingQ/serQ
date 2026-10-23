@@ -762,7 +762,7 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
                 // its records are attributes now, so that its caller reads
                 // them; its blocks are written after the session's, below
                 connector: {
-                    if sp.connector.is_some() {
+                    if !sp.connectors.is_empty() {
                         for a in CONNECTOR_ATTRS {
                             lk.attr(&format!("{}.{a}", s.name));
                         }
@@ -956,20 +956,23 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
             let st = &mut stages[at];
             at += 1;
             if let (StageKind::Step(sp), CStageKind::Step(step)) = (&decl.kind, &mut st.kind)
-                && let Some(c) = &sp.connector
+                && !sp.connectors.is_empty()
             {
+                let cs = &sp.connectors;
                 let taken = sp.memory.as_ref().filter(|m| {
                     sp.request
                         .as_ref()
                         .is_some_and(|r| r.pools.iter().any(|(q, _, _)| q.name == m.name))
                 });
-                if c.load.is_some() && taken.is_none() {
+                if cs.iter().any(|c| c.load.is_some()) && taken.is_none() {
                     return Err(connector_untaken(&decl.name, sp).at(decl.span));
                 }
                 let member = decl.array.then_some(i);
-                step.connector = Some(Box::new(lk.connector(c, &decl.name, taken, member)?));
-                if let ConnectorKind::Relation(Some(rel)) = &c.kind {
-                    sends.push((rel.source.clone(), rel.ttl));
+                step.connector = Some(Box::new(lk.connector(cs, &decl.name, taken, member)?));
+                for c in cs {
+                    if let ConnectorKind::Relation(Some(rel)) = &c.kind {
+                        sends.push((rel.source.clone(), rel.ttl));
+                    }
                 }
             }
         }
@@ -1496,7 +1499,7 @@ fn scheduler_reads(prog: &Program) -> SchedulerReads<'_> {
                     .chain(&r.reuse)
                     .chain(r.prefix.iter().flatten().flat_map(|(k, n)| [k, n]))
             })
-            .chain(sp.connector.iter().flat_map(|c| &c.load))
+            .chain(sp.connectors.iter().flat_map(|c| &c.load))
             .collect();
         let pools = r
             .into_iter()
@@ -2919,21 +2922,22 @@ impl Linker<'_> {
         })
     }
 
-    /// An engine's connector, for member `member` of an engine family (`None`
-    /// for one engine): its amounts, read for the request, and the kernel
-    /// blocks they mean, which read them as `E.loaded` and `E.saved`
-    /// (`ir::CConnector`). A load computes into the request's hold on
+    /// An engine's connectors, for member `member` of an engine family
+    /// (`None` for one engine): their amounts, read for the request, and the
+    /// kernel blocks they mean, which read them as `E.loaded` and `E.saved`
+    /// (`ir::CConnector`), one connector of the IR whose loads are theirs in
+    /// the order written. A load computes into the request's hold on
     /// `memory`, the engine's memory its `taking` takes: an L2's copies its
     /// tokens at the L2's stage, a KV relation's reads them over the two
     /// NICs from the lease the request's entry took `from` the source (the
     /// member `E.from`), waiting first for the source's leg in a push, and
-    /// ends the lease. A save is the hold on the L2's pool that copies what
-    /// its entry lacks and caches the rest. An L2's copy, a load's or a
-    /// save's, also crosses the member's own NIC when `kvt.l2_link` links
-    /// the two (`l2_copy`).
+    /// ends the lease. A save, of one of them (the parser refuses two), is
+    /// the hold on the L2's pool that copies what its entry lacks and caches
+    /// the rest. An L2's copy, a load's or a save's, also crosses the
+    /// member's own NIC when `kvt.l2_link` links the two (`l2_copy`).
     fn connector(
         &mut self,
-        c: &ConnectorSpec,
+        cs: &[ConnectorSpec],
         engine: &str,
         memory: Option<&Ref>,
         member: Option<usize>,
@@ -2952,9 +2956,12 @@ impl Linker<'_> {
         let size = self.stages.get(engine).map_or(1, |&(_, c)| c);
         let side = self.side;
         self.side = crate::ir::Side::Server;
-        let load = match &c.load {
-            None => None,
-            Some(n) => {
+        let mut loads = vec![];
+        for c in cs {
+            let Some(n) = &c.load else {
+                continue;
+            };
+            loads.push({
                 let kv = memory.expect("refused by `connector_untaken`");
                 let kv = own(&kv.name);
                 let mut body = match &c.kind {
@@ -3015,21 +3022,22 @@ impl Linker<'_> {
                     at,
                     Stmt::Load(kv.clone(), Expr::cost(one(&kv), var(&loaded))),
                 );
-                Some(self.member_transfer(n, &body, member, size, engine)?)
-            }
-        };
-        let save = match (&c.save, &c.kind) {
-            (None, _) => None,
-            (Some(_), ConnectorKind::Relation(_)) => unreachable!("the parser refuses it"),
-            (
-                Some(n),
+                self.member_transfer(n, &body, member, size, engine)?
+            });
+        }
+        // one of them saves at most, an L2's (the parser refuses the rest)
+        let save = match cs.iter().find_map(|c| Some((c.save.as_ref()?, &c.kind))) {
+            None => None,
+            Some((_, ConnectorKind::Relation(_))) => unreachable!("the parser refuses it"),
+            Some((
+                n,
                 ConnectorKind::L2 {
                     stage,
                     pool,
                     per_token,
                     link,
                 },
-            ) => {
+            )) => {
                 // the part of what the L2 is to hold that its entry lacks
                 let new = Expr::Call(
                     "max".into(),
@@ -3063,12 +3071,14 @@ impl Linker<'_> {
         };
         self.side = side;
         Ok(crate::ir::CConnector {
-            load,
+            loads,
             save,
             loaded: slots[0],
             saved: slots[1],
             load_done: slots[2],
-            from: matches!(c.kind, ConnectorKind::Relation(_))
+            from: cs
+                .iter()
+                .any(|c| matches!(c.kind, ConnectorKind::Relation(_)))
                 .then(|| self.attr(&format!("{engine}.{RELATION_FROM}"))),
             record: self.observe_slot(&loaded),
         })

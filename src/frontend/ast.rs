@@ -411,8 +411,10 @@ pub struct StepSpec {
     /// What its admission takes of a request and what the release leaves
     /// cached (`taking` on `admit waiting`); `None` before the engine is read.
     pub request: Option<RequestSpec>,
-    /// `connector C { … }`: its KV connector to the L2 queue `C`.
-    pub connector: Option<ConnectorSpec>,
+    /// `connector C { … }`, each: its KV connectors, to an L2 queue `C` or
+    /// the source `C` of its queue's KV relation, in the order written, the
+    /// order a request's admission asks them in.
+    pub connectors: Vec<ConnectorSpec>,
 }
 
 /// An engine's `connector C { per_token (r); [load (n);] [save (n);] }`,

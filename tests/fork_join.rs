@@ -76,6 +76,43 @@ fn push(route: &str, kv: u32, per_token: f64) -> String {
     )
 }
 
+/// The session waits for a leg only by reading its send, and a connector
+/// before the source's that has tokens is the request's load, which passes
+/// the read over (multi_connector.py:445-447): the session would end while
+/// the leg runs. The decoder's connectors are then refused in that order
+/// (#599), and link the other way round, where the L2's, which holds
+/// nothing yet, loads nothing and the read is the push's: the KV arrives at
+/// 12, as `the_decoder_waits_for_the_leg_s_send` has it.
+#[test]
+fn a_leg_s_send_read_after_another_connector_is_refused() {
+    let route = "set t0 = now;
+         fork { P.prefill (prompt); }
+         D.decode (prompt) from P;
+         observe loaded_at = D.load_done - t0;";
+    let workload = "workload { arrive batch(1); init { set prompt = 10; } send (prompt); session { turn; end; } }";
+    let source = "connector P { load (request.input - request.hit); }";
+    let l2 = "connector lmc { per_token (0.01); load (max(0, min(cachedin(lmc.kv), request.known - 1) - request.hit)); save (request.input); }";
+    let src = |connectors: String| {
+        let p = push(route, 100, 1.0);
+        assert!(p.contains(source));
+        p.replace(
+            "queue D : agg, decode {",
+            "queue lmc : l2 { pool kv { cap 1000; } serve ps(1); }\n        queue D : agg, decode {",
+        )
+        .replace(source, &connectors)
+    };
+    refused(
+        &src(format!("{l2} {source}")),
+        workload,
+        "a leg's send of `P.kv` is read by a connector after another, which a request that \
+         loads from the other passes over",
+    );
+    let r = run(&src(format!("{source} {l2}")), workload);
+    assert_eq!(samples(&r, "loaded_at"), [12.0]);
+    // the save at the request's end, and no load
+    assert_eq!(r.stage("lmc").map(|s| s.completed), Some(1));
+}
+
 /// The decoder's request is admitted to its blocks at once and waits for
 /// KV while the leg prefills (10 s); the push starts when the prefill's
 /// send is there and takes the wait and a second. In order, the decoder is

@@ -1,5 +1,5 @@
 {
-  "IR_VERSION": 15,
+  "IR_VERSION": 16,
   "ir": {
     "CStmt": 17,
     "CExpr": 11,
@@ -17,6 +17,8 @@
     "advance running each at most (threshold);",
     "cache (request.input + request.output - 1);",
     "cache (request.input + request.output);",
+    "choose j in ND by (holders(D[j].kv) + queued(D[j].kv));",
+    "connector P { load (request.preempted ? 0 : request.input - request.hit); }",
     "device gpu { compute (t) = a * ceil(t / b0); }",
     "device gpu { compute (t) = t * a; hbm (k) = omega + beta * k; kv cap blocks * bs; }",
     "device gpu { kv cap blocks * bs; }",
@@ -24,10 +26,12 @@
     "forward (c0 + max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));",
     "forward (max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));",
     "if (more) { tool (~exp(Z)); } else { end; }",
+    "kvt.nixl_pull (P, D, latency = x0, share = share.maxmin);",
     "pool kv on D.gpu { block bs; evict lru; preempt lifo; }",
     "pool kv on E.gpu { block bs; evict lru; preempt lifo; }",
     "pool kv on gpu { block bs; evict lru; preempt lifo; }",
     "pool reqs on vllm { queue fifo; }",
+    "reqs (request.loaded > 0 ? 0 : 1) reserve (1)",
     "reuse (floor(request.known - 1, blocksize(kv)))",
     "reuse (floor(request.known - 1, bs))",
     "run gate (cost(gate, serial * spacing));",

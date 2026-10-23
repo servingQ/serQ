@@ -27,7 +27,7 @@ use crate::frontend::link::*;
 use crate::ir::Preempt;
 use crate::ir::Side;
 use crate::ir::trace::Corpus;
-use crate::ir::{CConnector, CIter, CRequest, CStageKind, ClaimKind};
+use crate::ir::{CConnector, CIter, CRequest, CStageKind, CTransfer, ClaimKind};
 
 /// The tolerance of a comparison of amounts that sums of floats produce
 /// (units, tokens, work): below it, two amounts are equal.
@@ -210,6 +210,10 @@ struct Req<'p> {
     hit: f64,
     /// What its connector loads, read at its latest admission after `hit`.
     loaded: f64,
+    /// Which of its connector's loads its latest admission chose
+    /// (`CConnector::loads`): the first above 0, or a read that found its
+    /// send gone.
+    via: Option<usize>,
     /// Whether it has been preempted since its call.
     preempted: bool,
     /// The session's frames when a connector's block was pushed: the block
@@ -2465,6 +2469,7 @@ impl<'p> Interp<'p> {
                         generated: 0.0,
                         hit: 0.0,
                         loaded: 0.0,
+                        via: None,
                         preempted: false,
                         depth: 0,
                         finished: false,
@@ -2580,39 +2585,44 @@ impl<'p> Interp<'p> {
         let cached = memory.map_or(0.0, |pl| self.own_entry_size(pl, sid));
         let hit = reuse.map_or(cached, |b| cached.min(b));
         self.sessions[sid].req.as_mut().expect("a request").hit = hit;
-        // what its connector loads beyond it, which `taking` reads
+        // what its connector loads beyond it, which `taking` reads: each
+        // load asked in its order, and the first that has tokens is the
+        // request's (multi_connector.py:429-448)
         let st = self.sessions[sid].req.as_ref().expect("a request").stage;
+        let loads = self.connector(st).map_or(&[][..], |c| &c.loads[..]);
         // a request that took its KV `from` no source has none to read
         let remote = self
             .connector(st)
             .and_then(|c| c.from)
             .is_none_or(|a| self.sessions[sid].attrs[a] >= 0.0);
-        let mut unread = false;
-        let loaded = match self
-            .connector(st)
-            .and_then(|c| c.load.as_ref())
-            .filter(|_| remote)
-        {
+        let mut chosen: Option<(usize, f64, bool)> = None;
+        for (i, t) in loads.iter().enumerate() {
+            if t.source.is_some() && !remote {
+                continue;
+            }
+            let what = match loads.len() {
+                1 => format!("connector of {} load", self.p.stages[st].name),
+                _ => format!(
+                    "connector of {} load at {}",
+                    self.p.stages[st].name, self.p.stages[t.stage.base].name
+                ),
+            };
+            let n = self.amount(&t.amount, sid, &what);
+            if chosen.is_some() || n <= 0.0 {
+                continue;
+            }
             // a read of a send gone (its `ttl`) with no leg left to leave
             // another reads nothing: the request computes the tokens
-            Some(t)
-                if t.source.as_ref().is_some_and(|src| {
-                    let pl = self.session_index(src, sid);
-                    self.send_of(sid, pl).is_none() && self.sessions[sid].legs == 0
-                }) =>
-            {
-                unread = true;
-                0.0
-            }
-            Some(t) => {
-                let what = format!("connector of {} load", self.p.stages[st].name);
-                self.amount(&t.amount, sid, &what)
-            }
-            None => 0.0,
-        };
+            let gone = t.source.as_ref().is_some_and(|src| {
+                let pl = self.session_index(src, sid);
+                self.send_of(sid, pl).is_none() && self.sessions[sid].legs == 0
+            });
+            chosen = Some(if gone { (i, 0.0, true) } else { (i, n, false) });
+        }
         let r = self.sessions[sid].req.as_mut().expect("a request");
-        r.loaded = loaded;
-        r.unread = unread;
+        r.via = chosen.map(|(i, _, _)| i);
+        r.loaded = chosen.map_or(0.0, |(_, n, _)| n);
+        r.unread = chosen.is_some_and(|(_, _, u)| u);
     }
 
     /// The request's load has ended: when, and a request that has KV for
@@ -2688,11 +2698,22 @@ impl<'p> Interp<'p> {
         }
     }
 
-    /// The kernel block of engine `st`'s connector's load (`save` false) or
-    /// save (`Program::kernel`).
-    fn transfer_block(&self, st: usize, save: bool) -> Option<BlockId> {
-        let t = self.p.transfer_blocks.as_ref()?;
-        if save { t.save[st] } else { t.load[st] }
+    /// The kernel block of engine `st`'s connector's load `i`
+    /// (`Program::kernel`).
+    fn load_block(&self, st: usize, i: usize) -> Option<BlockId> {
+        self.p.transfer_blocks.as_ref()?.loads[st].get(i).copied()
+    }
+
+    /// The kernel block of engine `st`'s connector's save.
+    fn save_block(&self, st: usize) -> Option<BlockId> {
+        self.p.transfer_blocks.as_ref()?.save[st]
+    }
+
+    /// The load `sid`'s request's latest admission chose, with its place.
+    fn chosen_load(&self, sid: usize) -> Option<(usize, &'p CTransfer)> {
+        let r = self.sessions[sid].req.as_ref()?;
+        let i = r.via?;
+        Some((i, self.connector(r.stage)?.loads.get(i)?))
     }
 
     /// Engine `st`'s connector, if it has one.
@@ -2812,11 +2833,7 @@ impl<'p> Interp<'p> {
         if r.phase == Phase::Loading {
             // a read ends the source's send it read (vLLM frees the source's
             // blocks at `finished_sending`, scheduler.py:3135-3138)
-            if let Some(src) = self
-                .connector(r.stage)
-                .and_then(|c| c.load.as_ref())
-                .and_then(|t| t.source.as_ref())
-            {
+            if let Some(src) = self.chosen_load(sid).and_then(|(_, t)| t.source.as_ref()) {
                 let pl = self.session_index(src, sid);
                 self.end_send(sid, pl);
                 self.try_admit_all();
@@ -2828,11 +2845,14 @@ impl<'p> Interp<'p> {
             }
         }
         let r = self.sessions[sid].req.clone().expect("a request");
-        // its connector loads first, into the hold it was admitted with
+        // its connector loads first, into the hold it was admitted with, by
+        // the load its admission chose
         let load = self
-            .connector(r.stage)
-            .and_then(|c| c.load.as_ref().map(|t| (c.loaded, t.source.as_ref())))
-            .zip(self.transfer_block(r.stage, false));
+            .chosen_load(sid)
+            .zip(self.connector(r.stage))
+            .and_then(|((i, t), c)| {
+                Some(((c.loaded, t.source.as_ref()), self.load_block(r.stage, i)?))
+            });
         if r.phase == Phase::Admitted
             && r.loaded > 0.0
             && let Some(((slot, source), b)) = load
@@ -2890,7 +2910,7 @@ impl<'p> Interp<'p> {
                 // (`request_finished` keeps the blocks, lmcache_mp_connector.py:952)
                 if let Some(c) = self.connector(r.stage)
                     && let Some(t) = &c.save
-                    && let Some(b) = self.transfer_block(r.stage, true)
+                    && let Some(b) = self.save_block(r.stage)
                 {
                     let what = format!("connector of {} save", self.p.stages[r.stage].name);
                     let n = self.amount(&t.amount, sid, &what);
@@ -3144,17 +3164,12 @@ impl<'p> Interp<'p> {
     /// it, and of the source's send a read reads.
     fn copy_starts(&mut self, sid: usize) {
         let r = self.sessions[sid].req.as_ref().expect("a request");
-        let (phase, st) = (r.phase, r.stage);
-        if phase == Phase::Saving {
+        if r.phase == Phase::Saving {
             self.log_transfer(sid, Transfer::Save, Moved::Start);
             return;
         }
         self.log_transfer(sid, Transfer::Load, Moved::Start);
-        let Some(src) = self
-            .connector(st)
-            .and_then(|c| c.load.as_ref())
-            .and_then(|t| t.source.as_ref())
-        else {
+        let Some(src) = self.chosen_load(sid).and_then(|(_, t)| t.source.as_ref()) else {
             return;
         };
         // the send it reads: the latest the session holds of that member,

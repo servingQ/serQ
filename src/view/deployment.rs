@@ -377,6 +377,14 @@ struct Walker<'a> {
     calling: Option<CRef>,
 }
 
+/// One of several ways the walk takes (`Walker::alternatives`): an `if`'s
+/// arm, or a load of an engine's request, its connector's block as the call
+/// says it (`Walker::at_call`), which a read joins the legs before.
+enum Arm {
+    Block(usize),
+    Load { join: bool, stmts: Vec<CStmt> },
+}
+
 impl Walker<'_> {
     /// The instance an index addresses: exactly a chosen attribute.
     fn instance(&mut self, index: Option<&CExpr>) -> Option<usize> {
@@ -824,6 +832,57 @@ impl Walker<'_> {
         self.walk_in(stmts, None);
     }
 
+    /// Walk one way: a block, or a load of an engine's request.
+    fn walk_arm(&mut self, arm: Arm) {
+        match arm {
+            Arm::Block(b) => self.walk(b),
+            Arm::Load { join, stmts } => {
+                if join && !self.forked.is_empty() {
+                    self.join_legs();
+                }
+                self.walk_stmts(stmts);
+            }
+        }
+    }
+
+    /// Walk ways of which one runs, each labelled by what takes it: an
+    /// `if`'s arms, or the loads of an engine's request. Each starts from
+    /// the holds here, and a `release` in one does not reach another; after
+    /// them a pool is held only where every way still holds it. Each starts
+    /// from the flow here too: a `load` that opens one follows no transfer
+    /// of another. Their ends are the frontier after them.
+    fn alternatives(&mut self, arms: Vec<(Option<String>, Arm)>) {
+        let saved = self.frontier.clone();
+        let outer = self.arm.take();
+        let held = self.holds.clone();
+        let flow = self.last_flow;
+        let known = self.known.clone();
+        let mut ends = vec![];
+        for (k, (label, arm)) in arms.into_iter().enumerate() {
+            self.frontier = saved.clone();
+            self.arm = label;
+            if k == 0 {
+                self.walk_arm(arm);
+            } else {
+                // what the ways before it leave, and this one from here
+                let ways_held = std::mem::replace(&mut self.holds, held.clone());
+                let ways_known = std::mem::replace(&mut self.known, known.clone());
+                let ways_flow = std::mem::replace(&mut self.last_flow, flow);
+                self.walk_arm(arm);
+                // after them, what every way leaves the same
+                self.keep_held(&ways_held);
+                if self.last_flow != ways_flow {
+                    self.last_flow = None;
+                }
+                self.known.retain(|k| ways_known.contains(k));
+            }
+            ends.append(&mut self.frontier);
+        }
+        dedupe(&mut ends);
+        self.frontier = ends;
+        self.arm = outer;
+    }
+
     /// Walk statements, those of `block` when they are a block's as the
     /// program has it, whose gateways' routes are found by it.
     fn walk_in(&mut self, stmts: Vec<CStmt>, block: Option<usize>) {
@@ -943,20 +1002,23 @@ impl Walker<'_> {
                             .iter()
                             .any(|(s, e)| *s == slot && matches!(e, CExpr::Num(v) if *v < 0.0))
                     });
+                    // each load the request may run, in their order
                     let blocks = self.p.transfer_blocks.as_ref();
-                    let load = connector
-                        .as_ref()
-                        .and_then(|c| {
-                            let b = blocks.and_then(|t| t.load[stage.base])?;
-                            let source = c.load.as_ref()?.source.clone();
-                            Some((b, c.from, source))
+                    let loads: Vec<(usize, Option<usize>, Option<CRef>)> = connector
+                        .iter()
+                        .flat_map(|c| c.loads.iter().enumerate().map(move |(i, t)| (c, i, t)))
+                        .filter(|(_, _, t)| t.source.is_none() || !sourceless)
+                        .filter_map(|(c, i, t)| {
+                            let b = *blocks?.loads[stage.base].get(i)?;
+                            let from = t.source.as_ref().and(c.from);
+                            Some((b, from, t.source.clone()))
                         })
-                        .filter(|_| !sourceless);
+                        .collect();
                     // a pool it takes none of while it loads (its units 0 with
                     // `request.loaded` above 0) it takes once the load is done
                     // (`Interp::request_more`)
                     let after_load = |e: &CExpr| {
-                        load.is_some()
+                        !loads.is_empty()
                             && e.any(&|x| matches!(x, CExpr::Ctx(CtxVar::Loaded)))
                             && self.value(&with_loaded(e)).is_some_and(|(v, _)| v == 0.0)
                     };
@@ -978,13 +1040,22 @@ impl Walker<'_> {
                             self.holds.push((r.base, id, encloses));
                         }
                     }
-                    if let Some((b, from, source)) = load {
-                        // a read waits for the send of the legs' source call
-                        if source.is_some() && !self.forked.is_empty() {
-                            self.join_legs();
-                        }
-                        let stmts = self.at_call(b, &stage, from, source.as_ref());
-                        self.walk_stmts(stmts);
+                    // a read waits for the send of the legs' source call;
+                    // a guard not yet drawn labels each way's first edge
+                    let mut arms: Vec<(Option<String>, Arm)> = loads
+                        .into_iter()
+                        .map(|(b, from, source)| {
+                            let join = source.is_some();
+                            let stmts = self.at_call(b, &stage, from, source.as_ref());
+                            (self.arm.clone(), Arm::Load { join, stmts })
+                        })
+                        .collect();
+                    // the request runs one of them, the first that has
+                    // tokens: alternatives from its admission
+                    match arms.len() {
+                        0 => {}
+                        1 => self.walk_arm(arms.remove(0).1),
+                        _ => self.alternatives(arms),
                     }
                     for q in later {
                         self.holds.push((q, id, true));
@@ -1112,38 +1183,11 @@ impl Walker<'_> {
                     // The guard labels the first edge the arm takes. An arm
                     // with no station of its own contributes no label, which
                     // is what keeps a chain of guards from multiplying out.
-                    let saved = self.frontier.clone();
-                    let outer = self.arm.take();
-                    // each arm starts from the holds at the branch; a
-                    // `release` in one arm does not reach the other, and
-                    // after the branch a pool is held only where both arms
-                    // still hold it
-                    let held = self.holds.clone();
-                    // and from the flow before it: a `load` that opens the
-                    // else arm follows no transfer of the then arm
-                    let flow = self.last_flow;
-                    let known = self.known.clone();
-                    self.frontier = saved.clone();
-                    self.arm = Some(self.p.show_guard(&c));
-                    self.walk(t);
-                    let then_out = std::mem::take(&mut self.frontier);
-                    let then_held = std::mem::replace(&mut self.holds, held);
-                    let then_flow = std::mem::replace(&mut self.last_flow, flow);
-                    let then_known = std::mem::replace(&mut self.known, known);
-                    self.frontier = saved;
-                    self.arm = Some("else".into());
-                    self.walk(e);
-                    self.keep_held(&then_held);
-                    if self.last_flow != then_flow {
-                        self.last_flow = None;
-                    }
-                    // after the branch, what both arms leave the same
-                    self.known.retain(|k| then_known.contains(k));
-                    let mut out = then_out;
-                    out.append(&mut self.frontier);
-                    dedupe(&mut out);
-                    self.frontier = out;
-                    self.arm = outer;
+                    let guard = self.p.show_guard(&c);
+                    self.alternatives(vec![
+                        (Some(guard), Arm::Block(t)),
+                        (Some("else".into()), Arm::Block(e)),
+                    ]);
                 }
                 CStmt::Fork(body) => {
                     // The leg starts where the session is and runs beside

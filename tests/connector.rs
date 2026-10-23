@@ -1,7 +1,10 @@
 //! An engine's KV connector (`docs/design/scheduler-worker.md`, step 4):
 //! `connector C { per_token (r); load (n); save (n); }` copies a request's
 //! KV in from the L2 queue `C` at its admission and out to it at its end,
-//! at `C`'s bandwidth, as vLLM's `KVConnector` does for LMCache (#555).
+//! at `C`'s bandwidth, as vLLM's `KVConnector` does for LMCache (#555). An
+//! engine's several connectors are vLLM's `MultiConnector`: a request loads
+//! from the first that has tokens for it (`docs/design/multi-connector.md`,
+//! #599).
 
 mod common;
 
@@ -162,7 +165,7 @@ fn a_connector_says_what_it_copies() {
         &with(
             "connector lmc { per_token (1); load (1); } connector lmc { per_token (1); save (1); }",
         ),
-        "`connector` twice",
+        "`connector lmc` twice: one connector names its queue, with its `load` and its `save`",
     );
     refused(
         &(engine("connector lmc { per_token (1); load (1); }", "reqs (1)")
@@ -297,4 +300,233 @@ fn cachedin_reads_each_pool_by_the_chain_it_was_cached_along() {
         assert_eq!(samples(&r, "kv_outside"), [0.0, 192.0], "{system}");
         assert_eq!(samples(&r, "e.loaded"), [0.0, 10.0], "{system}");
     }
+}
+
+/// Two L2s, `a` and `b`, and an engine that asks them in their order, one
+/// iteration a second (multi_connector.py:429-448). The first request (100
+/// tokens) has 20 at `a`, which loads them at 0.01 s a token, 0.2 s, and is
+/// asked first: `b`'s 30 are passed over. It prefills the other 80 in an
+/// iteration, its first token 1.2 s after its admission. The second (60)
+/// has none at `a`, and loads `b`'s 30 at 0.02 s a token, 0.6 s, then
+/// prefills 30: 1.6 s. `b` saves, `a` does not: `b` holds the first's 100
+/// after it ends. Written the other way round, `b`, which always has 30, is
+/// asked first and loads both.
+#[test]
+fn an_engine_loads_from_its_first_connector_that_has_tokens() {
+    let src = |connectors: &str| {
+        format!(
+            "queue a : l2 {{ pool kv {{ cap 1000; }} serve ps(1); }}
+             queue b : l2 {{ pool kv {{ cap 1000; }} serve ps(1); }}
+             device gpu {{ kv cap 1000; }}
+             pool kv on gpu {{ }}
+             engine e on gpu {{
+               tokens cap inf;
+               {connectors}
+               scheduler {{ advance running; admit waiting while (running.preempted == 0) taking kv (request.known); }}
+               worker {{ forward (1); }}
+             }}
+             server {{
+               e (100, 1);
+               observe first_to_first = e.first - e.admitted;
+               observe held = cachedin(b.kv);
+               e (60, 1);
+               observe second_to_first = e.first - e.admitted;
+             }}"
+        )
+    };
+    let a = "connector a { per_token (0.01); load (request.input == 100 ? 20 : 0); }";
+    let b = "connector b { per_token (0.02); load (30); save (request.input); }";
+    let w = "workload { arrive batch(1); }";
+    // the times to the first token, to the float's last digit
+    let firsts = |r: &serq::Report| -> Vec<f64> {
+        ["first_to_first", "second_to_first"]
+            .map(|o| (samples(r, o)[0] * 1e9).round() / 1e9)
+            .to_vec()
+    };
+    let r = run(&src(&format!("{a} {b}")), w, 1000.0);
+    assert_eq!(samples(&r, "e.loaded"), [20.0, 30.0]);
+    assert_eq!(samples(&r, "e.prefill"), [80.0, 30.0]);
+    assert_eq!(firsts(&r), [1.2, 1.6]);
+    assert_eq!(samples(&r, "held"), [100.0]);
+    assert_eq!(r.stage("a").map(|s| s.completed), Some(1));
+    let r = run(&src(&format!("{b} {a}")), w, 1000.0);
+    assert_eq!(samples(&r, "e.loaded"), [30.0, 30.0]);
+    assert_eq!(firsts(&r), [1.6, 1.6]);
+    assert_eq!(r.stage("a").map(|s| s.completed), Some(0));
+}
+
+/// An engine's connectors name a queue each, one connector holding its
+/// `load` and its `save`; and one of them saves: a request runs one
+/// transfer at a time, so two saves would run one after the other, where
+/// vLLM's run at once (multi_connector.py:334-346, 525-554).
+#[test]
+fn an_engine_s_connectors_name_a_queue_once_and_save_once() {
+    let two = "queue lmc2 : l2 { pool kv { cap 1000; } serve ps(1); }";
+    let with = |c: &str| {
+        engine(c, "kv (request.known)").replace(CACHE, &format!("{CACHE} {two}"))
+            + " server { e (10, 1); }"
+    };
+    refused(
+        &with(
+            "connector lmc2 { per_token (1); load (1); } connector lmc { per_token (1); load (1); } \
+             connector lmc2 { per_token (1); save (1); }",
+        ),
+        "`connector lmc2` twice: one connector names its queue",
+    );
+    refused(
+        &with(
+            "connector lmc { per_token (1); save (1); } connector lmc2 { per_token (1); load (1); \
+             save (1); }",
+        ),
+        "`connector lmc2` saves, and so does `connector lmc`: a finished request runs one save",
+    );
+    // one saves, both load: it links
+    let ok = with(
+        "connector lmc { per_token (1); load (1); save (1); } connector lmc2 { per_token (1); \
+         load (1); }",
+    );
+    common::compile(&common::main_source(&ok), ONE, &common::horizon(10.0))
+        .unwrap_or_else(|e| panic!("{e}\n{ok}"));
+}
+
+/// A P/D pair with a shared L2, as `llmd_nixl_lmcache.sq`: the decoder asks
+/// its prefiller's connector first, then the L2's. The first turn (10
+/// tokens) is remote: the prefiller's iteration ends at 1, the decoder
+/// `D[0]` reads the 10 over the NICs (the wait of 1, then 10 tokens at 10
+/// a second: 3), computes its last token again (4) and decodes its second
+/// (5), then saves the 12 it has at 0.01 s a token: the turn takes 5.12 and
+/// the L2 holds 12. The second (20) is local to `D[1]`, whose memory holds
+/// nothing: its entry took its KV from no prefiller (`D.from` -1), so the
+/// L2 is asked, and loads the 12 it holds (0.12), the decoder prefills the
+/// other 8 (1.12) and decodes (2.12), and saves the 10 the L2 lacks of its
+/// 22 (0.1): 2.22. One copy over the NICs, three at the L2.
+#[test]
+fn a_decoder_reads_a_remote_request_from_its_source_and_a_local_one_from_the_l2() {
+    let src = r#"
+        queue gw : gateway {
+          route {
+            set t0 = now;
+            if (prompt == 10) { P.prefill (prompt); D[0].decode (prompt) from P; } else { D[1].decode (prompt); }
+            observe took = now - t0;
+            observe held = cachedin(lmc.kv);
+          }
+        }
+        queue lmc : l2 { pool kv { cap 1000; } serve ps(1); }
+        queue P : prefill {
+          device gpu { kv cap 100; }
+          engine on gpu {
+            reqs cap 4;
+            tokens cap inf;
+            scheduler { advance running; admit waiting while (running.preempted == 0) taking reqs (1), kv (request.known) cache (request.input); }
+            worker { forward (1); }
+          }
+          pool reqs on P { }
+          pool kv on gpu { }
+          nic ps(10);
+          prefill (p) { P (p, 1); }
+        }
+        queue D[2] : agg, decode {
+          device gpu { kv cap 100; }
+          engine on gpu {
+            reqs cap 4;
+            tokens cap inf;
+            connector P { load (request.input - request.hit); }
+            connector lmc {
+              per_token (0.01);
+              load (max(0, min(cachedin(lmc.kv), request.known - 1) - request.hit));
+              save (request.input + request.output);
+            }
+            scheduler { advance running; admit waiting while (running.preempted == 0) taking kv (request.known), reqs (request.loaded > 0 ? 0 : 1) cache (request.input); }
+            worker { forward (1); }
+          }
+          pool reqs on D { }
+          pool kv on D.gpu { }
+          nic ps(10);
+          decode (p) { D (p, 2); }
+          decode (p) from P { D (p, 2); }
+        }
+        use "std/kvt"; use "std/share"; kvt.nixl_pull (P, D, latency = 1, share = share.maxmin);
+        server (prompt) { gw.route(); }
+    "#;
+    let r = run(
+        src,
+        "workload { arrive batch(1); init { set prompt = 10; } send (prompt); \
+         session { turn; set prompt = 20; turn; end; } }",
+        1000.0,
+    );
+    assert_eq!(samples(&r, "D.loaded"), [10.0, 12.0]);
+    assert_eq!(samples(&r, "D.prefill"), [1.0, 8.0]);
+    assert_eq!(samples(&r, "held"), [12.0, 22.0]);
+    let took = samples(&r, "took");
+    assert!(
+        (took[0] - 5.12).abs() < 1e-9 && (took[1] - 2.22).abs() < 1e-9,
+        "{took:?}"
+    );
+    let done = |name: &str| -> u64 { r.stages_named(name).iter().map(|s| s.completed).sum() };
+    assert_eq!(done("D.nic"), 1);
+    assert_eq!(done("lmc"), 3);
+}
+
+/// The bug as found (#599): in `llmd_nixl_pull.sq` with `blocksD` 1000 the
+/// program's `send_held` (`D.load_done - t1`) of a decoder's request that
+/// was preempted after its read ran to its admission again, where the read
+/// had ended the send long before. The admission found the send gone and
+/// called its load over then, though its load, `request.preempted ? 0 :
+/// …`, asked for nothing. Here two prompts of 16 are prefilled by 1 and
+/// read by 5.2 (the wait of 1, then 32 tokens at 10 a second); their decode
+/// outgrows the decoder's 48 tokens and the later admitted is preempted,
+/// admitted again at 25.2. Its load is still over at 5.2: a load of no
+/// tokens is no load, and the first load that has tokens is the request's,
+/// as for several connectors.
+#[test]
+fn a_preempted_request_that_loads_nothing_keeps_its_read_s_end() {
+    let src = r#"
+        queue gw : gateway {
+          route {
+            set t0 = now;
+            P.prefill (prompt);
+            D.decode (prompt) from P;
+            observe loaded_at = D.load_done - t0;
+          }
+        }
+        queue P : prefill {
+          device gpu { kv cap 1000; }
+          engine on gpu {
+            reqs cap 4;
+            tokens cap inf;
+            scheduler { advance running; admit waiting while (running.preempted == 0) taking reqs (1), kv (request.known) cache (request.input); }
+            worker { forward (1); }
+          }
+          pool reqs on P { }
+          pool kv on gpu { }
+          nic ps(10);
+          prefill (p) { P (p, 1); }
+        }
+        queue D : agg, decode {
+          device gpu { kv cap 48; }
+          engine on gpu {
+            reqs cap 4;
+            tokens cap 64;
+            connector P { load (request.preempted ? 0 : request.input - request.hit); }
+            scheduler { advance running; admit waiting while (running.preempted == 0) taking kv (request.known), reqs (request.loaded > 0 ? 0 : 1) cache (request.input); }
+            worker { forward (1); }
+          }
+          pool reqs on D { }
+          pool kv on gpu { block 16; evict lru; preempt lifo; }
+          nic ps(10);
+          decode (p) { D (p, 20); }
+          decode (p) from P { D (p, 20); }
+        }
+        use "std/kvt"; use "std/share"; kvt.nixl_pull (P, D, latency = 1, share = share.maxmin);
+        server (prompt) { gw.route(); }
+    "#;
+    let r = run(
+        src,
+        "workload { arrive batch(2); init { set prompt = 16; } send (prompt); session { turn; end; } }",
+        1000.0,
+    );
+    assert_eq!(r.pool("D.kv").unwrap().preemptions, 1, "{}", r.text());
+    assert_eq!(samples(&r, "D.loaded"), [16.0, 16.0, 0.0]);
+    let at = samples(&r, "loaded_at");
+    assert!(at.iter().all(|&t| (t - 5.2).abs() < 1e-9), "{at:?}");
 }

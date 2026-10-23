@@ -108,6 +108,30 @@ fn a_swapped_relation_is_swapped_back() {
     assert_eq!(fixed(&swapped, &r.fixes[0]), d);
 }
 
+/// A second connector of the reader named for another queue than an L2
+/// (#599): the engine has `connector P` already, the queue reads from `P`
+/// alone, and the rename would name `P` twice, so there is none.
+#[test]
+fn a_second_connector_named_for_another_queue_is_not_renamed() {
+    let (d, w) = pair(PUSH);
+    let connector =
+        "      connector P { load (request.preempted ? 0 : request.input - request.hit); }\n";
+    let wrong = with(
+        &d,
+        connector,
+        &format!("{connector}      connector gw {{ load (1); }}\n"),
+    );
+    let r = refused(&wrong, &w, Code::ConnectorMisnamed);
+    assert!(
+        r.message
+            .contains("queue `D` reads its KV from `P` alone (`kvt.nixl_push (P, D, …)`), which `connector P` reads"),
+        "{}",
+        r.message
+    );
+    assert!(!r.message.contains("fix-it"), "{}", r.message);
+    assert!(r.fixes.is_empty(), "{:?}", r.fixes);
+}
+
 /// A reader's connector named for another queue than the one its relation
 /// reads from (#645 A7): the relation chose the source, so the rename makes
 /// no choice, and the program is as it was written before.
