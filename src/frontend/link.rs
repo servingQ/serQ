@@ -1877,8 +1877,12 @@ fn hidden_in_server(
                         check(i, "choice of a pool", t)?;
                     }
                     check(e, "allocation", t)?;
-                    // a growth may wait for room, and a load for its copy
-                    if !matches!(s, Stmt::Shrink(..)) {
+                    // a growth may wait for room, and a load for its copy;
+                    // a shrink frees units, and admits what waits there, as
+                    // a release does
+                    if matches!(s, Stmt::Shrink(..)) {
+                        keys(&reads.anywhere, t)?;
+                    } else {
                         waits(t, reads, held)?;
                     }
                 }
@@ -2040,11 +2044,20 @@ fn hidden_in_server(
                     }
                 },
                 // the session waits in the client's stage or pool, where
-                // the deployment's eviction and lease keys still read it
-                Stmt::Run { .. } | Stmt::Grow(..) | Stmt::Load(..) => gather(&mut w.waiting, t),
+                // the deployment's eviction and lease keys still read it;
+                // and what frees the client's pool admits what waits
+                // (`Interp::try_admit_all`), whose admission may evict an
+                // entry this session wrote, as the server's `release` does
+                Stmt::Run { .. }
+                | Stmt::Grow(..)
+                | Stmt::Load(..)
+                | Stmt::Shrink(..)
+                | Stmt::Release(_) => gather(&mut w.waiting, t),
                 Stmt::Hold { body, .. } => {
                     gather(&mut w.waiting, t);
-                    workload(body, site, t, w)
+                    workload(body, site, t, w);
+                    // its end frees its pools
+                    gather(&mut w.waiting, t);
                 }
                 Stmt::Fork(body) => workload(body, site, &mut t.clone(), w),
                 _ => {}

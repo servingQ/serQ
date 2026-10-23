@@ -694,6 +694,60 @@ fn an_eviction_key_reads_the_session_after_its_request() {
     .unwrap();
 }
 
+/// The workload's statements that free its own pool, a `release`, a
+/// `shrink` and a hold's end, admit what waits (`Interp::try_admit_all`),
+/// and an admission may evict the deployment's entry this session wrote,
+/// whose key reads it there: the workload's walk gathered only its waits.
+#[test]
+fn an_eviction_key_reads_the_session_where_the_workload_frees_a_pool() {
+    let src = common::main_source(
+        "pool kv { cap 30; evict by (x); }
+         stage A : fifo;
+         server (x, hidden o) { hold kv (cost(kv, 1)) { run A (cost(A, o)); } }",
+    );
+    let workload = |session: &str| {
+        format!(
+            "pool c {{ cap 10; }}
+             workload {{ arrive batch(1);
+               turn {{ set o = ~exp(10); set x = 1; }}
+               send (x, o);
+               session {{ turn; {session} turn; end; }} }}"
+        )
+    };
+    for session in [
+        "hold c (cost(c, 1)) { } lease c (inf); set o = ~exp(10); set x = o; release c; set x = 1;",
+        "hold c (cost(c, 1)) { set o = ~exp(10); set x = o; } set x = 1;",
+        "hold c (cost(c, 2)) { set o = ~exp(10); set x = o; shrink c (cost(c, 1)); set x = 1; }",
+    ] {
+        key_refused(
+            &src,
+            &workload(session),
+            "`x` is set from the hidden `o` in the workload's session, but is read in an \
+             eviction key",
+        );
+    }
+    // set again before the pool is freed, nothing reads it
+    compile(
+        &src,
+        &workload(
+            "hold c (cost(c, 1)) { } lease c (inf); set o = ~exp(10); set x = o; set x = 1; \
+             release c;",
+        ),
+        100.0,
+    )
+    .unwrap();
+    // the server's `shrink` frees units as its `release` does
+    key_refused(
+        &pool_program(
+            "evict by (y);",
+            "set y = 1; hold kv (cost(kv, 2)) { set y = o; shrink kv (cost(kv, 1)); set y = 1; \
+             run A (cost(A, o)); }",
+        ),
+        DRAW,
+        "`y` is set from the hidden `o` in the server, but is read in an eviction key",
+    );
+}
+
 /// A preempted hold goes back to its queue with the attributes it has then
 /// (`Interp::preempt`): under `requeue tail` as a newcomer, selected by the
 /// queue's keys again. Under `requeue head` (and `preempt lifo`) it goes

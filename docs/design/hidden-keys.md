@@ -139,12 +139,16 @@ then. A lease's time is read where the lease starts, at the hold's end
 
 "Wherever the session waits" is a run, a hold's queue, an engine
 request, a `grow` and a `load`. "Everywhere the session is" adds each
-release (a hold's end, `release P;`), the server's end, and the
-workload's own waits between requests (a `tool` call, a hold): an
-eviction key reads the session that wrote the entry wherever it is now
-(`Interp::node_writer`), or the attributes its release saw once it has
-ended, and a lease, which outlives the hold that took it, is a candidate
-while its session is anywhere.
+release (a hold's end, `release P;`, a `shrink`), the server's end, and
+the workload's own waits and releases between requests (a `tool` call,
+a hold and its end, a `release`, a `shrink`): an eviction key reads the
+session that wrote the entry wherever it is now (`Interp::node_writer`),
+or the attributes its release saw once it has ended, and a lease, which
+outlives the hold that took it, is a candidate while its session is
+anywhere. A release reads it twice over: the entry it writes keeps the
+attributes as they are then, and what it frees admits what waits
+(`Interp::try_admit_all`), whose admission may evict an entry this
+session wrote, a release of the workload's own pool included.
 
 The hidden attribute itself is left to `Program::validate`, which
 refuses it at every moment and covers an IR not written as text: the
@@ -179,6 +183,16 @@ stays: a `lease` time is still refused there, where it is not read, so
 `hold kv (…) { run A (cost(A, o)); } lease kv (o);` does not link though
 the lease reads `o` after `A` has revealed it. Dropping that check is a
 loosening of its own, left to a separate change.
+
+**The workload's waits only.** The workload's walk first gathered the
+session where it waits (a `tool` call, a `grow`, a `load`, a hold's
+queue), and the server's walk checked a release and a hold's end but
+not a `shrink`. A `release`, a `shrink` and a hold's end free a pool
+and admit what waits, and the admission may evict the deployment's
+entry the session wrote, whose key reads it there: `set x = o; release
+c; set x = 1;` in the session, on the workload's own pool `c`, linked
+with `evict by (x)` on the deployment's `kv` (the review of this change).
+They are gathered now, on both sides.
 
 **One set of names for every key.** A simpler rule collects every name
 set from a hidden attribute anywhere in the server and refuses it in
