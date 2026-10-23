@@ -12,7 +12,7 @@ fn main() {
   let blocks = args.number("blocks", 999);      // num_gpu_blocks less the null block
   let max_seqs = args.number("max_seqs", 16);     // max_num_seqs
   let chunk = args.number("chunk", inf);       // long_prefill_token_threshold (inf: none)
-  let adaptive = args.number("adaptive", 0);   // 1: long_prefill_token_threshold_adaptive
+  let adaptive = args.number("adaptive", 0);   // long_prefill_token_threshold_adaptive (0: off)
 
   device gpu { kv cap blocks * bs; }
   engine vllm on gpu {
@@ -23,7 +23,7 @@ fn main() {
       // running or waiting; a request alone takes the whole budget (scheduler.py:606-616).
       // Adaptive, the cap is floored at a fair share of the budget (scheduler.py:617-622)
       let n = running.count + waiting.count;   // num_eligible_reqs
-      let threshold = n > 1 ? (adaptive == 1 ? max(chunk, floor(B / n)) : chunk) : inf;
+      let threshold = n > 1 ? (adaptive > 0 ? max(chunk, floor(B / n)) : chunk) : inf;
       advance running each at most (threshold);
       // the scheduler admits with the blocks of the chunk the budget the
       // running requests leave allows, if the whole sequence fits

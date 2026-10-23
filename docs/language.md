@@ -1798,8 +1798,10 @@ The adaptive long-prefill threshold is off by default; it is expressible as
 (`scheduler.py:609-622`, [Engine](api/engine.md)).
 `examples/oracle/vllm_request.sq` writes it when its `adaptive` argument is
 1, and the oracle scenario `adaptive` checks it against vLLM's scheduler
-(`tests/vllm_oracle.rs`, theorem `vllm_adaptive`). `serq target` exports
-that cap as `long_prefill_token_threshold: threshold` with
+on a run where first the fair share binds and then the threshold, so that
+no constant cap gives vLLM's answer (`tests/vllm_oracle.rs`, theorem
+`vllm_adaptive`). `serq target` exports that cap as
+`long_prefill_token_threshold: threshold` with
 `long_prefill_token_threshold_adaptive: true`
 (`config/scheduler.py:87-91`), and refuses a cap that computes another
 share.

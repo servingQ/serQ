@@ -74,29 +74,51 @@ pub fn horizon(horizon: f64) -> serq::Overrides {
     }
 }
 
+/// A number of a vLLM oracle scenario, 0 when it is absent.
+fn num(v: &serde_json::Value, k: &str) -> f64 {
+    v.get(k).and_then(serde_json::Value::as_f64).unwrap_or(0.0)
+}
+
 /// The engine of a vLLM oracle scenario (`tools/oracle/*.json`) as the
-/// arguments of `examples/oracle/vllm_request.sq`: one mapping, which
-/// `tests/vllm_oracle.rs` and `tests/vllm_target_oracle.rs` both read.
+/// arguments of `examples/oracle/vllm_request.sq`. This and
+/// `oracle_sessions` are the one mapping from a scenario to the program,
+/// which `tests/vllm_oracle.rs` and `tests/vllm_target_oracle.rs` both read.
 pub fn oracle_engine(sc: &serde_json::Value) -> serq::Overrides {
-    let num = |k: &str| sc.get(k).and_then(serde_json::Value::as_f64).unwrap_or(0.0);
     let mut ov = horizon(100000.0);
     for (k, v) in [
-        ("bs", num("block_size")),
-        ("B", num("budget")),
-        ("blocks", num("num_blocks") - 1.0), // the null block
-        ("max_seqs", num("max_seqs")),
+        ("bs", num(sc, "block_size")),
+        ("B", num(sc, "budget")),
+        ("blocks", num(sc, "num_blocks") - 1.0), // the null block
+        ("max_seqs", num(sc, "max_seqs")),
     ] {
         ov.set_num(k, v).unwrap();
     }
     // vLLM's 0 is no cap, which the program's default `inf` already is
-    if num("chunk") > 0.0 {
-        ov.set_num("chunk", num("chunk")).unwrap();
+    if num(sc, "chunk") > 0.0 {
+        ov.set_num("chunk", num(sc, "chunk")).unwrap();
     }
     // long_prefill_token_threshold_adaptive (config/scheduler.py:87-91)
     if sc.get("adaptive").and_then(serde_json::Value::as_bool) == Some(true) {
         ov.set_num("adaptive", 1.0).unwrap();
     }
     ov
+}
+
+/// The requests of a vLLM oracle scenario as the program's explicit
+/// sessions: the prompt, the output length `o` and the arrival step.
+pub fn oracle_sessions(sc: &serde_json::Value) -> Vec<Vec<(&'static str, f64)>> {
+    sc["requests"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|q| {
+            vec![
+                ("prompt", num(q, "prompt")),
+                ("o", num(q, "out")),
+                ("arrive", num(q, "arrive")),
+            ]
+        })
+        .collect()
 }
 
 /// The vLLM oracle scenarios in `dir`, sorted: each `<name>.json` with the

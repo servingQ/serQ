@@ -13,8 +13,9 @@ this checkout's `ref/vllm`, which must be the full tree
 torch (the CPU build is enough) and `ref/vllm/requirements/common.txt`. Run
 it as `VLLM_TARGET_DEVICE=cpu VLLM_PLUGINS= python tools/vllm_oracle.py …`:
 `VLLM_TARGET_DEVICE=cpu` where there is no GPU (vLLM cannot infer a device
-otherwise), and `VLLM_PLUGINS=` to disable an installed platform plugin
-(rbln's forces a 512-token block size).
+otherwise: vllm/platforms/__init__.py:176-180, vllm/config/device.py:56), and
+`VLLM_PLUGINS=` to disable an installed platform plugin (rbln's forces a
+512-token block size).
 
 TARGET.json is what `serq target` printed for the scenario's program. Its
 configuration must be the scenario's, and when it names the programmable

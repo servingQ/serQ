@@ -11,8 +11,10 @@ request enters the scheduler `c0` after it is sent, session i sends its
 first turn at i * spacing and turn k+1 `think` seconds after turn k
 finishes.
 
-    VLLM_PLUGINS= python vllm_replay_oracle.py --trace data/exp/traces/short_base.jsonl \
-        --spacing 3.5 --out /tmp/replay.csv
+    VLLM_TARGET_DEVICE=cpu VLLM_PLUGINS= python tools/vllm_replay_oracle.py \\
+        --trace tools/oracle/shared_trace.jsonl --spacing 5 --budget 64 --max-seqs 4 \\
+        --blocks 30 --c-step 1 --a 0 --b 0 --c0 0 --omega 0 --beta 0 --cost sum --d 0 \\
+        --out tools/oracle/shared_trace.out.csv
 
 Output CSV: session,turn,sent,first,done,prompt,cached,out
 Runs where `tools/vllm_oracle.py` runs: the scheduler imported from this
@@ -57,13 +59,7 @@ def main():
     ap.add_argument("--d", type=float, default=0.0)
     ap.add_argument("--max-sessions", type=int, default=0)
     ap.add_argument("--out", required=True)
-    ap.add_argument("--pin", action="store_true", help="hypothesis H-pin: pin a waiting request's prefix")
     args = ap.parse_args()
-    if args.pin:
-        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "scripts", "exp", "lambda", "steptrace"))
-        from pinpatch import apply_pin
-        from vllm.v1.core.sched.scheduler import Scheduler as _Sch
-        apply_pin(_Sch)
 
     sessions = [json.loads(l) for l in open(args.trace) if l.strip()]
     if args.max_sessions:

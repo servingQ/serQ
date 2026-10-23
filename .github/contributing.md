@@ -52,10 +52,12 @@ computes something else.
    `ref/vllm/requirements/common.txt`. `VLLM_TARGET_DEVICE=cpu` is for a
    machine without a GPU, and `VLLM_PLUGINS=` disables an installed
    platform plugin.
-3. Add the name to the list in `tests/vllm_oracle.rs::scenarios`, run
-   `make oracle-ir`, then `make check` and `make lean`. The interpreter and
-   the Lean semantics now have to agree. The generator finds the scenarios
-   by listing the directory, so it needs no list of its own.
+3. Add the name to the list in `tests/vllm_oracle.rs::scenarios` and
+   `#print axioms SerqLang.Oracle.vllm_<name>` to
+   `lean/scripts/AxiomAudit.lean`, run `make oracle-ir`, then `make check`
+   and `make lean`. The interpreter and the Lean semantics now have to
+   agree. The generator finds the scenarios by listing the directory, so it
+   needs no list of its own; the axiom audit lists its theorems by hand.
 
 
 ## Language changes

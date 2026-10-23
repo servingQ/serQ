@@ -665,9 +665,11 @@ fn long_prefill_threshold_applies_only_with_company() {
 /// scheduler.py:609-622: with `adaptive_long_prefill_threshold`, the cap
 /// is floored at a fair share of the budget, `max(threshold, budget //
 /// num_eligible_reqs)`. An `each at most` computes it as `max(k, e)` with
-/// `k` a positive constant (#442). The first case is the oracle scenario
-/// `adaptive` (`tools/oracle/adaptive.json`), recorded against vLLM's
-/// scheduler.
+/// `k` a positive constant (#442). The two ttfts, [2, 2] and [1, 2], are
+/// the first-token steps vLLM's scheduler gives the oracle scenario
+/// `longchunk` with `adaptive` on, at chunk 1000 and at 3000
+/// (`tools/vllm_oracle.py`). The oracle scenario `adaptive` checks the rule
+/// on a run where a constant cap would answer otherwise.
 #[test]
 fn adaptive_long_prefill_threshold_floors_the_cap_at_a_fair_share() {
     let adaptive = |threshold: usize| {

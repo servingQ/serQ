@@ -21,9 +21,12 @@
 //! on a small pool), `longchunk` (`long_prefill_token_threshold`), `alone`
 //! (the cap is lifted while one request is eligible, scheduler.py:606-616:
 //! the first request takes the whole budget; CPU oracle only, no A100 run),
-//! `adaptive` (`long_prefill_token_threshold_adaptive`: `longchunk` with the
-//! cap floored at the fair share 4096 // 2 = 2048, scheduler.py:617-622; CPU
-//! oracle only, no A100 run).
+//! `adaptive` (`long_prefill_token_threshold_adaptive`, scheduler.py:617-622:
+//! budget 4096 and chunk 1000; while two 6000-token prompts are the only
+//! requests the fair share 4096 // 2 = 2048 binds, and once three
+//! 2000-token prompts arrive the chunk binds over 4096 // 5 = 819, so a
+//! constant cap of 819, 1000, 1365 or 2048 answers otherwise; CPU oracle
+//! only, no A100 run).
 
 mod common;
 
@@ -34,10 +37,6 @@ use serq::{paired_workload, program_path, run_ir};
 
 fn dir() -> std::path::PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tools/oracle")
-}
-
-fn num(v: &Value, k: &str) -> f64 {
-    v.get(k).and_then(Value::as_f64).unwrap_or(0.0)
 }
 
 fn read(name: &str) -> Value {
@@ -55,20 +54,9 @@ fn oracle_ir(name: &str) -> serq::Program {
     let workload =
         std::fs::read_to_string(paired_workload(&path).expect("the example's workload")).unwrap();
     let src = std::fs::read_to_string(&path).unwrap();
-    let reqs = sc["requests"].as_array().unwrap();
-    let sessions: Vec<Vec<(&str, f64)>> = reqs
-        .iter()
-        .map(|q| {
-            vec![
-                ("prompt", num(q, "prompt")),
-                ("o", num(q, "out")),
-                ("arrive", num(q, "arrive")),
-            ]
-        })
-        .collect();
     common::compile(&common::main_source(&src), &workload, &ov)
         .unwrap()
-        .with_sessions(&sessions)
+        .with_sessions(&common::oracle_sessions(&sc))
         .unwrap()
 }
 

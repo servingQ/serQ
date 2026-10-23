@@ -68,8 +68,12 @@ fn each_oracle_program_synthesises_to_the_configuration_its_scenario_ran() {
             ),
         ];
         for (key, v) in want {
-            // `serq target` writes the adaptive flag only when it is set
-            let have = c.get(key).cloned().unwrap_or(false.into());
+            // `serq target` writes the adaptive flag only when it is set;
+            // every other key it always writes
+            let have = match (key, c.get(key)) {
+                ("long_prefill_token_threshold_adaptive", None) => false.into(),
+                (_, v) => v.cloned().unwrap_or(Value::Null),
+            };
             assert_eq!(have, v, "{name}: {key}");
         }
     }

@@ -68,11 +68,11 @@ def outcome (D : Deployment) (horizon : ℕ) (w : Workload) :
   let m := Exec.runW D horizon w vllmRequest
   (observed m 0, observed m 1, m.preempts)
 
-/-- serQ `tools/oracle/adaptive.ir.json`: 2 requests, 1000 blocks of 16, budget 4096, 16 slots, chunk 1000, adaptive; the deployment and the workload are the IR's. -/
+/-- serQ `tools/oracle/adaptive.ir.json`: 5 requests, 2000 blocks of 16, budget 4096, 16 slots, chunk 1000, adaptive; the deployment and the workload are the IR's. -/
 theorem vllm_adaptive :
-    outcome ⟨[⟨16, 1, true, none⟩, ⟨15984, 16, false, none⟩], 4096, 0, some 1, fun _ => 1, none, some fun c => if ((c.residents + (c.queued 0)) > 1) then (max 1000 (4096 / (c.residents + (c.queued 0)))) else 0⟩ 8
-      ⟨[[(9, 3000), (10, 2), (11, 0)], [(9, 3000), (10, 2), (11, 0)]], [], none, 0, some 8, none⟩ =
-    ([(0, 2), (1, 2)], [(0, 3), (1, 3)], 0) := by
+    outcome ⟨[⟨16, 1, true, none⟩, ⟨31984, 16, false, none⟩], 4096, 0, some 1, fun _ => 1, none, some fun c => if ((c.residents + (c.queued 0)) > 1) then (max 1000 (4096 / (c.residents + (c.queued 0)))) else 0⟩ 12
+      ⟨[[(9, 6000), (10, 2), (11, 0)], [(9, 6000), (10, 2), (11, 0)], [(9, 2000), (10, 2), (11, 2)], [(9, 2000), (10, 2), (11, 2)], [(9, 2000), (10, 2), (11, 2)]], [], none, 0, some 8, none⟩ =
+    ([(0, 4), (1, 4), (2, 4), (3, 4), (4, 6)], [(0, 5), (1, 5), (2, 5), (3, 5), (4, 7)], 0) := by
   decide +kernel
 
 /-- serQ `tools/oracle/alone.ir.json`: 4 requests, 10 blocks of 16, budget 32, 8 slots, chunk 24; the deployment and the workload are the IR's. -/

@@ -28,10 +28,6 @@ fn dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tools/oracle/serve")
 }
 
-fn num(v: &Value, k: &str) -> f64 {
-    v.get(k).and_then(Value::as_f64).unwrap_or(0.0)
-}
-
 fn read(name: &str) -> Value {
     serde_json::from_str(&std::fs::read_to_string(dir().join(name)).unwrap()).unwrap()
 }
@@ -52,21 +48,9 @@ fn ir(name: &str) -> serq::Program {
         RUNNING,
         &format!("advance running by ({serve}) each at most (threshold);"),
     );
-    let sessions: Vec<Vec<(&str, f64)>> = sc["requests"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|q| {
-            vec![
-                ("prompt", num(q, "prompt")),
-                ("o", num(q, "out")),
-                ("arrive", num(q, "arrive")),
-            ]
-        })
-        .collect();
     common::compile(&common::main_source(&src), &workload, &ov)
         .unwrap()
-        .with_sessions(&sessions)
+        .with_sessions(&common::oracle_sessions(&sc))
         .unwrap()
 }
 
