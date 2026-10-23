@@ -767,18 +767,10 @@ pub fn parse_expr(src: &str) -> PResult<Expr> {
 /// The names `set` or `choose` assigns anywhere in `stmts`.
 pub(crate) fn assigned_in(stmts: &[Stmt], out: &mut Vec<String>) {
     for s in stmts {
-        match s {
-            Stmt::Set(n, _) | Stmt::Choose { var: n, .. } => out.push(n.clone()),
-            Stmt::Hold { body, .. }
-            | Stmt::Loop(body)
-            | Stmt::While(_, body)
-            | Stmt::Fork(body) => assigned_in(body, out),
-            Stmt::Branch(_, a, b) => {
-                assigned_in(a, out);
-                assigned_in(b, out);
-            }
-            _ => {}
+        if let Stmt::Set(n, _) | Stmt::Choose { var: n, .. } = s {
+            out.push(n.clone());
         }
+        s.blocks().for_each(|b| assigned_in(b, out));
     }
 }
 
@@ -801,31 +793,18 @@ fn sets_always(stmts: &[Stmt], name: &str) -> bool {
     })
 }
 
-/// The first statement of `stmts`, in a block in them as well, that `f`
-/// finds something in; `f` is told whether the statement is in a leg
-/// (`fork { … }`). The one walk of the blocks a statement holds, for the
-/// checks of a KV relation.
-fn find_stmt<'a, T>(
-    stmts: &'a [Stmt],
-    leg: bool,
-    f: &impl Fn(&'a Stmt, bool) -> Option<T>,
-) -> Option<T> {
-    stmts.iter().find_map(|s| {
-        f(s, leg).or_else(|| match s {
-            Stmt::Branch(_, a, b) => find_stmt(a, leg, f).or_else(|| find_stmt(b, leg, f)),
-            Stmt::Hold { body, .. } | Stmt::While(_, body) | Stmt::Loop(body) => {
-                find_stmt(body, leg, f)
-            }
-            Stmt::Fork(body) => find_stmt(body, true, f),
-            _ => None,
-        })
-    })
+/// What `f` finds first in `stmts`, at any depth: a statement before the
+/// blocks it holds (`Stmt::blocks`), the blocks in source order.
+fn find_stmt<'a, T>(stmts: &'a [Stmt], f: &impl Fn(&'a Stmt) -> Option<T>) -> Option<T> {
+    stmts
+        .iter()
+        .find_map(|s| f(s).or_else(|| s.blocks().find_map(|b| find_stmt(b, f))))
 }
 
 /// Whether `stmts` copy the KV over the NICs anywhere, an entry's
 /// `transfer (n) from S to kv (m)` (a run on `queue::PULL`).
 fn transfers(stmts: &[Stmt]) -> bool {
-    find_stmt(stmts, false, &|s, _| {
+    find_stmt(stmts, &|s| {
         matches!(s, Stmt::Run { stage, .. } if stage.name == queue::PULL).then_some(())
     })
     .is_some()
@@ -1139,23 +1118,15 @@ fn splice(stmts: &mut Vec<Stmt>, server: &[Stmt]) -> usize {
     let mut n = 0;
     let mut out = Vec::with_capacity(stmts.len());
     for mut s in std::mem::take(stmts) {
-        match &mut s {
-            Stmt::Request => {
-                n += 1;
-                out.push(Stmt::Side(crate::ir::Side::Server));
-                out.extend(server.iter().cloned());
-                out.push(Stmt::Side(crate::ir::Side::Workload));
-                continue;
-            }
-            Stmt::Hold { body, .. }
-            | Stmt::Loop(body)
-            | Stmt::While(_, body)
-            | Stmt::Fork(body) => n += splice(body, server),
-            Stmt::Branch(_, a, b) => {
-                n += splice(a, server);
-                n += splice(b, server);
-            }
-            _ => {}
+        if matches!(s, Stmt::Request) {
+            n += 1;
+            out.push(Stmt::Side(crate::ir::Side::Server));
+            out.extend(server.iter().cloned());
+            out.push(Stmt::Side(crate::ir::Side::Workload));
+            continue;
+        }
+        for b in s.blocks_mut() {
+            n += splice(b, server);
         }
         out.push(s);
     }
@@ -1269,23 +1240,14 @@ fn collect_entry(
                     locals.push(n.clone());
                 }
             }
-            Stmt::Hold { body, lease, .. } => {
-                if let Some((r, _)) = lease
-                    && !leased.contains(&r.name)
-                {
-                    leased.push(r.name.clone());
-                }
-                collect_entry(body, request_kv, locals, leased);
-            }
-            Stmt::Loop(body) | Stmt::While(_, body) | Stmt::Fork(body) => {
-                collect_entry(body, request_kv, locals, leased)
-            }
-            Stmt::Branch(_, a, b) => {
-                collect_entry(a, request_kv, locals, leased);
-                collect_entry(b, request_kv, locals, leased);
-            }
+            Stmt::Hold {
+                lease: Some((r, _)),
+                ..
+            } if !leased.contains(&r.name) => leased.push(r.name.clone()),
             _ => {}
         }
+        s.blocks()
+            .for_each(|b| collect_entry(b, request_kv, locals, leased));
     }
 }
 
@@ -1495,27 +1457,22 @@ fn pools_named<'a>(stmts: &'a [Stmt], out: &mut Vec<&'a Ref>) {
             | Stmt::Load(r, _)
             | Stmt::Drop(r)
             | Stmt::Release(r) => out.push(r),
-            Stmt::Hold {
-                pools, body, lease, ..
-            } => {
+            Stmt::Hold { pools, lease, .. } => {
                 out.extend(pools.iter().map(|(r, _, _)| r));
                 if let Some((r, _)) = lease {
                     out.push(r);
                 }
-                pools_named(body, out);
             }
             Stmt::Run {
                 growing: Some(g), ..
             } => out.push(g),
-            Stmt::Branch(_, a, b) => {
-                pools_named(a, out);
-                pools_named(b, out);
-            }
-            Stmt::Loop(b) | Stmt::While(_, b) | Stmt::Fork(b) => pools_named(b, out),
             Stmt::Call {
                 to: Some((r, _)), ..
             } => out.push(r),
             _ => {}
+        }
+        for b in s.blocks() {
+            pools_named(b, out);
         }
     }
 }
@@ -2251,7 +2208,7 @@ impl Parser {
             // a source whose entry holds and leases is the other spelling of
             // the prefill, and its lease would not be the relation's
             if let Some(e) = source.entries.iter().find(|e| {
-                find_stmt(&e.body, false, &|s, _| {
+                find_stmt(&e.body, &|s| {
                     matches!(s, Stmt::Hold { lease: Some(_), .. }).then_some(())
                 })
                 .is_some()
@@ -6681,17 +6638,7 @@ mod tests {
         fn executable(stmts: &mut Vec<Stmt>) {
             stmts.retain(|s| !matches!(s, Stmt::Side(_) | Stmt::Route(_)));
             for s in stmts {
-                match s {
-                    Stmt::Hold { body, .. }
-                    | Stmt::Loop(body)
-                    | Stmt::While(_, body)
-                    | Stmt::Fork(body) => executable(body),
-                    Stmt::Branch(_, a, b) => {
-                        executable(a);
-                        executable(b);
-                    }
-                    _ => {}
-                }
+                s.blocks_mut().for_each(executable);
             }
         }
         let run = |(body, workload): (&str, &str)| {

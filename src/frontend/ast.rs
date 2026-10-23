@@ -653,6 +653,59 @@ pub enum Stmt {
     Unread(Vec<Arg>),
 }
 
+/// The blocks a statement holds, as a pair of the first and the second (an
+/// `if`'s else-arm): the one list of them, which `Stmt::blocks` and
+/// `Stmt::blocks_mut` both expand, the match binding `&` or `&mut` as the
+/// statement is borrowed. It names every statement, so a new statement that
+/// holds a block does not compile until it is added here, once (#280).
+macro_rules! blocks_of {
+    ($s:expr) => {
+        match $s {
+            Stmt::Hold { body, .. }
+            | Stmt::Loop(body)
+            | Stmt::While(_, body)
+            | Stmt::Fork(body) => (Some(body), None),
+            Stmt::Branch(_, a, b) => (Some(a), Some(b)),
+            Stmt::Side(_)
+            | Stmt::Route(_)
+            | Stmt::Declare(..)
+            | Stmt::Turn
+            | Stmt::Request
+            | Stmt::Set(..)
+            | Stmt::Observe(..)
+            | Stmt::Grow(..)
+            | Stmt::Shrink(..)
+            | Stmt::Drop(_)
+            | Stmt::Release(_)
+            | Stmt::Load(..)
+            | Stmt::Run { .. }
+            | Stmt::Choose { .. }
+            | Stmt::End
+            | Stmt::Call { .. }
+            | Stmt::EngineRequest { .. }
+            | Stmt::Unread(_) => (None, None),
+        }
+    };
+}
+
+impl Stmt {
+    /// The blocks this statement holds, in source order: a hold's body, an
+    /// `if`'s then-arm and then its else-arm, a `loop`'s, a `while`'s and a
+    /// `fork`'s body. A walk that reaches every statement wherever it stands
+    /// descends through this (or `blocks_mut`), not a match of its own.
+    pub fn blocks(&self) -> impl Iterator<Item = &[Stmt]> {
+        let (a, b) = blocks_of!(self);
+        a.into_iter().chain(b).map(Vec::as_slice)
+    }
+
+    /// `blocks`, to rewrite: the same blocks in the same order, each a
+    /// `Vec` so that a walk may replace a statement by several.
+    pub fn blocks_mut(&mut self) -> impl Iterator<Item = &mut Vec<Stmt>> {
+        let (a, b) = blocks_of!(self);
+        a.into_iter().chain(b)
+    }
+}
+
 /// What `each_part_mut` hands a visitor: each expression a statement holds,
 /// each pool, stage or queue it names, and each argument of a
 /// `Stmt::Unread`. What lies inside one (a reference's index, a nested
@@ -665,9 +718,10 @@ pub(crate) struct Parts<E, R, A> {
     pub unread: A,
 }
 
-/// Hand every part of `stmts` to `parts`, a nested block's statements
-/// included, so that `without_locations` cannot pass over a place an
-/// expression stands: a reference's index is one (`hold g[n]`).
+/// Hand every part of `stmts` to `parts`, a statement's own before those
+/// of the blocks it holds (`Stmt::blocks_mut`), so that `without_locations`
+/// cannot pass over a place an expression stands: a reference's index is
+/// one (`hold g[n]`).
 #[cfg(test)]
 pub(crate) fn each_part_mut<E, R, A>(stmts: &mut [Stmt], parts: &mut Parts<E, R, A>)
 where
@@ -682,13 +736,15 @@ where
             | Stmt::Declare(..)
             | Stmt::Turn
             | Stmt::Request
-            | Stmt::End => {}
+            | Stmt::End
+            | Stmt::Loop(_)
+            | Stmt::Fork(_) => {}
             Stmt::Set(_, e) | Stmt::Observe(_, e) => (parts.expr)(e),
             Stmt::Unread(args) => args.iter_mut().for_each(&mut parts.unread),
             Stmt::Hold {
                 pools,
                 reuse,
-                body,
+                body: _,
                 cache,
                 prefix,
                 lease,
@@ -708,7 +764,6 @@ where
                     (parts.reference)(r);
                     (parts.expr)(duration);
                 }
-                each_part_mut(body, parts);
             }
             Stmt::Grow(r, e) | Stmt::Shrink(r, e) | Stmt::Load(r, e) => {
                 (parts.reference)(r);
@@ -738,16 +793,7 @@ where
                 latency.iter_mut().for_each(&mut parts.expr);
                 growing.iter_mut().for_each(&mut parts.reference);
             }
-            Stmt::Branch(e, a, b) => {
-                (parts.expr)(e);
-                each_part_mut(a, parts);
-                each_part_mut(b, parts);
-            }
-            Stmt::While(e, b) => {
-                (parts.expr)(e);
-                each_part_mut(b, parts);
-            }
-            Stmt::Loop(b) | Stmt::Fork(b) => each_part_mut(b, parts),
+            Stmt::Branch(e, ..) | Stmt::While(e, _) => (parts.expr)(e),
             Stmt::Choose { count, key, .. } => {
                 (parts.expr)(count);
                 key.iter_mut().for_each(&mut parts.expr);
@@ -767,6 +813,9 @@ where
                     (parts.expr)(e);
                 }
             }
+        }
+        for b in s.blocks_mut() {
+            each_part_mut(b, parts);
         }
     }
 }
@@ -971,4 +1020,53 @@ pub(crate) fn without_locations(mut p: Program) -> Program {
         expr(&mut c.expr);
     }
     p
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Each statement that holds a block hands its blocks in source order,
+    /// the same through `blocks` and `blocks_mut`, and a statement that holds
+    /// none hands none.
+    #[test]
+    fn a_statement_hands_its_blocks_in_source_order() {
+        let block = |n: &str| vec![Stmt::Set(n.into(), Expr::Num(0.0))];
+        let cases = [
+            (
+                Stmt::Hold {
+                    pools: vec![],
+                    reuse: None,
+                    body: block("h"),
+                    cache: None,
+                    prefix: None,
+                    lease: None,
+                },
+                vec!["h"],
+            ),
+            (
+                Stmt::Branch(Expr::Num(1.0), block("then"), block("else")),
+                vec!["then", "else"],
+            ),
+            (Stmt::Loop(block("l")), vec!["l"]),
+            (Stmt::While(Expr::Num(1.0), block("w")), vec!["w"]),
+            (Stmt::Fork(block("f")), vec!["f"]),
+            (Stmt::Set("x".into(), Expr::Num(0.0)), vec![]),
+        ];
+        fn names<'a>(blocks: impl Iterator<Item = &'a [Stmt]>) -> Vec<String> {
+            blocks
+                .flat_map(|b| {
+                    b.iter().map(|s| match s {
+                        Stmt::Set(n, _) => n.clone(),
+                        s => panic!("not a block of the test: {s:?}"),
+                    })
+                })
+                .collect()
+        }
+        for (mut s, want) in cases {
+            assert_eq!(names(s.blocks()), want, "blocks of {s:?}");
+            let by_mut = names(s.blocks_mut().map(|b| &b[..]));
+            assert_eq!(by_mut, want, "blocks_mut of {s:?}");
+        }
+    }
 }

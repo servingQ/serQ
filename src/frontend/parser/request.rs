@@ -286,59 +286,48 @@ fn engine_use(
             format!("call the engine, `{e} (input, output);`, which keeps the request's state")
         }
     };
-    for s in stmts {
-        let found = match s {
-            Stmt::Run { stage, mode, .. }
-                if *mode != RunMode::Plain
-                    && (en.is_engine)(&stage.name)
-                    && own != Some(stage.name.as_str()) =>
-            {
-                let (e, m) = (
-                    &stage.name,
-                    if *mode == RunMode::Prefill {
-                        "prefill"
-                    } else {
-                        "decode"
-                    },
-                );
-                Some((
-                    stage.span,
-                    format!(
-                        "{who} runs engine `{e}`'s {m} (`run {e} {m} (…)`): an engine runs only \
-                         in its own queue's entries; {}",
-                        instead(e)
-                    ),
-                ))
-            }
-            Stmt::Hold { pools, body, .. } => pools
-                .iter()
-                .filter(|_| own.is_none())
-                .find_map(|(p, _, _)| (en.admitter)(&p.name).map(|e| (p, e)))
-                .map(|(p, e)| {
-                    let to = if (en.is_queue)(&e) {
-                        format!("; {}", instead(&e))
-                    } else {
-                        format!(
-                            ": write the admission as `taking {} (…)` on `{e}`'s `admit waiting`, \
-                             and call the engine, `{e} (input, output);`",
-                            p.name
-                        )
-                    };
-                    (
-                        p.span,
-                        format!("{who} holds `{}`, which engine `{e}` admits{to}", p.name),
-                    )
-                })
-                .or_else(|| engine_use(body, en, who, own)),
-            Stmt::Branch(_, a, b) => {
-                engine_use(a, en, who, own).or_else(|| engine_use(b, en, who, own))
-            }
-            Stmt::Loop(b) | Stmt::While(_, b) | Stmt::Fork(b) => engine_use(b, en, who, own),
-            _ => None,
-        };
-        if found.is_some() {
-            return found;
+    super::find_stmt(stmts, &|s| match s {
+        Stmt::Run { stage, mode, .. }
+            if *mode != RunMode::Plain
+                && (en.is_engine)(&stage.name)
+                && own != Some(stage.name.as_str()) =>
+        {
+            let (e, m) = (
+                &stage.name,
+                if *mode == RunMode::Prefill {
+                    "prefill"
+                } else {
+                    "decode"
+                },
+            );
+            Some((
+                stage.span,
+                format!(
+                    "{who} runs engine `{e}`'s {m} (`run {e} {m} (…)`): an engine runs only \
+                     in its own queue's entries; {}",
+                    instead(e)
+                ),
+            ))
         }
-    }
-    None
+        Stmt::Hold { pools, .. } => pools
+            .iter()
+            .filter(|_| own.is_none())
+            .find_map(|(p, _, _)| (en.admitter)(&p.name).map(|e| (p, e)))
+            .map(|(p, e)| {
+                let to = if (en.is_queue)(&e) {
+                    format!("; {}", instead(&e))
+                } else {
+                    format!(
+                        ": write the admission as `taking {} (…)` on `{e}`'s `admit waiting`, \
+                         and call the engine, `{e} (input, output);`",
+                        p.name
+                    )
+                };
+                (
+                    p.span,
+                    format!("{who} holds `{}`, which engine `{e}` admits{to}", p.name),
+                )
+            }),
+        _ => None,
+    })
 }
