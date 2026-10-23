@@ -253,6 +253,13 @@ theorem upd_base (a : Attrs) (k v : ℕ) : (a.upd k v).base = a.base := by
 
 end Attrs
 
+/-- The admission number of a session no hold has admitted: after every
+admitted one, so that its runs join the engine's residents behind theirs, as
+the interpreter puts them (its `u64::MAX`, `adm_seq` and `start_job`). A key
+reading `admission` reads it there as the float 2^64 (`adm_seq as f64`),
+which this is. -/
+def unadmitted : ℕ := 2 ^ 64
+
 structure Sess where
   serial : ℕ
   attr : Attrs
@@ -260,6 +267,8 @@ structure Sess where
   prog : Prog
   stack : List Frame
   status : Status
+  /-- the number of the session's latest hold admission (`Machine.nextAdm`
+  then), `unadmitted` before its first -/
   admSeq : ℕ
   /-- the next of the session's turns (`Workload.turns`) -/
   turnIx : ℕ := 0
@@ -340,7 +349,7 @@ def roundDown (b u : ℕ) : ℕ := if b = 0 then u else u / b * b
 def pdef (p : ℕ) : PoolDef := D.pools.getD p ⟨0, 1, false, none⟩
 def pst (m : Machine) (p : ℕ) : PoolSt := m.pools.getD p ⟨0, [], [], []⟩
 def setPool (m : Machine) (p : ℕ) (s : PoolSt) : Machine := { m with pools := m.pools.set p s }
-def getS (m : Machine) (i : ℕ) : Sess := m.sess.getD i ⟨i, ⟨fun _ => 0, []⟩, 0, .stop, [], .ended, 0, 0⟩
+def getS (m : Machine) (i : ℕ) : Sess := m.sess.getD i ⟨i, ⟨fun _ => 0, []⟩, 0, .stop, [], .ended, unadmitted, 0⟩
 def setS (m : Machine) (i : ℕ) (s : Sess) : Machine := { m with sess := m.sess.setIfInBounds i s }
 
 def cachedTotal (s : PoolSt) : ℕ := (s.entries.map Entry.size).sum
@@ -1237,7 +1246,7 @@ def runUntil (horizon : ℕ) : ℕ → Machine → Machine
 def initial (n : ℕ) (init : ℕ → ℕ → ℕ) (prog : Prog) (wl : Workload := ⟨[], [], none, 0, none, none⟩) : Machine :=
   { wl := wl
     now := 0
-    sess := ((List.range n).map fun i => ⟨i, ⟨init i, []⟩, 0, prog, [], .ready, 0, 0⟩).toArray
+    sess := ((List.range n).map fun i => ⟨i, ⟨init i, []⟩, 0, prog, [], .ready, unadmitted, 0⟩).toArray
     pools := D.pools.map fun _ => ⟨0, [], [], []⟩
     jobs := [], iter := [], obs := [], preempts := 0
     nextAdm := 0, nextRel := 0, nextDead := 0, nextDelay := 0

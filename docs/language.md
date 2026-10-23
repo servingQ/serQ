@@ -1133,8 +1133,9 @@ admission sequence number, `remaining`, the tokens its run has left, and
 `running.count`, `running.decoding`, `running.kv_decode`,
 `running.kv_prefill`; ties in admission order; a key may not draw), or
 `admission` (the order their sessions were admitted, vLLM's `running`
-list; on an engine whose requests hold nothing, none is admitted and they
-are served in the order their runs started; the default), which is `by`
+list; a request no hold has admitted comes after every admitted one, its
+`admission` 2^64, so on an engine whose requests hold nothing they are
+served in the order their runs started; the default), which is `by`
 with no keys, where every request ties, or `decode first`, which is `by
 (decoding ? 0 : 1)`; of the orders, the IR knows only `by`. A scheduler that serves the shortest remaining run first
 is `advance running by (remaining)`, the opposite `by (-remaining)`. One

@@ -91,7 +91,7 @@ theorem radOK_sub {q : Prog} (h : Sub Pr q) : RadOK q := by
   | whileK _ ih => exact ih.elim
 
 /-- Session `i` of an array, as `getS` reads it. -/
-def sg (ss : Array Sess) (i : ℕ) : Sess := ss.getD i ⟨i, ⟨fun _ => 0, []⟩, 0, .stop, [], .ended, 0, 0⟩
+def sg (ss : Array Sess) (i : ℕ) : Sess := ss.getD i ⟨i, ⟨fun _ => 0, []⟩, 0, .stop, [], .ended, unadmitted, 0⟩
 
 theorem getS_eq_sg (m : Machine) (i : ℕ) : getS m i = sg m.sess i := rfl
 

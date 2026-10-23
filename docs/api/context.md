@@ -52,7 +52,7 @@ an `observe`, a `stage`, a `pool`, a `device`, an `engine`, a `queue`, a
 | `prefilled` | number | `Step`, `Plan`, `Iteration` | prefill tokens scheduled (in a body, so far) |
 | `attention` | number | `Step`, `Iteration` | attention work of the prefill chunks, `Σ n (K + n/2)`, `K` the position before a chunk (exact for `growing` runs) |
 | `decoding` | 0 / 1 | `Serve`, `Victim` | 1 if the resident (or candidate) is decoding, 0 otherwise |
-| `admission` | number | `Serve`, `Victim` | the resident's admission sequence number (its place in vLLM's `running` list); at `Victim`, the candidate's place in the candidates' admission order |
+| `admission` | number | `Serve`, `Victim` | the resident's admission sequence number (its place in vLLM's `running` list; 2^64 for a request no hold has admitted, after every admitted one); at `Victim`, the candidate's place in the candidates' admission order |
 | `remaining` | number | `Serve` | tokens the resident's run has left |
 | `position` | number | `Victim` | the position the candidate's hold has computed on the pool: what `computed` becomes if it is the victim |
 | `demand` | number | `Iteration` | tokens the residents could take this iteration with no budget: `min(1, remaining)` per decode, the remaining work up to the `chunk` per prefill, over the residents after the batch is scheduled (those an `only` leaves out included) |

@@ -1,0 +1,248 @@
+{
+ "arrival": {
+  "Sessions": [
+   {
+    "attrs": [
+     [
+      9,
+      1.0
+     ]
+    ],
+    "turns": []
+   },
+   {
+    "attrs": [
+     [
+      9,
+      8.0
+     ]
+    ],
+    "turns": []
+   },
+   {
+    "attrs": [
+     [
+      9,
+      8.0
+     ]
+    ],
+    "turns": []
+   }
+  ]
+ },
+ "attr_types": [
+  "Value",
+  "Size",
+  "Size",
+  "Size",
+  "Size",
+  "Size",
+  "Size",
+  "Size",
+  "Value",
+  "Size"
+ ],
+ "attrs": [
+  "cached",
+  "serial",
+  "turn_no",
+  "new",
+  "out",
+  "think",
+  "more",
+  "forced",
+  "computed",
+  "n"
+ ],
+ "blocks": [
+  [
+   {
+    "Set": [
+     9,
+     {
+      "Num": 1.0
+     }
+    ]
+   }
+  ],
+  [],
+  [
+   "Turn",
+   {
+    "Run": {
+     "growing": null,
+     "mode": "Prefill",
+     "stage": {
+      "base": 0,
+      "count": 1,
+      "index": null
+     },
+     "work": {
+      "Cost": [
+       {
+        "Stage": {
+         "base": 0,
+         "count": 1
+        }
+       },
+       {
+        "Attr": 9
+       }
+      ]
+     }
+    }
+   },
+   {
+    "Hold": {
+     "body": 3,
+     "cache": null,
+     "lease": null,
+     "pools": [
+      [
+       {
+        "base": 0,
+        "count": 1,
+        "index": null
+       },
+       {
+        "Cost": [
+         {
+          "Pool": {
+           "base": 0,
+           "count": 1
+          }
+         },
+         {
+          "Num": 16.0
+         }
+        ]
+       },
+       null
+      ]
+     ],
+     "reuse": null
+    }
+   },
+   {
+    "Observe": [
+     0,
+     {
+      "Ctx": "Now"
+     }
+    ]
+   },
+   "End"
+  ],
+  [
+   {
+    "Run": {
+     "growing": null,
+     "mode": "Prefill",
+     "stage": {
+      "base": 0,
+      "count": 1,
+      "index": null
+     },
+     "work": {
+      "Cost": [
+       {
+        "Stage": {
+         "base": 0,
+         "count": 1
+        }
+       },
+       {
+        "Num": 8.0
+       }
+      ]
+     }
+    }
+   }
+  ]
+ ],
+ "hidden": [],
+ "horizon": 1000.0,
+ "init": 0,
+ "observes": [
+  "done"
+ ],
+ "pools": [
+  {
+   "admit_via": null,
+   "block": 16.0,
+   "cap": 64.0,
+   "evict": "Lru",
+   "name": "llm.kv",
+   "preempt": {
+    "By": {
+     "keys": [
+      {
+       "Unary": [
+        "Neg",
+        {
+         "Ctx": "Admission"
+        }
+       ]
+      }
+     ]
+    }
+   },
+   "queue": null,
+   "spill": null
+  }
+ ],
+ "seed": 1,
+ "session": 2,
+ "sides": [
+  [
+   "Workload"
+  ],
+  [],
+  [
+   "Workload",
+   "Server",
+   "Server",
+   "Server",
+   "Workload"
+  ],
+  [
+   "Server"
+  ]
+ ],
+ "slot_cached": 0,
+ "slot_computed": 8,
+ "slot_forced": 7,
+ "slot_more": 6,
+ "slot_new": 3,
+ "slot_out": 4,
+ "slot_serial": 1,
+ "slot_think": 5,
+ "slot_turn": 2,
+ "stages": [
+  {
+   "kind": {
+    "Step": {
+     "budget": {
+      "Num": 4.0
+     },
+     "chunk": {
+      "Num": 0.0
+     },
+     "cost": {
+      "Num": 1.0
+     },
+     "memory": 0,
+     "serve": {
+      "By": []
+     }
+    }
+   },
+   "name": "llm"
+  }
+ ],
+ "trace": null,
+ "trace_ordered": false,
+ "turn": 1,
+ "version": 15,
+ "warmup": 0.0
+}

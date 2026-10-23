@@ -1,0 +1,36 @@
+// An engine whose residents mix runs inside a hold and runs outside every
+// hold. A run joins the residents by its session's latest hold admission
+// (the interpreter's `start_job`, `Exec.exec`'s `.run`); a session no hold
+// has admitted comes after every admitted one, so its run joins at the end.
+// Session 0 (n = 1) finishes its first run at t = 1 and its hold's run
+// joins ahead of sessions 1 and 2, still in their first runs: done at 3,
+// 7 and 11. Taking a session no hold admitted as admitted first put session
+// 0 behind them (done at 7, 9 and 11, #741). The Lean semantics must give
+// the interpreter's answer (lean/Serq/Regress.lean; README.md).
+fn main() {
+  queue llm : agg {
+    device gpu { kv cap 64; }
+    engine on gpu {
+      tokens cap 4;
+      scheduler {
+        advance running;
+        admit waiting while (running.preempted == 0);
+      }
+      worker {
+        forward (1);
+      }
+    }
+    pool kv on gpu { block 16; evict lru; preempt lifo; }
+    decode (n) {
+      run llm prefill (cost(llm, n));
+      hold kv (cost(kv, 16)) {
+        run llm prefill (cost(llm, 8));
+      }
+    }
+  }
+
+  server (n) {
+    llm.decode (n);
+    observe done = now;
+  }
+}

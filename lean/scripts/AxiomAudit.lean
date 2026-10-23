@@ -62,6 +62,7 @@ import papers.KongPoisson
 #print axioms SerqLang.Exec.makeRoom_eq_fast
 -- regressions against the interpreter (Serq/Regress.lean, generated)
 #print axioms SerqLang.Regress.regress_cost_ctx
+#print axioms SerqLang.Regress.regress_mixed_admission
 #print axioms SerqLang.Regress.regress_preempt_delay
 -- an iteration of the step engine is the greedy fill, in serving order (Serq/Fill.lean)
 #print axioms SerqLang.Exec.fillIter_eq_amounts

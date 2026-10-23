@@ -46,7 +46,7 @@ theorem fill_sub (js : List Job) (hn : (js.map (·.owner)).Nodup) (B : ℕ) :
 /-! ### A slot -/
 
 /-- What the chain carries from slot to slot. -/
-def Inv (m : Machine) : Prop := ∃ L g, DaiStable.SB L g m ∧ A0 m
+def Inv (m : Machine) : Prop := ∃ L g, DaiStable.SB L g m ∧ NoAdm m
 
 theorem empty_inv : Inv DaiStable.empty :=
   ⟨_, _, DaiStable.empty_sb, fun j => by simp [getS, DaiStable.empty, Slot.empty, Exec.initial]⟩
