@@ -905,8 +905,8 @@ pub struct Interface {
     pub workload: Vec<String>,
 }
 
-/// `claim NAME [given (e)] : every iteration of STAGE (e) ;`, `… some
-/// iteration of STAGE (e) ;` or `… at end (e) ;`.
+/// `claim NAME [given (e)] : every iteration of ENGINE (e) ;`, `… some
+/// iteration of ENGINE (e) ;` or `… at end (e) ;`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ClaimDecl {
     pub span: Option<Span>,

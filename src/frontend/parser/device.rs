@@ -91,28 +91,53 @@ type Lets = Vec<(String, Expr)>;
 /// resident's turn (`only`, `by`) and in the schedule's statements.
 const AS_THEY_STAND: &[&str] = &["tokens cap", "each at most", "only", "by", "scheduler"];
 
+/// A claim over an engine's iterations (`claim … every iteration of E
+/// (…)`), as a clause of the engine: the interpreter reads it once the
+/// batch is formed, with the worker's cost (`check_iteration`), so it reads
+/// the batch as `worker` does and `running.count` as the residents stand
+/// then, admitted ones included and preempted ones not (#437).
+pub const CLAIM: &str = "claim";
+
+/// The clauses that read the residents' number, `running.count`: those that
+/// read the residents as they stand, and a claim over iterations, which
+/// reads it once the batch is formed. The kernel's `residents` is the
+/// residents' number at both moments.
+const RESIDENTS_COUNT: &[&str] = &[
+    "tokens cap",
+    "each at most",
+    "only",
+    "by",
+    "scheduler",
+    CLAIM,
+];
+
 /// An engine's values: the name it reads one by, the kernel's context
 /// variable, and the clauses that read it. `running` is the residents as
 /// they stand, `waiting` the queues, `batch` the iteration's batch: in a
 /// schedule's statements (`scheduler`), what it has formed so far; in
-/// `worker`, what it formed. The kernel reads `decoders` and `kv_decode` as
-/// the residents' before the batch is formed and as the batch's in `cost`
-/// (#416), so the engine names them twice. Within a schedule, `only`, `by`
+/// `worker` and a claim over its iterations (`claim`), what it formed. The
+/// kernel reads `decoders` and `kv_decode` as the residents' before the
+/// batch is formed and as the batch's in `cost` (#416) and in an iteration
+/// claim, so the engine names them twice. Within a schedule, `only`, `by`
 /// and `each at most` are read at their own moments, not the statements'.
 pub const ENGINE_VALUES: [(&str, &str, &[&str]); 20] = [
-    ("running.count", "residents", AS_THEY_STAND),
+    ("running.count", "residents", RESIDENTS_COUNT),
     ("running.decoding", "decoders", AS_THEY_STAND),
     ("running.kv_decode", "kv_decode", AS_THEY_STAND),
     ("running.kv_prefill", "kv_prefill", AS_THEY_STAND),
     ("running.preempted", "preempted", &["scheduler"]),
     ("waiting.count", WAITING_COUNT, AS_THEY_STAND),
     ("waiting.admitted", "admitted", &["scheduler"]),
-    ("batch.tokens", "tokens", &["scheduler", "worker"]),
-    ("batch.prefilled", "prefilled", &["scheduler", "worker"]),
-    ("batch.decoding", "decoders", &["worker"]),
-    ("batch.kv_decode", "kv_decode", &["worker"]),
-    ("batch.kv_prefill", "kv_prefill", &["worker"]),
-    ("batch.attention", "attention", &["worker"]),
+    ("batch.tokens", "tokens", &["scheduler", "worker", CLAIM]),
+    (
+        "batch.prefilled",
+        "prefilled",
+        &["scheduler", "worker", CLAIM],
+    ),
+    ("batch.decoding", "decoders", &["worker", CLAIM]),
+    ("batch.kv_decode", "kv_decode", &["worker", CLAIM]),
+    ("batch.kv_prefill", "kv_prefill", &["worker", CLAIM]),
+    ("batch.attention", "attention", &["worker", CLAIM]),
     ("request.input", "request.input", &["taking", "cache"]),
     ("request.output", "request.output", &["taking", "cache"]),
     ("request.known", "request.known", &["taking", "cache"]),
@@ -174,8 +199,8 @@ fn qualify_request(r: &mut RequestSpec, f: &dyn Fn(&mut Ref)) {
 }
 
 /// The name an engine reads the kernel's context variable `var` by in
-/// `clause` (`tokens cap`, `scheduler`, `worker`), if it reads it there: a
-/// view that draws a step stage in an engine's words names it so.
+/// `clause` (`tokens cap`, `scheduler`, `worker`, `claim`), if it reads it
+/// there: a view that draws a step stage in an engine's words names it so.
 pub fn engine_name(var: &str, clause: &str) -> Option<&'static str> {
     ENGINE_VALUES
         .iter()
@@ -190,9 +215,97 @@ pub(crate) fn tokens_cap_name(v: crate::ir::CtxVar) -> &'static str {
     engine_name(v.name(), "tokens cap").unwrap_or(v.name())
 }
 
+/// The engine's own clauses among `clauses`, but `except`, as a message
+/// names them ("`scheduler` and `worker`"), and whether a claim over its
+/// iterations is among them. Every message that says where a value of
+/// `ENGINE_VALUES` is read names its clauses here, from the table.
+fn clauses_named(clauses: &[&str], except: &str) -> (String, bool) {
+    let mut own: Vec<&str> = vec![];
+    for c in clauses {
+        if *c != CLAIM && *c != except && !own.contains(c) {
+            own.push(c);
+        }
+    }
+    let own = match own.split_last() {
+        Some((last, [])) => format!("`{last}`"),
+        Some((last, rest)) => format!("`{}` and `{last}`", rest.join("`, `")),
+        None => unreachable!("an engine's value is read in a clause of the engine"),
+    };
+    (own, clauses.contains(&CLAIM))
+}
+
+/// `clauses` where an engine reads a value: "its `scheduler` and `worker`,
+/// and in a claim over its iterations".
+fn in_its(clauses: &[&str]) -> String {
+    match clauses_named(clauses, "") {
+        (own, false) => format!("its {own}"),
+        (own, true) => format!("its {own}, and in a claim over its iterations"),
+    }
+}
+
+/// Where the values of `list` (`running`, `waiting`, `batch`, `request`)
+/// are read, as `ENGINE_VALUES` says: the engine's clauses, and a claim over
+/// its iterations if one is.
+fn read_in(list: &str) -> String {
+    let clauses: Vec<&str> = ENGINE_VALUES
+        .iter()
+        .filter(|(v, ..)| v.split_once('.').is_some_and(|(l, _)| l == list))
+        .flat_map(|(_, _, cs)| cs.iter().copied())
+        .collect();
+    format!("read in {}", in_its(&clauses))
+}
+
+/// The kernel's context variable `var` as an engine names it, when it does:
+/// each value of `ENGINE_VALUES` it is and where that is read ("`batch.tokens`
+/// in its `scheduler` and `worker`, and in a claim over its iterations").
+/// No moment but an engine's clauses and a claim over its iterations reads
+/// such a variable, and each of them reads it by the engine's name (#437),
+/// so a program never writes the kernel's.
+pub(crate) fn as_engine_values(var: &str) -> Option<String> {
+    let values: Vec<String> = ENGINE_VALUES
+        .iter()
+        .filter(|(_, k, _)| *k == var)
+        .map(|(v, _, cs)| format!("`{v}` in {}", in_its(cs)))
+        .collect();
+    (!values.is_empty()).then(|| values.join("; or "))
+}
+
+/// Where `value`, what an iteration's schedule did (`running.preempted`,
+/// `waiting.admitted`), is read: in the schedule's statements alone.
+fn what_the_schedule_did(value: &str) -> String {
+    format!("`{value}` is what the iteration's schedule did, read in its `if`, `while` and `set`")
+}
+
 /// Why `value` of `ENGINE_VALUES` is not read in `clause`.
 fn not_read_in(value: &str, clause: &str) -> String {
     let (list, field) = value.split_once('.').expect("a list's value");
+    let (_, var, clauses) = ENGINE_VALUES
+        .iter()
+        .find(|(v, ..)| *v == value)
+        .expect("a value of ENGINE_VALUES");
+    if clause == CLAIM {
+        let why = if list == "request" {
+            format!(
+                "`{value}` is one request's, read in its engine's `{}`",
+                clauses.join("` and `")
+            )
+        } else if field == "preempted" || field == "admitted" {
+            what_the_schedule_did(value)
+        } else if let Some(batch) = engine_name(var, CLAIM) {
+            format!(
+                "`{value}` counts the residents, in the batch or not, and the batch's is `{batch}`"
+            )
+        } else if list == "waiting" {
+            "a claim reads a queue as `queued(P)`".into()
+        } else {
+            unreachable!("`{value}` has no reason a claim over iterations does not read it")
+        };
+        return format!(
+            "a claim over an engine's iterations is read once the batch is formed, where the \
+             worker's `forward` is: it reads the batch, `batch.…`, and the residents' number, \
+             `running.count`; {why}"
+        );
+    }
     if list == "request" {
         if field == "hit" {
             "`request.hit` is read at the request's admission, in `taking` and a connector's \
@@ -216,10 +329,7 @@ fn not_read_in(value: &str, clause: &str) -> String {
              attributes and the engine's pools, not `{value}`"
         )
     } else if field == "preempted" || field == "admitted" {
-        format!(
-            "`{value}` is what the iteration's schedule did, read in its `if`, `while` and \
-             `set`, not in `{clause}`"
-        )
+        format!("{}, not in `{clause}`", what_the_schedule_did(value))
     } else if clause == "worker" {
         let batch = if list == "running" && field != "count" {
             format!(", and the batch's is `batch.{field}`")
@@ -237,20 +347,37 @@ fn not_read_in(value: &str, clause: &str) -> String {
         )
     } else if clause == "scheduler" {
         format!(
-            "`{value}` is the formed batch's, read in `worker`; a schedule's statements read \
-             the batch so far as `batch.tokens` and `batch.prefilled`, and the residents' as \
-             `running.…`"
+            "`{value}` is the formed batch's, read {}; a schedule's statements read the batch \
+             so far as `batch.tokens` and `batch.prefilled`, and the residents' as `running.…`",
+            places(clauses, "", None)
         )
     } else {
-        let so_far = if ["tokens", "prefilled"].contains(&field) {
-            ", and as the batch so far in a schedule's `if`, `while` and `set`"
-        } else {
-            ""
-        };
+        // a schedule's statements read it too, as the batch so far
+        let so_far = clauses
+            .contains(&"scheduler")
+            .then_some("as the batch so far in a schedule's `if`, `while` and `set`");
         format!(
             "`{clause}` is read before the batch is formed, so it reads no `batch.…`: `{value}` \
-             is read in `worker`{so_far}"
+             is read {}",
+            places(clauses, "scheduler", so_far)
         )
+    }
+}
+
+/// Where an engine reads a value, from its `clauses` but `except`, and
+/// then `more`, in a message that has named no engine before: "in
+/// `worker`, in a claim over the engine's iterations and as …".
+fn places(clauses: &[&str], except: &str, more: Option<&str>) -> String {
+    let (own, claim) = clauses_named(clauses, except);
+    let mut parts = vec![format!("in {own}")];
+    if claim {
+        parts.push("in a claim over the engine's iterations".into());
+    }
+    parts.extend(more.map(String::from));
+    match parts.split_last() {
+        Some((last, [])) => last.clone(),
+        Some((last, rest)) => format!("{} and {last}", rest.join(", ")),
+        None => unreachable!("a value is read in a clause"),
     }
 }
 
@@ -1165,10 +1292,7 @@ impl Parser {
         let Some(clause) = self.in_engine else {
             return self.err_at(
                 at,
-                format!(
-                    "`{list}.…` is a value of an engine, read in its `tokens cap`, `worker` and \
-                     `scheduler`"
-                ),
+                format!("`{list}.…` is a value of an engine, {}", read_in(list)),
             );
         };
         let f_at = self.pos;
@@ -1190,15 +1314,14 @@ impl Parser {
         Ok(Expr::Var((*var).into()))
     }
 
-    /// In an engine, the bare names its values replaced: the name for the
-    /// clause, or why the clause reads none. A name renamed since (#139),
-    /// `ntok` for `tokens`, is answered with the engine's name for it. A
-    /// name the program declares (a `let`, an attribute, a `def`) is the
-    /// program's, as the linker reads it before a context variable.
-    pub(super) fn retired_in_engine(&self, at: usize, written: &str) -> PResult<()> {
-        let Some(clause) = self.in_engine else {
-            return Ok(());
-        };
+    /// The kernel's bare names an engine's values replaced: in an engine's
+    /// clause or a claim over its iterations, the name for it there, or why
+    /// it reads none; anywhere else, the engine's names and where they are
+    /// read, since no other moment supplies one (#437). A name renamed since
+    /// (#139), `ntok` for `tokens`, is answered with the engine's name for
+    /// it. A name the program declares (a `let`, an attribute, a `def`) is
+    /// the program's, as the linker reads it before a context variable.
+    pub(super) fn bare_kernel_name(&self, at: usize, written: &str) -> PResult<()> {
         if self.definitions.iter().any(|(d, _)| d == written)
             || self.defs.iter().any(|d| d.name == written)
         {
@@ -1215,10 +1338,22 @@ impl Parser {
         let Some((value, _, _)) = named.first() else {
             return Ok(());
         };
+        let Some(clause) = self.in_engine else {
+            let values = as_engine_values(name).expect("a kernel's name an engine reads");
+            return self.err_at(
+                at,
+                format!("`{written}` is a value of an engine, read as {values}"),
+            );
+        };
+        let place = if clause == CLAIM {
+            "in a claim over an engine's iterations"
+        } else {
+            "in an engine"
+        };
         match named.iter().find(|(_, _, cs)| cs.contains(&clause)) {
             Some((now, ..)) => self.err_at(
                 at,
-                format!("in an engine, `{written}` is `{now}` here: one value, one name"),
+                format!("{place}, `{written}` is `{now}` here: one value, one name"),
             ),
             None => self.err_at(
                 at,
@@ -1820,4 +1955,32 @@ fn step_reads(s: &StepSpec, n: &str) -> bool {
             Schedule::Procedure(o) => o.iter().any(|e| reads_name(e, n)),
             Schedule::Body(b) => body_reads(b, n),
         }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A claim reads the residents' number where the clauses that read the
+    /// residents as they stand do, and no other value of theirs.
+    #[test]
+    fn the_residents_number_is_read_as_they_stand_and_in_a_claim() {
+        assert_eq!(RESIDENTS_COUNT, [AS_THEY_STAND, &[CLAIM]].concat());
+    }
+
+    /// Every value a claim over iterations does not read has its reason, so
+    /// a value added to `ENGINE_VALUES` without one fails here, not in a
+    /// program.
+    #[test]
+    fn a_claim_says_why_it_does_not_read_each_value() {
+        for (value, _, clauses) in ENGINE_VALUES {
+            if !clauses.contains(&CLAIM) {
+                let why = not_read_in(value, CLAIM);
+                assert!(
+                    why.starts_with("a claim over an engine's iterations"),
+                    "{why}"
+                );
+            }
+        }
+    }
 }

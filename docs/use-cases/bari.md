@@ -128,17 +128,18 @@ $t_{nl}=5$ µs per token, omitting attention costs.
     If every prompt length is a multiple of 128, each batch is a full
     tile unless every resident is decoding:
 
-    $$\mathrm{tokens}=128
-      \quad\text{or}\quad \mathrm{decoders}=\mathrm{residents}.$$
+    $$\mathrm{batch.tokens}=128
+      \quad\text{or}\quad \mathrm{batch.decoding}=\mathrm{running.count}.$$
 
     In the exceptional case, fewer than 128 decoding residents can leave
     the batch partially filled. The program uses $N=\infty$.
 
 ## The propositions in serQ
 
-A claim reads an iteration in the kernel's words (#437): `tokens` is
-`batch.tokens`, `decoders` is `running.decoding`, and `residents` is
-`running.count`. Theorem 1 says that under any scheduler a node completes
+A claim reads an iteration in its engine's words, as the worker does:
+`batch.tokens` is the tokens of this batch, `batch.decoding` the decoding
+requests in it, and `running.count` every running request, in the batch
+or not. Theorem 1 says that under any scheduler a node completes
 at most one token per `tlin / bcol + tnl` µs, so a load above it diverges.
 Optimal GeMM tiling (§4.2) says that with prompts a multiple of $b_{lcm}$
 (Assumption 3), every batch fills its tile unless every request decodes and
@@ -148,7 +149,7 @@ fewer than $b_{col}$ of them do:
 --8<-- "examples/papers/bari_rad.sq:claims"
 ```
 
-`given` restricts the claim to workloads whose every request satisfies Assumption 3. The drawn prompt lengths are otherwise any natural numbers in the Lean statement. `decoders == residents` says no resident was left to prefill.
+`given` restricts the claim to workloads whose every request satisfies Assumption 3. The drawn prompt lengths are otherwise any natural numbers in the Lean statement. `batch.decoding == running.count` says every running request decodes in this batch: none was left to prefill.
 
 ## The proof in Lean
 

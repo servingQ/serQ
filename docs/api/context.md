@@ -1,7 +1,7 @@
 # Context variables
 
 A context variable is supplied at specific evaluation moments. Reading it
-elsewhere is a link error: a session cannot use `set x = tokens;`.
+elsewhere is a link error: a session cannot use `set x = demand;`.
 
 The names the language supplies are the context variables below, `inf`,
 an engine's lists `running`, `waiting` and `batch` (`running.count`), and
@@ -69,7 +69,13 @@ At `Budget`, totals describe residents before the iteration. At `Serve`
 they describe the residents present when the expression is read, including
 new admissions and excluding preempted residents. At `Step` and
 `Iteration`, `decoders`, `kv_decode` and `kv_prefill` count scheduled
-residents, while `residents` counts all residents.
+residents, while `residents` counts all residents. A program reads the
+variables from `residents` to `attention` above only by an engine's names
+([engine values](../language.md#engines-on-devices)), `running.decoding`,
+`waiting.admitted`, `batch.tokens` and the rest: an engine's `worker` and
+a claim over its iterations read the batch's as `batch.…`, and a claim
+reads `residents` as `running.count`. The kernel's name is refused
+wherever a program writes it, with the engine's names for it (#437).
 
 `waiting` (a context variable at `Evict`, 0 or 1 for one entry) is not
 `queued(p)` ([function](functions.md#pool)), the length of a pool's queue.

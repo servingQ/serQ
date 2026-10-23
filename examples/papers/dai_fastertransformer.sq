@@ -31,7 +31,7 @@ fn main() {
   }
 
   // --8<-- [start:not_work_conserving]
-  claim not_work_conserving: some iteration of fastertransformer (demand >= bmax && tokens < bmax);
+  claim not_work_conserving: some iteration of fastertransformer (demand >= bmax && batch.tokens < bmax);
   // --8<-- [end:not_work_conserving]
   claim token_rate: every iteration of fastertransformer (served * (c + a * bmax / b0) <= bmax * now);
 }

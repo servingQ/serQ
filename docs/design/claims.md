@@ -30,7 +30,9 @@ claim NAME [given ( expr )] : at end ( expr ) ;
 - **`every iteration of S (e)`**: `e` holds at the start of every iteration
   of the step stage `S`, after its batch is formed (the moment the cost is
   read). It reads the cost's variables, `now`, the pool and stage
-  observables, and three new ones. `demand` is what the residents could take
+  observables, and three new ones. Since #437 it names the cost's
+  variables in its engine's words (`batch.tokens`, `batch.decoding`,
+  `running.count`; [A claim in its engine's words](claim-engine-words.md)). `demand` is what the residents could take
   with an unlimited budget, Dai et al.'s $\sum_i (p_i + \mathbf 1\{p_i=0\})$.
   `served` is the tokens of the earlier iterations, and `arrived` the
   sessions started by the iteration's start.

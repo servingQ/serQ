@@ -80,8 +80,8 @@ use crate::ir::{DistKind, Fun};
 mod device;
 mod request;
 
-pub(crate) use device::tokens_cap_name;
-pub use device::{ENGINE_VALUES, VLLM_GATE, engine_name};
+pub use device::{CLAIM, ENGINE_VALUES, VLLM_GATE, engine_name};
+pub(crate) use device::{as_engine_values, tokens_cap_name};
 
 #[derive(Debug, Clone)]
 pub struct ParseError {
@@ -234,7 +234,8 @@ struct Parser {
     engines: Vec<device::EngineDecl>,
     pools_on: Vec<device::PoolOn>,
     /// The engine clause being parsed, `tokens cap`, `worker`, `scheduler`
-    /// or one of the schedule's own (`only`, `by`, `each at most`), where
+    /// or one of the schedule's own (`only`, `by`, `each at most`), or a
+    /// claim over an engine's iterations (`device::CLAIM`), where
     /// `running.…`, `waiting.…` and `batch.…` are read.
     in_engine: Option<&'static str>,
     /// The queue whose body is being read: its `device gpu` is `Q.gpu`.
@@ -1708,13 +1709,20 @@ impl Parser {
             ClaimOver::End
         } else {
             return self.err(format!(
-                "a claim is `every iteration of STAGE (…)`, `some iteration of STAGE (…)` \
+                "a claim is `every iteration of ENGINE (…)`, `some iteration of ENGINE (…)` \
                  or `at end (…)`, found {}",
                 self.peek()
             ));
         };
         self.expect(&Tok::LParen)?;
-        let expr = self.expr()?;
+        // a claim over iterations is read with the worker's cost, once the
+        // batch is formed: it reads the engine's values as `worker` does
+        // (#437)
+        let expr = if matches!(over, ClaimOver::End) {
+            self.expr()?
+        } else {
+            self.engine_expr(device::CLAIM, |p| p.expr())?
+        };
         self.expect(&Tok::RParen)?;
         self.expect(&Tok::Semi)?;
         Ok(ClaimDecl {
@@ -6503,7 +6511,7 @@ impl Parser {
                         return self
                             .err("`self` is read in a queue's entry, as its member's index");
                     }
-                    self.retired_in_engine(self.pos - 1, &name)?;
+                    self.bare_kernel_name(self.pos - 1, &name)?;
                     Ok(Expr::Located(span, Box::new(Expr::Var(name))))
                 }
             }
@@ -6525,7 +6533,7 @@ impl Parser {
                 // and so is what a reply carries
                 Tok::Dot if LISTS.contains(&name.as_str()) || name == "reply" => {}
                 Tok::Comma | Tok::RParen => {
-                    self.retired_in_engine(self.pos, &name)?;
+                    self.bare_kernel_name(self.pos, &name)?;
                     self.advance();
                     return Ok(Arg::Ref(Ref {
                         span,

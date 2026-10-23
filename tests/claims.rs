@@ -1,6 +1,6 @@
-//! `claim NAME [given (e)] : every iteration of S (e);`, `… some iteration of
-//! S (e);`, `… at end (e);`: propositions about every path, which the
-//! interpreter checks on the path it runs.
+//! `claim NAME [given (e)] : every iteration of ENGINE (e);`, `… some
+//! iteration of ENGINE (e);`, `… at end (e);`: propositions about every
+//! path, which the interpreter checks on the path it runs.
 
 mod common;
 
@@ -23,9 +23,9 @@ engine llm on gpu {
 }
 server (t0) { llm (290, 991); observe response = now - t0;
 }
-claim work_conserving: every iteration of llm (demand < bmax || tokens == bmax);
+claim work_conserving: every iteration of llm (demand < bmax || batch.tokens == bmax);
 claim token_rate: every iteration of llm (served * (c + a * ceil(bmax / b0)) <= bmax * now);
-claim starved: some iteration of llm (demand >= bmax && tokens < bmax);
+claim starved: some iteration of llm (demand >= bmax && batch.tokens < bmax);
 claim mean_ok: at end (total(response) <= 1000000 * count(response));
 
 ";
@@ -200,8 +200,8 @@ fn a_session_that_fails_given_puts_the_claim_out_of_scope() {
     let r = run(
         &format!(
             "{BATCH}
-         claim small given (n <= 2): every iteration of llm (tokens <= 2);
-         claim any given (n <= 3): every iteration of llm (tokens <= 4);"
+         claim small given (n <= 2): every iteration of llm (batch.tokens <= 2);
+         claim any given (n <= 3): every iteration of llm (batch.tokens <= 4);"
         ),
         BATCH_WORKLOAD,
         &common::horizon(100.0),
@@ -225,8 +225,8 @@ fn served_and_demand_are_read_as_the_iteration_starts() {
     let r = run(
         &format!(
             "{BATCH}
-         claim first: some iteration of llm (served == 0 && demand == 6 && tokens == 4);
-         claim second: some iteration of llm (served == 4 && demand == 2 && tokens == 2);
+         claim first: some iteration of llm (served == 0 && demand == 6 && batch.tokens == 4);
+         claim second: some iteration of llm (served == 4 && demand == 2 && batch.tokens == 2);
          claim two: every iteration of llm (served < 6);"
         ),
         BATCH_WORKLOAD,
@@ -256,7 +256,7 @@ fn arrived_counts_the_sessions_started_by_the_iteration() {
         }
 
         claim at_20: some iteration of llm (now == 20 && arrived == 2);
-        claim balance: every iteration of llm (arrived * 3 == served + tokens);
+        claim balance: every iteration of llm (arrived * 3 == served + batch.tokens);
         claim clock: every iteration of llm (arrived * 10 == now);",
         "
         workload { arrive renewal(10);
@@ -320,7 +320,7 @@ fn a_claim_reads_only_what_its_moment_supplies() {
             "claim w: every iteration of llm (work(llm) > 0);",
             "may not read `work(…)`",
         ),
-        ("claim e: at end (tokens > 0);", "exists only in"),
+        ("claim e: at end (demand > 0);", "exists only in"),
         (
             "claim e: at end (busy(llm) == 0);",
             "`busy(…)` reads the deployment's state",
@@ -341,6 +341,159 @@ fn a_claim_reads_only_what_its_moment_supplies() {
     assert!(e.contains("read only by a claim `at end`"), "{e}");
 }
 
+/// A claim over an engine's iterations reads the engine's values as its
+/// `worker` does, the batch, and `running.count`: each is the kernel's
+/// variable a bare name gave before #437, so the IR is the same. Three
+/// prompts of 3, 1 and 2 under a budget of 4: the first iteration schedules
+/// 3 and 1, and all three are resident.
+#[test]
+fn a_claim_over_iterations_reads_its_engines_names() {
+    use serq::ir::{CExpr, CtxVar};
+    let src = format!(
+        "{BATCH}
+         claim w: every iteration of llm (batch.tokens + batch.prefilled + batch.decoding
+           + batch.kv_decode + batch.kv_prefill + batch.attention + running.count >= 0);
+         claim first: some iteration of llm (served == 0 && batch.tokens == 4
+           && batch.prefilled == 4 && batch.decoding == 0 && running.count == 3);"
+    );
+    let options = common::horizon(100.0);
+    let p = common::compile(&common::main_source(&src), BATCH_WORKLOAD, &options).unwrap();
+    let read = std::cell::RefCell::new(vec![]);
+    p.claims[0].expr.any(&|e| {
+        if let CExpr::Ctx(v) = e {
+            read.borrow_mut().push(*v);
+        }
+        false
+    });
+    assert_eq!(
+        read.into_inner(),
+        [
+            CtxVar::Ntok,
+            CtxVar::Npre,
+            CtxVar::Ndec,
+            CtxVar::Kvb,
+            CtxVar::Kvp,
+            CtxVar::Attn,
+            CtxVar::Nres
+        ]
+    );
+    let r = run(&src, BATCH_WORKLOAD, &options);
+    let w = r.claim("w").unwrap();
+    let iterations = r.stage("llm").unwrap().iterations;
+    assert_eq!((w.result, w.checked), (ClaimResult::Holds, iterations));
+    assert_eq!(result(&r, "first"), ClaimResult::Witnessed);
+}
+
+/// A claim over iterations names each value one way, the engine's: a bare
+/// kernel name is refused with the engine's name for it, since `decoders`
+/// is `running.decoding` in `tokens cap` and `batch.decoding` here (#437).
+/// What the claim's moment does not hold is refused with why.
+#[test]
+fn a_claim_over_iterations_refuses_the_kernels_names() {
+    for (claim, want) in [
+        (
+            "claim c: every iteration of llm (tokens <= 4);",
+            "in a claim over an engine's iterations, `tokens` is `batch.tokens` here: one value, \
+             one name",
+        ),
+        (
+            "claim c: some iteration of llm (tokens == 4);",
+            "in a claim over an engine's iterations, `tokens` is `batch.tokens` here",
+        ),
+        (
+            "claim c: every iteration of llm (batch.tokens == 4 || decoders == residents);",
+            "`decoders` is `batch.decoding` here",
+        ),
+        (
+            "claim c: every iteration of llm (residents > 0);",
+            "`residents` is `running.count` here",
+        ),
+        (
+            "claim c: every iteration of llm (kv_decode >= 0);",
+            "`kv_decode` is `batch.kv_decode` here",
+        ),
+        (
+            "claim c: every iteration of llm (ntok <= 4);",
+            "`ntok` is `batch.tokens` here",
+        ),
+        (
+            "claim c: every iteration of llm (running.decoding >= 0);",
+            "`running.decoding` counts the residents, in the batch or not, and the batch's is \
+             `batch.decoding`",
+        ),
+        (
+            "claim c: every iteration of llm (waiting.count >= 0);",
+            "a claim reads a queue as `queued(P)`",
+        ),
+        (
+            "claim c: every iteration of llm (running.preempted == 0);",
+            "`running.preempted` is what the iteration's schedule did",
+        ),
+        (
+            "claim c: every iteration of llm (preempted == 0);",
+            "`preempted` is `running.preempted`, and a claim over an engine's iterations is read \
+             once the batch is formed",
+        ),
+        (
+            "claim c: every iteration of llm (request.input > 0);",
+            "`request.input` is one request's, read in its engine's `taking` and `cache`",
+        ),
+        (
+            "claim c: at end (batch.tokens > 0);",
+            "`batch.…` is a value of an engine, read in its `scheduler` and `worker`, and in a \
+             claim over its iterations",
+        ),
+        (
+            "claim c given (running.count > 0): at end (1);",
+            "`running.…` is a value of an engine, read in its `tokens cap`, `each at most`, \
+             `only`, `by` and `scheduler`, and in a claim over its iterations",
+        ),
+    ] {
+        let e = link_error(&format!("{BATCH}{claim}"));
+        assert!(e.contains(want), "{claim}: {e}");
+    }
+}
+
+/// Outside an engine and a claim over its iterations, a kernel's bare name
+/// the engine's values replaced is answered with the engine's names, not
+/// with the moments that read the kernel's: the message sent `claim c: at
+/// end (tokens > 0);` to "a claim over iterations", which refuses `tokens`
+/// since #437 (and to an engine's `worker`, which already refused it).
+#[test]
+fn a_kernel_name_outside_an_engine_says_the_engines() {
+    for (decl, want) in [
+        (
+            "claim c: at end (tokens > 0);",
+            "`tokens` is a value of an engine, read as `batch.tokens` in its `scheduler` and \
+             `worker`, and in a claim over its iterations",
+        ),
+        (
+            "claim c: at end (decoders > 0);",
+            "`decoders` is a value of an engine, read as `running.decoding` in its `tokens cap`, \
+             `each at most`, `only`, `by` and `scheduler`; or `batch.decoding` in its `worker`, \
+             and in a claim over its iterations",
+        ),
+        (
+            "claim c given (residents > 0): at end (1);",
+            "`residents` is a value of an engine, read as `running.count`",
+        ),
+        (
+            "claim c: at end (ntok > 0);",
+            "`ntok` is a value of an engine, read as `batch.tokens`",
+        ),
+        (
+            "let tokens = 3;",
+            "`tokens` is a name the language supplies, read in an engine, as `batch.tokens` in \
+             its `scheduler` and `worker`, and in a claim over its iterations; a `let` constant \
+             named `tokens`",
+        ),
+    ] {
+        let e = link_error(&format!("{BATCH}{decl}"));
+        assert!(e.contains(want), "{decl}: {e}");
+        assert!(!e.contains("exists only in"), "{decl}: {e}");
+    }
+}
+
 /// An iteration claim may name a member of an engine array: a family of
 /// queues, each with its engine, the server calling a member's entry (an
 /// engine family has no request, so a server cannot run one directly).
@@ -358,7 +511,7 @@ fn a_claim_over_a_member_of_an_array() {
         }
         server { llm[serial].prefill (3);
         }
-        claim one: every iteration of llm[1] (tokens == 3);
+        claim one: every iteration of llm[1] (batch.tokens == 3);
         ";
     let workload = "
         workload { arrive batch(2);

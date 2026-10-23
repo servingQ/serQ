@@ -191,7 +191,7 @@ claim instead supplies an existential witness.
 | Token rate | `Dai.lean`, `token_rate` | Each batch's cost bounds its token rate; summing over iterations gives the elapsed-time bound. |
 | Sarathi work conservation | `Dai.lean`, `work_conserving` | The greedy fill serves `min(budget, demand)`. This program has no growing holds. |
 | Deterministic backlog | `DaiBounded.lean`, `bounded` | A backlog potential cannot increase across a full batch; a partial batch has fewer than 128 residents left. |
-| FasterTransformer counterexample | `Dai.lean`, `not_work_conserving` | Kernel evaluation of two requests finds `demand = 291`, `tokens = 1` at 0.935 s. |
+| FasterTransformer counterexample | `Dai.lean`, `not_work_conserving` | Kernel evaluation of two requests finds `demand = 291`, `batch.tokens = 1` at 0.935 s. |
 
 All proof files are under `examples/papers/`. See [the Lean guide](../lean.md)
 for generation and build commands.

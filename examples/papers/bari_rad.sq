@@ -39,6 +39,6 @@ fn main() {
   claim token_rate: every iteration of E (served * (tlin + tnl * bcol) <= bcol * now);
 
   claim optimal_tiling given (vp == bcol * floor(vp / bcol)):
-    every iteration of E (tokens == bcol || decoders == residents);
+    every iteration of E (batch.tokens == bcol || batch.decoding == running.count);
   // --8<-- [end:claims]
 }

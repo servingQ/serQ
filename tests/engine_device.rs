@@ -1891,3 +1891,62 @@ fn a_second_pool_on_a_device_is_refused_with_its_way_out() {
     let out = src.replace(open, &format!("{open}    pool kv2 {{ cap 160; }}\n"));
     common::compile(&out, &workload, &common::horizon(10.0)).unwrap_or_else(|e| panic!("{e}"));
 }
+
+/// The table of `docs/language.md` that says which clause of an engine
+/// reads which value, a claim over its iterations among them (#437), is
+/// `ENGINE_VALUES`: every value of `running`, `waiting` and `batch` in one
+/// row, and each `yes` or `no` what the parser reads there.
+#[test]
+fn the_table_of_engine_values_is_engine_values() {
+    use serq::frontend::parser::{CLAIM, ENGINE_VALUES};
+    let doc = std::fs::read_to_string(root().join("docs/language.md")).unwrap();
+    let cells = |line: &str| -> Vec<String> {
+        line.trim()
+            .trim_matches('|')
+            .split('|')
+            .map(|c| c.trim().to_string())
+            .collect()
+    };
+    let mut lines = doc
+        .lines()
+        .skip_while(|l| !l.starts_with("| Value | `tokens cap` |"));
+    let header = cells(lines.next().expect("the table of engine values"));
+    let clauses: Vec<&str> = header[1..]
+        .iter()
+        .map(|h| match h.as_str() {
+            "a claim over its iterations" => CLAIM,
+            h => h.trim_matches('`'),
+        })
+        .collect();
+    assert_eq!(clauses, ["tokens cap", "scheduler", "worker", CLAIM]);
+    let mut seen: Vec<&str> = vec![];
+    for line in lines.skip(1).take_while(|l| l.starts_with('|')) {
+        let row = cells(line);
+        assert_eq!(row.len(), header.len(), "{line}");
+        for value in row[0].split(", ") {
+            let value = value.trim_matches('`');
+            let (value, _, reads) = ENGINE_VALUES
+                .iter()
+                .find(|(v, ..)| *v == value)
+                .unwrap_or_else(|| panic!("`{value}` is no value of ENGINE_VALUES"));
+            assert!(!seen.contains(value), "`{value}` is in two rows");
+            seen.push(value);
+            for (clause, cell) in clauses.iter().zip(&row[1..]) {
+                assert!(
+                    cell.starts_with("yes") || cell.starts_with("no"),
+                    "{line}: {cell}"
+                );
+                assert_eq!(
+                    cell.starts_with("yes"),
+                    reads.contains(clause),
+                    "`{value}` in `{clause}`: the table says {cell}"
+                );
+            }
+        }
+    }
+    for (value, ..) in ENGINE_VALUES {
+        if !value.starts_with("request.") {
+            assert!(seen.contains(&value), "`{value}` has no row");
+        }
+    }
+}

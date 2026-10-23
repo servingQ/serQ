@@ -184,7 +184,7 @@ fn lexicographic_keys_preserve_enqueue_order_for_equal_keys() {
 fn selection_rejects_random_hidden_and_wrong_moment_keys_in_source_and_ir() {
     for (key, message) in [
         ("~exp(1)", "may not draw"),
-        ("tokens", "exists only"),
+        ("demand", "exists only"),
         ("secret", "hidden"),
     ] {
         let src =

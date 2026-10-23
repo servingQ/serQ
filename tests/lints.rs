@@ -155,16 +155,19 @@ fn zero_and_one_are_tests() {
     }
 }
 
-/// A context variable outside the moment that supplies it. `tokens` is what a
-/// step stage's budget and cost see for one iteration; in a session
+/// A context variable outside the moment that supplies it. `tokens` was what
+/// a step stage's budget and cost saw for one iteration; in a session
 /// statement it used to read as 0 and the program ran. The IR's validator
-/// knows the table, and the linker now runs it on what it produces.
+/// knows the table, and the linker now runs it on what it produces. A
+/// program writes `tokens` as an engine's `batch.tokens` (#437), so the
+/// parser refuses it first; `demand`, a claim's over iterations, is read
+/// so.
 #[test]
 fn a_context_variable_outside_its_moment_is_rejected() {
     let llm = engine("reqs (1), kv (request.input)");
     let src = format!(
         "{llm}
-    server (n) {{ set x = tokens;
+    server (n) {{ set x = demand;
           llm (n, 1);
         }}"
     );
@@ -174,9 +177,9 @@ fn a_context_variable_outside_its_moment_is_rejected() {
         e.starts_with("deployment.sq: 7:26: session: "),
         "names the line and the block's role: {e}"
     );
-    assert!(e.contains("set x = tokens;\n"), "shows the line: {e}");
-    assert!(e.contains("`tokens` is read in a session statement"), "{e}");
-    assert!(e.contains("exists only in an engine's `worker`"), "{e}");
+    assert!(e.contains("set x = demand;\n"), "shows the line: {e}");
+    assert!(e.contains("`demand` is read in a session statement"), "{e}");
+    assert!(e.contains("exists only in a claim over iterations"), "{e}");
     // every other moment refuses what it does not supply, and says where it
     // was read and where it exists
     const LLM: &str = "reqs cap 8; tokens cap 512; scheduler { advance running; admit waiting while (running.preempted == 0) taking reqs (1), kv (request.input); } worker { forward (1e-3); }";
@@ -203,9 +206,9 @@ fn a_context_variable_outside_its_moment_is_rejected() {
     // the ps capacity variable)
     for (src, where_read, exists) in [
         (
-            engine("evict by (tokens);", LLM, ""),
-            "pool `kv`: `tokens` is read in an eviction key",
-            "an engine's `worker`",
+            engine("evict by (demand);", LLM, ""),
+            "pool `kv`: `demand` is read in an eviction key",
+            "a claim over iterations",
         ),
         (
             engine("queue by (age);", LLM, ""),
@@ -249,7 +252,8 @@ fn a_context_variable_outside_its_moment_is_rejected() {
                 "",
             ),
             "`tokens cap` is read before the batch is formed",
-            "`batch.tokens` is read in `worker`",
+            "`batch.tokens` is read in `worker`, in a claim over the engine's iterations and as \
+             the batch so far",
         ),
         (
             engine(
@@ -261,7 +265,7 @@ fn a_context_variable_outside_its_moment_is_rejected() {
                 "",
             ),
             "`each at most` is read before the batch is formed",
-            "`batch.attention` is read in `worker`",
+            "`batch.attention` is read in `worker` and in a claim over the engine's iterations",
         ),
         (
             engine("", &LLM.replace("forward (1e-3)", "forward (age)"), ""),
@@ -814,7 +818,10 @@ fn a_declaration_cannot_take_a_name_the_language_supplies() {
     );
     let e = check(&observe, CLOSED).expect_err("rejected");
     assert!(
-        e.contains("`admitted` is a name the language supplies, read in an engine's `scheduler`"),
+        e.contains(
+            "`admitted` is a name the language supplies, read in an engine, as \
+             `waiting.admitted` in its `scheduler`"
+        ),
         "{e}"
     );
     // renamed, it links
