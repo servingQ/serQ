@@ -673,9 +673,9 @@ library](https://github.com/servingQ/serQ/blob/main/docs/design/kv-transfer.md)
 for why the entry is the session's (*Known limitations*).
 
 The L2's `serve` is then every engine's link at once. Where each engine
-(each member of a family) reaches the L2 over a link of its own, its
-PCIe to a CPU tier or its NIC to a Mooncake store, the queue declares the
-link, `nic ps(φ);`, and an *L2 link* says the copies cross it:
+(each member of a family) reaches the L2 server over a NIC of its own, the
+queue declares it, `nic ps(φ);`, and an *L2 link* says the copies cross
+it:
 
 ```serq
 queue E[J] : agg {
@@ -693,7 +693,9 @@ L2's `serve` is the bandwidth all the links share, and both are `ps(φ)`
 with a constant φ in the same units. The L2 comes first, then the queue,
 both declared above; the queue has a `nic` and an engine whose connector
 names the L2, and one link per engine and L2. The links to one L2 are one
-fabric, with one policy. A link takes no `latency` or `ttl`
+fabric, with one policy. The `nic` is the queue's one NIC: a queue that is
+also a NIXL relation's end copies both over it, and the relation and the
+link are then one fabric too. A link takes no `latency` or `ttl`
 (`examples/multi-turn/vllm_lmcache_replicas.sq`, [the L2
 link](https://github.com/servingQ/serQ/blob/main/docs/design/l2-link.md)).
 
@@ -1808,7 +1810,7 @@ file `examples/pairs.json` gives it, from `examples/workloads/`
 | `multi-turn/thunderagent.sq` | ThunderAgent's router in TR mode in front of two vLLM replicas, a fixed number of agents at once ([use case](use-cases/thunderagent.md)) | the source (ThunderAgent at 7ddc861), read; `tests/thunderagent.rs` against the router's default mode; no oracle |
 | `multi-turn/vllm.sq` | vLLM v1's engine, under a multi-turn agent workload and, from `examples/pairs.json`, a person's chat, single turns and an approximated subagent workload ([use case](use-cases/workloads.md)) | `tests/paired.rs` |
 | `multi-turn/vllm_lmcache.sq` | `vllm.sq` with an LMCache server as its L2 (`queue lmc : l2`, the engine's `connector lmc { … }`) | the source (the LMCache connector at vLLM v0.31.0, the scheduler at 0c87a197); `tests/connector.rs`; no scheduler oracle |
-| `multi-turn/vllm_lmcache_replicas.sq` | two `vllm_lmcache.sq` replicas sharing one LMCache server, each over its own link (`nic ps(1);`, `kvt.l2_link (lmc, E, …)`), a turn sent to the least loaded | the source (vLLM at 0c87a197); `tests/l2_link.rs` on the issue's pair; no scheduler oracle |
+| `multi-turn/vllm_lmcache_replicas.sq` | two `vllm_lmcache.sq` replicas (without its long-prefill threshold) sharing one LMCache server, each over its own link (`nic ps(1);`, `kvt.l2_link (lmc, E, …)`), a turn sent to the least loaded | the source (vLLM at 0c87a197); `tests/l2_link.rs` on the issue's pair; no scheduler oracle |
 | `multi-turn/vllm_system_prompt.sq` | `vllm.sq` serving the sessions of `M` products, each with its own system prompt, shared across sessions (its admission's `prefix (product: floor(S, bs), serial: inf)`) | the source (vLLM at 0c87a197); `tests/shared_prefix.rs`; no scheduler oracle |
 | `oracle/vllm_shared_prompt.sq` | `vllm_replay.sq` with a system prompt every session shares (its admission's `prefix (system: floor(S, bs), serial: inf)`), on the scenario `tools/oracle/shared_trace` | the upstream oracle, `tests/vllm_cache.rs`; no Lean theorem |
 | `oracle/vllm_request.sq` | one vLLM v1 request on the step clock, compiled per scenario to `tools/oracle/{adaptive,alone,chunked,hol,longchunk,mixed,preempt,seqcap}.ir.json` | the upstream oracle ([vLLM correspondence](#7-vllm-v1-as-a-serq-program)), `tests/vllm_oracle.rs`, the Lean theorems generated from the same IR |

@@ -10,10 +10,11 @@ use serq::frontend::diagnostic::Code;
 mod common;
 
 /// The issue's deployment: two engines share one L2. The session's first
-/// turn saves 1008 tokens on one engine, its second loads 1000 of them on
-/// the other, at 1e-4 s a token (0.1 s over a link of its own), and
-/// observes how long the load took. `{l2}` is the L2's `serve`, `{nic}` the
-/// engine queue's NIC, `{link}` the relation.
+/// turn saves 1008 tokens on one engine (`floor(1008 + 1, 16)`), its second
+/// loads 1007 of them on the other (`min(floor(1008, 16), 1008 - 1) - hit
+/// 0`, all but the last token) at 1e-4 s a token, 0.1007 s over a link of
+/// its own, and observes how long the load took, the copy alone. `{l2}` is
+/// the L2's `serve`, `{nic}` the engine queue's NIC, `{link}` the relation.
 fn deployment(l2: &str, nic: &str, link: &str) -> String {
     format!(
         "use \"std/kvt\";
@@ -91,9 +92,9 @@ fn near(got: f64, want: f64) {
 }
 
 /// The issue's After, run: each engine copies over its own link. With an
-/// L2 of two links' bandwidth a load takes one link's time, 0.1 s plus the
-/// iteration around it, whether one engine loads or both do; with an L2
-/// of one link's, the two loads divide the L2, as the program says. The
+/// L2 of two links' bandwidth a load takes one link's time, 1007 tokens at
+/// 1e-4 s, 0.1007, whether one engine loads or both do; with an L2 of one
+/// link's, the two loads divide the L2, as the program says: 0.2014. The
 /// two policies agree, each copy's tightest stage being one it alone holds
 /// or one the two hold alike.
 #[test]
@@ -231,7 +232,10 @@ fn a_link_names_an_l2_then_its_engine_s_queue() {
     );
     refused(
         &d(&format!("{} {}", link("maxmin"), link("maxmin"))),
-        &["`E` is linked to `lmc` already: one link per engine and L2"],
+        &[
+            "`kvt.l2_link (lmc, E)`: `E` is linked to `lmc` already, by the relation at 31:3: one \
+             link per engine and L2",
+        ],
     );
     refused(
         &d("kvt.l2_link (lmc, E);"),
@@ -321,4 +325,110 @@ fn a_swapped_link_is_swapped_back() {
         fixed.replace_range(e.range.0..e.range.1, &e.text);
     }
     assert_eq!(fixed, d);
+}
+
+/// A save reads its member's pools as a load does: its amount and its
+/// blocks are lowered as the member's (`member_transfer`). The save's
+/// amount was lowered outside the member's window, so `cachedin(E.kv)`,
+/// which a load may read, did not link in a save ("pool `E.kv` is a family
+/// of 2; index it").
+#[test]
+fn a_save_reads_its_member_s_pools_as_a_load_does() {
+    use serq::ir::{CArg, CExpr, CStageKind};
+    fn pools(e: &CExpr, out: &mut Vec<usize>) {
+        match e {
+            CExpr::Call(_, args) => {
+                for a in args {
+                    match a {
+                        CArg::Pool(r) => out.push(r.base),
+                        CArg::Expr(x) => pools(x, out),
+                        CArg::Stage(_) => {}
+                    }
+                }
+            }
+            CExpr::Cost(_, x) | CExpr::Unary(_, x) => pools(x, out),
+            CExpr::Binary(_, a, b) => {
+                pools(a, out);
+                pools(b, out);
+            }
+            CExpr::Cond(c, a, b) => {
+                pools(c, out);
+                pools(a, out);
+                pools(b, out);
+            }
+            _ => {}
+        }
+    }
+    let d = deployment("ps(2)", NIC, &link("maxmin")).replace(
+        "save (floor(request.input + request.output, 16));",
+        "save (min(floor(request.input + request.output, 16), cachedin(E.kv)));",
+    );
+    let p = common::compile(&d, &workload(1), &common::horizon(100.0))
+        .unwrap_or_else(|e| panic!("{e}"));
+    let mut members = 0;
+    for st in &p.stages {
+        let CStageKind::Step(sp) = &st.kind else {
+            continue;
+        };
+        let i = st.index.expect("a member");
+        let kv = p
+            .pools
+            .iter()
+            .position(|q| q.name == "E.kv" && q.index == Some(i))
+            .expect("the member's pool");
+        let save = sp.connector.as_ref().unwrap().save.as_ref().unwrap();
+        let mut read = vec![];
+        pools(&save.amount, &mut read);
+        assert_eq!(read, [kv], "member {i}");
+        members += 1;
+    }
+    assert_eq!(members, 2);
+}
+
+/// A queue's NIC is one stage whatever crosses it: a prefiller that saves
+/// to an L2 over `P.nic` while its decoders read from it over the same
+/// `P.nic` (`kvt.nixl_pull`) makes the NIXL reads and the L2 saves one
+/// fabric, with one policy (docs/design/l2-link.md, self-critique). A
+/// policy apart from the NIXL relation's is refused.
+#[test]
+fn a_nic_both_relations_cross_is_one_fabric() {
+    let pd = std::fs::read_to_string("examples/pd-disaggregation/llmd_nixl_pull.sq").unwrap();
+    let w = std::fs::read_to_string("examples/workloads/chat_reply.sq").unwrap();
+    let with = |policy: &str| {
+        let lines = [
+            (
+                "  queue P[NP] : prefill {",
+                "  queue lmc : l2 { device host { kv cap 1e6; } pool kv on host { block 16; evict \
+                 lru; } serve ps(BwP); }\n  queue P[NP] : prefill {"
+                    .to_string(),
+            ),
+            (
+                "      reqs cap max_seqsP;\n",
+                "      reqs cap max_seqsP;\n      connector lmc { per_token (1e-6); save \
+                 (floor(request.input, 16)); }\n"
+                    .to_string(),
+            ),
+            (
+                "  kvt.nixl_pull (P, D, latency = x0, share = share.maxmin);",
+                format!(
+                    "  kvt.nixl_pull (P, D, latency = x0, share = share.maxmin);\n  kvt.l2_link \
+                     (lmc, P, share = share.{policy});"
+                ),
+            ),
+        ];
+        lines.iter().fold(pd.clone(), |d, (old, new)| {
+            assert!(d.contains(old), "{old}");
+            d.replacen(old, new, 1)
+        })
+    };
+    common::compile(&with("maxmin"), &w, &common::horizon(100.0)).unwrap_or_else(|e| panic!("{e}"));
+    let e = match common::compile(&with("bottleneck"), &w, &common::horizon(100.0)) {
+        Err(e) => e,
+        Ok(_) => panic!("accepted"),
+    };
+    assert!(
+        e.contains("runs join the stages `lmc`, `P.nic`, `D.nic`")
+            && e.contains("one fabric has one policy"),
+        "{e}"
+    );
 }

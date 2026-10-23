@@ -78,7 +78,9 @@ the links share (vLLM runs a connector's worker side in each worker,
 
 Both stages are `ps(φ)` with a constant φ, in the connector's units
 (`per_token` seconds a token at a rate of 1). One link per engine and L2;
-the links to one L2 are one fabric and name one policy. A link takes no
+the links to one L2 are one fabric and name one policy. `QUEUE.nic` is the
+queue's one NIC: a queue that is also a NIXL relation's end copies both
+over it, and the relation and the link are one fabric. A link takes no
 `latency` or `ttl`: no NIXL READ is posted and no send is kept. Used in
 `examples/multi-turn/vllm_lmcache_replicas.sq` ([the L2
 link](https://github.com/servingQ/serQ/blob/main/docs/design/l2-link.md)).

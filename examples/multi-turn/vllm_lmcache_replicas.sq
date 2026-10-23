@@ -2,16 +2,19 @@
 // engine on each replica, under the same workload
 // (examples/workloads/chat.sq), a turn sent to the least loaded replica.
 // What one replica saves, another loads: the L2's contents are every
-// replica's, as Mooncake's store is shared by the vLLM instances that use
-// it (vLLM's docs/features/mooncake_store_connector_usage.md, lines 6 and
-// 52-59, at 0c87a197). The copies are not: a connector's worker side runs
-// in each worker (kv_connector/v1/base.py:25-26), so each replica copies
-// over its own PCIe or NIC link, and the server's bandwidth is what the
-// links' copies share. `kvt.l2_link` says so (docs/design/l2-link.md).
+// replica's, each replica's connector reaching the server its
+// `lmcache.mp.host` names (lmcache_mp_connector.py:465-466, 481-498), its
+// worker side from each worker (lmcache_mp_connector.py:509-511). The
+// copies are not every replica's: the worker side runs in each worker
+// (kv_connector/v1/base.py:25-26), so each replica copies over its own
+// NIC to the server, and the server's bandwidth is what the links' copies
+// share. `kvt.l2_link` says so (docs/design/l2-link.md).
 //
-// What the model leaves out, beyond `vllm_lmcache.sq`'s: a link carries a
-// load and a save in one direction at a time, and the router reads no
-// replica's prefix cache.
+// What the model leaves out, beyond `vllm_lmcache.sq`'s: its
+// long_prefill_token_threshold (`chunk_cap`), whose test reads
+// `waiting.count`, which a family's engine may not; a link
+// carries a load and a save in one direction at a time; and the router
+// reads no replica's prefix cache.
 use "std/args";
 use "std/kvt";
 use "std/share";
@@ -61,7 +64,7 @@ fn main() {
           taking reqs (1),
             kv (min(request.known, request.hit + (request.loaded > 0 ? request.loaded : budget_left(E))))
             reserve (request.known)
-          reuse (floor(request.known - 1, bs))
+          reuse (floor(request.known - 1, blocksize(kv)))
           cache (request.input + request.output);
       }
       worker {

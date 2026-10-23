@@ -2985,16 +2985,7 @@ impl Linker<'_> {
                     at,
                     Stmt::Load(kv.clone(), Expr::cost(one(&kv), var(&loaded))),
                 );
-                self.member_of.set(member.map(|_| size));
-                let first = self.blocks.len();
-                let compiled = self.expr(n).and_then(|e| Ok((e, self.block(&body)?)));
-                self.member_of.set(None);
-                let (mut amount, b) = compiled?;
-                if let Some(i) = member {
-                    member_expr(&mut amount, i, size, engine)?;
-                    self.member_block(b, i, size, engine)?;
-                }
-                Some(transfer(amount, self.take_blocks(first)))
+                Some(self.member_transfer(n, &body, member, size, engine)?)
             }
         };
         let save = match (&c.save, &c.kind) {
@@ -3035,20 +3026,9 @@ impl Linker<'_> {
                     prefix: None,
                     lease: None,
                 }];
-                let amount = self.expr(n)?;
-                let first = self.blocks.len();
-                // the member's own link (`E.nic[i]`); the L2 is one queue,
-                // which every member's reference names already
-                self.member_of.set(member.map(|_| size));
-                let compiled = self.block(&body);
-                self.member_of.set(None);
-                compiled?;
-                if let Some(i) = member {
-                    for b in first..self.blocks.len() {
-                        self.member_block(b, i, size, engine)?;
-                    }
-                }
-                Some(transfer(amount, self.take_blocks(first)))
+                // the member's own link (`E.nic[i]`) and pools; the L2 is
+                // one queue, which every member's reference names already
+                Some(self.member_transfer(n, &body, member, size, engine)?)
             }
         };
         self.side = side;
@@ -3062,6 +3042,31 @@ impl Linker<'_> {
                 .then(|| self.attr(&format!("{engine}.{RELATION_FROM}"))),
             record: self.observe_slot(&loaded),
         })
+    }
+
+    /// A connector's load or save: its amount `n` and the kernel blocks
+    /// `body`, as member `member` of an engine family of `size` reads them
+    /// (`None` for one engine), its pools and stages that member's.
+    fn member_transfer(
+        &mut self,
+        n: &Expr,
+        body: &[Stmt],
+        member: Option<usize>,
+        size: usize,
+        engine: &str,
+    ) -> LResult<crate::ir::CTransfer> {
+        self.member_of.set(member.map(|_| size));
+        let first = self.blocks.len();
+        let compiled = self.expr(n).and_then(|e| Ok((e, self.block(body)?)));
+        self.member_of.set(None);
+        let (mut amount, _) = compiled?;
+        if let Some(i) = member {
+            member_expr(&mut amount, i, size, engine)?;
+            for b in first..self.blocks.len() {
+                self.member_block(b, i, size, engine)?;
+            }
+        }
+        Ok(transfer(amount, self.take_blocks(first)))
     }
 
     /// The blocks from `first` on, taken out of the program: a connector's,

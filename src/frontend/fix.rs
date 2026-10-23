@@ -89,9 +89,11 @@ fn swap(t: &Text, k: usize) -> Option<Fix> {
         return None;
     }
     let (first, second) = (t.word(a)?, t.word(b)?);
-    let link = crate::frontend::parser::KVT_RELATIONS
-        .iter()
-        .any(|&(f, mode, _)| mode == "link" && open > 0 && t.word(open - 1) == Some(f));
+    use crate::frontend::parser::{KvtMode, kvt_relation};
+    let link = open > 0
+        && t.word(open - 1)
+            .and_then(kvt_relation)
+            .is_some_and(|r| r.mode == KvtMode::Link);
     let order = if link {
         "the L2 first, then the queue whose engine copies through it"
     } else {

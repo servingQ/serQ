@@ -446,10 +446,8 @@ impl Recorder {
             }
             "kvt" => {
                 let function = Self::name_at(toks, at + 2);
-                let mode = crate::frontend::parser::KVT_RELATIONS
-                    .iter()
-                    .find(|(f, _, _)| *f == function)
-                    .map_or(function.as_str(), |(_, mode, _)| mode)
+                let mode = crate::frontend::parser::kvt_relation(&function)
+                    .map_or(function.as_str(), |r| r.mode.name())
                     .to_string();
                 self.out.relations.push(Relation {
                     mode,

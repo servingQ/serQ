@@ -2,8 +2,7 @@
 
 An L2 KV cache outside the engines (an LMCache server, a Mooncake store) is
 shared: what one engine saves, another loads. Its links are not: each
-engine reaches it over its own PCIe (a CPU tier on the node) or its own NIC
-(a Mooncake store). Before this change an engine's connector copied through
+engine reaches the server over its own NIC. Before this change an engine's connector copied through
 the L2 queue's `serve` alone, so one `serve` was every engine's link at once,
 and a program could not say "a copy goes at one link's speed, and the
 engines do not slow each other". `kvt.l2_link (C, Q, share = s);` says it.
@@ -12,8 +11,10 @@ Issue #600; no IR change.
 ## Before
 
 The issue's pair, two engines sharing one L2 (main `d50ac83`). A session's
-first turn saves 1008 tokens on one engine, its second loads 1000 of them on
-the other at 1e-4 s a token, 0.1 s over a link of its own:
+first turn saves 1008 tokens on one engine (`floor(1008 + 1, 16)`), its
+second loads 1007 of them on the other (`min(floor(1008, 16), 1008 - 1) -
+hit 0`: all but the last token) at 1e-4 s a token, 0.1007 s over a link of
+its own. `load_time` is the copy alone, no iteration around it:
 
 ```serq
 queue lmc : l2 { device host { kv cap 1e6; } pool kv on host { block 16; evict lru; } serve ps(links); }
@@ -58,12 +59,12 @@ not a `run` the program writes.
 vLLM's KV connector has a scheduler side and a worker side, and the worker
 side "runs in each worker, loads/saves KV cache to/from the Connector"
 (`kv_connector/v1/base.py:25-26`): each engine's workers copy over that
-node's own link. The Mooncake store is shared by the instances that use it
-("Prefix caching across instances: … multiple vLLM instances to share cached
-KV blocks through the store", vLLM's
-`docs/features/mooncake_store_connector_usage.md` line 6 at 0c87a197), each
-rank contributing its own segment or requesting from a store process
-(lines 52-59). The contents are one; the copies are each engine's.
+node's own link. The LMCache connector the example models reaches a server
+its configuration names, "lmcache.mp.host: the host of the LMCache server"
+(`lmcache_mp_connector.py:465-466`), read into one `server_url`
+(`lmcache_mp_connector.py:481-498`) to which the worker side connects
+(`lmcache_mp_connector.py:509-511`): engines configured with one host share
+one server. The contents are one; the copies are each engine's.
 
 ## After
 
@@ -96,7 +97,9 @@ hold lmc.kv (cost(lmc.kv, cachedin(lmc.kv))) {
 } cache (cost(lmc.kv, E.saved));
 ```
 
-The same command, `--bw B` for the L2's `serve ps(B)`:
+The Before program with `nic ps(1);` in `E` and this relation below it
+(`use "std/kvt"; use "std/share";` added), the same command, `--links L`
+for the L2's `serve ps(L)` (`tests/l2_link.rs`, `deployment`):
 
 | L2 `serve` | one load | two engines load at once |
 |---|---|---|
@@ -120,7 +123,9 @@ bandwidth instead; a φ at least the sum of the links never binds.
 ## The program that uses it
 
 `examples/multi-turn/vllm_lmcache_replicas.sq`: `vllm_lmcache.sq`'s engine
-as `queue E[J] : agg`, two replicas, each `nic ps(1)`, one `queue lmc : l2`
+as `queue E[J] : agg` (less its long_prefill_token_threshold, whose test
+reads `waiting.count`, which a family's engine may not), two replicas, each
+`nic ps(1)`, one `queue lmc : l2`
 with `serve ps(l2_bw)`, `kvt.l2_link (lmc, E, share = share.maxmin)`, and a
 turn sent to the least loaded replica (`examples/workloads/chat.sq`), so a
 turn's prefix saved on one replica is often loaded on the other. Seed 1,
@@ -186,12 +191,14 @@ engine has no `connector C` `E-copy-no-connector` (a help, no fix-it: what
 moves is the program's), and the two written the wrong way round
 `E-copy-swapped`, whose fix-it swaps them (`fix.rs::swap`). A first queue
 that plays no `l2` (when the second does not either) and a link written
-twice are plain errors. `E-nic-unused`'s help names the link.
+twice are plain errors, the second naming where the first is written.
+`E-nic-unused`'s help names the link.
 
 **One table of std/kvt's relations.** `KVT_RELATIONS` (parser.rs) lists the
-three functions, their outline mode (`pull`, `push`, `link`) and their two
-queues' names; `kvt_call`, the statement form's refusal, the outline's
-`mode` and the swap fix-it's label read it.
+three functions, their mode (`KvtMode`, which the outline names `pull`,
+`push` or `link`), their two queues' names and the arguments each takes by
+name; `kvt_call`, the statement form's refusal, the outline's `mode` and
+the swap fix-it's label read it.
 
 ## Cost
 
@@ -200,7 +207,10 @@ queues' names; `kvt_call`, the statement form's refusal, the outline's
 - Lean: none. The generator stops at a connector (`Fragment`) and at
   families; no new `CExpr` or `CStmt`.
 - Frontend: the relation's parse and checks (`Parser::l2_link`), the
-  lowering's `also` (`l2_copy`), a save indexed by member as a load is.
+  lowering's `also` (`l2_copy`), and a save lowered as its member as a load
+  is, by one function (`member_transfer`): the save's amount was lowered
+  outside the member, so it could not read the member's pools
+  (`cachedin(E.kv)`) as a load can.
 - View: a save walked as its call's member.
 - `tools/metrics.json`: the new example repeats two lines of the other
   replicas' programs (its device and its KV pool).
@@ -213,7 +223,7 @@ one connector and checks it names `C`.
 
 ## Self-critique
 
-**One stage for both directions.** A PCIe or NIC link is full duplex; the
+**One stage for both directions.** A NIC is full duplex; the
 link here, as the L2's `serve`, is one stage a load and a save divide. A
 program where saves and loads overlap heavily sees the link half as fast as
 it is. Two stages per link (an `in` and an `out`) would be a second NIC
@@ -234,6 +244,19 @@ its help names `kvt.l2_link`.
 **The argument order mirrors NIXL's though the bytes go both ways.** "The
 source first, as the bytes go" holds for a load, not a save. The L2 comes
 first because it is what the link reaches, and the swap fix-it says so.
+
+**One `nic` for every copy of a queue.** The link is the queue's `nic`, the
+NIC a NIXL relation's copies cross too. A prefiller that saves to an L2
+(`connector lmc { … save (…); }`, `kvt.l2_link (lmc, P, …)`) while its
+decoders read from it (`kvt.nixl_pull (P, D, …)`) holds `P.nic` for both:
+the NIXL reads and the L2 saves divide one NIC, and the stages `lmc`,
+`P.nic` and `D.nic` are one fabric, so the link's policy must be the
+relation's ("runs join the stages `lmc`, `P.nic`, `D.nic` … one fabric has
+one policy", `tests/l2_link.rs`). That is right where the store is reached
+over the same NIC as the peers (Mooncake over RDMA); a link of another kind
+(a PCIe to a CPU tier on the node) beside a NIXL NIC cannot be written, as
+it would need a second link per queue. No program asks for it, and the
+spec names the link a NIC.
 
 **The fabric rule's message points at a generated run.** Two links to one
 L2 with two policies are refused at the second link's copy, a run the

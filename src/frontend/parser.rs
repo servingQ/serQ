@@ -897,23 +897,72 @@ fn is_pure(name: &str) -> bool {
 /// The modules `use "std/NAME";` imports, by the name a program calls them.
 pub(crate) const STD_MODULES: [&str; 3] = ["args", "kvt", "share"];
 
-/// The relations std/kvt declares, `kvt.NAME (FIRST, SECOND, …);`: each
-/// function, its mode as the outline names it, and its two queues. NIXL's
-/// two modes of one copy from a source to its reader, and an engine's link
-/// to the L2 its connector copies through (#600). Every site that names
-/// them reads this table.
-pub(crate) const KVT_RELATIONS: [(&str, &str, &str); 3] = [
-    ("nixl_pull", "pull", "SOURCE, READER"),
-    ("nixl_push", "push", "SOURCE, READER"),
-    ("l2_link", "link", "L2, QUEUE"),
+/// What a std/kvt relation declares: NIXL's two modes of one copy from a
+/// source to its reader, or an engine's link to the L2 its connector copies
+/// through (#600).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum KvtMode {
+    Pull,
+    Push,
+    Link,
+}
+
+impl KvtMode {
+    /// As the outline names it.
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            KvtMode::Pull => "pull",
+            KvtMode::Push => "push",
+            KvtMode::Link => "link",
+        }
+    }
+}
+
+/// A relation std/kvt declares, `kvt.NAME (FIRST, SECOND, name = …);`.
+pub(crate) struct KvtRelation {
+    pub(crate) function: &'static str,
+    pub(crate) mode: KvtMode,
+    /// Its two queues, as a refusal writes them.
+    pub(crate) queues: &'static str,
+    /// The arguments it takes by name.
+    pub(crate) named: &'static [&'static str],
+}
+
+/// The relations std/kvt declares. Every site that names them, their modes
+/// or their arguments reads this table. An L2's copy posts no NIXL READ to
+/// wait for (`latency`), nor a send to keep (`ttl`).
+pub(crate) const KVT_RELATIONS: [KvtRelation; 3] = [
+    KvtRelation {
+        function: "nixl_pull",
+        mode: KvtMode::Pull,
+        queues: "SOURCE, READER",
+        named: &["latency", "share", "ttl"],
+    },
+    KvtRelation {
+        function: "nixl_push",
+        mode: KvtMode::Push,
+        queues: "SOURCE, READER",
+        named: &["latency", "share", "ttl"],
+    },
+    KvtRelation {
+        function: "l2_link",
+        mode: KvtMode::Link,
+        queues: "L2, QUEUE",
+        named: &["share"],
+    },
 ];
+
+/// The relation of std/kvt named `function`.
+pub(crate) fn kvt_relation(function: &str) -> Option<&'static KvtRelation> {
+    KVT_RELATIONS.iter().find(|r| r.function == function)
+}
 
 /// `KVT_RELATIONS`, written as a program declares them.
 fn kvt_relations() -> String {
     and_list(
         KVT_RELATIONS
             .iter()
-            .map(|(f, _, args)| format!("`kvt.{f} ({args}, …);`")),
+            .map(|r| format!("`kvt.{} ({}, …);`", r.function, r.queues)),
     )
 }
 
@@ -2853,7 +2902,7 @@ impl Parser {
             return self.err_at(at, format!("`kvt.{function}` needs `use \"std/kvt\";`"));
         }
         // a module's functions, not keywords (`args.number` likewise)
-        let Some(&(_, mode, _)) = KVT_RELATIONS.iter().find(|(f, _, _)| *f == function) else {
+        let Some(relation) = kvt_relation(&function) else {
             return self.err_at(
                 f_at,
                 format!(
@@ -2862,15 +2911,7 @@ impl Parser {
                 ),
             );
         };
-        let push = mode == "push";
-        let link = mode == "link";
-        // the arguments each takes by name: an L2 copy posts no NIXL READ
-        // to wait for, nor a send to keep
-        let named: &[&str] = if link {
-            &["share"]
-        } else {
-            &["latency", "share", "ttl"]
-        };
+        let (mode, named) = (relation.mode, relation.named);
         self.expect(&Tok::LParen)?;
         let a_at = self.pos;
         let source = self.ident()?;
@@ -2942,7 +2983,7 @@ impl Parser {
         // concurrent copies divide the stages they cross by a policy the
         // relation names, which has no default
         let Some(share) = share else {
-            let crossed = if link {
+            let crossed = if mode == KvtMode::Link {
                 "the L2's `serve` and the NIC"
             } else {
                 "the NICs"
@@ -2956,13 +2997,13 @@ impl Parser {
                 ),
             );
         };
-        if link {
+        if mode == KvtMode::Link {
             return self.l2_link(prog, at, (source, a_at), (reader, b_at), share);
         }
         self.copy_relation(
             prog,
             at,
-            push,
+            mode == KvtMode::Push,
             (source, a_at),
             (reader, b_at),
             latency,
@@ -4228,6 +4269,7 @@ impl Parser {
             latency: None,
             nic: false,
             takes: None,
+            links: vec![],
             at,
         });
         let qi = self.queues.len() - 1;
@@ -5900,6 +5942,17 @@ impl Parser {
                 ),
             );
         }
+        if let Some(&(_, first)) = self.queues[qi].links.iter().find(|(c, _)| *c == l2) {
+            let t = &self.toks[first];
+            return self.err_at(
+                at,
+                format!(
+                    "{written}: `{reader}` is linked to `{l2}` already, by the relation at \
+                     {}:{}: one link per engine and L2\nhelp: remove one of the two relations",
+                    t.line, t.col
+                ),
+            );
+        }
         // what a request loads and saves is the program's to say, so no
         // fix-it writes the connector (criterion 2): the help names it
         let connector = format!("connector {l2} {{ per_token (r); load (n); save (n); }}");
@@ -5913,15 +5966,7 @@ impl Parser {
                 kind: ConnectorKind::L2 { link, .. },
                 ..
             })) if *queue == l2 => {
-                if link.is_some() {
-                    return self.err_at(
-                        at,
-                        format!(
-                            "`{reader}` is linked to `{l2}` already: one link per engine \
-                             and L2; remove one of the two relations"
-                        ),
-                    );
-                }
+                self.queues[qi].links.push((l2, at));
                 *link = Some(L2Link {
                     nic: format!("{reader}.nic"),
                     share,
