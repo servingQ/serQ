@@ -102,9 +102,10 @@ and the decider between them:
 The gateway selects a decoder by `holders + queued`, then a draw, and
 compares its uncached prompt suffix with `thr`. The prefiller is the one
 with the prefix, then the least loaded, then a draw. The draws stand for
-the picker's rotation: `choose` breaks a tie by the smallest index, which
-at a light load sends `D[0]` the requests that find both decoders idle and
-`P[0]` the cold prompts, and leaves `D[1]` and `P[1]` all but idle. It runs the
+the picker's rotation: without them `choose` would break a tie by the
+smallest index, which at a light load would send `D[0]` the requests that
+find both decoders idle and `P[0]` the cold prompts, and leave `D[1]` and
+`P[1]` all but idle. It runs the
 prefill entry before the decode entry. `observe send_held` is how long the prefiller kept its
 blocks for the decoder's read, its request's send. The router reads the model's actual cache state rather than a
 delayed or approximate cache index. The model uses `thr = 1` for
