@@ -32,16 +32,22 @@ class ExecutionSettings(unittest.TestCase):
 def disagreements(now, old, csvname):
     """What a rerun row `now` says that its recorded row `old` (read back
     from `csvname`, so text) does not, one clause a column, or "" when they
-    agree: a float beyond rel_tol 1e-9 (NaN skipped), anything else as csv
-    writes it."""
-    bad = []
+    agree: a column only one of them has (csv writes "" in a column a row
+    lacks), a float beyond rel_tol 1e-9 (NaN agrees only with NaN),
+    anything else as csv writes it."""
+    said = [f"{k} is {now[k]}, {csvname} has no such column" for k in now if k not in old]
+    said += [f"the rerun has no {k}, {csvname} has {old[k]}" for k in old if k not in now and old[k] != ""]
     for k, v in now.items():
+        if k not in old:
+            continue
         if isinstance(v, float):
-            if not math.isnan(v) and not math.isclose(v, float(old[k]), rel_tol=1e-9):
-                bad.append(k)
-        elif ("" if v is None else str(v)) != old[k]:
-            bad.append(k)
-    return "; ".join(f"{k} is {now[k]}, {csvname} has {old[k]}" for k in bad)
+            o = float(old[k])
+            same = math.isnan(o) if math.isnan(v) else math.isclose(v, o, rel_tol=1e-9)
+        else:
+            same = ("" if v is None else str(v)) == old[k]
+        if not same:
+            said.append(f"{k} is {v}, {csvname} has {old[k]}")
+    return "; ".join(said)
 
 
 class Results(unittest.TestCase):
