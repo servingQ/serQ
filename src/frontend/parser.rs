@@ -792,7 +792,26 @@ fn sets_always(stmts: &[Stmt], name: &str) -> bool {
         Stmt::End => true,
         Stmt::Branch(_, a, b) => sets_always(a, name) && sets_always(b, name),
         Stmt::Hold { body, .. } => sets_always(body, name),
-        _ => false,
+        // a `while` may not run, and a leg's `set` is its own; a `loop`'s
+        // body is not looked into, which is the safe answer
+        Stmt::Loop(_) | Stmt::While(..) | Stmt::Fork(_) => false,
+        // every statement is named, so a new one that holds a block does
+        // not compile until this says whether its block always runs (#740)
+        Stmt::Side(_)
+        | Stmt::Route(_)
+        | Stmt::Declare(..)
+        | Stmt::Turn
+        | Stmt::Request
+        | Stmt::Observe(..)
+        | Stmt::Grow(..)
+        | Stmt::Shrink(..)
+        | Stmt::Drop(_)
+        | Stmt::Release(_)
+        | Stmt::Load(..)
+        | Stmt::Run { .. }
+        | Stmt::Call { .. }
+        | Stmt::EngineRequest { .. }
+        | Stmt::Unread(_) => false,
     })
 }
 
@@ -1442,7 +1461,33 @@ fn always_leaves_kv(stmts: &[Stmt], request_kv: bool) -> bool {
             Stmt::Hold { body, .. } if leases(body) => return true,
             Stmt::Branch(_, a, b) if leases(a) && leases(b) => return true,
             Stmt::End => return false,
-            _ => {}
+            // a hold, an `if` or a request that leaves none on every way; a
+            // `loop`'s or a `while`'s body, not looked into (the safe
+            // answer); a leg, which may not lease
+            Stmt::Hold { .. }
+            | Stmt::Branch(..)
+            | Stmt::EngineRequest { .. }
+            | Stmt::Loop(_)
+            | Stmt::While(..)
+            | Stmt::Fork(_) => {}
+            // every statement is named, so a new one that holds a block
+            // does not compile until this says whether its block leases (#740)
+            Stmt::Side(_)
+            | Stmt::Route(_)
+            | Stmt::Declare(..)
+            | Stmt::Turn
+            | Stmt::Request
+            | Stmt::Set(..)
+            | Stmt::Observe(..)
+            | Stmt::Grow(..)
+            | Stmt::Shrink(..)
+            | Stmt::Drop(_)
+            | Stmt::Release(_)
+            | Stmt::Load(..)
+            | Stmt::Run { .. }
+            | Stmt::Choose { .. }
+            | Stmt::Call { .. }
+            | Stmt::Unread(_) => {}
         }
     }
     false

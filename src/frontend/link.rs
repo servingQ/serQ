@@ -2067,7 +2067,19 @@ fn hidden_in_server(
                     gather(&mut w.waiting, t);
                 }
                 Stmt::Fork(body) => workload(body, site, &mut t.clone(), w),
-                _ => {}
+                // every statement is named, so a new one that holds a block
+                // does not compile until this walk says how it enters it
+                // (#740); `drop` frees a cached entry, which admits no one
+                Stmt::Route(_)
+                | Stmt::Declare(..)
+                | Stmt::Request
+                | Stmt::Observe(..)
+                | Stmt::Drop(_)
+                | Stmt::Choose { .. }
+                | Stmt::End
+                | Stmt::Call { .. }
+                | Stmt::EngineRequest { .. }
+                | Stmt::Unread(_) => {}
             }
         }
     }
