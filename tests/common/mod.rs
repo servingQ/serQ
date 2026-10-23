@@ -117,3 +117,48 @@ pub fn run_example(path: &str, ov: &serq::Overrides) -> Result<serq::Report, Str
     let workload = serq::paired_workload(&root.join(path)).expect("a pair");
     serq::run_ir(&example(path, ov)?, workload.parent())
 }
+
+/// The iterations of a logged run, one line each, as
+/// `tools/serq_iter_trace.py --block BLOCK` prints them (the form the
+/// removed `SERQ_TRACE_ITER` switch printed, #728): `ITER t s:turn:mn` per
+/// request of the batch, `m` its mode (`p` prefill, `d` decode) and `n` its
+/// tokens (the `iter` event's `each`), then ` | used U cached C`, the
+/// engine's memory in blocks of `block` units. The tests run the tool, not
+/// a copy of it: it is what a diff against `ORACLE_TRACE_ITER` runs
+/// (serving-queue-theory's `scripts/exp/first_divergence.sh`), and these
+/// schedules check it.
+pub fn iter_trace(log: &serq::engine::log::Log, block: f64) -> Vec<String> {
+    use std::io::Write as _;
+    use std::process::Stdio;
+    let tool = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tools/serq_iter_trace.py");
+    let mut child = Command::new("python3")
+        .arg(&tool)
+        .args(["-", "--block", &block.to_string()])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap_or_else(|e| panic!("python3 {}: {e}", tool.display()));
+    // a tool that stops before reading it all says why on stderr, below
+    let _ = child.stdin.take().unwrap().write_all(log.json().as_bytes());
+    let out = child.wait_with_output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}: {}",
+        tool.display(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8(out.stdout)
+        .unwrap()
+        .lines()
+        .map(str::to_owned)
+        .collect()
+}
+
+/// `iter_trace`'s lines without the memory after ` | `: the schedule.
+pub fn iter_lines(log: &serq::engine::log::Log) -> Vec<String> {
+    iter_trace(log, 1.0)
+        .iter()
+        .map(|l| l.split(" | ").next().unwrap().to_owned())
+        .collect()
+}

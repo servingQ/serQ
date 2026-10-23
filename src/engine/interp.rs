@@ -931,9 +931,9 @@ pub struct Interp<'p> {
     /// evicted (no pool or stage queries, no sampling), so `make_room` can
     /// key every entry once.
     evict_static: Vec<bool>,
-    /// Debug switches (`SERQ_TRACE_EVICT`, `SERQ_TRACE_ITER`), read once.
+    /// Debug switch (`SERQ_TRACE_EVICT`), read once. An iteration's batch
+    /// and memory are in the log (`EventKind::Iter`).
     trace_evict: bool,
-    trace_iter: bool,
     live: usize,
     live_avg: TimeAverage,
     /// While a stage admits from a queue it serves: (stage, budget left).
@@ -1105,7 +1105,6 @@ impl<'p> Interp<'p> {
                 })
                 .collect(),
             trace_evict: std::env::var_os("SERQ_TRACE_EVICT").is_some(),
-            trace_iter: std::env::var_os("SERQ_TRACE_ITER").is_some(),
             observes: p.observes.iter().map(|_| ObserveStat::new()).collect(),
             client: CLIENT.iter().map(|_| ObserveStat::new()).collect(),
             gauges: p.gauges.iter().map(|_| vec![]).collect(),
@@ -5638,48 +5637,29 @@ impl<'p> Interp<'p> {
         }
         self.check_iteration(st, chunk, &ctx);
         self.served[st] += ntok;
-        if self.trace_iter {
-            let parts: Vec<String> = assign
-                .iter()
-                .map(|&(id, t)| {
-                    let j = &self.stages[st].jobs[&id];
-                    let who = j.owner.map_or(u64::MAX, |sid| self.sessions[sid].serial);
-                    let tn = j
-                        .owner
-                        .map_or(0.0, |sid| self.sessions[sid].attrs[self.p.slot_turn]);
-                    format!(
-                        "{who}:{tn}:{}{t}",
-                        if j.mode == RunMode::Decode { "d" } else { "p" }
-                    )
-                })
-                .collect();
-            // in the pool's blocks, or units when it has none
-            let kv = spec.memory.map_or((0.0, 0.0), |pl| {
-                let b = self.pools[pl].block.unwrap_or(1.0);
-                (self.pools[pl].used / b, self.pools[pl].cached / b)
-            });
-            eprintln!(
-                "ITER {:.4} {} | used {} cached {}",
-                self.now,
-                parts.join(" "),
-                kv.0,
-                kv.1
-            );
-        }
         if self.log.is_some() {
-            let reqs: Vec<Who> = assign
+            // each request with its tokens, in one pass so the two lists
+            // line up; the memory pool once the iteration is scheduled, in
+            // units
+            let (reqs, each): (Vec<Who>, Vec<f64>) = assign
                 .iter()
-                .filter_map(|(id, _)| self.stages[st].jobs[id].owner)
-                .map(|sid| Who {
-                    serial: self.sessions[sid].serial,
-                    leg: self.sessions[sid].leg.number(),
+                .filter_map(|&(id, t)| {
+                    self.stages[st].jobs[&id]
+                        .owner
+                        .map(|sid| (self.who(sid), t))
                 })
-                .collect();
+                .unzip();
+            let memory = spec
+                .memory
+                .map(|pl| (self.pools[pl].used, self.pools[pl].cached));
             self.log(EventKind::Iter {
                 stage: st,
                 dur: cost,
                 tokens: ntok,
+                budget,
                 reqs,
+                each,
+                memory,
             });
         }
         let Kind::Step { iter, epoch, .. } = &mut self.stages[st].kind else {

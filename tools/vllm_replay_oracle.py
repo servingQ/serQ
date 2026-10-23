@@ -174,6 +174,11 @@ def main():
             dt = args.c_step + args.d * ndec + args.beta * kvb + args.a * npre + args.b * attn
         else:
             dt = args.c_step + max(args.omega + args.beta * kvb, args.a * ntok + args.b * npre * (kvp - npre / 2))
+        # per step: each request's tokens and the block pool's used and
+        # cached blocks. serQ's counterpart is the log's `iter` event
+        # (`serq run --log`): `each`, and `used`/`cached` in units, the
+        # blocks times the pool's `block`; `tools/serq_iter_trace.py
+        # LOG --block 16` prints it as these lines.
         if os.environ.get("ORACLE_TRACE_ITER"):
             parts = []
             for rid in ids:

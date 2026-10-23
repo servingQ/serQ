@@ -5,9 +5,7 @@
 
 mod common;
 
-use serq::{Program, run_ir};
-use std::path::Path;
-use std::process::Command;
+use serq::{Program, run_ir, run_ir_logged};
 
 const FT: &str = "running.decoding > 0 ? decoding : !decoding";
 
@@ -45,33 +43,12 @@ fn source(schedule: &str) -> String {
     )
 }
 
+/// The iterations of a run to 20, from its log (`common::iter_lines`).
 fn trace(name: &str, src: &str, workload: &str) -> Vec<String> {
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("serve-only");
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join(format!("{name}.sq"));
-    std::fs::write(&path, common::main_source(src)).unwrap();
-    let wpath = dir.join(format!("{name}.workload.sq"));
-    std::fs::write(&wpath, workload).unwrap();
-    let out = Command::new(env!("CARGO_BIN_EXE_serq"))
-        .env("SERQ_TRACE_ITER", "1")
-        .args([
-            "run",
-            path.to_str().unwrap(),
-            "--workload",
-            wpath.to_str().unwrap(),
-            "--horizon",
-            "20",
-            "--json",
-        ])
-        .output()
-        .unwrap();
-    let stderr = String::from_utf8(out.stderr).unwrap();
-    assert!(out.status.success(), "{stderr}");
-    stderr
-        .lines()
-        .filter(|l| l.starts_with("ITER "))
-        .map(|l| l.split(" | ").next().unwrap().to_owned())
-        .collect()
+    let p = common::compile(&common::main_source(src), workload, &common::horizon(20.0))
+        .unwrap_or_else(|e| panic!("{name}: {e}"));
+    let r = run_ir_logged(&p, None, usize::MAX).unwrap_or_else(|e| panic!("{name}: {e}"));
+    common::iter_lines(r.log.as_ref().unwrap())
 }
 
 #[test]

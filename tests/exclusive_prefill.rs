@@ -5,9 +5,8 @@
 
 mod common;
 
-use serq::{Program, run_ir};
-use std::path::Path;
-use std::process::Command;
+use serq::engine::log::{EventKind, Log};
+use serq::{Program, run_ir, run_ir_logged};
 
 /// The schedule that takes a waiting prefill alone, in chunks of 4: the
 /// stage's `serve exclusive prefill`.
@@ -53,35 +52,43 @@ fn batch(n: usize) -> String {
     format!("workload {{ arrive batch({n}); session {{ turn; end; }} }}")
 }
 
+/// The log of a run of `src`, one of `source`'s, with `AB` to 20, in which
+/// both sessions arrive and end, and every iteration reads the budget of
+/// `source`'s `tokens cap 4`.
+fn logged(name: &str, src: &str) -> Log {
+    let p = common::compile(&common::main_source(src), AB, &common::horizon(20.0))
+        .unwrap_or_else(|e| panic!("{name}: {e}"));
+    let r = run_ir_logged(&p, None, usize::MAX).unwrap_or_else(|e| panic!("{name}: {e}"));
+    assert_eq!((r.arrivals, r.ended), (2, 2), "{name}");
+    let log = r.log.unwrap();
+    let budgets: Vec<f64> = log
+        .events
+        .iter()
+        .filter_map(|e| match &e.kind {
+            EventKind::Iter { budget, .. } => Some(*budget),
+            _ => None,
+        })
+        .collect();
+    assert!(!budgets.is_empty(), "{name}: no iteration");
+    assert!(budgets.iter().all(|&b| b == 4.0), "{name}: {budgets:?}");
+    log
+}
+
+/// Its iterations (`common::iter_lines`).
 fn trace(name: &str, src: &str) -> Vec<String> {
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("exclusive-prefill");
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join(format!("{name}.sq"));
-    std::fs::write(&path, common::main_source(src)).unwrap();
-    let wpath = dir.join(format!("{name}.workload.sq"));
-    std::fs::write(&wpath, AB).unwrap();
-    let out = Command::new(env!("CARGO_BIN_EXE_serq"))
-        .env("SERQ_TRACE_ITER", "1")
-        .args([
-            "run",
-            path.to_str().unwrap(),
-            "--workload",
-            wpath.to_str().unwrap(),
-            "--horizon",
-            "20",
-            "--json",
-        ])
-        .output()
-        .unwrap();
-    let stderr = String::from_utf8(out.stderr).unwrap();
-    assert!(out.status.success(), "{stderr}");
-    let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(report["arrivals"], 2);
-    assert_eq!(report["ended"], 2);
-    stderr
-        .lines()
-        .filter(|l| l.starts_with("ITER "))
-        .map(|l| l.split(" | ").next().unwrap().to_owned())
+    common::iter_lines(&logged(name, src))
+}
+
+/// Per iteration, the units used and cached in `kv`, the engine's memory,
+/// once the iteration is scheduled.
+fn memory(name: &str, src: &str) -> Vec<(f64, f64)> {
+    logged(name, src)
+        .events
+        .iter()
+        .filter_map(|e| match &e.kind {
+            EventKind::Iter { memory, .. } => Some(memory.expect("llm's memory is kv")),
+            _ => None,
+        })
         .collect()
 }
 
@@ -98,6 +105,25 @@ fn waiting_prefill_replaces_decodes_and_gets_the_full_budget() {
             "ITER 1.0000 1:1:p4",
             "ITER 2.0000 0:1:d1",
             "ITER 3.0000 0:1:d1",
+        ]
+    );
+    // `kv` once each iteration is scheduled, in units: A's 2 at t=0; at
+    // t=1 A's tentative decode has grown its hold to 3 before B's prefill
+    // displaced it, and B holds its 4: 7; B ended at t=2 and its 4 are
+    // cached, A decodes within its 3; at t=3 A grows to 4.
+    assert_eq!(
+        memory("takeover", &src),
+        [(2.0, 0.0), (7.0, 0.0), (3.0, 4.0), (4.0, 4.0)]
+    );
+    // The same as `tools/vllm_replay_oracle.py`'s `ORACLE_TRACE_ITER`
+    // lines put it, in blocks: of 2 units, whatever the pool's `block`.
+    assert_eq!(
+        common::iter_trace(&logged("takeover", &src), 2.0),
+        [
+            "ITER 0.0000 0:1:p2 | used 1 cached 0",
+            "ITER 1.0000 1:1:p4 | used 3.5 cached 0",
+            "ITER 2.0000 0:1:d1 | used 1.5 cached 2",
+            "ITER 3.0000 0:1:d1 | used 2 cached 2",
         ]
     );
     let ov = common::horizon(20.0);
@@ -143,14 +169,21 @@ fn a_waiting_prefill_that_does_not_fit_keeps_the_decode_batch() {
     );
     // Four KV units: A's growing decode holds 3 at t=1 and 4 at t=2,
     // leaving too little for B's full-sequence gate; same schedule.
+    let src = source(EXCLUSIVE, 2, 4);
     assert_eq!(
-        trace("memory", &source(EXCLUSIVE, 2, 4)),
+        trace("memory", &src),
         [
             "ITER 0.0000 0:1:p2",
             "ITER 1.0000 0:1:d1",
             "ITER 2.0000 0:1:d1",
             "ITER 3.0000 1:1:p4",
         ]
+    );
+    // So `kv` holds 2, 3 and 4. A ended at t=3 and its 4 went to the cache;
+    // B's 4 then needed all four units, so they were evicted: none cached.
+    assert_eq!(
+        memory("memory", &src),
+        [(2.0, 0.0), (3.0, 0.0), (4.0, 0.0), (4.0, 0.0)]
     );
 }
 

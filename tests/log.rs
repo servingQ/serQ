@@ -5,6 +5,7 @@ mod common;
 
 use serq::engine::log::{EventKind, Who};
 use serq::frontend::ast::RunMode;
+use serq::ir::CStageKind;
 use serq::{run_ir, run_ir_logged};
 use std::path::{Path, PathBuf};
 
@@ -126,6 +127,7 @@ fn a_session_is_logged_through_prefiller_link_and_decoder() {
                 tokens,
                 reqs,
                 dur,
+                ..
             } => Some((*stage, *tokens, reqs.clone(), *dur)),
             _ => None,
         })
@@ -141,40 +143,170 @@ fn a_session_is_logged_through_prefiller_link_and_decoder() {
     assert!(first_iter.3 > 0.0);
 }
 
-/// Keeping the log changes nothing in the run: the report is the same,
-/// field for field (the JSON without the `log` key), for every example
-/// program, with its preemptions, forks and lease revocations.
-#[test]
-fn the_log_does_not_change_the_run() {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples");
-    let mut n = 0;
+/// Every example program (`examples/*/*.sq`); a workload's file runs with
+/// the program it is paired with, so `examples/workloads` is not one.
+fn examples() -> Vec<PathBuf> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples");
+    let mut paths = vec![];
     for group in std::fs::read_dir(&root).unwrap().flatten() {
-        // a workload's file runs with the program it is paired with
         if !group.path().is_dir() || group.file_name() == "workloads" {
             continue;
         }
         for entry in std::fs::read_dir(group.path()).unwrap().flatten() {
             let path = entry.path();
-            if path.extension().is_none_or(|e| e != "sq") {
-                continue;
+            if path.extension().is_some_and(|e| e == "sq") {
+                paths.push(path);
             }
-            let (p, base) = load(&path, common::horizon(20.0));
-            let base = Some(base.as_path());
-            let plain = run_ir(&p, base).unwrap().json();
-            let logged = run_ir_logged(&p, base, usize::MAX).unwrap();
-            let mut j: serde_json::Value = serde_json::from_str(&logged.json()).unwrap();
-            let log = j
-                .as_object_mut()
-                .unwrap()
-                .remove("log")
-                .expect("the log is in the JSON");
-            assert_eq!(log["version"], 0, "{}", path.display());
-            let plain: serde_json::Value = serde_json::from_str(&plain).unwrap();
-            assert_eq!(j, plain, "{}", path.display());
-            n += 1;
         }
     }
-    assert!(n >= 30, "{n} programs");
+    paths.sort();
+    assert!(paths.len() >= 30, "{} programs", paths.len());
+    paths
+}
+
+/// Keeping the log changes nothing in the run: the report is the same,
+/// field for field (the JSON without the `log` key), for every example
+/// program, with its preemptions, forks and lease revocations.
+#[test]
+fn the_log_does_not_change_the_run() {
+    for path in examples() {
+        let (p, base) = load(&path, common::horizon(20.0));
+        let base = Some(base.as_path());
+        let plain = run_ir(&p, base).unwrap().json();
+        let logged = run_ir_logged(&p, base, usize::MAX).unwrap();
+        let mut j: serde_json::Value = serde_json::from_str(&logged.json()).unwrap();
+        let log = j
+            .as_object_mut()
+            .unwrap()
+            .remove("log")
+            .expect("the log is in the JSON");
+        assert_eq!(log["version"], 0, "{}", path.display());
+        let plain: serde_json::Value = serde_json::from_str(&plain).unwrap();
+        assert_eq!(j, plain, "{}", path.display());
+    }
+}
+
+/// An iteration names each request's tokens, its budget and its engine's
+/// memory (#728), for every example program: `each` lines up with `reqs`
+/// and sums to `tokens`, which the budget bounds; `used` and `cached` are
+/// there exactly when the engine has a memory pool, and are units, so
+/// never negative.
+#[test]
+fn an_iteration_gives_each_request_its_tokens_its_budget_and_its_memory() {
+    let mut iters = 0;
+    for path in examples() {
+        let at = path.display();
+        let (p, base) = load(&path, common::horizon(20.0));
+        let r = run_ir_logged(&p, Some(base.as_path()), usize::MAX).unwrap();
+        for e in &r.log.as_ref().unwrap().events {
+            let EventKind::Iter {
+                stage,
+                tokens,
+                budget,
+                reqs,
+                each,
+                memory,
+                ..
+            } = &e.kind
+            else {
+                continue;
+            };
+            let CStageKind::Step(spec) = &p.stages[*stage].kind else {
+                panic!(
+                    "{at}: an iteration of `{}`, no engine",
+                    p.stages[*stage].name
+                )
+            };
+            assert_eq!(each.len(), reqs.len(), "{at} at {}", e.t);
+            assert_eq!(each.iter().sum::<f64>(), *tokens, "{at} at {}", e.t);
+            assert!(each.iter().all(|&n| n > 0.0), "{at} at {}: {each:?}", e.t);
+            assert!(*tokens <= *budget, "{at} at {}: {tokens} > {budget}", e.t);
+            assert_eq!(memory.is_some(), spec.memory.is_some(), "{at}");
+            if let Some((used, cached)) = memory {
+                assert!(
+                    *used >= 0.0 && *cached >= 0.0,
+                    "{at} at {}: {memory:?}",
+                    e.t
+                );
+            }
+            iters += 1;
+        }
+    }
+    assert!(iters > 0);
+}
+
+/// The budget is the `tokens cap` as each iteration reads it, so it is in
+/// the event and not the header: `replica.sq`'s cap is `max(running.decoding,
+/// floor((omega + beta * running.kv_decode) / a))`, `floor(omega / a)` = 10
+/// until the decoders' context passes 10⁴ tokens (first at t = 20.66 at the
+/// default seed) and more after (up to 12 by t = 40).
+#[test]
+fn the_budget_is_read_per_iteration() {
+    let (p, base) = load(&serq::program_path("replica"), common::horizon(40.0));
+    let r = run_ir_logged(&p, Some(base.as_path()), usize::MAX).unwrap();
+    let budgets: Vec<f64> = r
+        .log
+        .as_ref()
+        .unwrap()
+        .events
+        .iter()
+        .filter_map(|e| match &e.kind {
+            EventKind::Iter { budget, .. } => Some(*budget),
+            _ => None,
+        })
+        .collect();
+    let lo = budgets.iter().copied().fold(f64::INFINITY, f64::min);
+    let hi = budgets.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    assert_eq!(lo, 10.0, "floor(omega / a)");
+    assert!(lo < hi, "{lo} .. {hi}");
+}
+
+/// A run's mode is in its `run` event, whether or not an engine request
+/// holds it: a queue's entry that runs `llm decode` with no `request` has
+/// no `status`, and `tools/serq_iter_trace.py` still prints its decodes as
+/// `d`, as the removed `SERQ_TRACE_ITER` switch did (it read the job's mode)
+/// and as main's binary prints these four lines. The tool once took the
+/// mode from `status` alone and printed them `p1` (#737).
+#[test]
+fn a_decode_outside_an_engine_request_is_traced_as_a_decode() {
+    let src = "let bs = 16;
+        queue llm : agg {
+          pool kv { cap 64 * bs; block bs; }
+          device gpu { }
+          engine on gpu {
+            tokens cap 1000;
+            scheduler { advance running; admit waiting while (running.preempted == 0); }
+            worker { forward (1); }
+          }
+          decode (prompt) {
+            hold kv (cost(kv, prompt)) {
+              run llm prefill (cost(llm, prompt)) growing kv;
+              run llm decode (cost(llm, o - 1)) growing kv;
+            }
+          }
+        }
+        server (prompt, hidden o) { llm.decode (prompt); }";
+    let workload = "workload { arrive batch(2); init { set prompt = 32; set o = 4; }
+          send (prompt, o);
+          session { turn; end; } }";
+    let p = common::compile(&common::main_source(src), workload, &common::horizon(50.0)).unwrap();
+    let r = run_ir_logged(&p, None, usize::MAX).unwrap();
+    let log = r.log.unwrap();
+    assert!(
+        !log.events
+            .iter()
+            .any(|e| matches!(e.kind, EventKind::Status { .. })),
+        "no engine request, no status"
+    );
+    assert_eq!(
+        common::iter_lines(&log),
+        [
+            "ITER 0.0000 0:1:p32 1:1:p32",
+            "ITER 1.0000 0:1:d1 1:1:d1",
+            "ITER 2.0000 0:1:d1 1:1:d1",
+            "ITER 3.0000 0:1:d1 1:1:d1",
+        ]
+    );
 }
 
 /// A leg (`fork`) shares its session's serial: the log tells them apart
