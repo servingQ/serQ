@@ -19,6 +19,8 @@ Its attributes are read-only.
 | `mean_live` | `float` | Time-average number of live sessions after warm-up. |
 | `observes` | `dict[str, Observe]` | Observations in program order. A new dictionary on each access. |
 | `client` | `dict[str, Observe]` | What each turn's client saw: `ttft`, `tpot` and `response`, in that order, whatever the program observes ([client metrics](../language.md#what-the-client-sees)). A new dictionary on each access. |
+| `status` | `dict[str, Status]` | Every [engine request status](../reference/cli.md#request-statuses), visited or not, in its order; each has `name` and the fields of the JSON's `status.<status>`. A new dictionary on each access. |
+| `engines` | `dict[str, Engine]` | Every engine that takes requests, in declaration order; each has `name` and the fields of the JSON's `engines.<name>`, `admissions`, `readmissions` and `token_hit` ([engine statistics](../reference/cli.md#engine-statistics)). A new dictionary on each access. |
 | `gauges` | `dict[str, Gauge]` | Gauges in program order. A new dictionary on each access. |
 | `claims` | `dict[str, Claim]` | Claims in program order; empty when the program has none. A new dictionary on each access. |
 | `stages` | `list[Stage]` | One row per stage or array member. A new list on each access. |
@@ -33,6 +35,7 @@ Python float attributes preserve NaN and infinities. JSON encodes these as
 |---|---|---|
 | [`json()`](#json) | `str` | JSON summary matching the CLI. |
 | [`observe(name)`](#observe) | `Observe` or `None` | Observation by name. |
+| [`engine(name)`](#engine) | `Engine` or `None` | Engine by name. |
 | [`gauge(name)`](#gauge) | `Gauge` or `None` | Gauge by name. |
 | [`claim(name)`](#claim) | `Claim` or `None` | Claim by name. |
 | [`stage(name)`](#stage) | `Stage` or `None` | First stage row with this name. |
@@ -63,6 +66,16 @@ Report.observe(self, name: str) -> Observe | None
 ```
 
 Return the named [Observe](observe.md), or `None`.
+
+## engine
+
+```python
+Report.engine(self, name: str) -> Engine | None
+```
+
+Return the named engine's row, or `None`: `name`, `admissions`,
+`readmissions` and `token_hit`, as the JSON's `engines.<name>`. A family's
+members are one row, under its name.
 
 ## gauge
 

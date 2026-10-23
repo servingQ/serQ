@@ -30,7 +30,7 @@ word to its `;` or `}`; a `body` is what is between its braces.
 | `queues` | `{name, roles, family, range, body, members, accepts}` | `queue P[NP] : prefill { … }`; `family` is the text between the brackets, or null |
 | `queues[].members` | `{kind, name?, from?, range, body?}`, `kind` one of `device`, `engine`, `pool`, `nic`, `serve`, `entry` | in order; a device's or pool's `name`, an entry's verb as `name` and its `from Q` |
 | `queues[].accepts.pools` | `{on, cap, admitted_by}` | where the queue may still take a pool: each capacity of its engine and devices no pool is on, as `pool NAME on …` spells it there (`on` is `Q`, `gpu` or `Q.gpu`), and the engine that would admit it, or null (`on gpu`: none; `on Q.gpu`: `Q`). The device an engine runs on holds one pool, so once it has one it offers none. What the members already say is not repeated: an entry is what a call names (a NIC, a pool or a device is not), a `nic` is what a KV copy's end needs, a `gateway` routes |
-| `relations` | `{mode, source, reader, range, function}` | `kvt.nixl_pull (P, D, …);`; `mode` is `pull` or `push`, `function` the range of `nixl_pull` |
+| `relations` | `{mode, source, reader, range, function}` | `kvt.nixl_pull (P, D, …);`, `kvt.nixl_push` or `kvt.l2_link (C, E, …);`; `mode` is `pull`, `push` or `link`; `source` and `reader` the first queue and the second, for a link the L2 and the queue whose engine copies through it; `function` the range of the function's name |
 | `routes` | `{gateway, range, body}` | a gateway's `route { … }` |
 | `server` | `{range, body}` | `server { … }` |
 | `workload` | a range | `workload { … }` |

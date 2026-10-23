@@ -372,6 +372,9 @@ struct Walker<'a> {
     /// What this path last set each attribute to: a connector's block reads
     /// its request's source by one (`E.from`).
     set_to: Vec<(usize, CExpr)>,
+    /// While a connector's save is walked, its request's call: the save's
+    /// statements are its member's (`as_called`), its hold's body too.
+    calling: Option<CRef>,
 }
 
 impl Walker<'_> {
@@ -727,13 +730,27 @@ impl Walker<'_> {
         from: Option<usize>,
         source: Option<&CRef>,
     ) -> Vec<CStmt> {
-        let p = self.p;
         let from = from.and_then(|slot| {
             self.set_to
                 .iter()
                 .find(|(s, _)| *s == slot)
                 .map(|(_, e)| e.clone())
         });
+        let mut stmts = self.p.blocks[b].clone();
+        // a read ends the source's send it reads, drawn as the `release` of
+        // the source's pool it is
+        stmts.extend(source.cloned().map(CStmt::Release));
+        for s in &mut stmts {
+            self.as_called(s, call, from.as_ref());
+        }
+        stmts
+    }
+
+    /// A statement of a connector's block as its request's call says it
+    /// (`at_call`): its stages and pools of the engine's family the call's
+    /// member, and a source's member the one `from` names.
+    fn as_called(&self, s: &mut CStmt, call: &CRef, from: Option<&CExpr>) {
+        let p = self.p;
         let fix = |r: &mut CRef, pools: bool| {
             let (name, index) = if pools {
                 (&p.pools[r.base].name, p.pools[r.base].index)
@@ -743,7 +760,7 @@ impl Walker<'_> {
             match r.index.as_deref() {
                 // the source member the entry named
                 Some(CExpr::Attr(_)) => {
-                    if let Some(e) = &from {
+                    if let Some(e) = from {
                         r.index = Some(Box::new(e.clone()));
                     }
                 }
@@ -768,23 +785,22 @@ impl Walker<'_> {
                 _ => {}
             }
         };
-        let mut stmts = p.blocks[b].clone();
-        // a read ends the source's send it reads, drawn as the `release` of
-        // the source's pool it is
-        stmts.extend(source.cloned().map(CStmt::Release));
-        for s in &mut stmts {
-            match s {
-                CStmt::Run { stage, also, .. } => {
-                    fix(stage, false);
-                    for r in also {
-                        fix(r, false);
-                    }
+        match s {
+            CStmt::Run { stage, also, .. } => {
+                fix(stage, false);
+                for r in also {
+                    fix(r, false);
                 }
-                CStmt::Load(r, _) | CStmt::Release(r) | CStmt::Grow(r, _) => fix(r, true),
-                _ => {}
             }
+            CStmt::Load(r, _) | CStmt::Release(r) | CStmt::Grow(r, _) => fix(r, true),
+            // a save's room, in an L2's pool (#600)
+            CStmt::Hold { pools, .. } => {
+                for (r, _, _) in pools {
+                    fix(r, true);
+                }
+            }
+            _ => {}
         }
-        stmts
     }
 
     /// The legs forked so far end where a read of their send starts: at
@@ -820,8 +836,11 @@ impl Walker<'_> {
                 .collect()
         });
         let n = stmts.len();
-        for (k, s) in stmts.into_iter().enumerate() {
+        for (k, mut s) in stmts.into_iter().enumerate() {
             self.routes_at(&routes, k);
+            if let Some(call) = self.calling.clone() {
+                self.as_called(&mut s, &call, None);
+            }
             match s {
                 CStmt::Run {
                     stage,
@@ -991,7 +1010,12 @@ impl Walker<'_> {
                         .as_ref()
                         .and_then(|t| t.save[stage.base])
                     {
+                        // the save's hold and its body, as the call's
+                        // member makes them: its own link (`E.nic[j]`,
+                        // `kvt.l2_link`), not member 0's
+                        let calling = self.calling.replace(stage.clone());
                         self.walk(b);
+                        self.calling = calling;
                     }
                     if !pools.is_empty() {
                         self.holds.retain(|&(_, h, _)| h != id);
@@ -1784,6 +1808,7 @@ pub fn project(p: &Program) -> Net {
         gateways: vec![],
         known: vec![],
         set_to: vec![],
+        calling: None,
     };
     w.enter(p.session, false);
     w.settle_instances();

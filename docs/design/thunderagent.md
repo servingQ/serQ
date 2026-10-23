@@ -318,8 +318,10 @@ a queue's tick as a station of its own inside the queue's pool.
 `tools/thunderagent/sweep.py` runs both modes over the agent counts, four
 seeds each by default, with a horizon of 25 000 s and a warm-up of 5 000 s.
 Steps/min are turns per minute after warm-up, the paper's unit (a
-reasoning and an acting period, p. 9). The hit rate is reused tokens over
-prompt tokens, vLLM's `prefix_cache_hits / prefix_cache_queries`.
+reasoning and an acting period, p. 9). The hit rate is the report's
+token hit, reused tokens over admitted tokens; vLLM's `prefix_cache_hits /
+prefix_cache_queries` is the same over first admissions only
+([engine admissions](engine-admissions.md)).
 "Resumed" is the share of TR mode's turns that a program still paused at
 its request sends; one a tick gave back before it is not counted.
 
