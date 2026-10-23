@@ -477,13 +477,13 @@ pub struct Relation {
 }
 
 /// An engine's `taking P (u) [reserve (r)], … [reuse (e)] [prefix (…)]
-/// [cache M (e)]`, read for each request (`ir::CRequest`).
+/// [cache P (e)]`, read for each request (`ir::CRequest`).
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct RequestSpec {
     pub pools: Vec<(Ref, Expr, Option<Expr>)>,
     pub reuse: Option<Expr>,
     pub prefix: Option<Vec<(Expr, Expr)>>,
-    /// `cache M (e)`: the pool whose computed prefix stays cached (the
+    /// `cache P (e)`: the pool whose computed prefix stays cached (the
     /// engine's memory), and how much.
     pub cache: Option<(Ref, Expr)>,
 }

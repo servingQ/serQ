@@ -1147,7 +1147,7 @@ pub(super) fn cache_names_no_pool(pools: &[&str], engine: bool) -> String {
         ),
         (_, true) => format!(
             "an engine's `cache` names its memory, the pool its requests' KV is in: write \
-             `cache M (ℓ)`, M the one of {listed} on the engine's device"
+             `cache P (ℓ)`, P the one of {listed} on the engine's device"
         ),
     };
     format!("`cache (ℓ)` names no pool\nhelp: {help} (#366)")

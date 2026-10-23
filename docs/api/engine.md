@@ -266,15 +266,15 @@ each:
 
 ```serq
 admit waiting … taking POOL (units) [reserve (units)], …
-  [reuse (e)] [prefix (k: n, …)] [cache MEMORY (e)];
+  [reuse (e)] [prefix (k: n, …)] [cache POOL (e)];
 ```
 
 `taking` names the engine's capacities and its device's, and reads the
 request as `request.input`, `request.output`, `request.known`,
-`request.hit`, `request.loaded` and `request.preempted`; `cache` names the
-engine's memory, the pool on its device that the request's KV is in (a
-`cache` on another pool does not link), and, read when the request gives
-its pools back, reads `request.finished`. The engine's
+`request.hit`, `request.loaded` and `request.preempted`. `cache POOL (e)`
+names the engine's memory, the pool on its device that the request's KV
+is in (a `cache` on another pool does not link); `e` is read when the
+request gives its pools back and may read `request.finished`. The engine's
 records are attributes the caller reads after the call: `ENGINE.reused`,
 `ENGINE.prefill`, `ENGINE.admitted` and `ENGINE.first` (a connector adds
 `ENGINE.loaded`, `ENGINE.saved` and `ENGINE.load_done`); `ENGINE.reused`,

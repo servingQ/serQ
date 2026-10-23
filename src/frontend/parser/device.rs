@@ -512,7 +512,7 @@ impl Parser {
                 return self.err(
                     "an engine keeps a request's state, as vLLM's scheduler does: no `request \
                      (…) { … }` says what it does with one. What its admission takes is \
-                     `taking … [reuse (e)] [prefix (…)] [cache M (e)]` on `admit waiting`, and the \
+                     `taking … [reuse (e)] [prefix (…)] [cache P (e)]` on `admit waiting`, and the \
                      server calls `E (input, output);` (docs/design/scheduler-worker.md)",
                 );
             } else if self.eat_kw("tokens") {

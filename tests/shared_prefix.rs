@@ -182,6 +182,33 @@ fn a_key_reads_no_state() {
     assert!(error.contains("not supported yet"), "{error}");
 }
 
+/// The chain is the cached pool's (#366): a pool of the same hold that
+/// `cache` does not name keeps nothing of the session's prefix, so its
+/// spill touches no chain, and the hold links and shares the prompt as
+/// `a_system_prompt_is_computed_once` does. Before #366 every pool of a
+/// cached hold took part, and this did not link.
+#[test]
+fn a_pool_the_hold_does_not_cache_may_spill() {
+    let src = program(100_000, "serial * 10", CHAIN)
+        .replace(
+            "hold kv (cost(kv, 1600))",
+            "hold kv (cost(kv, 1600)), aux (cost(aux, 16))",
+        )
+        .replace(
+            "stage user : delay;",
+            "stage user : delay;
+             pool aux { cap 100000; block 16; evict lru; spill l2 via link (1) when (1); }
+             pool l2 { cap 1000000; block 16; evict lru; } stage link : delay;",
+        );
+    let r = run(&src, &prompted(3, "7"), &options(100.0));
+    assert_eq!(
+        r.observe("got").unwrap().samples,
+        [0.0, 1200.0, 1200.0],
+        "{}",
+        r.text()
+    );
+}
+
 /// Three sessions on the system prompt (`prompted(3, "7")`), one after
 /// another, then each a second request on its own context, in reverse
 /// order. `INNER` stands in

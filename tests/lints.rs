@@ -636,6 +636,25 @@ fn cached_in_a_hold_without_cache_is_rejected() {
     );
 }
 
+/// On a hold of several pools the message lists the ones `cache` may name,
+/// as the parse error of `cache (ℓ)` does (#366): only one of them keeps
+/// the prefix.
+#[test]
+fn cached_in_a_hold_of_several_pools_lists_them() {
+    let src = cache_server(
+        "",
+        "pool reqs { cap 4; }",
+        "hold kv (cost(kv, 1000)), reqs (cost(reqs, 1)) { observe hit = cached > 0; \
+         run user (cost(user, 1)); } llm (1, 1);",
+    );
+    let e = check(&src, CACHE_ENGINE_WORKLOAD).expect_err("rejected");
+    assert!(
+        e.contains("`cache P (0)`")
+            && e.contains("P is the one of `kv`, `reqs` whose computed prefix stays cached"),
+        "{e}"
+    );
+}
+
 /// `cache kv (0)` is that spelling, and the usual request links as before.
 #[test]
 fn cache_zero_is_the_way_through() {

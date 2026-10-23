@@ -265,18 +265,8 @@ impl Program {
                 }
             }
         };
-        // the clause that makes a hold's pools the prefix cache's
-        // the pools the clause is about: the one `cache` names, else every
-        // pool (a `reuse` or `prefix` without `cache`, which the lint refuses)
-        fn cached<'a>(
-            pools: &'a [(CRef, CExpr, Option<CExpr>)],
-            cache: &'a Option<(CRef, CExpr)>,
-        ) -> Vec<&'a CRef> {
-            match cache {
-                Some((r, _)) => vec![r],
-                None => pools.iter().map(|(r, _, _)| r).collect(),
-            }
-        }
+        // the clause that makes a hold's pools the prefix cache's; the pools
+        // it marks are `cache_pools`
         let clause = |reuse: bool, cache: bool, prefix: bool| {
             [("cache", cache), ("reuse", reuse), ("prefix", prefix)]
                 .into_iter()
@@ -292,7 +282,7 @@ impl Program {
                     && let Some(c) =
                         clause(r.reuse.is_some(), r.cache.is_some(), r.prefix.is_some())
                 {
-                    for q in cached(&r.pools, &r.cache) {
+                    for q in cache_pools(&r.pools, &r.cache) {
                         mark(&mut kv, q, Kv::Taking(c, s));
                     }
                 }
@@ -310,7 +300,7 @@ impl Program {
                     } => {
                         if let Some(c) = clause(reuse.is_some(), cache.is_some(), prefix.is_some())
                         {
-                            for q in cached(pools, cache) {
+                            for q in cache_pools(pools, cache) {
                                 mark(&mut kv, q, Kv::Clause(c, b, k));
                             }
                         }

@@ -240,7 +240,7 @@ fn a_spill_goes_over_a_stage_not_an_engine() {
             "device gpu {{ kv cap 5; }}
         engine llm on gpu {{
           tokens cap 8;
-          scheduler {{ advance running; admit waiting while (running.preempted == 0) taking kv (request.input) cache (100); }}
+          scheduler {{ advance running; admit waiting while (running.preempted == 0) taking kv (request.input) cache kv (100); }}
           worker {{ forward (1); }}
         }}
         pool l2 {{ cap 100; }}{link}

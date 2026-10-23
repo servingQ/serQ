@@ -2863,6 +2863,21 @@ pub(crate) fn moves(e: &CExpr) -> bool {
     })
 }
 
+/// The pools a hold's (or an engine request's) cache clauses are about: the
+/// one its `cache` names (#366), else every pool it takes (a `reuse` or a
+/// `prefix` without `cache`, which the lint refuses). The `prefix` checks,
+/// the cost type of `reuse` and `cache`, and the whole-number KV pools all
+/// read it here.
+pub(crate) fn cache_pools<'a>(
+    pools: &'a [(CRef, CExpr, Option<CExpr>)],
+    cache: &'a Option<(CRef, CExpr)>,
+) -> Vec<&'a CRef> {
+    match cache {
+        Some((r, _)) => vec![r],
+        None => pools.iter().map(|(r, _, _)| r).collect(),
+    }
+}
+
 /// Whether a renewal gap reads only constants and draws: no attribute, no
 /// context variable, no pool or stage.
 fn arrival_expr_is_pure(e: &CExpr) -> bool {
@@ -3726,10 +3741,7 @@ impl Validator<'_> {
                 }
                 // the pools the chain keys: the one the hold caches (#366),
                 // else every pool it takes
-                let keyed: Vec<&CRef> = match cache {
-                    Some((r, _)) => vec![r],
-                    None => pools.iter().map(|(r, _, _)| r).collect(),
-                };
+                let keyed = cache_pools(pools, cache);
                 // a chain is a sequence of blocks: a pool without them (a slot
                 // pool) caches per session, and a hold that caches nothing
                 // else would share nothing it says it does

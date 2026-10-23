@@ -251,7 +251,7 @@ fn exprs_of(s: &CStmt) -> Vec<&CExpr> {
 fn cached_in_a_hold_without_cache(
     p: &Program,
     block: usize,
-    hold: Option<(&str, &str, bool)>,
+    hold: Option<(&str, &str, &str, bool)>,
     nested: Option<String>,
     out: &mut Vec<String>,
 ) {
@@ -263,13 +263,13 @@ fn cached_in_a_hold_without_cache(
         let reads_cached = exprs_of(s)
             .into_iter()
             .any(|e| mentions_attr(e, p.slot_cached));
-        if let (Some((pool, _, _)), Some(inner), true) = (hold, &nested, reads_cached) {
+        if let (Some((pool, _, _, _)), Some(inner), true) = (hold, &nested, reads_cached) {
             out.push(format!(
                 "`cached` is read after the hold on `{inner}` in the body of the hold on \
                  `{pool}`: every admission sets it, so here it is the admission of `{inner}`. \
                  Read it above that hold (`set c = cached;`), as `llmd_nixl_pull.sq` does."
             ));
-        } else if let Some((pool, named, false)) = hold
+        } else if let Some((pool, named, pick, false)) = hold
             && reads_cached
         {
             out.push(format!(
@@ -277,7 +277,7 @@ fn cached_in_a_hold_without_cache(
                  hold consumes nothing of the session's cached prefix, so `cached` is 0 \
                  there. Write `cache {named} (0)` to consume the prefix and keep nothing, \
                  `cache {named} (ℓ)` to keep ℓ of what was computed, or read `cached` above \
-                 the hold, where the admission that set it is the enclosing hold's."
+                 the hold, where the admission that set it is the enclosing hold's.{pick}"
             ));
         }
         match s {
@@ -290,17 +290,29 @@ fn cached_in_a_hold_without_cache(
                 ..
             } => {
                 let pool = p.show_pool_ref(&pools[0].0);
-                // the pool a `cache` would name: the hold's, or `P` among several
-                let named = match &pools[..] {
-                    [(r, _, _)] => p.show_pool_ref(r),
-                    _ => "P".to_string(),
+                // the pool a `cache` would name: the hold's, or `P` among
+                // several, listed as the parse error of `cache (ℓ)` lists them
+                let (named, pick) = match &pools[..] {
+                    [(r, _, _)] => (p.show_pool_ref(r), String::new()),
+                    _ => (
+                        "P".to_string(),
+                        format!(
+                            " P is the one of {} whose computed prefix stays cached; the others \
+                             are memory alone.",
+                            pools
+                                .iter()
+                                .map(|(r, _, _)| format!("`{}`", p.show_pool_ref(r)))
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ),
+                    ),
                 };
                 if prefix.is_some() && cache.is_none() {
                     out.push(format!(
                         "`prefix` on a hold on `{pool}` that has no `cache` clause: such a hold \
                          reads and keeps nothing of the cache, so its chain says nothing. Write \
                          `cache {named} (ℓ)` to read the chain's cached prefix and keep ℓ along \
-                         it."
+                         it.{pick}"
                     ));
                 }
                 if reuse.is_some() && cache.is_none() {
@@ -308,11 +320,16 @@ fn cached_in_a_hold_without_cache(
                         "`reuse` on a hold on `{pool}` that has no `cache` clause: such a hold \
                          consumes nothing of the session's cached prefix, so the bound has \
                          nothing to bound. Write `cache {named} (0)` to consume the prefix and \
-                         keep nothing, or `cache {named} (ℓ)` to keep ℓ."
+                         keep nothing, or `cache {named} (ℓ)` to keep ℓ.{pick}"
                     ));
                 }
                 // its `cached` is its own admission's
-                let inner = Some((pool.as_str(), named.as_str(), cache.is_some()));
+                let inner = Some((
+                    pool.as_str(),
+                    named.as_str(),
+                    pick.as_str(),
+                    cache.is_some(),
+                ));
                 cached_in_a_hold_without_cache(p, *body, inner, None, out);
             }
             CStmt::Branch(_, t, e) => {

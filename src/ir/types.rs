@@ -536,12 +536,12 @@ impl Program {
                         // `cache P (ℓ)` is units of the one pool it caches, and
                         // `reuse` bounds what that pool reads (#366); without a
                         // `cache`, `reuse` reads nothing, and the lint says so
-                        let target = match cache {
-                            Some((r, _)) => CostTarget::pool(r),
-                            None => CostTarget::joint(
-                                pools.iter().map(|(r, _, _)| CostTarget::pool(r)).collect(),
-                            ),
-                        };
+                        let target = CostTarget::joint(
+                            cache_pools(pools, cache)
+                                .into_iter()
+                                .map(CostTarget::pool)
+                                .collect(),
+                        );
                         for e in reuse.iter().chain(cache.as_ref().map(|(_, e)| e)) {
                             amount(e, target.clone())?;
                         }

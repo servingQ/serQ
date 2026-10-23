@@ -253,15 +253,19 @@ text and directly constructed IR meet the same rules. Validation covers:
   segment's key and length read no state, no clock, no draw, and not
   `cached` or `computed`: they are read while the hold waits and when it
   is admitted, and the trie they index must not move under them. A hold
-  with `prefix` has a segment, only its last one endless, takes at least
-  one pool with `block`, and none that spills
-  or is spilled to. No statement sets `serial`, the session's number:
+  with `prefix` has a segment, only its last one endless; the pools its
+  chain keys, the one its `cache` names (#366) or else every pool it
+  takes, include one with `block`, and none of them spills or is spilled
+  to. A pool of the hold that `cache` does not name keys no chain, and
+  may spill. No statement sets `serial`, the session's number:
   a session's cache entry is what hangs under the key of its serial.
   `BudgetLeft` references only step stages, including every member of an
   indexed family.
 - **Ownership.** `Grow`, `Shrink`, `Load`, `Release` and a run's `growing` require an
   enclosing hold with the same `CRef` (base, count and index expression);
-  `Grow`, `Shrink` and `Release` may instead act on a lease of it. A hold leases only its own pool, names
+  `Grow`, `Shrink` and `Release` may instead act on a lease of it. A hold
+  leases and caches only its own pool (its `cache` and its `lease` each
+  name one of the pools it takes, index included), names
   each reference once, and cannot change attributes its index reads.
   An index read again inside the hold cannot depend on state or time.
   Preemptible holds cannot use such indices or `cached`/`computed` in

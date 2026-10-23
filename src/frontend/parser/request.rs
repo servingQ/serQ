@@ -40,12 +40,12 @@ impl Parser {
         Ok(())
     }
 
-    /// `P (u) [reserve (r)], … [reuse (e)] [prefix (k: n, …)] [cache M (e)]`:
+    /// `P (u) [reserve (r)], … [reuse (e)] [prefix (k: n, …)] [cache P (e)]`:
     /// the pools the admission takes and how much, what it may reuse of the
     /// cache, what its sequence is made of, and what its release leaves
-    /// cached on the engine's memory `M`. The pools are checked where the
-    /// engine ends, with its capacities, and `M` where the program is
-    /// linked, with the engine's memory.
+    /// cached on the pool `cache` names, the engine's memory. The pools are
+    /// checked where the engine ends, with its capacities, and the cache's
+    /// pool where the program is linked, with the engine's memory.
     fn taking(&mut self) -> PResult<RequestSpec> {
         let mut pools = vec![];
         loop {

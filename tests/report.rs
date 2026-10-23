@@ -724,7 +724,7 @@ fn one_engine(connector: &str, cache: &str) -> String {
           scheduler {{
             advance running;
             admit waiting while (running.preempted == 0)
-              taking kv (request.known) reuse (request.known - 1) cache ({cache});
+              taking kv (request.known) reuse (request.known - 1) cache kv ({cache});
           }}
           worker {{ forward (1); }}
         }}

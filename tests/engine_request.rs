@@ -1,6 +1,6 @@
 //! An engine's request (`docs/design/scheduler-worker.md`, step 3): the
 //! engine keeps a request's state as vLLM does; what its admission takes is
-//! `taking … [reuse (e)] [prefix (…)] [cache M (e)]` on `admit waiting`, read
+//! `taking … [reuse (e)] [prefix (…)] [cache P (e)]` on `admit waiting`, read
 //! as `request.…`, and the server calls it, `llm (prompt, o);`. A request
 //! runs as the hold a queue's entry writes in the kernel, and what the
 //! design refuses does not link.

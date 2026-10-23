@@ -61,8 +61,10 @@ An engine's admission names its memory, one word more
 Its numbers do not move: the request's prefill grows `kv` before it
 ends, and with one flag per hold that made `reqs` cache its position, 0.
 Every example and tutorial program under each of its workloads
-(`examples/pairs.json`, 39 pairs) gives the same text and JSON report
-before and after, seed 1, but `replica.sq`'s `reqs` row; the oracles
+(`examples/pairs.json`: 40 programs, 43 pairs, `vllm.sq` under four)
+gives the same text and JSON report before and after, but `replica.sq`'s
+`reqs` row: run with `--seed 1 --horizon 300 --warmup 50` and with `--seed
+2 --horizon 600 --warmup 50`, against `main` at 4ed307c. The oracles
 (`make oracle-ir`, `make lean`) agree as before.
 
 The title's bug, a pool's cache decided by another pool: in
@@ -124,6 +126,15 @@ with the name, each with its test:
 - a hold with `prefix` caches a pool with `block`: "a hold with `prefix`
   caches `slots`, a pool without `block`", even when another pool has one.
 
+The `prefix` checks read the cached pool alone, so one is looser: a pool
+of the hold that `cache` does not name keys no chain, and may spill or be
+spilled to (`tests/shared_prefix.rs`,
+`a_pool_the_hold_does_not_cache_may_spill`), where before every pool of a
+cached hold kept the chain and none could. The rule of which pools a
+hold's clauses are about is written once, `ir::cache_pools`, and the
+`prefix` checks, the cost type of `reuse` and `cache` and the whole-number
+KV pools read it.
+
 The spelling without a pool is a parse error that says what to write:
 the hold's pool when it has one, else `cache P (ℓ)` with the pools to
 choose from; an engine's, its memory.
@@ -140,7 +151,12 @@ header, and its `reuse` and `prefix` are spelled as on a hold; a
 `cache (ℓ)` that meant the memory there and every pool on a hold would be
 one spelling with two meanings. The check that it is the memory is
 needed anyway: a cache on another pool would keep a prefix no prefill
-skips.
+skips. The IR carries the pool as well, `CRequest.cache: (pool, ℓ)`,
+though `Program::validate` admits only the memory there: the IR is the
+definition, and a pool its reader must supply is the implicit pool this
+change removes; and the hold's and the request's `cache` are then one
+shape, which the interpreter (`cache_on`), `gen_lean_oracle.py`
+(`cache_of`) and the figure (`cache_targets`) read alike.
 
 **`grown` per pool.** The interpreter's `Held.grown` is set by a growing
 run's position and by a `load` on that pool, and `Held::computed` reads
@@ -175,15 +191,23 @@ IR 16 (15 is tagged in v0.1.7-alpha.2): `scripts/gen_lean_oracle.py` and
 committed IR file is regenerated. `serving-queue-theory/programs` writes
 one word at five sites: `lecture_pd.sq:63` (`cache memP`), `agentic.sq:57`
 and `agentic_model.sq:111` (`cache kv`), and the engines of
-`open_vllm.sq:57` and `replay_vllm.sq:68` (`cache kv`).
+`open_vllm.sq:57` and `replay_vllm.sq:68` (`cache kv`); the comment at
+`replay_vllm.sq:22` quotes the old spelling, `cache (prompt + out - 1)`.
 
 ## Self-critique
 
-**`grown` per pool, nothing else.** Tried on 2026-10-11 and reverted:
-every slot pool then cached its slot, `reqs`'s cached went from 0 to
-15.8–88.9 in the vLLM programs with evictions, and a turn with only the
-slot entry left read `cached = 1` and prefilled one token less (SGLang's
-TTFT 0.5267 → 0.5265). The flag was a symptom; the clause applying to
+**`grown` per pool, nothing else.** This change with the clause applying
+to every pool again (`cache_on` ignoring the pool, `cached` the largest
+consumed prefix), run over the 43 pairs with `--seed 1 --horizon 300
+--warmup 50` on 4ed307c: every slot pool then cached its slot, in the 17
+pairs whose programs hold one with the KV. The mean cached of the slot
+pools went from 0 to between 3.0 (`vllm_shared_prompt.sq`'s nine
+requests) and 88.6 (SGLang's, 207.8 at `--horizon 1200`): 14.1–16.0 in
+the vLLM programs, 44.3 on llm-d's decoder, 46.5 in the replay, 55.5 in
+TensorRT-LLM's. Nothing else of any report moved: the turn that finds
+only its slot entry left, reads `cached = 1` and prefills one token less
+(`drop kv` in `a_hold_caches_only_the_pool_its_cache_names`) did not
+occur in these runs. The flag was a symptom; the clause applying to
 every pool was the cause.
 
 **The cost type picks the pool, `cache (cost(kv, ℓ))`** (the issue's (b)).
