@@ -178,53 +178,49 @@ four engines: *colocated* is 4 decode pods that prefill every prompt
 themselves (`thr` past any prompt), the router picking a pod by load as
 the program's decode profile does; *colocated_cache* is the same pods,
 the router picking one that has the session's prefix first, as it picks
-a prefill pod; *split* is 3 prefill pods and 1 decode pod, every prompt
+a prefill pod; both draw among the pods tied on what they compare;
+*split* is 3 prefill pods and 1 decode pod, every prompt
 remote (`thr = 1`). `sessions.md` has the table; `sessions.py` reads
 what a pod computes from its engine's record (`P.prefill` on a prefill
 pod, `D.prefill` on a decode pod that prefills itself), and records each
 deployment's edits in `sessions.csv`.
 
 - **With prefix reuse the cache decides before the batching does.** At
-  3 sessions/s (27 turns/s) TTFT is 172 ms colocated, 37 ms
-  colocated_cache and 214 ms split, the response 359, 86 and 260 ms, the
-  prompt tokens computed a turn 5051, 1339 and 2337. A colocated pod
+  3 sessions/s (27 turns/s) TTFT is 174 ms colocated, 30 ms
+  colocated_cache and 211 ms split, the response 356, 79 and 257 ms, the
+  prompt tokens computed a turn 5057, 1145 and 2346. A colocated pod
   caches the prompt and the answer of a turn, and the next turn's prompt
   is them and the new tokens; a prefill pod caches the prompt only
   (`cache (request.input)`), so the split computes the previous answer
   again.
   Routed by load, the colocated pods lose the prefix and prefill most of
-  every prompt: their decodes then wait behind prefills, 187 ms of decode
-  against 46 split, an ITL of 0.94 ms against 0.23 (a mean above the
-  p99 of 0.38: the gaps beyond the p99 are the prefills a decode rides
-  with). Routed by prefix, they prefill little, and the decode is 50 ms
-  against 46, the ITL 0.25 against 0.23 ms.
+  every prompt: their decodes then wait behind prefills, 182 ms of decode
+  against 46 split, an ITL of 0.92 ms against 0.23 (a mean above the
+  p99 of 0.37: the gaps beyond the p99 are the prefills a decode rides
+  with). Routed by prefix, they prefill little, and the decode is 49 ms
+  against 46, the ITL 0.24 against 0.23 ms.
 - **At low load the split answers before the load-routed colocated pods,
-  and that is the cache too.** At 1 session/s TTFT is 55 ms colocated,
-  17 ms colocated_cache and 31 ms split; the decode time is 43.0 ms
-  colocated and 43.3 split. The split's 31 ms are its prefill of 849
+  and that is the cache too.** At 1 session/s TTFT is 61 ms colocated,
+  14 ms colocated_cache and 31 ms split; the decode time is 43.1 ms
+  colocated and 43.2 split. The split's 31 ms are its prefill of 849
   tokens (17 ms), the read of the 2000 the decode pod lacks (2 ms of wait
   and 11 on the NIC, which concurrent reads share), and the waits
   between.
 - **Closed sessions: a faster answer brings the next turn a little
-  sooner.** With 60 users colocated serves 21.06 turns/s, split 21.46 and
-  colocated_cache 21.88, with responses of 182, 130 and 77 ms. A turn's
-  cycle is 60/21.06 = 2.85 s, most of it the tool; Little's law, users =
-  turns/s × cycle, gives 21.06 × 2.85 / (2.85 − 0.052) = 21.45 for the
-  split and 21.06 × 2.85 / (2.85 − 0.106) = 21.87 for colocated_cache.
+  sooner.** With 60 users colocated serves 21.00 turns/s, split 21.39 and
+  colocated_cache 21.91, with responses of 183, 130 and 64 ms. A turn's
+  cycle is 60/21.00 = 2.858 s, most of it the tool; Little's law, users =
+  turns/s × cycle, gives 21.00 × 2.858 / (2.858 − 0.053) = 21.40 for the
+  split and 21.00 × 2.858 / (2.858 − 0.120) = 21.92 for colocated_cache.
   With a tool call that long, a gain in the answer is the user's more
   than the throughput's.
 
 Not covered here: N, NP, ND as constants a
 run can set (an input may not set a family's size); and how concurrent reads
-share a NIC beyond max-min fairness. The router draws among prefill pods
-tied on prefix and load (`~uniform(0, 1)`; docs/use-cases/pd.md §The
-router, #610), so the split's cold prompts spread over its three prefill
-pods and their caches; a tie among decode pods still goes to the lowest
-index, as `choose` breaks one (docs/language.md §Ties), where llm-d's
-decode profile rotates too: with a draw there the colocated TTFT at
-1 session/s is 61 ms, not 55 (#747). The router's draw reads the
-session's stream, which its tool time reads too
-(docs/design/stochastic-model.md, Definition 3; #748): on one seed the
-split draws the colocated pods' tokens but other tool times (3.043 s a
-call against 2.999 at 1 session/s, seed 1), so the modes compare by
-their means over the five seeds, not seed by seed.
+share a NIC beyond max-min fairness. Routing ties are drawn
+(`~uniform(0, 1)`), among decode pods as among prefill pods, as llm-d's
+max-score-picker rotates (docs/use-cases/pd.md §The router; #610, #747).
+A draw reads the session's stream, which its tool time reads too
+(docs/design/stochastic-model.md, Definition 3; #748): the deployments
+draw the same tokens on a seed but not the same tool times, so they
+compare by their means over the five seeds, not seed by seed.

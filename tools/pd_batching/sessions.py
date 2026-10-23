@@ -48,8 +48,8 @@ T95 = {1: 12.706, 2: 4.303, 3: 3.182, 4: 2.776, 5: 2.571, 6: 2.447, 7: 2.365, 8:
 # (the program's text, what it becomes), and inputs
 FOUR_DECODERS = [("let NP = 2;", "let NP = 1;"), ("let ND = 2;", "let ND = 4;")]
 CACHE_ROUTER = (
-    "    choose j in ND by (holders(D[j].kv) + queued(D[j].kv));",
-    "    choose j in ND by (cachedin(D[j].kv) > 0 ? 0 : 1, holders(D[j].kv) + queued(D[j].kv));",
+    "    choose j in ND by (holders(D[j].kv) + queued(D[j].kv), ~uniform(0, 1));",
+    "    choose j in ND by (cachedin(D[j].kv) > 0 ? 0 : 1, holders(D[j].kv) + queued(D[j].kv), ~uniform(0, 1));",
 )
 MODES = {
     "colocated": (FOUR_DECODERS, {"thr": 1e9}),

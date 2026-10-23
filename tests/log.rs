@@ -79,26 +79,36 @@ fn a_session_is_logged_through_prefiller_link_and_decoder() {
         leg: None,
     };
     let s = story(log, first);
+    // which prefiller and which decoder: the router's draw among idle
+    // ones (`~uniform(0, 1)`, as llm-d's picker rotates), so the first
+    // wait at each says; the rest of the story is theirs
+    let at = |pool: &str| -> String {
+        s.iter()
+            .find_map(|(what, at)| (what == "wait").then(|| at.strip_prefix(pool))?)
+            .unwrap_or_else(|| panic!("no wait at {pool}: {s:#?}"))
+            .to_string()
+    };
+    let (i, j) = (at("P.reqs"), at("D.kv"));
     let want: Vec<(String, String)> = [
-        ("arrive", ""),
-        ("turn", "1"),
-        ("wait", "P.reqs[0]"),
-        ("admit", "P.reqs[0]"),
-        ("prefill", "P[0]"),
-        ("done", "P[0]"),
-        ("wait", "D.kv[0]"),
-        ("admit", "D.kv[0]"),
-        ("run", "P.nic[0]+D.nic[0]"),
-        ("done", "P.nic[0]"),
-        ("wait", "D.reqs[0]"),
-        ("admit", "D.reqs[0]"),
-        ("prefill", "D[0]"),
-        ("done", "D[0]"),
-        ("decode", "D[0]"),
-        ("done", "D[0]"),
+        ("arrive", String::new()),
+        ("turn", "1".into()),
+        ("wait", format!("P.reqs{i}")),
+        ("admit", format!("P.reqs{i}")),
+        ("prefill", format!("P{i}")),
+        ("done", format!("P{i}")),
+        ("wait", format!("D.kv{j}")),
+        ("admit", format!("D.kv{j}")),
+        ("run", format!("P.nic{i}+D.nic{j}")),
+        ("done", format!("P.nic{i}")),
+        ("wait", format!("D.reqs{j}")),
+        ("admit", format!("D.reqs{j}")),
+        ("prefill", format!("D{j}")),
+        ("done", format!("D{j}")),
+        ("decode", format!("D{j}")),
+        ("done", format!("D{j}")),
     ]
-    .iter()
-    .map(|(a, b)| (a.to_string(), b.to_string()))
+    .into_iter()
+    .map(|(a, b)| (a.to_string(), b))
     .collect();
     assert_eq!(&s[..want.len()], &want[..], "{s:#?}");
     // then its tool, or its end: the workload's `more` draw

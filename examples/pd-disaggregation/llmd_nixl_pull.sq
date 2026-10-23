@@ -31,7 +31,7 @@ fn main() {
   // --8<-- [start:router]
   queue gw : gateway {
     route {
-      choose j in ND by (holders(D[j].kv) + queued(D[j].kv));
+      choose j in ND by (holders(D[j].kv) + queued(D[j].kv), ~uniform(0, 1));
       set hitD = min(cachedin(D[j].kv), floor(input - 1, bs));
       set remote_prefill = input >= minp && input - hitD >= thr;
       if (remote_prefill) {
