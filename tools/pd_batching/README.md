@@ -10,7 +10,7 @@ measurements.
 ```
 cargo build --release
 tools/pd_batching/sweep.py     # about ten minutes; writes raw.jsonl (not committed), results.csv, summary.md
-tools/pd_batching/sessions.py  # about fifteen minutes; writes sessions.csv, sessions.md
+tools/pd_batching/sessions.py  # about ten minutes; writes sessions.csv, sessions.md
 ```
 
 | File | |
@@ -20,6 +20,7 @@ tools/pd_batching/sessions.py  # about fifteen minutes; writes sessions.csv, ses
 | `results.csv` | one row per run (experiment, mode, load, case, the program's lines a variation edits, seed) |
 | `summary.md` | mean ± 95 % CI over five seeds |
 | `sessions.py`, `sessions.csv`, `sessions.md` | the same comparison on `llmd_nixl_pull.sq` as written: multi-turn sessions with a tool call between turns and prefix reuse, open and closed |
+| `test_runners.py` | reruns two rows each of `results.csv` and `sessions.csv` on seed 1 (`make check`); a change that moves them regenerates the file |
 
 Both modes of a program draw the same requests from a seed: the output
 tokens of every session agree between the modes. The output throughput of
@@ -178,17 +179,19 @@ themselves (`thr` past any prompt), the router picking a pod by load as
 the program's decode profile does; *colocated_cache* is the same pods,
 the router picking one that has the session's prefix first, as it picks
 a prefill pod; *split* is 3 prefill pods and 1 decode pod, every prompt
-remote (`thr = 1`). `sessions.md` has the table; `sessions.py` adds one
-`observe` to the prefill pods' entry to count what they compute, and
-records each deployment's edits in `sessions.csv`.
+remote (`thr = 1`). `sessions.md` has the table; `sessions.py` reads
+what a pod computes from its engine's record (`P.prefill` on a prefill
+pod, `D.prefill` on a decode pod that prefills itself), and records each
+deployment's edits in `sessions.csv`.
 
 - **With prefix reuse the cache decides before the batching does.** At
   3 sessions/s (27 turns/s) TTFT is 172 ms colocated, 37 ms
-  colocated_cache and 217 ms split, the response 359, 86 and 263 ms, the
-  prompt tokens computed a turn 5051, 1339 and 2389. A colocated pod
+  colocated_cache and 214 ms split, the response 359, 86 and 260 ms, the
+  prompt tokens computed a turn 5051, 1339 and 2337. A colocated pod
   caches the prompt and the answer of a turn, and the next turn's prompt
   is them and the new tokens; a prefill pod caches the prompt only
-  (`cache (prompt)`), so the split computes the previous answer again.
+  (`cache (request.input)`), so the split computes the previous answer
+  again.
   Routed by load, the colocated pods lose the prefix and prefill most of
   every prompt: their decodes then wait behind prefills, 187 ms of decode
   against 46 split, an ITL of 0.94 ms against 0.23 (a mean above the
@@ -197,19 +200,31 @@ records each deployment's edits in `sessions.csv`.
   against 46, the ITL 0.25 against 0.23 ms.
 - **At low load the split answers before the load-routed colocated pods,
   and that is the cache too.** At 1 session/s TTFT is 55 ms colocated,
-  17 ms colocated_cache and 41 ms split; the decode time is 43.0 ms
-  colocated and 43.3 split. The split's 41 ms are its prefill of 1130
-  tokens (23 ms), the read of the 2000 the decode pod lacks (2 ms of wait
-  and 10 on the NIC), and the waits between.
+  17 ms colocated_cache and 31 ms split; the decode time is 43.0 ms
+  colocated and 43.3 split. The split's 31 ms are its prefill of 849
+  tokens (17 ms), the read of the 2000 the decode pod lacks (2 ms of wait
+  and 11 on the NIC, which concurrent reads share), and the waits
+  between.
 - **Closed sessions: a faster answer brings the next turn a little
-  sooner.** With 60 users colocated serves 21.06 turns/s, split 21.37 and
-  colocated_cache 21.88, with responses of 182, 143 and 77 ms. A turn's
+  sooner.** With 60 users colocated serves 21.06 turns/s, split 21.46 and
+  colocated_cache 21.88, with responses of 182, 130 and 77 ms. A turn's
   cycle is 60/21.06 = 2.85 s, most of it the tool; Little's law, users =
-  turns/s × cycle, gives 21.06 × 2.85 / (2.85 − 0.039) = 21.35 for the
+  turns/s × cycle, gives 21.06 × 2.85 / (2.85 − 0.052) = 21.45 for the
   split and 21.06 × 2.85 / (2.85 − 0.106) = 21.87 for colocated_cache.
   With a tool call that long, a gain in the answer is the user's more
   than the throughput's.
 
 Not covered here: N, NP, ND as constants a
 run can set (an input may not set a family's size); and how concurrent reads
-share a NIC beyond max-min fairness. Routing ties go to the lowest index.
+share a NIC beyond max-min fairness. The router draws among prefill pods
+tied on prefix and load (`~uniform(0, 1)`; docs/use-cases/pd.md §The
+router, #610), so the split's cold prompts spread over its three prefill
+pods and their caches; a tie among decode pods still goes to the lowest
+index, as `choose` breaks one (docs/language.md §Ties), where llm-d's
+decode profile rotates too: with a draw there the colocated TTFT at
+1 session/s is 61 ms, not 55 (#747). The router's draw reads the
+session's stream, which its tool time reads too
+(docs/design/stochastic-model.md, Definition 3; #748): on one seed the
+split draws the colocated pods' tokens but other tool times (3.043 s a
+call against 2.999 at 1 session/s, seed 1), so the modes compare by
+their means over the five seeds, not seed by seed.

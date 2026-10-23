@@ -29,6 +29,27 @@ class ExecutionSettings(unittest.TestCase):
         self.assertGreater(report["observes"]["P.prefill"]["count"], 0)
 
 
+def disagreements(now, old, csvname):
+    """What a rerun row `now` says that its recorded row `old` (read back
+    from `csvname`, so text) does not, one clause a column, or "" when they
+    agree: a column only one of them has (csv writes "" in a column a row
+    lacks), a float beyond rel_tol 1e-9 (NaN agrees only with NaN),
+    anything else as csv writes it."""
+    said = [f"{k} is {now[k]}, {csvname} has no such column" for k in now if k not in old]
+    said += [f"the rerun has no {k}, {csvname} has {old[k]}" for k in old if k not in now and old[k] != ""]
+    for k, v in now.items():
+        if k not in old:
+            continue
+        if isinstance(v, float):
+            o = float(old[k])
+            same = math.isnan(o) if math.isnan(v) else math.isclose(v, o, rel_tol=1e-9)
+        else:
+            same = ("" if v is None else str(v)) == old[k]
+        if not same:
+            said.append(f"{k} is {v}, {csvname} has {old[k]}")
+    return "; ".join(said)
+
+
 class Results(unittest.TestCase):
     """results.csv is what the committed programs print: two cheap rows,
     rerun on seed 1, agree with it. A change that moves a seeded number
@@ -48,9 +69,33 @@ class Results(unittest.TestCase):
             if old is None:
                 self.fail(f"{where}: no row in results.csv; regenerate with sweep.py")
             now = sweep.row(experiment, mode, lam, prompt, 1, sweep.run(program, sets, defs, 1, edits), edits)
-            for k, v in now.items():
-                if isinstance(v, float) and not math.isnan(v) and not math.isclose(v, float(old[k]), rel_tol=1e-9):
-                    self.fail(f"{where}: {k} is {v}, results.csv has {old[k]}; regenerate with sweep.py")
+            said = disagreements(now, old, "results.csv")
+            if said:
+                self.fail(f"{where}: {said}; regenerate with sweep.py")
+
+
+class Sessions(unittest.TestCase):
+    """sessions.csv is what llmd_nixl_pull.sq prints under sessions.py's
+    edits: two cheap rows, rerun on seed 1, agree with it. #610 moved the
+    split's rows and nothing reran them (#609); a change that moves them
+    regenerates the file with sessions.py."""
+
+    # the split: the prefill pods' choose, the NIXL read, the one decode
+    # pod; colocated_cache: four decode pods and sessions.py's CACHE_ROUTER
+    ROWS = [("split", "closed", 20), ("colocated_cache", "closed", 20)]
+
+    def test_two_rows_reproduce(self):
+        with open(sessions.HERE / "sessions.csv") as f:
+            recorded = {(r["mode"], r["workload"], r["x"], r["seed"]): r for r in csv.DictReader(f)}
+        for mode, workload, x in self.ROWS:
+            where = f"{mode} {workload} {x}"
+            old = recorded.get((mode, workload, str(x), "1"))
+            if old is None:
+                self.fail(f"{where}: no row in sessions.csv; regenerate with sessions.py")
+            now = sessions.row(mode, workload, x, 1, sessions.run(mode, workload, x, 1))
+            said = disagreements(now, old, "sessions.csv")
+            if said:
+                self.fail(f"{where}: {said}; regenerate with sessions.py")
 
 
 if __name__ == "__main__":
