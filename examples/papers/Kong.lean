@@ -45,7 +45,7 @@ def volE : Env → ℕ := fun x => x.attr 9 * x.attr 10 + (x.attr 10 * x.attr 10
 
 theorem prog_eq : Pk = .observe 0 (fun x => x.attr 10) (.observe 1 volE Hk) := rfl
 
-theorem deployment_eq : Dk = ⟨[⟨20000, 1, false, some volE⟩], 1000000, 0, none, fun _ => 1, none, none⟩ := rfl
+theorem deployment_eq : Dk = ⟨[⟨20000, 1, false, some volE⟩], 1000000, 0, none, fun _ => 1, none, none, []⟩ := rfl
 
 /-! ### One command -/
 
@@ -1620,8 +1620,7 @@ theorem start_bnd {w : Workload} {g : Ghost} {m : Machine} (hF : Fam w) (h : Set
     exfalso; revert hp; rcases p with _ | p <;> simp [pdef, deployment_eq]
   have hg : ∀ j ∈ m.jobs, j.growing = none := fun j hj => (hI.jobs j hj).2.2.2.1
   have hbud : Claims.KongSvf.deployment.budget = 1000000 := rfl
-  have ha := assign_eq_fillIter Dk rfl m hq hg m.preempts (m.jobs.length + 100000) 0 1000000 [] (by omega)
-  simp only [List.drop_zero, List.nil_append] at ha
+  have ha := plan_eq_fillIter Dk rfl rfl m hq hg
   have hw1 : ∀ j ∈ m.jobs, wantOf Dk j = 1 := fun j hj => by
     have h1 := hI.jobs j hj
     have h2 := (hI.leftPos _ h1.1 h1.2.1).1
@@ -1648,7 +1647,7 @@ theorem start_bnd {w : Workload} {g : Ghost} {m : Machine} (hF : Fam w) (h : Set
   · have hya : ∃ j < w.init.length, g.c j = .a := (jobs_nonempty_iff hI).mp hj
     have hne : (m.jobs.isEmpty) = false := by simpa using hj
     simp only [hne, Bool.not_false, ↓reduceIte]
-    rw [hbud, ha, hfill]
+    rw [ha, hbud, hfill]
     have hne2 : (m.jobs.map fun j => (j.owner, 1)).isEmpty = false := by simpa using hj
     simp only [hne2, Bool.not_false, Bool.true_or, ↓reduceIte]
     refine ⟨⟨hI.congr rfl rfl rfl rfl rfl rfl rfl rfl, h.ready, h.cats, h.full⟩,

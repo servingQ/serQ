@@ -14,7 +14,11 @@ KV blocks of the chunk the engine's budget leaves (admission needs room for
 the whole prompt), prefill growing the hold, decode growing it. The
 theorems say that the executable semantics gives, for every request, the
 step of its first token and of its last token, and the number of
-preemptions, that the real scheduler gives. The last, `vllmTurn` (serQ
+preemptions, that the real scheduler gives. The `vllm_serve_*` scenarios
+run the same program with the engine serving its residents in another order
+(`serve by`: by admission, newest first, prefills first); their answers come
+from the vLLM scheduler patched to serve in that order (serQ
+`tools/serq_vllm.py`). The last, `vllmTurn` (serQ
 `examples/replay/vllm_replay.sq` on a unit step clock, the trace inlined as the
 sessions' turns), is a multi-turn replay with a prefix cache: hits, a
 partial hit and misses caused by eviction; its theorem gives, for every
@@ -70,58 +74,86 @@ def outcome (D : Deployment) (horizon : ℕ) (w : Workload) :
 
 /-- serQ `tools/oracle/adaptive.ir.json`: 5 requests, 2000 blocks of 16, budget 4096, 16 slots, chunk 1000, adaptive; the deployment and the workload are the IR's. -/
 theorem vllm_adaptive :
-    outcome ⟨[⟨16, 1, true, none⟩, ⟨31984, 16, false, none⟩], 4096, 0, some 1, fun _ => 1, none, some fun c => if ((c.residents + (c.queued 0)) > 1) then (max 1000 (4096 / (c.residents + (c.queued 0)))) else 0⟩ 12
+    outcome ⟨[⟨16, 1, true, none⟩, ⟨31984, 16, false, none⟩], 4096, 0, some 1, fun _ => 1, none, some fun c => if ((c.residents + (c.queued 0)) > 1) then (max 1000 (4096 / (c.residents + (c.queued 0)))) else 0, []⟩ 12
       ⟨[[(9, 6000), (10, 2), (11, 0)], [(9, 6000), (10, 2), (11, 0)], [(9, 2000), (10, 2), (11, 2)], [(9, 2000), (10, 2), (11, 2)], [(9, 2000), (10, 2), (11, 2)]], [], none, 0, some 8, none⟩ =
     ([(0, 4), (1, 4), (2, 4), (3, 4), (4, 6)], [(0, 5), (1, 5), (2, 5), (3, 5), (4, 7)], 0) := by
   decide +kernel
 
 /-- serQ `tools/oracle/alone.ir.json`: 4 requests, 10 blocks of 16, budget 32, 8 slots, chunk 24; the deployment and the workload are the IR's. -/
 theorem vllm_alone :
-    outcome ⟨[⟨8, 1, true, none⟩, ⟨144, 16, false, none⟩], 32, 0, some 1, fun _ => 1, none, some fun c => if ((c.residents + (c.queued 0)) > 1) then 24 else 0⟩ 53
+    outcome ⟨[⟨8, 1, true, none⟩, ⟨144, 16, false, none⟩], 32, 0, some 1, fun _ => 1, none, some fun c => if ((c.residents + (c.queued 0)) > 1) then 24 else 0, []⟩ 53
       ⟨[[(9, 60), (10, 12), (11, 1)], [(9, 60), (10, 24), (11, 4)], [(9, 60), (10, 12), (11, 0)], [(9, 30), (10, 6), (11, 1)]], [], none, 0, some 8, none⟩ =
     ([(0, 5), (1, 25), (2, 3), (3, 17)], [(0, 23), (1, 48), (2, 14), (3, 22)], 2) := by
   decide +kernel
 
 /-- serQ `tools/oracle/chunked.ir.json`: 3 requests, 1000 blocks of 16, budget 1024, 16 slots, chunk 0; the deployment and the workload are the IR's. -/
 theorem vllm_chunked :
-    outcome ⟨[⟨16, 1, true, none⟩, ⟨15984, 16, false, none⟩], 1024, 0, some 1, fun _ => 1, none, none⟩ 13
+    outcome ⟨[⟨16, 1, true, none⟩, ⟨15984, 16, false, none⟩], 1024, 0, some 1, fun _ => 1, none, none, []⟩ 13
       ⟨[[(9, 3000), (10, 2), (11, 0)], [(9, 700), (10, 5), (11, 1)], [(9, 100), (10, 3), (11, 1)]], [], none, 0, some 8, none⟩ =
     ([(0, 3), (1, 4), (2, 4)], [(0, 4), (1, 8), (2, 6)], 0) := by
   decide +kernel
 
 /-- serQ `tools/oracle/hol.ir.json`: 3 requests, 11 blocks of 16, budget 1024, 16 slots, chunk 0; the deployment and the workload are the IR's. -/
 theorem vllm_hol :
-    outcome ⟨[⟨16, 1, true, none⟩, ⟨160, 16, false, none⟩], 1024, 0, some 1, fun _ => 1, none, none⟩ 25
+    outcome ⟨[⟨16, 1, true, none⟩, ⟨160, 16, false, none⟩], 1024, 0, some 1, fun _ => 1, none, none, []⟩ 25
       ⟨[[(9, 96), (10, 10), (11, 0)], [(9, 96), (10, 10), (11, 0)], [(9, 16), (10, 3), (11, 0)]], [], none, 0, some 8, none⟩ =
     ([(0, 1), (1, 11), (2, 11)], [(0, 10), (1, 20), (2, 13)], 0) := by
   decide +kernel
 
 /-- serQ `tools/oracle/longchunk.ir.json`: 2 requests, 1000 blocks of 16, budget 4096, 16 slots, chunk 1000; the deployment and the workload are the IR's. -/
 theorem vllm_longchunk :
-    outcome ⟨[⟨16, 1, true, none⟩, ⟨15984, 16, false, none⟩], 4096, 0, some 1, fun _ => 1, none, some fun c => if ((c.residents + (c.queued 0)) > 1) then 1000 else 0⟩ 9
+    outcome ⟨[⟨16, 1, true, none⟩, ⟨15984, 16, false, none⟩], 4096, 0, some 1, fun _ => 1, none, some fun c => if ((c.residents + (c.queued 0)) > 1) then 1000 else 0, []⟩ 9
       ⟨[[(9, 3000), (10, 2), (11, 0)], [(9, 3000), (10, 2), (11, 0)]], [], none, 0, some 8, none⟩ =
     ([(0, 3), (1, 3)], [(0, 4), (1, 4)], 0) := by
   decide +kernel
 
 /-- serQ `tools/oracle/mixed.ir.json`: 6 requests, 40 blocks of 16, budget 512, 4 slots, chunk 0; the deployment and the workload are the IR's. -/
 theorem vllm_mixed :
-    outcome ⟨[⟨4, 1, true, none⟩, ⟨624, 16, false, none⟩], 512, 0, some 1, fun _ => 1, none, none⟩ 105
+    outcome ⟨[⟨4, 1, true, none⟩, ⟨624, 16, false, none⟩], 512, 0, some 1, fun _ => 1, none, none, []⟩ 105
       ⟨[[(9, 300), (10, 40), (11, 0)], [(9, 200), (10, 30), (11, 2)], [(9, 250), (10, 20), (11, 3)], [(9, 150), (10, 60), (11, 3)], [(9, 400), (10, 10), (11, 5)], [(9, 100), (10, 25), (11, 9)]], [], none, 0, some 8, none⟩ =
     ([(0, 1), (1, 3), (2, 33), (3, 41), (4, 53), (5, 63)], [(0, 40), (1, 32), (2, 52), (3, 100), (4, 62), (5, 87)], 0) := by
   decide +kernel
 
 /-- serQ `tools/oracle/preempt.ir.json`: 2 requests, 11 blocks of 16, budget 100, 16 slots, chunk 0; the deployment and the workload are the IR's. -/
 theorem vllm_preempt :
-    outcome ⟨[⟨16, 1, true, none⟩, ⟨160, 16, false, none⟩], 100, 0, some 1, fun _ => 1, none, none⟩ 65
+    outcome ⟨[⟨16, 1, true, none⟩, ⟨160, 16, false, none⟩], 100, 0, some 1, fun _ => 1, none, none, []⟩ 65
       ⟨[[(9, 80), (10, 30), (11, 0)], [(9, 80), (10, 30), (11, 0)]], [], none, 0, some 8, none⟩ =
     ([(0, 1), (1, 31)], [(0, 30), (1, 60)], 1) := by
   decide +kernel
 
 /-- serQ `tools/oracle/seqcap.ir.json`: 4 requests, 1000 blocks of 16, budget 1024, 2 slots, chunk 0; the deployment and the workload are the IR's. -/
 theorem vllm_seqcap :
-    outcome ⟨[⟨2, 1, true, none⟩, ⟨15984, 16, false, none⟩], 1024, 0, some 1, fun _ => 1, none, none⟩ 18
+    outcome ⟨[⟨2, 1, true, none⟩, ⟨15984, 16, false, none⟩], 1024, 0, some 1, fun _ => 1, none, none, []⟩ 18
       ⟨[[(9, 1024), (10, 5), (11, 0)], [(9, 1024), (10, 5), (11, 0)], [(9, 1024), (10, 5), (11, 0)], [(9, 1024), (10, 5), (11, 0)]], [], none, 0, some 8, none⟩ =
     ([(0, 1), (1, 3), (2, 7), (3, 9)], [(0, 5), (1, 7), (2, 11), (3, 13)], 0) := by
+  decide +kernel
+
+/-- serQ `tools/oracle/serve/admission.ir.json`: 4 requests, 12 blocks of 16, budget 64, 8 slots, chunk 0, served by `admission` (the patched scheduler's answer); the deployment and the workload are the IR's. -/
+theorem vllm_serve_admission :
+    outcome ⟨[⟨8, 1, true, none⟩, ⟨176, 16, false, none⟩], 64, 0, some 1, fun _ => 1, none, none, [fun e => ((e.admission : ℕ) : ℤ)]⟩ 66
+      ⟨[[(9, 40), (10, 30), (11, 0)], [(9, 40), (10, 30), (11, 1)], [(9, 40), (10, 30), (11, 2)], [(9, 40), (10, 30), (11, 3)]], [], none, 0, some 8, none⟩ =
+    ([(0, 1), (1, 2), (2, 3), (3, 32)], [(0, 30), (1, 31), (2, 51), (3, 61)], 1) := by
+  decide +kernel
+
+/-- serQ `tools/oracle/serve/newest_first.ir.json`: 4 requests, 1000 blocks of 16, budget 32, 4 slots, chunk 0, served by `-admission` (the patched scheduler's answer); the deployment and the workload are the IR's. -/
+theorem vllm_serve_newest_first :
+    outcome ⟨[⟨4, 1, true, none⟩, ⟨15984, 16, false, none⟩], 32, 0, some 1, fun _ => 1, none, none, [fun e => -((e.admission : ℕ) : ℤ)]⟩ 33
+      ⟨[[(9, 10), (10, 12), (11, 4)], [(9, 120), (10, 24), (11, 0)], [(9, 60), (10, 12), (11, 0)], [(9, 4), (10, 6), (11, 0)]], [], none, 0, some 8, none⟩ =
+    ([(0, 7), (1, 4), (2, 6), (3, 6)], [(0, 18), (1, 28), (2, 17), (3, 11)], 0) := by
+  decide +kernel
+
+/-- serQ `tools/oracle/serve/newest_first_preempt.ir.json`: 4 requests, 10 blocks of 16, budget 32, 8 slots, chunk 24, served by `-admission` (the patched scheduler's answer); the deployment and the workload are the IR's. -/
+theorem vllm_serve_newest_first_preempt :
+    outcome ⟨[⟨8, 1, true, none⟩, ⟨144, 16, false, none⟩], 32, 0, some 1, fun _ => 1, none, some fun c => if ((c.residents + (c.queued 0)) > 1) then 24 else 0, [fun e => -((e.admission : ℕ) : ℤ)]⟩ 54
+      ⟨[[(9, 60), (10, 12), (11, 1)], [(9, 60), (10, 24), (11, 4)], [(9, 60), (10, 12), (11, 0)], [(9, 30), (10, 6), (11, 1)]], [], none, 0, some 8, none⟩ =
+    ([(0, 5), (1, 26), (2, 3), (3, 18)], [(0, 26), (1, 49), (2, 16), (3, 23)], 2) := by
+  decide +kernel
+
+/-- serQ `tools/oracle/serve/prefill_first.ir.json`: 4 requests, 1000 blocks of 16, budget 64, 8 slots, chunk 48, served by `decoding ? 1 : 0` (the patched scheduler's answer); the deployment and the workload are the IR's. -/
+theorem vllm_serve_prefill_first :
+    outcome ⟨[⟨8, 1, true, none⟩, ⟨15984, 16, false, none⟩], 64, 0, some 1, fun _ => 1, none, some fun c => if ((c.residents + (c.queued 0)) > 1) then 48 else 0, [fun e => (((if (e.decoding ≠ 0) then 1 else 0) : ℕ) : ℤ)]⟩ 27
+      ⟨[[(9, 30), (10, 20), (11, 0)], [(9, 30), (10, 20), (11, 0)], [(9, 200), (10, 3), (11, 2)], [(9, 90), (10, 3), (11, 3)]], [], none, 0, some 8, none⟩ =
+    ([(0, 1), (1, 1), (2, 7), (3, 7)], [(0, 22), (1, 22), (2, 9), (3, 9)], 0) := by
   decide +kernel
 
 /-! ### A multi-turn scenario with a prefix cache -/
@@ -203,7 +235,7 @@ theorem vllmTurn_wf : vllmTurn.wf = true := by decide
 `cache_trace.csv`; the deployment and the workload are the IR's. Per turn:
 send step, time to first token, latency, cached tokens at admission. -/
 theorem vllm_cache_trace :
-    let m := Exec.runW ⟨[⟨320, 16, false, none⟩, ⟨4, 1, true, none⟩], 64, 0, some 0, fun _ => 1, none, none⟩ 43
+    let m := Exec.runW ⟨[⟨320, 16, false, none⟩, ⟨4, 1, true, none⟩], 64, 0, some 0, fun _ => 1, none, none, []⟩ 43
       ⟨[[], [], []], [[[(3, 100), (4, 3), (5, 2), (7, 0)], [(3, 150), (4, 3), (5, 2), (7, 0)], [(3, 210), (4, 3), (5, 0), (7, 0)]], [[(3, 120), (4, 3), (5, 2), (7, 0)], [(3, 180), (4, 3), (5, 2), (7, 0)], [(3, 230), (4, 3), (5, 0), (7, 0)]], [[(3, 90), (4, 3), (5, 2), (7, 0)], [(3, 140), (4, 3), (5, 2), (7, 0)], [(3, 200), (4, 3), (5, 0), (7, 0)]]], some 2, 6, some 8, none⟩ vllmTurn
     (observed m 1, observed m 2, observed m 3, observed m 4) =
       ([(0, 0), (0, 6), (0, 13), (1, 3), (1, 9), (1, 17), (2, 6), (2, 12), (2, 22)],

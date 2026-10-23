@@ -133,6 +133,12 @@ are rejected rather than silently omitted.
   zero where Rust produces infinity or NaN.
   Rust reports invalid guards
   at runtime; Lean's executable model has no corresponding error state.
+- The engine serves its residents in admission order or by `serve by` keys
+  (`advance running by (…)`, `decode first`) over what a key reads of a
+  resident: `decoding`, `admission`, `remaining`, `residents`, `decoders`
+  and its attributes. A key may be negated as a whole (`-admission`, newest
+  first). Keys reading `kv_decode`, `kv_prefill` or `now`, a negation inside
+  a key, a difference, and `exclusive prefill` are rejected.
 - The claims fragment also supports the body an engine's shared `only (p)`
   lowers to, a chunk expression over `residents` and `queued(p)`, one queue key on a pool that no run grows,
   and cost terms of the form `k * ceil(tokens / b)`. A claim read at the

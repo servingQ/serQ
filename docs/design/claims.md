@@ -107,8 +107,9 @@ Three results hold for every program, not only the papers':
   no hold (`jobs_not_growing`).
 - **Work conservation** (`Exec.work_conserving`). On an engine that serves
   every resident and admits for no pool, every iteration takes
-  `min budget demand`. It is `Fill.assign_eq_fillIter` lifted to every
-  iteration of every path by `every_iteration_of`.
+  `min budget demand`, in whatever order its `serve by` keys serve the
+  residents. It is `Work.assign_tokSum` lifted to every iteration of every
+  path by `every_iteration_of`.
 
 ## The papers
 

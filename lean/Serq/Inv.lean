@@ -412,9 +412,9 @@ theorem inv_admitVia {P : Prog} (m : Machine) (left : ℕ) (h : Inv P m) : Inv P
     · exact h
 
 theorem inv_assign {P : Prog} (pre0 : ℕ) :
-    ∀ (f : ℕ) (m : Machine) (idx left : ℕ), Inv P m → Inv P (assign D f m idx left pre0)
+    ∀ (f : ℕ) (m : Machine) (todo : List Job) (left : ℕ), Inv P m → Inv P (assign D f m todo left pre0)
   | 0, _, _, _, h => h
-  | f + 1, m, idx, left, h => by
+  | f + 1, m, todo, left, h => by
     unfold assign
     split
     · split
@@ -422,7 +422,7 @@ theorem inv_assign {P : Prog} (pre0 : ℕ) :
         · rename_i m' heq
           have h1 := inv_admitVia D m left h
           rw [heq] at h1
-          exact inv_assign pre0 f m' idx left h1
+          exact inv_assign pre0 f m' _ left h1
         · rename_i m' heq
           have h1 := inv_admitVia D m left h
           rw [heq] at h1
@@ -430,17 +430,17 @@ theorem inv_assign {P : Prog} (pre0 : ℕ) :
       · exact h
     · rename_i j _
       split
-      · exact inv_assign pre0 f m (idx + 1) left h
+      · exact inv_assign pre0 f m _ left h
       · simp only
         split
-        · exact inv_assign pre0 f m (idx + 1) left h
+        · exact inv_assign pre0 f m _ left h
         · split
           · try simp only
             split
             · exact h
-            · exact inv_assign pre0 f _ (idx + 1) _ h
+            · exact inv_assign pre0 f _ _ _ h
           · split
-            · exact inv_assign pre0 f m (idx + 1) left h
+            · exact inv_assign pre0 f m _ left h
             · rename_i p _ _ a x _
               rcases hr : (if x + min (wantOf D j) left > a then
                   grow D (D.pools.length * 100000) m j.owner p (x + min (wantOf D j) left - a)
@@ -454,21 +454,37 @@ theorem inv_assign {P : Prog} (pre0 : ℕ) :
                   · exact h
                 rw [hr] at this
                 exact this
-              try simp only [hr]
+              try simp only
               split
-              · have h2 : Inv P (setS m' j.owner (mapHold (getS m' j.owner) p fun (a, x) => (a, x + min (wantOf D j) left))) :=
-                  h1.upd' _ _ fun ho => sessOK_mapHold _ _ _ ho
-                split
-                · exact h2
-                · exact inv_assign pre0 f _ (idx + 1) _ h2
-              · exact inv_assign pre0 f m' idx left h1
+              · split
+                · exact h1
+                · exact inv_assign pre0 f _ _ _ h1
+              · exact h1
+
+theorem inv_settleIter {P : Prog} (m : Machine) (h : Inv P m) : Inv P (settleIter m) := by
+  unfold settleIter
+  suffices ∀ (l : List (ℕ × ℕ)) (M : Machine), Inv P M → Inv P (l.foldl settleOne M) from
+    this m.iter m h
+  intro l
+  induction l with
+  | nil => exact fun _ h => h
+  | cons e l ih =>
+    intro M hM
+    simp only [List.foldl_cons]
+    apply ih
+    unfold settleOne
+    split
+    · exact hM.upd' _ _ fun ho => sessOK_mapHold _ _ _ ho
+    · exact hM
+
+theorem inv_plan {P : Prog} (m : Machine) (h : Inv P m) : Inv P (plan D m) :=
+  inv_settleIter _ (inv_assign D m.preempts _ { m with iter := [] } m.jobs D.budget h)
 
 theorem inv_startIteration {P : Prog} (m : Machine) (h : Inv P m) : Inv P (startIteration D m) := by
   unfold startIteration
   simp only
   split
-  · have h1 := inv_assign (iterDeployment D m) m.preempts (m.jobs.length + 100000)
-      { m with iter := [] } 0 D.budget h
+  · have h1 := inv_plan (iterDeployment D m) m h
     split
     · exact h1
     · exact h1

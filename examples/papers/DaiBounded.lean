@@ -29,7 +29,7 @@ def P1 : Prog := .set 9 (fun x => x.now) P2
 
 theorem prog_eq : Pd = .run 1 .plain (fun x => x.attr 14) none P1 := rfl
 
-theorem deployment_eq : Dd = ⟨[], 128, 0, none, fun st => 1128 + 3547 * ((st.tokens + 127) / 128), none, none⟩ := rfl
+theorem deployment_eq : Dd = ⟨[], 128, 0, none, fun st => 1128 + 3547 * ((st.tokens + 127) / 128), none, none, []⟩ := rfl
 
 /-! ### The state of a request -/
 
@@ -943,8 +943,7 @@ theorem start_bnd {w : Workload} (hF : Fam w) {g : Ghost} {m : Machine} (hI : DI
   rw [hFr0] at hpot
   have hq : engineQueuesEmpty Dd m := fun p hp => by simp [pdef, Claims.DaiSarathi.deployment] at hp
   have hg : ∀ j ∈ m.jobs, j.growing = none := fun j hj => (hI.jobs j hj).2.2.1
-  have ha := assign_eq_fillIter Dd rfl m hq hg m.preempts (m.jobs.length + 100000) 0 128 [] (by omega)
-  simp only [List.drop_zero, List.nil_append] at ha
+  have ha := plan_eq_fillIter Dd rfl rfl m hq hg
   have hvia : ((List.range Claims.DaiSarathi.deployment.pools.length).any fun p =>
       (pdef Dd p).viaEngine && !(pst m p).queue.isEmpty) = false := by
     simp [Claims.DaiSarathi.deployment]
@@ -973,7 +972,7 @@ theorem start_bnd {w : Workload} (hF : Fam w) {g : Ghost} {m : Machine} (hI : DI
   · obtain ⟨j0, js, hjs'⟩ := List.exists_cons_of_ne_nil hjs
     have hne0 : m.jobs.isEmpty = false := by simpa using hjs
     simp only [hne0, Bool.not_false, ↓reduceIte]
-    rw [hb, ha]
+    rw [ha, hb]
     set it := fillIter Dd m.jobs 128 with hit
     have hj0 : j0 ∈ m.jobs := by rw [hjs']; exact List.mem_cons_self
     have hw0 : 0 < wantOf Dd j0 := by

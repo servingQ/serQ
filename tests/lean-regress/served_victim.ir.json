@@ -1,0 +1,396 @@
+{
+ "arrival": {
+  "Sessions": [
+   {
+    "attrs": [
+     [
+      9,
+      125.0
+     ],
+     [
+      10,
+      5.0
+     ],
+     [
+      11,
+      4.0
+     ]
+    ],
+    "turns": []
+   },
+   {
+    "attrs": [
+     [
+      9,
+      52.0
+     ],
+     [
+      10,
+      16.0
+     ],
+     [
+      11,
+      3.0
+     ]
+    ],
+    "turns": []
+   },
+   {
+    "attrs": [
+     [
+      9,
+      90.0
+     ],
+     [
+      10,
+      9.0
+     ],
+     [
+      11,
+      5.0
+     ]
+    ],
+    "turns": []
+   }
+  ]
+ },
+ "attr_types": [
+  "Value",
+  "Size",
+  "Size",
+  "Size",
+  "Size",
+  "Size",
+  "Size",
+  "Size",
+  "Value",
+  "Size",
+  "Size",
+  "Size",
+  "Value",
+  "Value",
+  "Value",
+  "Value"
+ ],
+ "attrs": [
+  "cached",
+  "serial",
+  "turn_no",
+  "new",
+  "out",
+  "think",
+  "more",
+  "forced",
+  "computed",
+  "prompt",
+  "o",
+  "arrive",
+  "vllm.admitted",
+  "vllm.first",
+  "vllm.reused",
+  "vllm.prefill"
+ ],
+ "blocks": [
+  [
+   {
+    "Set": [
+     9,
+     {
+      "Num": 1.0
+     }
+    ]
+   },
+   {
+    "Set": [
+     10,
+     {
+      "Num": 1.0
+     }
+    ]
+   },
+   {
+    "Set": [
+     11,
+     {
+      "Num": 0.0
+     }
+    ]
+   }
+  ],
+  [],
+  [
+   {
+    "Run": {
+     "growing": null,
+     "mode": "Plain",
+     "stage": {
+      "base": 1,
+      "count": 1,
+      "index": null
+     },
+     "work": {
+      "Cost": [
+       {
+        "Stage": {
+         "base": 1,
+         "count": 1
+        }
+       },
+       {
+        "Attr": 11
+       }
+      ]
+     }
+    }
+   },
+   "Turn",
+   {
+    "Request": {
+     "input": {
+      "Attr": 9
+     },
+     "output": {
+      "Attr": 10
+     },
+     "stage": {
+      "base": 0,
+      "count": 1,
+      "index": null
+     }
+    }
+   },
+   {
+    "Observe": [
+     0,
+     {
+      "Attr": 13
+     }
+    ]
+   },
+   {
+    "Observe": [
+     1,
+     {
+      "Ctx": "Now"
+     }
+    ]
+   },
+   "End"
+  ]
+ ],
+ "hidden": [
+  10
+ ],
+ "horizon": 100.0,
+ "init": 0,
+ "observes": [
+  "first",
+  "done",
+  "vllm.reused",
+  "vllm.prefill"
+ ],
+ "pools": [
+  {
+   "admit_via": 0,
+   "block": null,
+   "cap": 8.0,
+   "evict": "Lru",
+   "name": "reqs",
+   "preempt": "None",
+   "queue": null,
+   "spill": null
+  },
+  {
+   "admit_via": null,
+   "block": 16.0,
+   "cap": 240.0,
+   "evict": "Lru",
+   "name": "kv",
+   "preempt": {
+    "By": {
+     "keys": [
+      {
+       "Unary": [
+        "Neg",
+        {
+         "Ctx": "Admission"
+        }
+       ]
+      }
+     ]
+    }
+   },
+   "queue": null,
+   "spill": null
+  }
+ ],
+ "seed": 1,
+ "session": 2,
+ "sides": [
+  [
+   "Workload",
+   "Workload",
+   "Workload"
+  ],
+  [],
+  [
+   "Workload",
+   "Workload",
+   "Server",
+   "Server",
+   "Server",
+   "Workload"
+  ]
+ ],
+ "slot_cached": 0,
+ "slot_computed": 8,
+ "slot_forced": 7,
+ "slot_more": 6,
+ "slot_new": 3,
+ "slot_out": 4,
+ "slot_serial": 1,
+ "slot_think": 5,
+ "slot_turn": 2,
+ "stages": [
+  {
+   "kind": {
+    "Step": {
+     "budget": {
+      "Num": 24.0
+     },
+     "chunk": {
+      "Cond": [
+       {
+        "Binary": [
+         "Gt",
+         {
+          "Binary": [
+           "Add",
+           {
+            "Ctx": "Nres"
+           },
+           {
+            "Call": [
+             "Queued",
+             [
+              {
+               "Pool": {
+                "base": 0,
+                "count": 1,
+                "index": null
+               }
+              }
+             ]
+            ]
+           }
+          ]
+         },
+         {
+          "Num": 1.0
+         }
+        ]
+       },
+       {
+        "Num": 12.0
+       },
+       {
+        "Num": 0.0
+       }
+      ]
+     },
+     "cost": {
+      "Num": 1.0
+     },
+     "memory": 1,
+     "request": {
+      "pools": [
+       [
+        {
+         "base": 0,
+         "count": 1,
+         "index": null
+        },
+        {
+         "Num": 1.0
+        },
+        null
+       ],
+       [
+        {
+         "base": 1,
+         "count": 1,
+         "index": null
+        },
+        {
+         "Call": [
+          "Min",
+          [
+           {
+            "Expr": {
+             "Ctx": "Known"
+            }
+           },
+           {
+            "Expr": {
+             "Call": [
+              "BudgetLeft",
+              [
+               {
+                "Stage": {
+                 "base": 0,
+                 "count": 1,
+                 "index": null
+                }
+               }
+              ]
+             ]
+            }
+           }
+          ]
+         ]
+        },
+        {
+         "Ctx": "Known"
+        }
+       ]
+      ],
+      "records": {
+       "admitted": 12,
+       "first": 13,
+       "last_prefill": 15,
+       "last_reused": 14,
+       "prefill": 3,
+       "reused": 2
+      }
+     },
+     "serve": {
+      "By": [
+       {
+        "Unary": [
+         "Neg",
+         {
+          "Ctx": "Admission"
+         }
+        ]
+       }
+      ]
+     }
+    }
+   },
+   "name": "vllm"
+  },
+  {
+   "kind": {
+    "Ps": {
+     "Ctx": "N"
+    }
+   },
+   "name": "gate"
+  }
+ ],
+ "trace": null,
+ "trace_ordered": false,
+ "turn": 1,
+ "version": 15,
+ "warmup": 0.0
+}

@@ -101,6 +101,55 @@ class FragmentBoundaries(unittest.TestCase):
 
 
 
+class ServeOrder(unittest.TestCase):
+    """`serve` `By(keys)` as `Exec.Deployment.serveBy` (#328)."""
+
+    def keys(self, *keys):
+        return generator.serve_by({"serve": {"By": list(keys)}})
+
+    def test_admission_order_has_no_key(self):
+        self.assertEqual(self.keys(), "[]")
+
+    def test_a_key_is_a_natural_expression_or_its_negation(self):
+        # `decode first`'s key, and the prefill_first scenario's
+        prefill_first = {"Cond": [{"Ctx": "Decoding"}, {"Num": 1.0}, {"Num": 0.0}]}
+        self.assertEqual(self.keys(prefill_first),
+                         "[fun e => (((if (e.decoding ≠ 0) then 1 else 0) : ℕ) : ℤ)]")
+        # newest first, `preempt lifo`'s spelling
+        self.assertEqual(self.keys({"Unary": ["Neg", {"Ctx": "Admission"}]}),
+                         "[fun e => -((e.admission : ℕ) : ℤ)]")
+        self.assertEqual(self.keys({"Ctx": "Remaining"}, {"Attr": 3}),
+                         "[fun e => ((e.remaining : ℕ) : ℤ), fun e => (((e.attr 3) : ℕ) : ℤ)]")
+
+    def test_what_a_resident_does_not_carry_is_outside(self):
+        for read in ("Now", "Kvb", "Kvp"):
+            with self.assertRaisesRegex(generator.Fragment, "serve key"):
+                self.keys({"Ctx": read})
+
+    def test_a_sign_inside_a_key_or_a_difference_is_outside(self):
+        neg = {"Unary": ["Neg", {"Ctx": "Admission"}]}
+        with self.assertRaisesRegex(generator.Fragment, "Neg"):
+            self.keys({"Binary": ["Add", neg, {"Ctx": "Remaining"}]})
+        with self.assertRaisesRegex(generator.Fragment, "Neg"):
+            self.keys({"Unary": ["Neg", neg]})
+        with self.assertRaisesRegex(generator.Fragment, "difference"):
+            self.keys({"Binary": ["Sub", {"Ctx": "Remaining"}, {"Ctx": "Admission"}]})
+
+    def test_exclusive_prefill_is_outside(self):
+        ir, _ = generator.load("mixed")
+        ir = copy.deepcopy(ir)
+        ir["stages"][0]["kind"]["Step"]["serve"] = "ExclusivePrefill"
+        with self.assertRaisesRegex(generator.Fragment, "exclusive prefill"):
+            generator.Lean(ir).deployment()
+
+    def test_the_serve_scenarios_run_the_request_program(self):
+        serve = generator.request_scenarios("serve")
+        self.assertEqual(serve, ["serve/admission", "serve/newest_first",
+                                 "serve/newest_first_preempt", "serve/prefill_first"])
+        # the same session program as the stock scenarios', or this raises
+        generator.program("vllmRequest", generator.request_scenarios() + serve, "the request program")
+
+
 class Sessions(unittest.TestCase):
     def test_while_keeps_its_continuation(self):
         ir, _ = generator.load("mixed")

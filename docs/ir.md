@@ -418,7 +418,10 @@ the IR over natural numbers, event by event as the interpreter does: pools
 with LRU eviction and LIFO preemption, one step engine (stage 0) whose
 iteration cost uses supported terms in `tokens`, `prefilled`, `decoders`,
 `kv_decode` and `attention`, with natural coefficients and a constant term
-of at least 1 (`cost 1` is the step clock; attention coefficients must be even), delay stages, explicit sessions with preset attributes and turns, and the
+of at least 1 (`cost 1` is the step clock; attention coefficients must be even)
+and whose `serve` is `By(keys)`, each key a natural expression over
+`Decoding`, `Admission`, `Remaining`, `Nres`, `Ndec` and attributes, or its
+negation as a whole (`-admission`), delay stages, explicit sessions with preset attributes and turns, and the
 statements `Turn`, `Hold`, `Run`, `Set`, `Observe`, `Branch`, `Loop`, `While`, `End`
 (not `Release`, `Load`, `Fork`, a hold with a `lease` or an engine whose requests are sent)
 with expressions built from integer constants, attributes, `Now`,
@@ -450,8 +453,17 @@ one queue key on a pool that no run grows, and supported tiled costs. A
 claim read at the end aggregates with `Total`, `Count` or `PrefixTotal`:
 `Largest` and `Smallest` are outside the fragment. See
 [the Lean guide](lean.md#what-is-not-covered-yet) for these restrictions.
-Arbitrary iteration bodies, registers, `reserve_held`, `granule` and
+Arbitrary iteration bodies, registers, `reserve_held`, `granule`,
+`ExclusivePrefill`, serve keys reading `Kvb`, `Kvp` or `Now`, and
 preemption policies other than LIFO are not translated.
+
+The model builds an iteration as the interpreter does under any serve
+order (`Exec.assign`, [design](design/lean-serve-order.md)): the next
+resident is the one with the least keys as the residents stand; a resident
+a growth preempts after it was served leaves the batch and its tokens
+return to the budget; a growth that preempts the grower ends the serving;
+and a hold's computed position advances when the iteration is settled, for
+the residents still in it (`Exec.settleIter`).
 
 ### Source entry points and inputs
 

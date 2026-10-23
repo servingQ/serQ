@@ -310,9 +310,6 @@ theorem same_settle (m : Machine) : Same m (settle D m) := same_settleLoop D 100
 
 /-! ### Building an iteration -/
 
-/-- The tokens of a batch. -/
-def tokSum (l : List (ℕ × ℕ)) : ℕ := (l.map (·.2)).sum
-
 @[simp] theorem setS_iter (m : Machine) (i : ℕ) (s : Sess) : (setS m i s).iter = m.iter := rfl
 
 theorem tokSum_append (a b : List (ℕ × ℕ)) : tokSum (a ++ b) = tokSum a + tokSum b := by
@@ -431,13 +428,17 @@ theorem admitVia_same (m : Machine) (left : ℕ) : Same m (admitVia D m left).1 
       · exact Same.refl m
     · exact Same.refl m
 
+@[simp] theorem tokSum_singleton (o t : ℕ) : tokSum [(o, t)] = t := by simp [tokSum]
+
 /-- Building an iteration leaves the clock, the engine's iteration and the
-delays alone, and hands out at most `left` tokens. -/
-theorem assign_same (pre0 : ℕ) : ∀ (f : ℕ) (m : Machine) (idx left : ℕ),
-    Same0 m (assign D f m idx left pre0) ∧
-      tokSum (assign D f m idx left pre0).iter ≤ tokSum m.iter + left
+delays alone, and hands out at most `left` tokens: the jobs a growth
+preempts take their tokens out of the batch as they give them back to the
+budget. -/
+theorem assign_same (pre0 : ℕ) : ∀ (f : ℕ) (m : Machine) (todo : List Job) (left : ℕ),
+    Same0 m (assign D f m todo left pre0) ∧
+      tokSum (assign D f m todo left pre0).iter ≤ tokSum m.iter + left
   | 0, m, _, _ => ⟨Same0.refl m, Nat.le_add_right _ _⟩
-  | f + 1, m, idx, left => by
+  | f + 1, m, todo, left => by
     unfold assign
     split
     · split
@@ -445,7 +446,7 @@ theorem assign_same (pre0 : ℕ) : ∀ (f : ℕ) (m : Machine) (idx left : ℕ),
         · rename_i m' heq
           have hs := admitVia_same D m left
           rw [heq] at hs
-          obtain ⟨h1, h2⟩ := assign_same pre0 f m' idx left
+          obtain ⟨h1, h2⟩ := assign_same pre0 f m' _ left
           exact ⟨hs.same0.trans h1, hs.iter ▸ h2⟩
         · rename_i m' heq
           have hs := admitVia_same D m left
@@ -454,24 +455,24 @@ theorem assign_same (pre0 : ℕ) : ∀ (f : ℕ) (m : Machine) (idx left : ℕ),
       · exact ⟨Same0.refl m, Nat.le_add_right _ _⟩
     · rename_i j _
       split
-      · exact assign_same pre0 f m (idx + 1) left
+      · exact assign_same pre0 f m _ left
       · simp only
         split
-        · exact assign_same pre0 f m (idx + 1) left
+        · exact assign_same pre0 f m _ left
         · rename_i ht
           split
           · split
             · refine ⟨Same0.of_key0 rfl, ?_⟩
-              simp only [tokSum_append]
-              simp [tokSum] <;> omega
+              simp only [tokSum_append, tokSum_singleton]
+              omega
             · obtain ⟨h1, h2⟩ := assign_same pre0 f
-                { m with iter := m.iter ++ [(j.owner, min (wantOf D j) left)] } (idx + 1)
+                { m with iter := m.iter ++ [(j.owner, min (wantOf D j) left)] } (todo.erase j)
                 (left - min (wantOf D j) left)
               refine ⟨Same0.key0_trans h1 rfl, ?_⟩
-              simp only [tokSum_append] at h2
-              simp [tokSum] at h2 ⊢; omega
+              simp only [tokSum_append, tokSum_singleton] at h2
+              omega
           · split
-            · exact assign_same pre0 f m (idx + 1) left
+            · exact assign_same pre0 f m _ left
             · rename_i p _ _ a x _
               -- the growth, then the tokens
               have hg : key0 (if x + min (wantOf D j) left > a then
@@ -487,25 +488,37 @@ theorem assign_same (pre0 : ℕ) : ∀ (f : ℕ) (m : Machine) (idx left : ℕ),
                   grow D (D.pools.length * 100000) m j.owner p (x + min (wantOf D j) left - a)
                   else (m, true)) with ⟨m', ok⟩
               rw [hr] at hg
-              try simp only [hr]
-              obtain ⟨hk, ht⟩ := hg
+              try simp only
+              obtain ⟨hk, hti⟩ := hg
+              simp only at hk hti
               have hs : Same0 m m' := Same0.of_key0 hk
+              have htl : min (wantOf D j) left ≤ left := min_le_right _ _
               split
               · split
                 · refine ⟨hs.trans (Same0.of_key0 rfl), ?_⟩
-                  simp only [tokSum_append]
-                  simp only [tokSum] at ht ⊢
-                  simp [setS_iter]; omega
+                  simp only [tokSum_append, tokSum_singleton]
+                  omega
                 · obtain ⟨h1, h2⟩ := assign_same pre0 f
-                    { setS m' j.owner (mapHold (getS m' j.owner) _ fun (a, x) => (a, x + min (wantOf D j) left)) with
-                      iter := m'.iter ++ [(j.owner, min (wantOf D j) left)] } (idx + 1)
-                    (left - min (wantOf D j) left)
+                    { m' with iter := m'.iter ++ [(j.owner, min (wantOf D j) left)] } _
+                    (left + (tokSum m.iter - tokSum m'.iter) - min (wantOf D j) left)
                   refine ⟨hs.trans (Same0.key0_trans h1 rfl), ?_⟩
-                  simp only [tokSum_append] at h2
-                  simp only [tokSum] at ht h2 ⊢
-                  simp [setS_iter] at h2 ⊢; omega
-              · obtain ⟨h1, h2⟩ := assign_same pre0 f m' idx left
-                exact ⟨hs.trans h1, by simp only at ht; omega⟩
+                  simp only [tokSum_append, tokSum_singleton] at h2
+                  omega
+              · exact ⟨hs, by omega⟩
+
+theorem key0_settleIter (m : Machine) : key0 (settleIter m) = key0 m := by
+  obtain ⟨_, h⟩ := settleIter_eq m; rw [h]; rfl
+
+/-- Planning an iteration leaves the clock, the engine's iteration and the
+delays alone, and hands out at most the budget. -/
+theorem plan_same (m : Machine) : Same0 m (plan D m) ∧ tokSum (plan D m).iter ≤ D.budget := by
+  obtain ⟨hs, htok⟩ := assign_same D m.preempts (m.jobs.length + 100000) { m with iter := [] } m.jobs
+    D.budget
+  have h0 : Same0 m { m with iter := [] } := Same0.of_key0 rfl
+  unfold plan
+  refine ⟨h0.trans (hs.trans (Same0.of_key0 (key0_settleIter _))), ?_⟩
+  rw [settleIter_iter]
+  simpa [tokSum] using htok
 
 theorem key0_foldl' {α : Type} (f : Machine → α → Machine) (hf : ∀ m a, key0 (f m a) = key0 m) :
     ∀ (l : List α) (m : Machine), key0 (l.foldl f m) = key0 m
@@ -562,10 +575,9 @@ theorem startIteration_inv {T R : ℕ} (hb : RateBound D T R) (m : Machine) (h :
   unfold startIteration
   simp only
   split
-  · obtain ⟨hs, htok⟩ := assign_same (iterDeployment D m) m.preempts (m.jobs.length + 100000)
-      { m with iter := [] } 0 D.budget
-    set m' := assign (iterDeployment D m) (m.jobs.length + 100000) { m with iter := [] } 0 D.budget
-      m.preempts with hm'
+  · obtain ⟨hs, htok⟩ := plan_same (iterDeployment D m) m
+    rw [iterDeployment_budget] at htok
+    set m' := plan (iterDeployment D m) m with hm'
     have hn : m'.now = m.now := hs.now
     have hsv : m'.served = m.served := hs.served
     have hie : m'.iterEnd = none := hs.iterEnd.trans hi
@@ -575,7 +587,6 @@ theorem startIteration_inv {T R : ℕ} (hb : RateBound D T R) (m : Machine) (h :
       · exact h.future d h1
       · exact h1
     have hst : m'.delays.Pairwise (fun a b => a.1 ≤ b.1) := hs.sorted h.sorted
-    simp only [tokSum, List.map_nil, List.sum_nil, zero_add] at htok
     split
     · have hc := hb (iterStats D m') (by rw [iterStats_tokens]; exact htok)
       rw [iterStats_tokens] at hc

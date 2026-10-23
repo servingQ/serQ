@@ -35,7 +35,7 @@ import sys
 sys.path.insert(0, os.path.dirname(__file__))
 from gen_lean_oracle import (  # noqa: E402
     Expr, Fragment, Lean, affine, chunk_rule, erase_costs, fold, nat, one_ref, COST_VARS,
-    fragment_step, is_lifo, only_body,
+    fragment_step, is_lifo, only_body, serve_by, serve_leaf,
 )
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
@@ -91,17 +91,6 @@ def end_leaf(e):
     if "Ctx" in e and e["Ctx"] == "Now":
         return "m.now"
     raise Fragment(f"an end claim reads {e}")
-
-
-def serve_leaf(e):
-    if "Ctx" in e:
-        v = {"Decoding": "e.decoding", "Admission": "e.admission", "Remaining": "e.remaining",
-             "Nres": "e.residents", "Ndec": "e.decoders"}.get(e["Ctx"])
-        if v:
-            return v
-    if "Attr" in e:
-        return f"(e.attr {e['Attr']})"
-    raise Fragment(f"serve only reads {e}")
 
 
 def at_least_one(e):
@@ -228,7 +217,7 @@ class Program:
         return (f"⟨[{', '.join(pools)}], {nat(fold(step['budget']), 'budget')}, "
                 f"{nat(chunk, 'chunk')}, "
                 f"{'none' if step['memory'] is None else 'some ' + str(step['memory'])}, {cost}, {only}, "
-                f"{at or 'none'}⟩")
+                f"{at or 'none'}, {serve_by(step)}⟩")
 
     def grown_pools(self):
         out = set()
