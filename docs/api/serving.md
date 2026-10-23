@@ -5,9 +5,9 @@ admission is the kernel's
 [`hold … { … } cache (…)`](statements.md#hold), which an
 engine's scheduler writes as `taking`, `reuse` and `cache`, reading the
 engine's state of the request (`request.known`, `request.hit`). Prefill and
-decode are the mode of a [`run`](statements.md#run) on a step engine; the
-server calls the engine with the request's input and output, `E (in, out);`,
-and a queue's entry writes `run P prefill (cost(P, T));`.
+decode are the mode of a [`run`](statements.md#run) on a step engine, which
+runs them for the request it keeps: the server and a queue's entry call the
+engine with the request's input and output, `E (in, out);`.
 
 Serving forms accept ordinary quantities and perform the named resource
 [`cost`](functions.md#cost) conversion before the primitive operation.

@@ -131,7 +131,7 @@ stmt     := turn ;                           -- draw attributes, submit, wait fo
           | end ;
           | QUEUE [ '[' expr ']' ] . VERB ( expr, ... ) [ from QUEUE [ '[' expr ']' ] ] [ to POOL ( expr ) ] ;
                                              -- a queue's entry, in its place (*Queues*)
-          | ENGINE ( expr , expr ) ;         -- in a server: a request to the engine, its input and output tokens
+          | ENGINE ( expr , expr ) ;         -- in a server or a queue's entry: a request to the engine, its input and output tokens
           | serving                          -- the serving vocabulary, sugar for run
 serving  := transfer [ '[' expr ']' | on STAGE [, STAGE]* ] expr from POOL to POOL ( expr ) ;
                                              -- the KV moves: run link; load; release
@@ -257,12 +257,13 @@ The serving forms name a part of the request's lifecycle that is more than
 one run (a KV transfer) or that is not the engine's (a tool call). They are
 sugar: the parser rewrites each to the kernel statement it stands for, so
 the IR (`serq ir` prints the kernel), the interpreter and the Lean model
-know nothing of them. Prefill and decode are not forms: on a step engine
-they are the mode of the run, written only where the engine's own work is.
-An engine keeps a request's state and runs its prefill and decode itself
-(*An engine's request*); a queue's entry runs its queue's engine as `run P
-prefill (cost(P, T))`. The server, a gateway's `route` and the session
-call the engine (`E (input, output);`) and do not run an engine themselves.
+know nothing of them. Prefill and decode are not forms: an engine keeps a
+request's state and runs its prefill and decode itself (*An engine's
+request*). The server, a gateway's `route` and a queue's entry call it,
+`E (input, output);`, a queue's engine only from the queue's own entries,
+and the session reaches it by its turns. On a step engine prefill and
+decode are the mode of a `run`, which only a queue's entry writes, on its
+own engine, for what a request cannot say (*An engine's request*).
 
 | Serving form | Kernel |
 |---|---|
@@ -530,8 +531,8 @@ does with one request, with the role's parameters (`prefill (prompt)`). A
 queue declares its device and pools, then its stage (its engine, or a
 `serve` of `fifo`, `ps` or `delay`), then its entries, each reading what is
 above it; a pool `on` the queue's device or engine may follow the engine. The body is the server's statements; `run (cost(P, X))` with
-no stage names the queue's own, and a step engine's run names it with its mode (`run P prefill (cost(P, T))`);
-the stages that are not a step engine (a link's, a delay) the body may name
+no stage names the queue's own, and the body calls the queue's engine, `P (prompt, 1);`
+(*An engine's request*); the stages that are not a step engine (a link's, a delay) the body may name
 as a `server` does. `self` is the member's index in a family; nothing may be
 declared `self`, which an entry reads before a parameter or local. A family's
 size may be a `let` constant (`queue D[ND]`), and a family of one is still
@@ -1373,17 +1374,23 @@ report too, one per admission.
 
 The server, a gateway's `route` and the session may not run an engine's
 prefill or decode, nor hold a pool an engine admits (`pool P on E`, `pool
-kv on E.gpu`, an engine's capacity); each is refused with the `taking` and
-the call to write instead (#539). A pool no engine admits (a top-level
-pool, one `on DEVICE`) is held anywhere, around the call too, as
+kv on E.gpu`, an engine's capacity); each is refused with what to write
+instead: the `taking` and the call, or in the workload the session's turn
+(#539). A pool no engine admits (a top-level pool, one `on DEVICE`) is
+held anywhere, around the call too, as
 `examples/single-turn/fastertransformer.sq` holds its `reqs`. A queue's
 entries run their own engine and no other. A queue's engine admits by
 its `taking` as any engine does, and the queue's entries call it, `E
 (input, output);` (`examples/multi-turn/thunderagent.sq`); the server and
 the gateway call the entry (`E[j].decode (prompt);`), not the engine. A
 family's `taking` names its pools without an index, and each member takes
-its own. An entry may still run its engine in the kernel's words (`run E
-prefill (…)`), which no program here does any more.
+its own. An entry may still run its own engine in the kernel's words, `run
+E prefill (…) growing kv` in a `hold` of the queue's pools, for what a
+request cannot say: a delay between its prefill and its decode, or a grow,
+lease or release of a pool the request did not take ([the
+design](design/engine-request.md#self-critique)). No example does
+(`tools/unused.json` lists the modes); `tests/lean-regress/preempt_delay.sq`
+does, for the delay.
 
 An engine's `connector C { per_token (r); load (n); save (n); }` copies a
 request's KV through the L2 queue `C` (vLLM's KV connector; *Queues*). At

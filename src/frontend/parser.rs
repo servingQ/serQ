@@ -583,7 +583,8 @@ enum Side {
 
 /// A serving form: a statement that desugars to `run` on the stage that
 /// plays the role. Prefill and decode are not among them: on a step engine
-/// they are the run's mode, written `run E prefill (…)`.
+/// they are the run's mode, written `run E prefill (…)` in its own queue's
+/// entry.
 #[derive(Clone, Copy, PartialEq)]
 enum Role {
     Transfer,
@@ -5129,10 +5130,26 @@ impl Parser {
             && (s == "prefill" || s == "decode")
         {
             let s = s.clone();
+            // an entry's own engine is named after its queue (`engine on
+            // gpu` in `queue P`), and the entry calls it
+            let own = self
+                .in_queue
+                .map(|qi| self.queues[qi].name.clone())
+                .filter(|q| self.engines.iter().any(|e| e.name == *q));
+            let reach = self.workload_reach().unwrap_or(match &own {
+                Some(q) => request::Reach::Call(q),
+                None => request::Reach::Unknown,
+            });
+            // `init` and `turn` set sizes, and a run's work is a cost
+            let run = if matches!(reach, request::Reach::Sizes(_)) {
+                ""
+            } else {
+                ", or `run S (cost(S, W));` on a stage that is not a step engine"
+            };
             return self.err(format!(
-                "`{s}` is the mode of a `run` on a step engine, not a statement, except in an \
-                 engine's `request`, where `{s} (e)` is `run E {s} (cost(E, e))`\n\
-                 help: write `run E {s} (cost(E, T));` on the step engine `E`, or `run S (cost(S, W));` on another stage"
+                "`{s}` is not a statement: an engine prefills and decodes the requests it keeps, \
+                 and `{s}` is the mode of a `run` on a step engine\n\
+                 help: {reach}{run}"
             ));
         }
         if self.is_kw("Size") || self.is_kw("Cost") {
@@ -5256,11 +5273,15 @@ impl Parser {
         if let Some((q, p)) = r.name.split_once('.')
             && here != Some(q)
         {
+            let reach = self
+                .workload_reach()
+                .or_else(|| self.entry_reach(q))
+                .unwrap_or(request::Reach::Unknown);
             return self.err_at(
                 at,
                 format!(
                     "`{what} {}`: `{p}` is a pool of queue `{q}`, and only `{q}`'s entries hold it; \
-                     call one (`{q}.verb (…)`)",
+                     {reach}",
                     r.name
                 ),
             );
@@ -5270,7 +5291,9 @@ impl Parser {
 
     /// `Q[i].verb (args) [from S[k]] [to P (m)];`
     fn call(&mut self) -> PResult<Stmt> {
-        if self.side == Side::WorkloadSession {
+        // in any workload block, not the session alone: `init` and `turn`
+        // are not expanded, and the call survived to the linker (#510)
+        if self.wl_block.is_some() {
             return self
                 .err("queue entries belong in `server`; a session describes turns with `turn;`");
         }
@@ -5428,6 +5451,15 @@ impl Parser {
                         "`turn` is the session's: the next turn is the workload's decision, \
                          not the server's",
                     );
+                }
+                // `init` and `turn` run inside a turn: the server is not
+                // spliced there, and the turn's request survived to the
+                // linker (#510)
+                if let Some(b @ ("init" | "turn")) = self.wl_block {
+                    return self.err(format!(
+                        "`turn` is the session's: {}",
+                        request::Reach::Sizes(b)
+                    ));
                 }
                 self.advance();
                 self.expect(&Tok::Semi)?;
@@ -5649,9 +5681,9 @@ impl Parser {
             _ if *self.peek_at(1) == Tok::LParen && self.engines.iter().any(|e| e.name == kw) => {
                 self.engine_call()
             }
-            // the serving forms (`prefill`, `transfer`, `decode`, `tool`) are
-            // parsed by `stmt_into`, since one of them stands for several
-            // statements
+            // `transfer` and `tool` are parsed by `stmt_into`, since one
+            // stands for several statements, and it refuses `prefill` and
+            // `decode`
             other => match retired(other) {
                 Some(now) => self.err(now),
                 None => self.err(format!("unknown statement `{other}`")),
@@ -6694,10 +6726,12 @@ mod tests {
                 e.msg.contains(&format!("`{kw}` is the mode of a `run`")),
                 "{e}"
             );
-            assert!(
-                e.msg.contains(&format!("`run E {kw} (cost(E, T));`")),
-                "{e}"
-            );
+            // the help names the call: not the engine's `request`, which
+            // #592 removed, nor the kernel run, which the server may not
+            // write (#510)
+            assert!(e.msg.contains("`E (input, output);`"), "{e}");
+            assert!(!e.msg.contains("engine's `request`"), "{e}");
+            assert!(!e.msg.contains("`run E "), "{e}");
             assert_eq!((e.line, e.col), (7, 34), "{e}");
         }
     }
