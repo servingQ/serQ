@@ -64,8 +64,9 @@ a measurement.
 output token after the first, `response` from sending to the answer
 ([what the client sees](language.md#what-the-client-sees)). Before reading the means, check the pool columns: `rej`
 (requests that can never fit), `preempt`, and `preempted in recompute`
-(sessions preempted again while recomputing what a preemption dropped:
-ordinary under overload, and also how a hold that can never fit shows).
+(sessions preempted again while recomputing what a preemption dropped;
+this is ordinary under overload, where the session may still finish, and a
+hold that can never fit is counted too).
 The means are over answered turns: a turn that is rejected, or unanswered
 when the run ends, has no sample; compare `turns` on the run line with the
 `response` count, and read `rej`.
