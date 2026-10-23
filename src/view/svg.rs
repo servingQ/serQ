@@ -8,7 +8,7 @@
 use std::fmt::Write as _;
 
 use crate::view::figure::{
-    Anchor, BoxStyle, CLIENT, EdgeRole, EdgeStyle, Figure, Item, StationKind,
+    Anchor, BoxStyle, CLIENT, EdgeRole, EdgeStyle, Figure, Item, Mark, StationKind,
 };
 
 /// Text or an attribute value, escaped.
@@ -37,6 +37,9 @@ fn box_class(s: BoxStyle) -> &'static str {
         BoxStyle::Instance => "instance",
         BoxStyle::Frame => "frame",
         BoxStyle::Server => "server",
+        BoxStyle::Prefill => "prefill",
+        BoxStyle::Decode => "decode",
+        BoxStyle::Used => "used",
     }
 }
 
@@ -138,17 +141,51 @@ const PAINTS: &[Paint] = &[
     },
 ];
 
+/// The roles only a run's figure paints (the iteration view): a request's
+/// tokens by its mode, in serq-lar's colours for a prefill and a decode so
+/// that its replay and the figure agree; a pool's allocated units; the
+/// marks of an event. Their dark overrides are written only in a figure
+/// that has one, so that a deployment figure's file stays as it was.
+const RUN_PAINTS: &[Paint] = &[
+    Paint {
+        class: "prefill",
+        light: "fill=\"#e8782a\" stroke=\"none\"",
+        dark: "fill:#f39248",
+    },
+    Paint {
+        class: "decode",
+        light: "fill=\"#2f6fde\" stroke=\"none\"",
+        dark: "fill:#5b8ff0",
+    },
+    Paint {
+        class: "used",
+        light: "fill=\"#8a94a3\" stroke=\"none\"",
+        dark: "fill:#6b7585",
+    },
+    Paint {
+        class: "preempt",
+        light: "fill=\"none\" stroke=\"#d6453d\" stroke-width=\"1.4\"",
+        dark: "stroke:#f0655c",
+    },
+    Paint {
+        class: "evict",
+        light: "fill=\"#d6453d\" stroke=\"none\"",
+        dark: "fill:#f0655c",
+    },
+];
+
 /// `class="..."` plus the light-mode presentation attributes for a role.
 fn paint(class: &str) -> String {
     let p = PAINTS
         .iter()
+        .chain(RUN_PAINTS)
         .find(|p| p.class == class)
         .expect("a known paint role");
     format!(r#"class="{class}" {}"#, p.light)
 }
 
 /// The dark-mode overrides, and the font every label is set in.
-fn stylesheet() -> String {
+fn stylesheet(f: &Figure) -> String {
     let mut s = String::from(
         "\n  text { font-family: ui-monospace, \"SF Mono\", Menlo, Consolas, monospace; }\n",
     );
@@ -157,7 +194,8 @@ fn stylesheet() -> String {
         s,
         "    text {{ fill: #e8e6e3; }} text.dim {{ fill: #9aa4b2; }}"
     );
-    for p in PAINTS {
+    let run: &[Paint] = if f.of_a_run() { RUN_PAINTS } else { &[] };
+    for p in PAINTS.iter().chain(run) {
         let _ = writeln!(s, "    .{} {{ {} }}", p.class, p.dark);
     }
     s.push_str("  }\n");
@@ -188,7 +226,7 @@ pub fn render(f: &Figure) -> String {
     if !f.title.is_empty() {
         let _ = writeln!(s, "<title>{}</title>", esc(&f.title));
     }
-    let _ = writeln!(s, "<style>{}</style>", stylesheet());
+    let _ = writeln!(s, "<style>{}</style>", stylesheet(f));
     let _ = writeln!(
         s,
         r##"<defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="context-stroke"/></marker></defs>"##
@@ -225,7 +263,10 @@ pub fn render(f: &Figure) -> String {
                         | BoxStyle::Cached
                         | BoxStyle::Enclosure
                         | BoxStyle::Frame
-                        | BoxStyle::Server => {
+                        | BoxStyle::Server
+                        | BoxStyle::Prefill
+                        | BoxStyle::Decode
+                        | BoxStyle::Used => {
                             unreachable!("only a bracket or a panel names nodes")
                         }
                     };
@@ -538,6 +579,40 @@ pub fn render(f: &Figure) -> String {
                     n(at.y),
                     n(*r)
                 );
+            }
+            Item::Mark { at, size, mark } => {
+                let h = size / 2.0;
+                let (class, d) = match mark {
+                    // a cross over the victim's cell
+                    Mark::Preempt => (
+                        "preempt",
+                        format!(
+                            "M {} {} L {} {} M {} {} L {} {}",
+                            n(at.x - h),
+                            n(at.y - h),
+                            n(at.x + h),
+                            n(at.y + h),
+                            n(at.x - h),
+                            n(at.y + h),
+                            n(at.x + h),
+                            n(at.y - h)
+                        ),
+                    ),
+                    // a triangle pointing down, over its column
+                    Mark::Evict => (
+                        "evict",
+                        format!(
+                            "M {} {} L {} {} L {} {} z",
+                            n(at.x - h),
+                            n(at.y - h),
+                            n(at.x + h),
+                            n(at.y - h),
+                            n(at.x),
+                            n(at.y + h)
+                        ),
+                    ),
+                };
+                let _ = writeln!(s, r#"<path {} d="{d}"/>"#, paint(class));
             }
             Item::Text {
                 at,

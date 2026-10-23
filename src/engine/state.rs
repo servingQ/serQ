@@ -57,6 +57,11 @@ impl Status {
             .position(|&s| s == self)
             .expect("every status is in ALL")
     }
+
+    /// The status `name` names: the log read back (`Log::from_json`).
+    pub fn from_name(name: &str) -> Option<Status> {
+        Status::ALL.into_iter().find(|s| s.name() == name)
+    }
 }
 
 /// A KV move of a request (`ir::CTransfer`, or a source's send).
@@ -71,12 +76,21 @@ pub enum Transfer {
 }
 
 impl Transfer {
+    /// Every kind of transfer.
+    pub const ALL: [Transfer; 3] = [Transfer::Load, Transfer::Save, Transfer::Send];
+
+    /// Its name in the log.
     pub fn name(self) -> &'static str {
         match self {
             Transfer::Load => "load",
             Transfer::Save => "save",
             Transfer::Send => "send",
         }
+    }
+
+    /// The transfer `name` names: the log read back (`Log::from_json`).
+    pub fn from_name(name: &str) -> Option<Transfer> {
+        Transfer::ALL.into_iter().find(|t| t.name() == name)
     }
 }
 
@@ -93,11 +107,20 @@ pub enum Moved {
 }
 
 impl Moved {
+    /// Every step of a transfer, in order.
+    pub const ALL: [Moved; 3] = [Moved::Registered, Moved::Start, Moved::Done];
+
+    /// Its name in the log.
     pub fn name(self) -> &'static str {
         match self {
             Moved::Registered => "registered",
             Moved::Start => "start",
             Moved::Done => "done",
         }
+    }
+
+    /// The step `name` names: the log read back (`Log::from_json`).
+    pub fn from_name(name: &str) -> Option<Moved> {
+        Moved::ALL.into_iter().find(|m| m.name() == name)
     }
 }

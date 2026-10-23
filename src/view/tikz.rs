@@ -8,7 +8,7 @@
 
 use std::fmt::Write as _;
 
-use crate::view::figure::{Anchor, BoxStyle, EdgeStyle, Figure, Item, StationKind};
+use crate::view::figure::{Anchor, BoxStyle, EdgeStyle, Figure, Item, Mark, StationKind};
 
 /// LaTeX-escape a label. serQ expressions carry `_`, `^`, `~`, `<` and `&`.
 fn esc(s: &str) -> String {
@@ -55,6 +55,9 @@ fn box_style(s: BoxStyle) -> &'static str {
         BoxStyle::Instance => "seqinstance",
         BoxStyle::Frame => "seqframe",
         BoxStyle::Server => "seqserver",
+        BoxStyle::Prefill => "seqprefill",
+        BoxStyle::Decode => "seqdecode",
+        BoxStyle::Used => "seqused",
     }
 }
 
@@ -92,10 +95,30 @@ const STYLES: &str = r#"x=1pt, y=-1pt, line cap=round, line join=round,
   seqback/.style={draw=seqline, line width=.8pt, dash pattern=on 3pt off 2.5pt, ->},
   seqrelation/.style={draw=seqdim, line width=.7pt, dash pattern=on 1.5pt off 2.5pt, ->}"#;
 
+/// The colours only a run's figure paints (the iteration view), as the SVG
+/// writer's `RUN_PAINTS`: written only in a figure that has one.
+const RUN_PREAMBLE: &str = r#"\definecolor{seqprefillc}{HTML}{E8782A}
+\definecolor{seqdecodec}{HTML}{2F6FDE}
+\definecolor{sequsedc}{HTML}{8A94A3}
+\definecolor{seqalert}{HTML}{D6453D}
+"#;
+
+const RUN_STYLES: &str = r#",
+  seqprefill/.style={draw=none, fill=seqprefillc},
+  seqdecode/.style={draw=none, fill=seqdecodec},
+  seqused/.style={draw=none, fill=sequsedc},
+  seqpreempt/.style={draw=seqalert, line width=1pt},
+  seqevict/.style={draw=none, fill=seqalert}"#;
+
 /// Render a figure as a `tikzpicture`, with the colours it needs.
 pub fn render(f: &Figure) -> String {
     let mut s = String::from(PREAMBLE);
-    let _ = writeln!(s, "\\begin{{tikzpicture}}[{STYLES}]");
+    let run = f.of_a_run();
+    if run {
+        s.push_str(RUN_PREAMBLE);
+    }
+    let run_styles = if run { RUN_STYLES } else { "" };
+    let _ = writeln!(s, "\\begin{{tikzpicture}}[{STYLES}{run_styles}]");
 
     for item in &f.items {
         match item {
@@ -280,6 +303,32 @@ pub fn render(f: &Figure) -> String {
                     p(at.x, at.y),
                     n(*r)
                 );
+            }
+            Item::Mark { at, size, mark } => {
+                let h = size / 2.0;
+                match mark {
+                    // a cross over the victim's cell
+                    Mark::Preempt => {
+                        let _ = writeln!(
+                            s,
+                            "  \\draw[seqpreempt] {} -- {} {} -- {};",
+                            p(at.x - h, at.y - h),
+                            p(at.x + h, at.y + h),
+                            p(at.x - h, at.y + h),
+                            p(at.x + h, at.y - h)
+                        );
+                    }
+                    // a triangle pointing down, over its column
+                    Mark::Evict => {
+                        let _ = writeln!(
+                            s,
+                            "  \\fill[seqevict] {} -- {} -- {} -- cycle;",
+                            p(at.x - h, at.y - h),
+                            p(at.x + h, at.y - h),
+                            p(at.x, at.y + h)
+                        );
+                    }
+                }
             }
             Item::Text {
                 at,

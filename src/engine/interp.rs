@@ -17,7 +17,7 @@ use rand::rngs::StdRng;
 
 use crate::engine::cache::{Seg, Trie};
 use crate::engine::dist::Dist;
-use crate::engine::log::{EventKind, Log, Who};
+use crate::engine::log::{EventKind, Log, Memory, Who};
 use crate::engine::report::*;
 use crate::engine::state::{Moved, Status as ReqStatus, Transfer};
 use crate::engine::stats::*;
@@ -5661,7 +5661,8 @@ impl<'p> Interp<'p> {
             // each request with its tokens, in one pass so the two lists
             // line up (every job is one: no spill goes via an engine,
             // #733, so `each` sums to `tokens`); the memory pool once the
-            // iteration is scheduled, in units
+            // iteration is scheduled, in units, with what it has evicted
+            // since the run began
             let (reqs, each): (Vec<Who>, Vec<f64>) = assign
                 .iter()
                 .map(|&(id, t)| {
@@ -5671,9 +5672,11 @@ impl<'p> Interp<'p> {
                     (self.who(sid), t)
                 })
                 .unzip();
-            let memory = spec
-                .memory
-                .map(|pl| (self.pools[pl].used, self.pools[pl].cached));
+            let memory = spec.memory.map(|pl| Memory {
+                used: self.pools[pl].used,
+                cached: self.pools[pl].cached,
+                evicted: self.pools[pl].evicted_units,
+            });
             self.log(EventKind::Iter {
                 stage: st,
                 dur: cost,

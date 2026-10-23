@@ -276,3 +276,108 @@ fn an_error_in_the_workload_is_located_in_its_file() {
         assert!(!stderr.contains("model.sq"), "{stderr}");
     }
 }
+
+/// `serq draw --log LOG` draws the log `run --log` wrote (the iteration
+/// view), and takes neither a program nor a run's options.
+#[test]
+fn a_run_s_log_is_drawn() {
+    let fx = Fixture::new();
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let program = root.join("docs/tutorial/programs/05-engine.sq");
+    let workload = root.join("docs/tutorial/programs/workloads/05-engine.sq");
+    let out = fx.run(&[
+        "run",
+        program.to_str().unwrap(),
+        "--workload",
+        workload.to_str().unwrap(),
+        "--horizon",
+        "10",
+        "--log",
+        "l.json",
+    ]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let out = fx.run(&[
+        "draw",
+        "--log",
+        "l.json",
+        "--from",
+        "0",
+        "--iterations",
+        "20",
+        "--format",
+        "svg",
+        "--out",
+        "f.svg",
+    ]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let svg = std::fs::read_to_string(fx.0.join("f.svg")).unwrap();
+    assert!(
+        svg.starts_with("<svg") && svg.contains("class=\"prefill\""),
+        "{svg}"
+    );
+    // TikZ, to stdout, by default
+    let out = fx.run(&["draw", "--log", "l.json", "--engine", "llm"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(String::from_utf8_lossy(&out.stdout).contains("\\begin{tikzpicture}"));
+    for (args, fragments) in [
+        (
+            vec!["draw", "p.sq", "--log", "l.json"],
+            vec!["takes no FILE", "`p.sq`"],
+        ),
+        (
+            vec!["draw", "--log", "l.json", "--seed", "1"],
+            vec!["--seed does not apply to `draw --log`"],
+        ),
+        (vec!["draw", "--log"], vec!["missing value for --log"]),
+        (
+            vec!["draw", "--log", "l.json", "--iterations", "0"],
+            vec!["--iterations", "positive integer"],
+        ),
+        (
+            vec!["draw", "--log", "l.json", "--from", "-1"],
+            vec!["--from", "nonnegative"],
+        ),
+        (
+            vec!["draw", "--log", "l.json", "--format", "png"],
+            vec!["invalid --format `png`"],
+        ),
+    ] {
+        failure(&fx.run(&args), 2, &fragments);
+    }
+    // a window past the end, an engine the log does not have, a file
+    // that is no log: the file's error
+    for (args, fragments) in [
+        (
+            vec!["draw", "--log", "l.json", "--from", "100"],
+            vec!["l.json: `llm` has no iteration from t = 100"],
+        ),
+        (
+            vec!["draw", "--log", "l.json", "--engine", "E"],
+            vec!["no stage `E`", "llm"],
+        ),
+        (
+            vec!["draw", "--log", "missing.json"],
+            vec!["missing.json: cannot read"],
+        ),
+    ] {
+        failure(&fx.run(&args), 1, &fragments);
+    }
+    fx.write("ir.json", "{\"version\": 15, \"stages\": []}");
+    failure(
+        &fx.run(&["draw", "--log", "ir.json"]),
+        1,
+        &["not a run log"],
+    );
+}

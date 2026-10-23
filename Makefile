@@ -17,8 +17,9 @@ oracle-ir:         ## regenerate tools/oracle/*.ir.json (vllm_request.sq per sce
 claims-ir:         ## regenerate tools/claims/*.ir.json (examples/papers/*.sq, each with its workload) and the Lean statements of their claims
 	SERQ_BLESS=1 cargo test --release --test claims claim_ir_files_are_current
 	python3 scripts/gen_lean_claims.py
-draw-golden:       ## regenerate docs/assets/*.deployment.svg (serq draw)
+draw-golden:       ## regenerate docs/assets/*.deployment.svg (serq draw) and docs/assets/*.iterations.svg (serq draw --log, of the runs tests/iteration_view.rs names)
 	SERQ_BLESS=1 cargo test --release --test draw docs_assets_are_current
+	SERQ_BLESS=1 cargo test --release --test iteration_view iteration_assets_are_current
 metrics:           ## regenerate tools/metrics.json (the language's size; make check fails when it moves unrecorded)
 	scripts/metrics.py --report
 unused:            ## regenerate tools/unused.json (the IR variants no program uses)

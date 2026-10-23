@@ -2,6 +2,7 @@
 //! `serq check FILE --workload W [--instance F] [--def k=expr]... [--name value]...`
 //! `serq ir FILE --workload W [--instance F] [--def k=expr]... [--seed N] [--horizon T] [--warmup T] [--arrivals N] [--trace F] [--inline-trace] [--name value]...`
 //! `serq draw FILE --workload W [--format tikz|svg] [--out PATH] [--name value]...` (experimental)
+//! `serq draw --log LOG [--engine NAME] [--from T] [--iterations N] [--format tikz|svg] [--out PATH]` (experimental)
 //! `serq target FILE --workload W [--instance F] [--def k=expr]... [--name value]...`
 //!
 //! `--name value` is an input the program declares with `args.number`.
@@ -29,7 +30,7 @@ fn usage(cmd: &str) -> &'static str {
             "serq ir FILE --workload W [--instance F] [--def name=expr]... [--seed N] [--horizon T] [--warmup T] [--arrivals N] [--trace F] [--inline-trace] [--name value]..."
         }
         "draw" => {
-            "serq draw FILE --workload W [--instance F] [--def name=expr]... [--format tikz|svg] [--out PATH] [--name value]..."
+            "serq draw FILE --workload W [--instance F] [--def name=expr]... [--format tikz|svg] [--out PATH] [--name value]...\n       serq draw --log LOG [--engine NAME] [--from T] [--iterations N] [--format tikz|svg] [--out PATH]"
         }
         "target" => {
             "serq target FILE --workload W [--instance F] [--def name=expr]... [--name value]..."
@@ -104,6 +105,111 @@ fn format_files(args: &[String]) {
     }
 }
 
+/// The text of a figure, to stdout or to `out`.
+fn write_figure(text: &str, out: Option<&str>) {
+    match out {
+        None => print!("{text}"),
+        Some(path) => {
+            if let Err(e) = std::fs::write(path, text) {
+                eprintln!("cannot write {path}: {e}");
+                exit(1)
+            }
+        }
+    }
+}
+
+/// `serq draw --log LOG …`: the iteration view of a run's log
+/// (`view::iterations`). It reads the file `run --log` wrote and runs
+/// nothing, so it takes no FILE and none of a run's options; its own
+/// (`--engine`, `--from`, `--iterations`) are no program's input names,
+/// and are not reserved as `args::OPTIONS` are.
+fn draw_log(args: &[String]) {
+    const FLAGS: [&str; 6] = [
+        "--log",
+        "--engine",
+        "--from",
+        "--iterations",
+        "--format",
+        "--out",
+    ];
+    let cmd = "draw";
+    if let Some(file) = args.get(1).filter(|a| !a.starts_with("--")) {
+        argument_error(
+            cmd,
+            format!(
+                "`draw --log` draws a run's log and takes no FILE, found `{file}`\nhelp: run the program with `serq run FILE --workload W --log LOG`, then `serq draw --log LOG`"
+            ),
+        );
+    }
+    let (mut log, mut engine, mut from, mut n) =
+        (None, None, 0.0, serq::view::iterations::ITERATIONS);
+    let mut format = String::from("tikz");
+    let mut out: Option<String> = None;
+    let mut i = 1;
+    while i < args.len() {
+        let flag = args[i].as_str();
+        if !FLAGS.contains(&flag) {
+            argument_error(
+                cmd,
+                format!(
+                    "{flag} does not apply to `draw --log`\nhelp: `draw --log` takes {}",
+                    FLAGS.join(", ")
+                ),
+            );
+        }
+        i += 1;
+        let value = args
+            .get(i)
+            .filter(|v| !v.starts_with("--"))
+            .cloned()
+            .unwrap_or_else(|| {
+                argument_error(
+                    cmd,
+                    format!(
+                        "missing value for {flag}\nhelp: supply a value immediately after {flag}"
+                    ),
+                )
+            });
+        match flag {
+            "--log" => log = Some(value),
+            "--engine" => engine = Some(value),
+            "--from" => from = time_arg(cmd, flag, &value, false),
+            "--iterations" => {
+                n = value.parse::<usize>().ok().filter(|n| *n > 0).unwrap_or_else(|| {
+                    argument_error(
+                        cmd,
+                        format!("invalid value `{value}` for --iterations; expected a positive integer\nhelp: use --iterations 120"),
+                    )
+                })
+            }
+            "--format" => {
+                if !serq::view::format_names().contains(&value.as_str()) {
+                    argument_error(
+                        cmd,
+                        format!(
+                            "invalid --format `{value}`\nhelp: choose {}",
+                            serq::view::format_names().join(" or ")
+                        ),
+                    );
+                }
+                format = value;
+            }
+            "--out" => out = Some(value),
+            _ => unreachable!("one of FLAGS"),
+        }
+        i += 1;
+    }
+    let path = log.expect("draw_log is called with --log");
+    let file = Path::new(&path);
+    let text =
+        std::fs::read_to_string(file).unwrap_or_else(|e| fail(file, format!("cannot read: {e}")));
+    let log = serq::engine::log::Log::from_json(&text).unwrap_or_else(|e| fail(file, e));
+    let figure = serq::view::iterations::figure(&log, engine.as_deref(), from, n)
+        .unwrap_or_else(|e| fail(file, e));
+    let text = serq::view::render(&figure, &format).unwrap_or_else(|e| fail(file, e));
+    write_figure(&text, out.as_deref());
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let cmd = args.first().map(String::as_str).unwrap_or("");
@@ -126,6 +232,11 @@ fn main() {
     }
     if cmd == "fmt" {
         format_files(&args);
+        return;
+    }
+    // a run's log, drawn: no program to load
+    if cmd == "draw" && args.iter().any(|a| a == "--log") {
+        draw_log(&args);
         return;
     }
     if args.get(1).is_none_or(|s| s.starts_with("--")) {
@@ -172,7 +283,9 @@ fn main() {
         let allowed: &[&str] = match flag {
             "--def" | "--instance" | "--workload" => &["run", "check", "ir", "draw", "target"],
             "--seed" | "--horizon" | "--warmup" | "--arrivals" | "--trace" => &["run", "ir"],
-            "--json" | "--dump" | "--log" => &["run"],
+            "--json" | "--dump" => &["run"],
+            // `draw --log` is `draw_log`'s, which a FILE does not reach
+            "--log" => &["run", "draw"],
             "--inline-trace" => &["ir"],
             "--format" | "--out" => &["draw"],
             _ => unreachable!("`{flag}` is in args::OPTIONS but has no arm"),
@@ -311,15 +424,7 @@ fn main() {
             let figure =
                 serq::view::deployment::checked_figure(&prog).unwrap_or_else(|e| fail(file, e));
             let text = serq::view::render(&figure, &format).unwrap_or_else(|e| fail(file, e));
-            match &out {
-                None => print!("{text}"),
-                Some(path) => {
-                    if let Err(e) = std::fs::write(path, &text) {
-                        eprintln!("cannot write {path}: {e}");
-                        exit(1)
-                    }
-                }
-            }
+            write_figure(&text, out.as_deref());
         }
         "run" => {
             let r = match &log {

@@ -121,6 +121,54 @@ sharp change in observed latency, but does not establish multiple stable states.
 For comparison with a measured A100 deployment and a cache-policy
 experiment, see the [vLLM use case](../use-cases/vllm.md).
 
+## One engine, iteration by iteration
+
+The table says that the engine is busy at 2.0 and the latency grows, not
+what it is busy with. Log a run and draw 120 of its engine's iterations
+(the [iteration view](../visualization/iterations.md)):
+
+```bash
+for L in 1.5 2.0; do
+  serq run docs/tutorial/programs/05-engine.sq --workload docs/tutorial/programs/workloads/05-engine.sq --horizon 600 --seed 1 --Lambda $L --log cliff-$L.json
+  serq draw --log cliff-$L.json --from 591 --iterations 120 --format svg --out cliff-$L.svg
+done
+```
+
+A column is an iteration; a row a session; a cell its tokens in that
+iteration, orange in a prefill and blue in a decode; under them, the
+iteration's tokens against the 2048-token cap and the KV pool, allocated
+(grey) under cached (beige), against its 64 000 units. A triangle is an
+eviction, a cross a preemption.
+
+At 1.5 sessions/s:
+
+![The engine at 1.5 sessions/s, 120 iterations from t = 591](../assets/cliff-1.5.iterations.svg)
+
+At 2.0 sessions/s:
+
+![The engine at 2.0 sessions/s, 120 iterations from t = 591](../assets/cliff-2.0.iterations.svg)
+
+At 1.5 the batch is at most three sessions and the pool is full of cache:
+128 to 611 of its 4000 blocks allocated, the rest cached, so a new
+block evicts an old one now and then (17 columns), and the cache supplies
+0.39 of the prompt tokens over the run. At 2.0 the same 120 iterations hold 13
+sessions, at most 9 at once of the 16 `reqs cap` allows; the pool is
+allocated to 3381–4000 blocks with at most 618 cached, half the columns
+evict, and one request is preempted when the blocks run out. The tokens
+are not what is short: an iteration takes 249 of its 2048 on average.
+What is short is blocks, and the cache they would have held (it supplies
+0.08 of the prompt tokens over the run): the 17 prefill columns recompute
+contexts the cache lost, and take 95 % of the window's time. That is the loop above, drawn: the queue behind the batch
+(23 sessions waiting on average over these 600 s, `reqs`'s `queue`) is
+what the latency measures, and the figure does not draw it.
+
+The logs are large (41 MB at 2.0, 88 MB at 1.5 for 600 s: at 1.5 the
+engine iterates three times as often, small batches of decodes being
+short iterations).
+
+Measured 2026-10-23 on serQ with `iter`'s `evicted` and the log's pool
+caps (#22), by the commands above.
+
 ## What to try
 
 Vary one parameter at a time:

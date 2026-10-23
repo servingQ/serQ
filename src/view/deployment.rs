@@ -2333,7 +2333,7 @@ impl Stack {
                     c.poster = name(&c.poster);
                 }
             }
-            Item::Dot { at, .. } => at.y += dy,
+            Item::Dot { at, .. } | Item::Mark { at, .. } => at.y += dy,
             Item::Text { at, text, .. } => {
                 at.y += dy;
                 *text = text.replace(&format!("[{}]", self.var), &format!("[{m}]"));
@@ -2353,7 +2353,7 @@ fn within(item: &Item, area: &Rect) -> bool {
         | Item::Queue { rect, .. }
         | Item::Drum { rect, .. } => area.contains(rect),
         Item::Edge { pts, .. } => pts.iter().all(at),
-        Item::Dot { at: q, .. } | Item::Text { at: q, .. } => at(q),
+        Item::Dot { at: q, .. } | Item::Mark { at: q, .. } | Item::Text { at: q, .. } => at(q),
     }
 }
 
@@ -3355,6 +3355,9 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
                 continue;
             }
             Item::Dot { at, r } => Rect::new(at.x - r, at.y - r, 2.0 * r, 2.0 * r),
+            Item::Mark { at, size, .. } => {
+                Rect::new(at.x - size / 2.0, at.y - size / 2.0, *size, *size)
+            }
             // the arrival's label stands outside, over its arrow
             Item::Text { at, .. } if at.x < server_left => continue,
             Item::Text {

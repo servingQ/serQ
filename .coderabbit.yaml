@@ -17,6 +17,7 @@ reviews:
   path_filters:
     - "!Cargo.lock"
     - "!docs/assets/*.deployment.svg"
+    - "!docs/assets/*.iterations.svg"
     - "!tests/golden/**"
     - "!tools/oracle/*.ir.json"
     - "!tools/metrics.json"

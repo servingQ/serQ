@@ -3,7 +3,7 @@
 
 mod common;
 
-use serq::engine::log::{EventKind, Who};
+use serq::engine::log::{EventKind, Log, Who};
 use serq::frontend::ast::RunMode;
 use serq::ir::CStageKind;
 use serq::{run_ir, run_ir_logged};
@@ -22,14 +22,8 @@ fn load(path: &Path, ov: serq::Overrides) -> (serq::Program, PathBuf) {
 /// `(what, where)` of each event about `who`, the names of the IR's
 /// stages and pools in place of their indices.
 fn story(log: &serq::engine::log::Log, who: Who) -> Vec<(String, String)> {
-    let stage = |k: &usize| {
-        let (name, index) = &log.stages[*k];
-        index.map_or(name.clone(), |i| format!("{name}[{i}]"))
-    };
-    let pool = |k: &usize| {
-        let (name, index) = &log.pools[*k];
-        index.map_or(name.clone(), |i| format!("{name}[{i}]"))
-    };
+    let stage = |k: &usize| log.stages[*k].label();
+    let pool = |k: &usize| log.pools[*k].label();
     log.events
         .iter()
         .filter_map(|e| match &e.kind {
@@ -132,7 +126,7 @@ fn a_session_is_logged_through_prefiller_link_and_decoder() {
             _ => None,
         })
         .unwrap();
-    assert_eq!(log.stages[first_iter.0].0, "P");
+    assert_eq!(log.stages[first_iter.0].name, "P");
     assert_eq!(first_iter.2, vec![first]);
     // the first turn's prompt: `K + n` with `K = 0` and `n = ceil(~uniform(1000,
     // 3000))`, all of it prefilled since the cache is cold (`c = cached` = 0)
@@ -186,6 +180,85 @@ fn the_log_does_not_change_the_run() {
     }
 }
 
+/// The log reads back as it was written (`Log::from_json`), for every
+/// example program: what `serq draw --log` draws is what the run logged.
+/// And it shows the pools' invariant: an engine's memory never holds more
+/// than its pool's cap, allocated and cached together, which the header
+/// gives; what it has evicted only grows.
+#[test]
+fn the_log_reads_back_and_keeps_the_memory_within_its_cap() {
+    for path in examples() {
+        let at = path.display();
+        let (p, base) = load(&path, common::horizon(20.0));
+        let r = run_ir_logged(&p, Some(base.as_path()), usize::MAX).unwrap();
+        let log = r.log.unwrap();
+        let back = Log::from_json(&log.json()).unwrap_or_else(|e| panic!("{at}: {e}"));
+        assert_eq!(back.stages, log.stages, "{at}");
+        assert_eq!(back.pools, log.pools, "{at}");
+        assert_eq!(back.truncated, log.truncated, "{at}");
+        assert!(
+            back.events == log.events,
+            "{at}: the events read back otherwise"
+        );
+        let mut evicted = vec![0.0; log.stages.len()];
+        for e in &log.events {
+            let EventKind::Iter {
+                stage,
+                memory: Some(m),
+                ..
+            } = &e.kind
+            else {
+                continue;
+            };
+            let pool = log.stages[*stage]
+                .memory
+                .unwrap_or_else(|| panic!("{at}: an engine's memory not in the header"));
+            let cap = log.pools[pool].cap;
+            assert!(
+                m.used + m.cached <= cap,
+                "{at} at {}: used {} + cached {} > cap {cap}",
+                e.t,
+                m.used,
+                m.cached
+            );
+            assert!(m.evicted >= evicted[*stage], "{at} at {}", e.t);
+            evicted[*stage] = m.evicted;
+        }
+    }
+}
+
+/// An iteration's `evicted` is the memory pool's `evicted_units` so far:
+/// the last iteration's is at most the report's, which counts the whole
+/// run (a warm-up does not reset it), and on the cliff's program at 2.0
+/// sessions/s, where the cache is gone, it rises.
+#[test]
+fn an_iteration_counts_what_its_memory_evicted() {
+    let mut ov = common::horizon(60.0);
+    ov.set_num("Lambda", 2.0).unwrap();
+    let (p, base) = load(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("docs/tutorial/programs/05-engine.sq"),
+        ov,
+    );
+    let r = run_ir_logged(&p, Some(base.as_path()), usize::MAX).unwrap();
+    let log = r.log.as_ref().unwrap();
+    let kv = log.pools.iter().position(|q| q.name == "kv").unwrap();
+    assert_eq!(log.stages[0].memory, Some(kv));
+    assert_eq!(log.pools[kv].cap, 4000.0 * 16.0);
+    let last = log
+        .events
+        .iter()
+        .rev()
+        .find_map(|e| match &e.kind {
+            EventKind::Iter {
+                memory: Some(m), ..
+            } => Some(m.evicted),
+            _ => None,
+        })
+        .unwrap();
+    let report = r.pools[kv].evicted_units;
+    assert!(last > 0.0 && last <= report, "{last} of {report}");
+}
+
 /// An iteration names each request's tokens, its budget and its engine's
 /// memory (#728), for every example program: `each` lines up with `reqs`
 /// and sums to `tokens`, which the budget bounds; `used` and `cached` are
@@ -222,9 +295,9 @@ fn an_iteration_gives_each_request_its_tokens_its_budget_and_its_memory() {
             assert!(each.iter().all(|&n| n > 0.0), "{at} at {}: {each:?}", e.t);
             assert!(*tokens <= *budget, "{at} at {}: {tokens} > {budget}", e.t);
             assert_eq!(memory.is_some(), spec.memory.is_some(), "{at}");
-            if let Some((used, cached)) = memory {
+            if let Some(m) = memory {
                 assert!(
-                    *used >= 0.0 && *cached >= 0.0,
+                    m.used >= 0.0 && m.cached >= 0.0 && m.evicted >= 0.0,
                     "{at} at {}: {memory:?}",
                     e.t
                 );
@@ -333,7 +406,7 @@ fn a_leg_is_told_from_its_session() {
         .events
         .iter()
         .find_map(|e| match &e.kind {
-            EventKind::Iter { stage, reqs, .. } if log.stages[*stage].0 == "P" => {
+            EventKind::Iter { stage, reqs, .. } if log.stages[*stage].name == "P" => {
                 Some(reqs.clone())
             }
             _ => None,
