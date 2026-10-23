@@ -29,7 +29,7 @@ fn main() {
   // --8<-- [end:worker]
 
   // --8<-- [start:server]
-  server (vp, vd, t0) {
+  server (vp, hidden vd, t0) {
     E (vp, vd + 1);   // the model's decode steps after the prefill's sampled token
     observe response = now - t0;
   }

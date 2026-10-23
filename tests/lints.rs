@@ -50,7 +50,7 @@ fn a_stale_header_read_is_rejected() {
     let llm = engine(CACHED_PREFIX);
     let src = format!(
         "{llm}
-        server (K, n, o) {{
+        server (K, n, hidden o) {{
           set prompt = K + n;
           set c = min(cachedin(kv), prompt - 1);
           llm (prompt, o);
@@ -69,7 +69,7 @@ fn the_request_s_hit_is_the_way_through() {
     );
     let src = format!(
         "{llm}
-        server (K, n, o) {{
+        server (K, n, hidden o) {{
           set prompt = K + n;
           llm (prompt, o);
         }}"

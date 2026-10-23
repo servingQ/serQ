@@ -44,7 +44,7 @@ item     := let NAME = expr ;
           | engine NAME [ '[' N ']' ] on DEVICE { eitem* }   -- a stage that runs iterations (the IR's step stage)
           | pool NAME on OWNER { poolopt* }    -- a capacity of a device or an engine, as a pool
           | pool NAME on ENGINE.DEVICE { poolopt* }   -- the device's capacity, whose queue the engine admits: the name before the dot is that engine
-          | server [ ( [hidden] NAME , … ) ] [ reply ( NAME , … ) ] block   -- request handling, and what a request and its reply carry; the session lives inside the workload file's workload
+          | server [ ( [hidden | visible] NAME , … ) ] [ reply ( NAME , … ) ] block   -- request handling, and what a request and its reply carry; the session lives inside the workload file's workload
           | queue NAME [ '[' expr ']' ] [ : ROLE [, ROLE]* ] { qitem* }   -- a station: its pools, stage and entries (below, *Queues*)
           | kvt.nixl_pull ( QUEUE , QUEUE [, latency = expr ] , share = POLICY ) ;   -- the source, its reader, the read (below, *Queues*)
           | kvt.nixl_push ( QUEUE , QUEUE [, latency = expr ] , share = POLICY ) ;   -- the source, its reader, the write
@@ -395,8 +395,9 @@ attribute `s` as it is. After `turn;` the workload reads the reply as
   `vllm.first`);
 - `serial`, the session's number, every request carries.
 
-A parameter may be `hidden` ([`hidden`](api/workload.md#hidden)). The
-server sets each reply attribute on every path that completes the
+A parameter may be `hidden` ([`hidden`](api/workload.md#hidden)), and
+one that a length the model generates reads says `hidden` or `visible`
+([below](#hidden)). The server sets each reply attribute on every path that completes the
 request. What the server sets stays the session's
 from one request to the next (a sticky `home` in
 `examples/multi-turn/routing.sq`); the parameters are bound anew at each.
@@ -1494,6 +1495,26 @@ expressions, such as a hold's header, queue keys or a budget, from reading
 run work, a hold's `cache` and a claim's `given` may read it. Attributes
 set by the scheduler (`cached`, `computed`) cannot be hidden.
 See [Workload](api/workload.md#hidden) for the permitted positions.
+
+A length the model generates has no default. A parameter that the output
+of an engine's request reads (`E (n, o);`'s `o`), or the work of a decode
+run (`run E decode (w)`), is written `hidden` or `visible`, and bare it
+does not compile: a bare parameter is the scheduler's to read, so a
+forgotten `hidden` made a scheduler that knows how long each request runs.
+vLLM's does not: it knows `max_tokens` and learns the length when
+`check_stop` sees EOS or the cap (`sched/utils.py:98-119`), so
+`examples/multi-turn/vllm.sq` says `server (input, hidden output)`. A
+scheduler that reads the length on purpose says `visible`:
+`examples/vendors/ascend.sq`'s admission reserves `request.input +
+request.output - 1`, `server (prompt, immediate, visible out)`. What the
+request's prompt reads needs no word, so `min(output, max_model_len -
+input)` asks for `output`'s alone: the prompt is the input of `E (n, o);`
+as it stands at the call, which the engine admits by. The reads follow the
+server's `set`s, a length's in any order and the prompt's up to the call,
+so a context the turn stores after its request (`set ctx = ctx + output;`)
+does not excuse the length. A decode run has no input, and asks for every
+parameter its work reads. `visible` on any other parameter is refused,
+since a bare one says the same ([the design](design/generated-length.md)).
 
 ### Branching
 

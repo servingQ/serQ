@@ -946,7 +946,7 @@ fn bad_amounts_and_indices_fail_the_run() {
           worker { forward (1); }
         }
         pool kv on gpu { }
-        server (z) { hold kv (cost(kv, 8)) { eng (0, z - 1); }
+        server (hidden z) { hold kv (cost(kv, 8)) { eng (0, z - 1); }
         }
         ",
         ),

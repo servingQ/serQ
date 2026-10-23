@@ -159,6 +159,24 @@ and a name nothing sets is an error. The [vLLM program](../use-cases/vllm.md)
 hides the output length, `server (input, hidden output)`, preventing admission from reserving memory using
 future output length.
 
+### A generated length says which
+
+```serq
+server (input, hidden output) { vllm (input, output); }               // vLLM: learns it at the end
+server (prompt, immediate, visible out) { … llm (prompt, out + 1); … } // reserves it at admission
+```
+
+A parameter that a length the model generates reads, the output of an
+engine's request (`E (n, o);`'s `o`) or the work of a decode run, is
+written `hidden` or `visible`; bare, it does not compile. A bare
+parameter is the scheduler's to read, so a forgotten `hidden` was a
+scheduler that knows each request's length. `visible` says the program
+means that: `examples/vendors/ascend.sq`'s admission reserves
+`request.input + request.output - 1`, which `hidden` refuses. What the
+request's prompt reads (the input of `E (n, o);` as it stands at the call)
+needs no word, and `visible` on any other parameter is refused, since a
+bare one says the same ([Language](../language.md#hidden)).
+
 The engine's request and the `server` are the rest of the scheduler, and
 there a hidden attribute is the target's until a run reveals it. A request
 may run work by it (`decode (o - 1)`: the model ends the run, not the

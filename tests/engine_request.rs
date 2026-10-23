@@ -119,7 +119,9 @@ queue llm : prefill {
     } cache (cost(reqs, kv, prompt + o));
   }
 }
-server (n, hidden o) {
+// the decode run's work reads the prompt, and a decode run has no input
+// to tell it from the length (docs/design/generated-length.md)
+server (visible n, hidden o) {
   set t0 = now;
   llm.prefill (n);
   observe response = now - t0;

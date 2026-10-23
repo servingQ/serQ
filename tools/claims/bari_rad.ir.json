@@ -397,7 +397,9 @@
   "slot_more": 6,
   "slot_forced": 7,
   "slot_computed": 8,
-  "hidden": [],
+  "hidden": [
+    11
+  ],
   "claims": [
     {
       "name": "token_rate",

@@ -27,7 +27,7 @@ fn main() {
   pool reqs on llm { queue fifo; }
   // --8<-- [end:pools]
   // --8<-- [start:server]
-  server (prompt, out) {
+  server (prompt, hidden out) {
     llm (prompt, out + 1);   // the model's `out` decode steps after the prefill's token
   }
   // --8<-- [end:server]

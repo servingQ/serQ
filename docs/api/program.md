@@ -223,7 +223,7 @@ Use `end;` only to exit early. Queue entry calls belong in the server.
 ## `server`
 
 ```serq
-server [( [hidden] NAME [, …]* )] [reply ( NAME [, …]* )] block
+server [( [hidden | visible] NAME [, …]* )] [reply ( NAME [, …]* )] block
 ```
 
 The deployment's handling of each turn. Every workload uses one server,
@@ -239,6 +239,7 @@ Its signature is the deployment's interface:
 |---|---|
 | `NAME` | A parameter: what each request carries, bound by the workload's [`send`](workload.md#send). The server, its gateways' routes and the scheduler's expressions read it, and no attribute the workload keeps; a queue's entry reads what it is passed. |
 | `hidden NAME` | A parameter the scheduler may not read until a run reveals it ([`hidden`](workload.md#hidden)); a queue's entry reads it without being passed it. |
+| `visible NAME` | A length the model generates that the scheduler may read, as a bare parameter is: written only on a parameter that the output of an engine's request reads beyond the request's prompt, or a decode run's work reads, which must say `hidden` or `visible` ([a generated length](workload.md#a-generated-length-says-which)). |
 | `reply (NAME, …)` | What the reply carries. The server sets each on every path that completes the request; the workload's session reads it after `turn;` as `reply.NAME`, and no other attribute the server, the scheduler or an engine sets. |
 
 What the server sets stays the session's from one request to the next;

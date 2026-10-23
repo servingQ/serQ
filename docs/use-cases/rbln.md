@@ -122,7 +122,10 @@ examples/vendors/rbln.sq --workload examples/workloads/rbln_batch.sq`):
 --8<-- "examples/workloads/rbln_batch.sq:workload"
 ```
 
-The server takes each request's prompt and output to the engine:
+The server takes each request's prompt and output to the engine. The
+output is `hidden`: as vLLM's, the scheduler learns the length when the
+run ends (`sched/utils.py:98-119`), and reserves only the tokens a request
+has:
 
 ```serq
 --8<-- "examples/vendors/rbln.sq:server"

@@ -779,7 +779,7 @@ fn the_request_boundary_preserves_size_ownership() {
         send (K, n, o);";
     let split = format!(
         "{head}
-        server (K, n, o) reply (prompt) {{
+        server (K, n, hidden o) reply (prompt) {{
           set t0 = now;
           set prompt = K + n;
           llm (prompt, o);
@@ -801,7 +801,7 @@ fn the_request_boundary_preserves_size_ownership() {
     );
     let flat = format!(
         "{head}
-        server (K, n, o) {{
+        server (K, n, hidden o) {{
           set t0 = now;
           set prompt = K + n;
           llm (prompt, o);

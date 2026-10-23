@@ -151,7 +151,9 @@ session's last, `send (input: K + n, output: o, final: more == 0);`, and
 the `server` says what a turn is:
 
 ```serq
-server (input, output, final) {
+// a turn is one request to the engine; as vLLM's, the scheduler learns
+// how long it runs when the run ends (sched/utils.py:98-119)
+server (input, hidden output, final) {
   llm (input, output);
   // a session's last turn leaves nothing worth keeping
   if (final) { drop kv; }
@@ -159,7 +161,14 @@ server (input, output, final) {
 ```
 
 one request to the engine, with `input` as its prompt and `output` as its
-output: `request.input` and `request.output` in `taking`. After the
+output: `request.input` and `request.output` in the admission, where
+`cache` reads them. `output` is the length the model generates, and the
+signature says whether the scheduler knows it before the run: `hidden`,
+as vLLM's scheduler, which knows `max_tokens` and finds the length when the
+model stops (`sched/utils.py:98-119`); an admission that read
+`request.output` in `taking` or `reserve` would not link. A scheduler that
+reserves the whole sequence says `visible output` instead, and leaving the
+word out is an error ([`hidden`](../language.md#hidden)). After the
 session's last turn the server drops its cached KV, which is the
 deployment's, as in chapter 4. The server reads what the request carries,
 not the client's `K`; the client keeps its context itself,

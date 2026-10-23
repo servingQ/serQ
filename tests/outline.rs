@@ -353,6 +353,30 @@ fn a_deployment_alone_has_an_outline() {
     );
 }
 
+/// A signature's parameter says what the scheduler knows of it: a generated
+/// length `hidden` or `visible`, any other bare (`docs/design/generated-length.md`).
+#[test]
+fn a_signature_says_what_the_scheduler_knows() {
+    let src = read("examples/vendors/ascend.sq");
+    let sig = outline(&src).signature.unwrap();
+    let marks: Vec<_> = sig
+        .params
+        .iter()
+        .map(|p| (p.name.as_str(), p.hidden, p.visible))
+        .collect();
+    assert_eq!(
+        marks,
+        [
+            ("prompt", false, false),
+            ("immediate", false, false),
+            ("out", false, true)
+        ]
+    );
+    let src = read("examples/vendors/rbln.sq");
+    let sig = outline(&src).signature.unwrap();
+    assert!(sig.params[1].hidden && !sig.params[1].visible);
+}
+
 #[test]
 fn a_parse_error_is_the_diagnostic() {
     let e = serq::outline("fn main() { queue }").unwrap_err();

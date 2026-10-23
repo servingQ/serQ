@@ -23,7 +23,7 @@ fn main() {
   pool slots on llm { }
   stage gate : delay;
 
-  server (n, o, t0) {
+  server (n, hidden o, t0) {
     run gate (cost(gate, t0));
     llm (n, o + 1);                     // `o` tokens decoded after the prefill's
     observe ttft = llm.first - t0;
