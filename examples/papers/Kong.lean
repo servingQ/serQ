@@ -1953,7 +1953,7 @@ def g0 : Ghost := ⟨fun _ => .s0, fun _ => 0, fun _ => 0⟩
 theorem sinv_initial (w : Workload) (hF : Fam w) :
     SInv w g0 (Exec.initial Dk w.init.length w.attr Pk w) := by
   have hget : ∀ i < w.init.length, getS (Exec.initial Dk w.init.length w.attr Pk w) i =
-      ⟨i, ⟨w.attr i, []⟩, 0, Pk, [], .ready, 0, 0⟩ := by
+      ⟨i, ⟨w.attr i, []⟩, 0, Pk, [], .ready, unadmitted, 0⟩ := by
     intro i hi
     simp [getS, Exec.initial, Array.getD_eq_getD_getElem?, hi]
   have hpst : pst (Exec.initial Dk w.init.length w.attr Pk w) 0 = ⟨0, [], [], []⟩ := by

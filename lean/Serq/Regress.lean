@@ -90,6 +90,25 @@ theorem regress_cost_ctx :
     ([[(0, 1723), (1, 6934)], [(0, 7074), (1, 7159)], [(0, 0), (1, 0)], [(0, 40), (1, 70)]], 0) := by
   decide +kernel
 
+/-- `tests/lean-regress/mixed_admission.sq`, translated from its IR. Attributes: 2 = turn_no, 3 = new, 4 = out, 5 = think, 6 = more, 7 = forced, 8 = computed, 9 = n. Observations: 0 = done. Pools: 0 = llm.kv. Stages: 0 = llm. -/
+def mixedAdmission : Prog := [route|
+  turn;
+  run 0 prefill (x.attr 9);
+  hold 0 (16) {
+    run 0 prefill (8);
+    done
+  };
+  observe 0 = x.now;
+  stop]
+
+/-- `serq run`: done per session, and 0 preemptions. -/
+theorem regress_mixed_admission :
+    let m := Exec.runW ⟨[⟨64, 16, false, none⟩], 4, 0, some 0, fun _ => 1, none, none⟩ 1000
+      ⟨[[(9, 1)], [(9, 8)], [(9, 8)]], [], none, 0, some 8, none⟩ mixedAdmission
+    ([observed m 0], m.preempts) =
+    ([[(0, 3), (1, 7), (2, 11)]], 0) := by
+  decide +kernel
+
 /-- `tests/lean-regress/preempt_delay.sq`, translated from its IR. Attributes: 2 = turn_no, 3 = new, 4 = out, 5 = think, 6 = more, 7 = forced, 8 = computed, 9 = d. Observations: 0 = resumed, 1 = done. Pools: 0 = llm.kv, 1 = llm.slots. Stages: 0 = llm, 1 = tool. -/
 def preemptDelay : Prog := [route|
   turn;

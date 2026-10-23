@@ -539,7 +539,7 @@ def Model.work (M : Model) (a : ℕ → ℕ) : ℕ := (M.len a).1 + (M.len a).2
 
 theorem getS_inject (a : ℕ → ℕ) (m : Machine) (j : ℕ) :
     getS (inject (Q1 M) a m) j =
-      if j = m.sess.size then ⟨m.sess.size, ⟨a, []⟩, 0, Q1 M, [], .ready, 0, 0⟩ else getS m j := by
+      if j = m.sess.size then ⟨m.sess.size, ⟨a, []⟩, 0, Q1 M, [], .ready, unadmitted, 0⟩ else getS m j := by
   unfold getS inject
   simp only [Array.getD_eq_getD_getElem?, Array.getElem?_push]
   split_ifs with h
@@ -1048,22 +1048,23 @@ theorem backlog_slot (hS : Starts M Busy) {L : ℕ → ℕ × ℕ} {g : Ghost} {
 /-! ### The job list, exactly
 
 `CI` says what each job is; for a chain on job lists (`DaiSim`, `BariSim`)
-we follow the list itself. No pool admits, so every session keeps admission
-number 0 (`A0`), and a `run` on the engine appends its job (`Exec.exec`
-inserts behind the jobs of no later admission). -/
+we follow the list itself. No pool admits, so no session is ever admitted
+(`NoAdm`, every admission number `unadmitted`), and a `run` on the engine
+appends its job (`Exec.exec` inserts behind the jobs of no later
+admission). -/
 
-/-- Every session has admission number 0. -/
-def A0 (m : Machine) : Prop := ∀ j, (getS m j).admSeq = 0
+/-- No session has been admitted. -/
+def NoAdm (m : Machine) : Prop := ∀ j, (getS m j).admSeq = unadmitted
 
-theorem A0_setS {m : Machine} (hA : A0 m) {i : ℕ} (s : Sess) (hs : s.admSeq = 0) (hi : i < m.sess.size) :
-    A0 (setS m i s) := fun j => by
+theorem NoAdm_setS {m : Machine} (hA : NoAdm m) {i : ℕ} (s : Sess) (hs : s.admSeq = unadmitted) (hi : i < m.sess.size) :
+    NoAdm (setS m i s) := fun j => by
   rw [Exec.getS_setS m s hi]
   split_ifs
   · exact hs
   · exact hA j
 
-/-- `A0` reads only the sessions. -/
-theorem A0_of_sess {m m' : Machine} (h : m'.sess = m.sess) (hA : A0 m) : A0 m' := fun j => by
+/-- `NoAdm` reads only the sessions. -/
+theorem NoAdm_of_sess {m m' : Machine} (h : m'.sess = m.sess) (hA : NoAdm m) : NoAdm m' := fun j => by
   have : getS m' j = getS m j := by unfold getS; rw [h]
   rw [this]; exact hA j
 
@@ -1078,10 +1079,10 @@ theorem span_all {α : Type} (p : α → Bool) : ∀ l : List α, (∀ x ∈ l, 
     rw [this.1, this.2]
 
 /-- An arrived request's prefill of its prompt joins the end of the job list. -/
-theorem exec_r1_jobs {L : ℕ → ℕ × ℕ} {g : Ghost} {m : Machine} (hI : CI M L g m) (hA : A0 m)
+theorem exec_r1_jobs {L : ℕ → ℕ × ℕ} {g : Ghost} {m : Machine} (hI : CI M L g m) (hA : NoAdm m)
     {i : ℕ} {rest : List ℕ} (hr : m.ready = i :: rest) (hc : g.c i = .r1) :
     (exec M.D 10000 { m with ready := rest } i).jobs = m.jobs ++ [⟨i, .prefill, (L i).1, none⟩] ∧
-      A0 (exec M.D 10000 { m with ready := rest } i) := by
+      NoAdm (exec M.D 10000 { m with ready := rest } i) := by
   obtain ⟨hin, -⟩ := hI.lt_of_ready hr
   obtain ⟨hsh, -, hlen, hfit⟩ := hI.sess i hin
   have hf := M.fits _ hfit
@@ -1094,7 +1095,7 @@ theorem exec_r1_jobs {L : ℕ → ℕ × ℕ} {g : Ghost} {m : Machine} (hI : CI
   set s1 : Sess := { getS m0 i with attr := (getS m0 i).attr.upd 9 (evalE m0 i fun x => x.now), prog := Q2 M }
     with hs1
   set m1 := setS m0 i s1 with hm1
-  have hA1 : A0 m1 := A0_setS (fun j => hA j) s1 (hA i) (by simpa using hin)
+  have hA1 : NoAdm m1 := NoAdm_setS (fun j => hA j) s1 (hA i) (by simpa using hin)
   have hg1 : getS m1 i = s1 := Exec.getS_setS_self m0 s1 (by simpa using hin)
   have hev : evalE m1 i (fun x => (M.len x.attr).1) = (L i).1 := by
     show (M.len (getS m1 i).attr.get).1 = _
@@ -1105,15 +1106,15 @@ theorem exec_r1_jobs {L : ℕ → ℕ × ℕ} {g : Ghost} {m : Machine} (hI : CI
   refine ⟨?_, fun j => ?_⟩
   · show m1.jobs ++ [⟨i, .prefill, evalE m1 i (fun x => (M.len x.attr).1), none⟩] = _
     rw [hev]; try rfl
-  · show (getS (setS m1 i { getS m1 i with prog := Q3 M, status := .engine }) j).admSeq = 0
-    exact A0_setS hA1 { getS m1 i with prog := Q3 M, status := .engine } (hA1 i)
+  · show (getS (setS m1 i { getS m1 i with prog := Q3 M, status := .engine }) j).admSeq = unadmitted
+    exact NoAdm_setS hA1 { getS m1 i with prog := Q3 M, status := .engine } (hA1 i)
       (by simpa [hm1, hm0] using hin) j
 
 /-- A prefilled request's decode of its output joins the end of the job list. -/
-theorem exec_r3_jobs {L : ℕ → ℕ × ℕ} {g : Ghost} {m : Machine} (hI : CI M L g m) (hA : A0 m)
+theorem exec_r3_jobs {L : ℕ → ℕ × ℕ} {g : Ghost} {m : Machine} (hI : CI M L g m) (hA : NoAdm m)
     {i : ℕ} {rest : List ℕ} (hr : m.ready = i :: rest) (hc : g.c i = .r3) :
     (exec M.D 10000 { m with ready := rest } i).jobs = m.jobs ++ [⟨i, .decode, (L i).2, none⟩] ∧
-      A0 (exec M.D 10000 { m with ready := rest } i) := by
+      NoAdm (exec M.D 10000 { m with ready := rest } i) := by
   obtain ⟨hin, -⟩ := hI.lt_of_ready hr
   obtain ⟨hsh, -, hlen, hfit⟩ := hI.sess i hin
   have hf := M.fits _ hfit
@@ -1121,7 +1122,7 @@ theorem exec_r3_jobs {L : ℕ → ℕ × ℕ} {g : Ghost} {m : Machine} (hI : CI
   obtain ⟨hp, hst⟩ := hsh
   set m0 : Machine := { m with ready := rest } with hm0
   have hg0 : ∀ j, getS m0 j = getS m j := fun _ => rfl
-  have hA0 : A0 m0 := fun j => hA j
+  have hA0 : NoAdm m0 := fun j => hA j
   have hev : evalE m0 i (fun x => (M.len x.attr).2) = (L i).2 := congrArg Prod.snd hlen
   rw [show (10000 : ℕ) = 9999 + 1 from rfl,
     Exec.exec_runEngine M.D 9999 m0 i .decode (fun x => (M.len x.attr).2) Q4 (by rw [hg0]; exact hst)
@@ -1130,14 +1131,14 @@ theorem exec_r3_jobs {L : ℕ → ℕ × ℕ} {g : Ghost} {m : Machine} (hI : CI
   refine ⟨?_, fun j => ?_⟩
   · show m0.jobs ++ [⟨i, .decode, evalE m0 i (fun x => (M.len x.attr).2), none⟩] = _
     rw [hev]; try rfl
-  · show (getS (setS m0 i { getS m0 i with prog := Q4, status := .engine }) j).admSeq = 0
-    exact A0_setS hA0 { getS m0 i with prog := Q4, status := .engine } (hA0 i) (by simpa [hm0] using hin) j
+  · show (getS (setS m0 i { getS m0 i with prog := Q4, status := .engine }) j).admSeq = unadmitted
+    exact NoAdm_setS hA0 { getS m0 i with prog := Q4, status := .engine } (hA0 i) (by simpa [hm0] using hin) j
 
 /-- A decoded request leaves the job list as it is. -/
-theorem exec_r4_jobs {L : ℕ → ℕ × ℕ} {g : Ghost} {m : Machine} (hI : CI M L g m) (hA : A0 m)
+theorem exec_r4_jobs {L : ℕ → ℕ × ℕ} {g : Ghost} {m : Machine} (hI : CI M L g m) (hA : NoAdm m)
     {i : ℕ} {rest : List ℕ} (hr : m.ready = i :: rest) (hc : g.c i = .r4) :
     (exec M.D 10000 { m with ready := rest } i).jobs = m.jobs ∧
-      A0 (exec M.D 10000 { m with ready := rest } i) := by
+      NoAdm (exec M.D 10000 { m with ready := rest } i) := by
   obtain ⟨hin, -⟩ := hI.lt_of_ready hr
   obtain ⟨hsh, hstk, -⟩ := hI.sess i hin
   rw [hc] at hsh
@@ -1151,11 +1152,11 @@ theorem exec_r4_jobs {L : ℕ → ℕ × ℕ} {g : Ghost} {m : Machine} (hI : CI
     obs := (0, (getS m0 i).serial, m0.now, evalE m0 i fun x => x.now - x.attr 9) :: m0.obs } with hm1
   have hg1 : getS m1 i = { getS m0 i with prog := .stop } :=
     Exec.getS_setS_self m0 _ (by simpa using hin)
-  have hA1 : A0 m1 := fun j => by
-    show (getS (setS m0 i { getS m0 i with prog := .stop }) j).admSeq = 0
-    exact A0_setS (m := m0) (fun j => hA j) { getS m0 i with prog := .stop } (hA i) (by simpa using hin) j
+  have hA1 : NoAdm m1 := fun j => by
+    show (getS (setS m0 i { getS m0 i with prog := .stop }) j).admSeq = unadmitted
+    exact NoAdm_setS (m := m0) (fun j => hA j) { getS m0 i with prog := .stop } (hA i) (by simpa using hin) j
   rw [Exec.exec_stop M.D _ m1 i (by rw [hg1]; exact hst) (by rw [hg1]) (by rw [hg1]; exact hstk)]
-  exact ⟨rfl, A0_setS hA1 _ (hA1 i) (by simpa [hm1, hm0] using hin)⟩
+  exact ⟨rfl, NoAdm_setS hA1 _ (hA1 i) (by simpa [hm1, hm0] using hin)⟩
 
 /-- The job a ready request adds to the list when it runs. -/
 def contrib (L : ℕ → ℕ × ℕ) (g : Ghost) (i : ℕ) : List Job :=
@@ -1165,9 +1166,9 @@ def contrib (L : ℕ → ℕ × ℕ) (g : Ghost) (i : ℕ) : List Job :=
   | _ => []
 
 /-- **Draining** appends each ready request's job, in the ready list's order. -/
-theorem drain_jobs {L : ℕ → ℕ × ℕ} : ∀ (f : ℕ) (g : Ghost) (m : Machine), CI M L g m → A0 m →
+theorem drain_jobs {L : ℕ → ℕ × ℕ} : ∀ (f : ℕ) (g : Ghost) (m : Machine), CI M L g m → NoAdm m →
     m.ready.length ≤ f →
-    (drain M.D f m).jobs = m.jobs ++ m.ready.flatMap (contrib L g) ∧ A0 (drain M.D f m)
+    (drain M.D f m).jobs = m.jobs ++ m.ready.flatMap (contrib L g) ∧ NoAdm (drain M.D f m)
   | 0, g, m, hI, hA, hf => by
     have hr : m.ready = [] := List.eq_nil_of_length_eq_zero (by omega)
     exact ⟨by simp [drain, hr], hA⟩
@@ -1183,7 +1184,7 @@ theorem drain_jobs {L : ℕ → ℕ × ℕ} : ∀ (f : ℕ) (g : Ghost) (m : Mac
       obtain ⟨g1, hI1, hr1, hJ, hA1, hc1⟩ : ∃ g1, CI M L g1 (exec M.D 10000 { m with ready := rest } i) ∧
           (exec M.D 10000 { m with ready := rest } i).ready = rest ∧
           (exec M.D 10000 { m with ready := rest } i).jobs = m.jobs ++ contrib L g i ∧
-          A0 (exec M.D 10000 { m with ready := rest } i) ∧ (∀ j, j ≠ i → g1.c j = g.c j) := by
+          NoAdm (exec M.D 10000 { m with ready := rest } i) ∧ (∀ j, j ≠ i → g1.c j = g.c j) := by
         cases hc : g.c i with
         | r1 =>
           obtain ⟨h1, h2, -, -⟩ := ci_r1 hI hr hc
@@ -1207,8 +1208,8 @@ theorem drain_jobs {L : ℕ → ℕ × ℕ} : ∀ (f : ℕ) (g : Ghost) (m : Mac
         simp only [contrib, hc1 j hji]
 
 /-- **Settling an instant**: the ready requests' jobs join the list. -/
-theorem settle_jobs {L : ℕ → ℕ × ℕ} {g : Ghost} {m : Machine} (hI : CI M L g m) (hA : A0 m) :
-    (settle M.D m).jobs = m.jobs ++ m.ready.flatMap (contrib L g) ∧ A0 (settle M.D m) := by
+theorem settle_jobs {L : ℕ → ℕ × ℕ} {g : Ghost} {m : Machine} (hI : CI M L g m) (hA : NoAdm m) :
+    (settle M.D m).jobs = m.jobs ++ m.ready.flatMap (contrib L g) ∧ NoAdm (settle M.D m) := by
   have hf : m.ready.length ≤ drainFuel m := by unfold drainFuel; omega
   obtain ⟨g', h1, h2, -⟩ := drain_ci _ g m hI hf
   rw [settle_eq_drain h2]
@@ -1216,22 +1217,22 @@ theorem settle_jobs {L : ℕ → ℕ × ℕ} {g : Ghost} {m : Machine} (hI : CI 
 
 /-- A slot's arrivals: the job list is unchanged, the old sessions too, and
 the new ones are ready, in order, with their attributes. -/
-theorem injects_facts : ∀ (as : List (ℕ → ℕ)) (m : Machine), A0 m →
+theorem injects_facts : ∀ (as : List (ℕ → ℕ)) (m : Machine), NoAdm m →
     (injL M as m).jobs = m.jobs ∧ (injL M as m).ready = m.ready ++ List.range' m.sess.size as.length ∧
-    (injL M as m).sess.size = m.sess.size + as.length ∧ A0 (injL M as m) ∧
+    (injL M as m).sess.size = m.sess.size + as.length ∧ NoAdm (injL M as m) ∧
     (∀ j < m.sess.size, getS (injL M as m) j = getS m j) ∧
     (∀ t < as.length, getS (injL M as m) (m.sess.size + t) =
-      ⟨m.sess.size + t, ⟨as.getD t (fun _ => 0), []⟩, 0, Q1 M, [], .ready, 0, 0⟩)
+      ⟨m.sess.size + t, ⟨as.getD t (fun _ => 0), []⟩, 0, Q1 M, [], .ready, unadmitted, 0⟩)
   | [], m, hA => ⟨rfl, by simp [injL], by simp [injL], hA, fun _ _ => rfl, fun t ht => by simp at ht⟩
   | a :: as, m, hA => by
     set m' := inject (Q1 M) a m with hm'
     have hsz : m'.sess.size = m.sess.size + 1 := by simp [hm', inject]
-    have hA' : A0 m' := fun j => by
+    have hA' : NoAdm m' := fun j => by
       rw [hm', getS_inject]; split_ifs
       · rfl
       · exact hA j
     have hg' : ∀ j, getS m' j = if j = m.sess.size then
-        ⟨m.sess.size, ⟨a, []⟩, 0, Q1 M, [], .ready, 0, 0⟩ else getS m j := getS_inject a m
+        ⟨m.sess.size, ⟨a, []⟩, 0, Q1 M, [], .ready, unadmitted, 0⟩ else getS m j := getS_inject a m
     have hI : injL M (a :: as) m = injL M as m' := rfl
     obtain ⟨h1, h2, h3, h4, h5, h6⟩ := injects_facts as m' hA'
     rw [hI]
@@ -1295,10 +1296,10 @@ theorem after_append (it : List (ℕ × ℕ)) (a b : List Job) : after it (a ++ 
 /-- An iteration ends: each job loses its share; the finished ones leave the
 list and become ready, in the list's order. -/
 theorem handle_facts {m : Machine} {a qa : ℕ} (hie : m.iterEnd = some (a, qa))
-    (hn : (m.jobs.map (·.owner)).Nodup) (hA : A0 m) (hb : ∀ j ∈ m.jobs, j.owner < m.sess.size) :
+    (hn : (m.jobs.map (·.owner)).Nodup) (hA : NoAdm m) (hb : ∀ j ∈ m.jobs, j.owner < m.sess.size) :
     (handle m a qa).jobs = (after m.iter m.jobs).filter (·.left ≠ 0) ∧
       (handle m a qa).ready = m.ready ++ ((after m.iter m.jobs).filter (·.left = 0)).map (·.owner) ∧
-      A0 (handle m a qa) := by
+      NoAdm (handle m a qa) := by
   set jobs' := after m.iter m.jobs with hjobs'
   set done := (jobs'.filter (·.left = 0)).map (·.owner) with hdone
   set M1 : Machine := { m with now := a, iterEnd := none, jobs := jobs'.filter (·.left ≠ 0), iter := [] }
@@ -1329,8 +1330,8 @@ arrivals, while a finished decode leaves. On an idle engine there is no job,
 and the list is the arrivals' prefills. The old requests keep their lengths,
 and the new ones have their attributes'. -/
 theorem slot_jobs (hS : Starts M Busy) {L : ℕ → ℕ × ℕ} {g : Ghost} {m : Machine} (hB : SB M Busy L g m)
-    (hA : A0 m) (as : List (ℕ → ℕ)) (hf : ∀ a ∈ as, M.Fits (M.len a)) :
-    ∃ L' g', SB M Busy L' g' (slotL M.D (Q1 M) as m) ∧ A0 (slotL M.D (Q1 M) as m) ∧
+    (hA : NoAdm m) (as : List (ℕ → ℕ)) (hf : ∀ a ∈ as, M.Fits (M.len a)) :
+    ∃ L' g', SB M Busy L' g' (slotL M.D (Q1 M) as m) ∧ NoAdm (slotL M.D (Q1 M) as m) ∧
       (∀ i < m.sess.size, L' i = L i) ∧
       (∀ t < as.length, L' (m.sess.size + t) = M.len (as.getD t fun _ => 0)) ∧
       (slotL M.D (Q1 M) as m).jobs =
@@ -1374,7 +1375,7 @@ theorem slot_jobs (hS : Starts M Busy) {L : ℕ → ℕ × ℕ} {g : Ghost} {m :
   · -- an idle engine starts on the new prefills
     obtain ⟨g4, s1, -, -, s2, s3⟩ := ci_after_idle hS h1 (h4.iterEnd.trans hie)
     rw [slotL_idle as hie, ← hm1]
-    refine ⟨L1, g4, s1, A0_of_sess s3 sA, hLo, hLn, ?_⟩
+    refine ⟨L1, g4, s1, NoAdm_of_sess s3 sA, hLo, hLn, ?_⟩
     rw [s2, ← hm2, hm2j, hB.idle hie]
     simp [after, hnewP]
   · -- a busy engine: the arrivals join, then the batch ends and the next starts
@@ -1386,7 +1387,7 @@ theorem slot_jobs (hS : Starts M Busy) {L : ℕ → ℕ × ℕ} {g : Ghost} {m :
     obtain ⟨sj2, sA2⟩ := settle_jobs e1 hAH
     obtain ⟨g4, s1, -, -, s2, s3⟩ := ci_after_idle hS e1 e4
     rw [slotL_busy hB.toCI hf hie, ← hm1, ← hm2, ← hH]
-    refine ⟨L1, g4, s1, A0_of_sess s3 sA2, hLo, hLn, ?_⟩
+    refine ⟨L1, g4, s1, NoAdm_of_sess s3 sA2, hLo, hLn, ?_⟩
     rw [hiter2] at hj hrd
     -- the job list: the running batch holds no new request
     have hsubP : after m.iter newP = newP := by

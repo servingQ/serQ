@@ -37,7 +37,7 @@ busy engine "now" is the running iteration's start, so a session that
 arrives during an iteration is stamped (`now`) with its start: a response
 time read on this chain is up to one iteration longer. -/
 def inject (prog : Prog) (a : ℕ → ℕ) (m : Machine) : Machine :=
-  { m with sess := m.sess.push ⟨m.sess.size, ⟨a, []⟩, 0, prog, [], .ready, 0, 0⟩
+  { m with sess := m.sess.push ⟨m.sess.size, ⟨a, []⟩, 0, prog, [], .ready, unadmitted, 0⟩
            ready := m.ready ++ [m.sess.size] }
 
 /-- One slot: `k` sessions arrive, then the next event is handled (on a busy

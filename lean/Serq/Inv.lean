@@ -378,7 +378,7 @@ theorem inv_preemptVictim {P : Prog} (m : Machine) (p : ℕ) (h : Inv P m) :
     · have ho := h.sessOK hv
       apply inv_unwind D p v _ _ ho.2
       exact ⟨(h.setS_attr v _).1, fun j hj => h.2 j (List.mem_of_mem_filter hj)⟩
-    · have hd : getS m v = ⟨v, ⟨fun _ => 0, []⟩, 0, .stop, [], .ended, 0, 0⟩ := by
+    · have hd : getS m v = ⟨v, ⟨fun _ => 0, []⟩, 0, .stop, [], .ended, unadmitted, 0⟩ := by
         unfold getS; simp [Array.getD_eq_getD_getElem?, hv]
       apply inv_unwind D p v _ _ (by rw [hd]; simp)
       exact ⟨(h.setS_attr v _).1, fun j hj => h.2 j (List.mem_of_mem_filter hj)⟩

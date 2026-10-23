@@ -87,7 +87,7 @@ theorem decodeMode_eq (L : ℕ → ℕ × ℕ) (m : Machine) :
 /-! ### A slot -/
 
 /-- What the chain carries from slot to slot. -/
-def Inv (m : Machine) : Prop := ∃ L g, BariStable.SB L g m ∧ A0 m
+def Inv (m : Machine) : Prop := ∃ L g, BariStable.SB L g m ∧ NoAdm m
 
 theorem empty_inv : Inv BariStable.empty :=
   ⟨_, _, BariStable.empty_sb, fun j => by simp [getS, BariStable.empty, Slot.empty, Exec.initial]⟩
@@ -99,7 +99,7 @@ theorem slot_inv {m : Machine} (h : Inv m) (rs : List (ℕ × ℕ))
   obtain ⟨L', g', hB', hA', hLo, hLn, hj⟩ :=
     slot_jobs BariStable.ci_start hB hA (rs.map BariStable.attrs) (BariStable.fits_attrs hf)
   change BariStable.SB L' g' (BariStable.slot rs m) at hB'
-  change A0 (BariStable.slot rs m) at hA'
+  change NoAdm (BariStable.slot rs m) at hA'
   change (BariStable.slot rs m).jobs = _ at hj
   simp only [List.length_map] at hLn hj
   refine ⟨⟨L', g', hB', hA'⟩, ?_⟩

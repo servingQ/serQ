@@ -42,5 +42,6 @@
   "examples/vendors/rbln.sq": "examples/workloads/rbln_batch.sq",
   "tests/lean-regress/chunk_expr.sq": "tests/lean-regress/workloads/chunk_expr.sq",
   "tests/lean-regress/cost_ctx.sq": "tests/lean-regress/workloads/cost_ctx.sq",
+  "tests/lean-regress/mixed_admission.sq": "tests/lean-regress/workloads/mixed_admission.sq",
   "tests/lean-regress/preempt_delay.sq": "tests/lean-regress/workloads/preempt_delay.sq"
 }

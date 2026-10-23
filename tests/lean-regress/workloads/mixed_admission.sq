@@ -1,0 +1,6 @@
+// The sessions of tests/lean-regress/mixed_admission.sq.
+workload {
+  arrive batch(3);
+  init { set n = 1; }
+  send (n);
+}

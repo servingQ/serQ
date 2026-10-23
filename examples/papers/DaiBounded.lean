@@ -1567,7 +1567,7 @@ def g0 : Ghost := ⟨fun _ => .s0, fun _ => 0⟩
 
 theorem pre_initial {w : Workload} (hF : Fam w) : Pre w g0 (Exec.initial Dd w.init.length w.attr Pd w) := by
   have hget : ∀ i < w.init.length, getS (Exec.initial Dd w.init.length w.attr Pd w) i =
-      ⟨i, ⟨w.attr i, []⟩, 0, Pd, [], .ready, 0, 0⟩ := by
+      ⟨i, ⟨w.attr i, []⟩, 0, Pd, [], .ready, unadmitted, 0⟩ := by
     intro i hi
     simp [getS, Exec.initial, Array.getD_eq_getD_getElem?, hi]
   have hW : Wn w g0 = 0 := Finset.sum_eq_zero fun i _ => rfl
