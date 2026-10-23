@@ -566,6 +566,9 @@ fn a_session_does_not_call_an_engine() {
 fn a_refusal_names_what_its_caller_may_write() {
     let kernel = |e: &str| {
         assert!(!e.contains("`run E "), "{e}");
+        // nor the declared engine's run with its work: the refusal of a run
+        // quotes the run it refuses without it, `run llm prefill (…)`
+        assert!(!e.contains("`run llm prefill (cost("), "{e}");
         assert!(!e.contains("engine's `request`"), "{e}");
     };
     // the server: the call, which links
@@ -638,19 +641,28 @@ fn a_refusal_names_what_its_caller_may_write() {
             kernel(&e);
         }
     }
-    // a queue's engine: the server calls an entry, the workload makes a turn
+    // a queue's engine: the server calls an entry, a family's by its index,
+    // which links; the workload makes a turn
     let queue = "`P (…)` is a request to queue `P`'s engine";
     let e = refusal_with(&prefiller("P (prompt, 1);", "P (n, 1);"), PREFILLS);
     assert!(e.contains(queue), "{e}");
+    assert!(e.contains("`P[i].VERB (…);`"), "{e}");
+    let one = |entry: &str, server: &str| prefiller(entry, server).replace("P[2]", "P");
+    let e = refusal_with(&one("P (prompt, 1);", "P (n, 1);"), PREFILLS);
     assert!(e.contains("`P.VERB (…);`"), "{e}");
+    compiled_with(&one("P (prompt, 1);", "P.prefill (n);"), PREFILLS);
     let session = PREFILLS.replace("send (n); }", "send (n); session { turn; P (n, 1); } }");
     let e = refusal_with(
         &prefiller("P (prompt, 1);", "P[serial].prefill (n);"),
         &session,
     );
     assert!(e.contains(queue), "{e}");
-    assert!(e.contains("make a turn, `turn;`"), "{e}");
-    assert!(!e.contains("`P.VERB"), "{e}");
+    // the server reaches a queue's engine through an entry, not by a call
+    assert!(
+        e.contains("make a turn, `turn;`, which submits a request to the server"),
+        "{e}"
+    );
+    assert!(!e.contains(".VERB"), "{e}");
     let turn = PREFILLS.replace("set n = 6; }", "set n = 6; P (n, 1); }");
     let e = refusal_with(
         &prefiller("P (prompt, 1);", "P[serial].prefill (n);"),
@@ -658,7 +670,7 @@ fn a_refusal_names_what_its_caller_may_write() {
     );
     assert!(e.contains(queue), "{e}");
     assert!(e.contains(&sizes("turn")), "{e}");
-    assert!(!e.contains("`P.VERB"), "{e}");
+    assert!(!e.contains(".VERB"), "{e}");
     // a queue's pool: the server calls an entry, the session makes a turn
     let pool = "`kv` is a pool of queue `P`, and only `P`'s entries hold it";
     let e = refusal_with(
@@ -669,7 +681,7 @@ fn a_refusal_names_what_its_caller_may_write() {
         PREFILLS,
     );
     assert!(e.contains(pool), "{e}");
-    assert!(e.contains("`P.VERB (…);`"), "{e}");
+    assert!(e.contains("`P[i].VERB (…);`"), "{e}");
     let session = PREFILLS.replace(
         "send (n); }",
         "send (n); session { hold P[0].kv (1) { turn; } } }",
@@ -680,7 +692,7 @@ fn a_refusal_names_what_its_caller_may_write() {
     );
     assert!(e.contains(pool), "{e}");
     assert!(e.contains("make a turn, `turn;`"), "{e}");
-    assert!(!e.contains("`P.VERB"), "{e}");
+    assert!(!e.contains(".VERB"), "{e}");
 }
 
 /// The workload's `init` and `turn` blocks call no queue's entry and make

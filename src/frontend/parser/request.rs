@@ -168,12 +168,12 @@ impl Parser {
         let name = self.ident()?;
         let own = self.in_queue.is_some_and(|qi| self.queues[qi].name == name);
         let workload = self.workload_reach();
-        if !own && self.queues.iter().any(|q| q.name == name) {
+        if !own && let Some(entry) = self.entry_reach(&name) {
             return self.err_at(
                 at,
                 format!(
                     "`{name} (…)` is a request to queue `{name}`'s engine, which its entries make; {}",
-                    workload.unwrap_or(Reach::Entry(&name))
+                    workload.unwrap_or(entry)
                 ),
             );
         }
@@ -230,7 +230,7 @@ impl Parser {
             admitter: &admitter,
             is_engine: &|stage: &str| self.engines.iter().any(|e| e.name == stage),
             // a queue's engine is run through the queue's entries
-            is_queue: &|stage: &str| self.queues.iter().any(|q| q.name == stage),
+            entry: &|stage: &str| self.entry_reach(stage),
         };
         let caller = |who: &str, own, workload| Caller {
             who: who.into(),
@@ -272,12 +272,12 @@ impl Parser {
     }
 }
 
-/// What `engine_use` asks of the program: who admits a pool, and which
-/// stages are engines and which of those are queues'.
+/// What `engine_use` asks of the program: who admits a pool, which stages
+/// are engines, and which of those are queues', reached by an entry.
 struct Engines<'a> {
     admitter: &'a dyn Fn(&str) -> Option<String>,
     is_engine: &'a dyn Fn(&str) -> bool,
-    is_queue: &'a dyn Fn(&str) -> bool,
+    entry: &'a dyn Fn(&str) -> Option<Reach<'a>>,
 }
 
 /// What reaches an engine from where a refusal stands, and so what the
@@ -291,36 +291,30 @@ pub(super) enum Reach<'a> {
     /// The workload's `init` or `turn` block, which sets sizes: the
     /// session's turn, which the block may not make either.
     Sizes(&'static str),
-    /// Queue `Q`'s engine: through the queue's entries.
-    Entry(&'a str),
+    /// Queue `Q`'s engine: through the queue's entries, a family's by its
+    /// member's index (`Q[i].VERB`), which `queue::call` asks of a family.
+    Entry { queue: &'a str, family: bool },
     /// Engine `E`: its call.
     Call(&'a str),
     /// An engine the parser cannot name: a call, or a queue's entry.
     Unknown,
 }
 
-impl<'a> Reach<'a> {
-    /// Engine `e` from outside the workload: through its entries if it is
-    /// a queue's, else by its call.
-    pub(super) fn engine(e: &'a str, queue: bool) -> Self {
-        if queue {
-            Reach::Entry(e)
-        } else {
-            Reach::Call(e)
-        }
-    }
-}
-
 impl std::fmt::Display for Reach<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        const TURN: &str = "a turn, `turn;`, which the server sends to the engine";
+        // the turn's request is the server's, which calls the engine or an
+        // entry that calls it
+        const TURN: &str = "a turn, `turn;`, which submits a request to the server";
         match self {
             Reach::Turn => write!(f, "make {TURN}"),
             Reach::Sizes(b) => write!(
                 f,
                 "the `{b}` block sets sizes, and the `session` makes {TURN}"
             ),
-            Reach::Entry(q) => write!(f, "call one of queue `{q}`'s entries (`{q}.VERB (…);`)"),
+            Reach::Entry { queue: q, family } => {
+                let i = if *family { "[i]" } else { "" };
+                write!(f, "call one of queue `{q}`'s entries (`{q}{i}.VERB (…);`)")
+            }
             Reach::Call(e) => write!(
                 f,
                 "call the engine, `{e} (input, output);`, which keeps the request's state"
@@ -344,6 +338,16 @@ impl Parser {
             b => Some(Reach::Sizes(b)),
         }
     }
+
+    /// What reaches queue `name`'s engine, if `name` is a queue: one of its
+    /// entries.
+    pub(super) fn entry_reach(&self, name: &str) -> Option<Reach<'_>> {
+        let q = self.queues.iter().find(|q| q.name == name)?;
+        Some(Reach::Entry {
+            queue: &q.name,
+            family: q.family,
+        })
+    }
 }
 
 /// Whose statements `engine_use` reads: `who` names them in a refusal,
@@ -359,9 +363,12 @@ struct Caller<'a> {
 /// outside its own queue: where it is and what to write instead.
 fn engine_use(stmts: &[Stmt], en: &Engines, c: &Caller) -> Option<(Option<Span>, String)> {
     let Caller { who, own, workload } = c;
+    // from outside the workload, a queue's engine through its entries, any
+    // other by its call
     let instead = |e: &str| {
         workload
-            .unwrap_or(Reach::engine(e, (en.is_queue)(e)))
+            .or_else(|| (en.entry)(e))
+            .unwrap_or(Reach::Call(e))
             .to_string()
     };
     super::find_stmt(stmts, &|s| match s {
@@ -394,7 +401,7 @@ fn engine_use(stmts: &[Stmt], en: &Engines, c: &Caller) -> Option<(Option<Span>,
             .map(|(p, e)| {
                 // the session writes no `taking`: the engine's admission
                 // is the deployment's, and a turn reaches it
-                let to = if workload.is_some() || (en.is_queue)(&e) {
+                let to = if workload.is_some() || (en.entry)(&e).is_some() {
                     format!("; {}", instead(&e))
                 } else {
                     format!(

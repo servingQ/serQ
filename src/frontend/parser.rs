@@ -5273,7 +5273,10 @@ impl Parser {
         if let Some((q, p)) = r.name.split_once('.')
             && here != Some(q)
         {
-            let reach = self.workload_reach().unwrap_or(request::Reach::Entry(q));
+            let reach = self
+                .workload_reach()
+                .or_else(|| self.entry_reach(q))
+                .unwrap_or(request::Reach::Unknown);
             return self.err_at(
                 at,
                 format!(
