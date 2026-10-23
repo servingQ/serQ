@@ -63,6 +63,8 @@ python3 scripts/test_check_docs_examples.py
 python3 scripts/check_docs_examples.py
 # Experimental runners must explicitly select their execution conditions too.
 python3 tools/pd_batching/test_runners.py
+# The A100 golden's collector and converter, on made-up input (no GPU).
+python3 tools/a100-v031/test_tools.py
 python3 scripts/check_oracle_gpu.py
 # The docs' `file.py:line` evidence for the vLLM correspondence. Skips loudly
 # where ref/vllm is absent (scripts/fetch_vllm_ref.sh --sparse: 4 MB, 2 s).
