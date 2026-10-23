@@ -16,8 +16,11 @@ The scheduler's choices are not a GPU question. Which request a step admits,
 how many tokens it gives each, whom it preempts: the CPU oracle checks that,
 by running vLLM's own scheduler from `ref/vllm` without a GPU, a step at a
 time (`tools/vllm_oracle.py`, `tools/vllm_replay_oracle.py`,
-`tools/oracle/*.out.*`, and `scripts/check_oracle_gpu.py`, which holds the
-CPU oracle, the A100 engine and serQ to the same answers).
+`tools/oracle/*.out.*`). `scripts/check_oracle_gpu.py` holds the CPU oracle
+and an A100 engine (`tools/oracle/a100_engine.json`, six scenarios) to the
+same `first`, `done` and `preemptions`; the tests (`tests/vllm_oracle.rs`)
+and the Lean model (`lean/Serq/Oracle.lean`) hold serQ to the oracle's
+answers.
 
 A golden checks **time, and the aggregates that move it**: per-request
 time to first token, time per output token and response time; queueing
@@ -33,18 +36,27 @@ Hub dataset, `servingq/serq-serving-traces`.
 
 ## What is collected, and what is not yet
 
+Each collected batch is a task of the private Harbor dataset
+`servingq/serq-serving-traces` ([Instances and storage](#instances-and-storage));
+the table names the tasks.
+
 | Collected | Where | What |
 |---|---|---|
-| A100 single-turn, vLLM v0.31.0, Llama-3.1-8B-Instruct and Qwen3-8B (2026-10-13) | Harbor `servingq/a100-vllm031-single-turn-llama31-8b-2026-10` and `servingq/a100-vllm031-single-turn-qwen3-8b-2026-10`; scripts: #605, which adds them as `tools/a100-v031/` | `examples/workloads/single_turn.sq` against `examples/multi-turn/vllm.sq`, replayed by `vllm bench serve`. Per model: a saturation probe (1 to 96 concurrent requests; λ_max 3.72 req/s for Llama, 3.63 for Qwen), a Poisson sweep at 0.2, 0.4, 0.6, 0.8, 0.9, 1.0 and 1.2 × λ_max with three repetitions, the 1.0 point with async scheduling on, and seven engine settings at 0.9 × λ_max with three repetitions; 51 runs per model, all exit 0. Both models get the same (n, o) draws. Every request, 65 023 in all, is an ATIF-v1.7 trajectory that harbor 0.24.0's validator accepts |
-| A6000 P/D pull and push (2026-09) | Harbor `servingq/a6000-pd-nixl-2026-09`; part in `tools/a6000/` | pull 1P1D, push 1P1D and pull 2P2D at session spacing 3.0 s, 96 sessions of `examples/replay/data/short_base.csv` each, 288 ATIF trajectories. `/metrics` polled once a second, no step record; a toy round-robin proxy; vLLM at the dev commit `0c87a197` |
+| A100 single-turn, vLLM v0.31.0, Llama-3.1-8B-Instruct and Qwen3-8B (2026-10-13) | Harbor tasks `servingq/a100-vllm031-single-turn-llama31-8b-2026-10` and `servingq/a100-vllm031-single-turn-qwen3-8b-2026-10`; scripts: #605, which adds them as `tools/a100-v031/` | `examples/workloads/single_turn.sq` against `examples/multi-turn/vllm.sq`, replayed by `vllm bench serve`. Per model: a saturation probe (1 to 96 concurrent requests; λ_max 3.72 req/s for Llama, 3.63 for Qwen), a Poisson sweep at 0.2, 0.4, 0.6, 0.8, 0.9, 1.0 and 1.2 × λ_max with three repetitions, the 1.0 point with async scheduling on, and seven engine settings at 0.9 × λ_max with three repetitions; 51 runs per model, all exit 0. Both models get the same (n, o) draws. Every request, 65 023 in all, is an ATIF-v1.7 trajectory that harbor 0.24.0's validator accepts |
+| A6000 P/D pull and push (2026-09) | Harbor task `servingq/a6000-pd-nixl-2026-09`; part in `tools/a6000/` | pull 1P1D, push 1P1D and pull 2P2D at session spacing 3.0 s, 96 sessions of `examples/replay/data/short_base.csv` each, 288 ATIF trajectories. `/metrics` polled once a second, no step record; a toy round-robin proxy; vLLM at the dev commit `0c87a197` |
 
 The single-turn records per run: the client's per-request JSON
 (`--save-detailed`), the server's OTLP spans, its log with the iteration
 lines, `/metrics` once a second and around each run, `nvidia-smi` every
 100 ms, and the server flags. Not recorded there: KV events, the KV
 residency histograms, CUDA graph padding, and a step-cost probe. In 18 runs
-the spans of 1 to 5 requests are missing (not exported before the server
-stopped); the client records are complete. The step cost (`c_it` and the
+the spans of 1 to 5 requests are missing (the span receiver stopped before
+the server's exporter sent them); the client records are complete. Such a
+request keeps its trajectory and its row: its `extra.server` is null, its
+`prompt` (and `metrics.prompt_tokens`) is the client's input length instead
+of the span's `prompt_tokens`, and nothing is synthesised (#605's
+`bench_to_atif.py`).
+The step cost (`c_it` and the
 rest of `examples/replay/vllm_replay.sq`'s worker) has not been refitted on
 these records. The scripts that collected them land on their own, as they
 ran (#605); the multi-turn scripts come with F2.
@@ -89,17 +101,19 @@ commits ahead of it and none behind (GitHub compare `0c87a197...v0.31.0`).
 Those commits change the scheduler: the `skipped_waiting` queue is split
 into `kv_holding_waiting` and `deferred_waiting` (vllm#58947), streaming
 continuations get their own max tokens (vllm#57676), and the prefix-cache
-key changes
-(vllm#51899, vllm#59335). Measured today, 15 of the 31 files
-`scripts/check_citations.py` cites differ between the two, and 119 of the
-178 citations in `tools/citations.json` point at different text at the
-same lines, all 82 in the scheduler. Moving the pin is therefore its own
-change (F1), and it lands before any multi-turn collection, so that the
-oracle and the golden read the same engine. The single-turn golden was
-collected on v0.31.0 before the pin moved. vLLM v0.32.0 (2026-10-18) exists;
+key changes (vllm#51899, vllm#59335). Measured on 2026-10-23, serQ main
+`4ed307c` against the v0.31.0 tag: of the 31 files `tools/citations.json`
+cites, 15 differ between the two, and 122 of its 188 citations point at
+different text at the same lines, all 85 in the scheduler. Moving the pin
+is therefore its own change (F1), and it lands before any multi-turn
+collection. Until then the CPU oracle runs the pin (vLLM 0.30.1rc0+215, as
+`scripts/check_oracle_gpu.py` labels it), and that script holds it to A100
+runs of v0.30.0: neither engine is v0.31.0, on which the single-turn golden
+was collected before the pin moved. After F1 the oracle and the multi-turn
+golden read the same engine. vLLM v0.32.0 (2026-10-18) exists;
 the golden stays on v0.31.0 so that every collection shares one engine.
 
-The other engines, checked against GitHub today:
+The other engines, checked against GitHub on 2026-10-23:
 
 | Engine | Cited commit | Release | Note |
 |---|---|---|---|
@@ -107,7 +121,7 @@ The other engines, checked against GitHub today:
 | TensorRT-LLM | `bf414e37` | none yet | no final release contains it; the latest final is v1.2.1 (2026-04-20), and the first tag that contains it is v1.4.0rc0 (2026-10-14), then v1.4.0rc1. P2 waits for v1.4.0, or runs v1.4.0rc1 recorded as a release candidate |
 | TGI | `b4adbf2f` | v3.3.7 | the repository is archived; the commit is two after v3.3.7, which touch only a CodeQL workflow and docs, so the code is v3.3.7's |
 | ThunderAgent | `7ddc861` | none | the repository has no releases; the commit itself |
-| llm-d, its router | `8a2f37d`, `13eebdb` | unresolved | neither commit is found under `llm-d/llm-d` or `llm-d/llm-d-router` (formerly `llm-d-inference-scheduler`); F4 first finds the repository, then the release |
+| llm-d, its router | `13eebdb` (`llm-d/llm-d`), `8a2f37d` (`llm-d/llm-d-router`, formerly `llm-d-inference-scheduler`) | llm-d v1.0.0 (2026-10-20) | `docs/language.md` and `docs/use-cases/pd.md` name the two commits the other way round. v0.10.0 is the first llm-d release containing `13eebdb`, but its guides deploy router v0.11.0, which predates `8a2f37d`; v1.0.0's deploy router v1.0.0, the first final release containing it, and vLLM v0.31.0 (`guides/env.sh`, the `gpu-vllm` image) |
 
 The model is Qwen3-8B in bf16 at TP 1 for every collection from here on.
 The single-turn golden also has Llama-3.1-8B-Instruct.
@@ -411,7 +425,10 @@ outputs so that F5's comparison is one diff: `serq run --dump DIR`
    ([`vllm/v1/engine/output_processor.py` L799–859](https://github.com/vllm-project/vllm/blob/v0.31.0/vllm/v1/engine/output_processor.py#L799-L859)).
    The gap between the client's `sent` and the span's start (the arrival)
    splits a request's fixed cost `c0` between the network, the API server
-   and the engine.
+   and the engine. A span is lost when its receiver stops before the
+   server's exporter sends it, as in 18 single-turn runs, so the scripts
+   stop the server before the receiver, and the manifest counts the
+   requests without a span.
 4. `iterations.jsonl`: the step lines of `--enable-logging-iteration-details`
    ([`vllm/v1/metrics/loggers.py` L177–207](https://github.com/vllm-project/vllm/blob/v0.31.0/vllm/v1/metrics/loggers.py#L177-L207)):
    prefill requests and tokens, decode requests and tokens, elapsed time and
@@ -447,11 +464,14 @@ outputs so that F5's comparison is one diff: `serq run --dump DIR`
 9. `probe.jsonl`: requests sent alone, without load, sweeping the prefill
    length, the decode batch and the KV length, for the step-cost fit. Once
    per instance.
-10. `summary.json`, per load point: throughput, SLO goodput, TTFT, TPOT, ITL
-    and response time (mean, p50, p90, p99), waiting time, preemptions,
-    prefix hit rate, KV usage, the step count and mean step time. Little's
-    law (L = λW) is checked within the run, which screens the golden
-    itself.
+10. `summary.json`, per load point: throughput, and TTFT, TPOT, ITL and
+    response time (mean, p50, p90, p99), from the client's export (2),
+    which has every request; waiting time from the spans (3), over the
+    requests that have one, with their count; preemptions, prefix hit rate
+    and KV usage from `/metrics` (5); the step count and mean step time
+    from the iteration log (4). No goodput: the golden fixes no SLO, and a
+    goodput at any SLO is recomputed from (2). Little's law (L = λW) is
+    checked within the run, which screens the golden itself.
 11. `trajectories.tar.gz`: an ATIF-v1.7 trajectory per session, made from
     (2) and (3). A Harbor-made workload keeps both the generation's
     trajectories and the replay's.
@@ -488,7 +508,10 @@ record of its own to point to (see
 [What is lost without a plugin](#what-is-lost-without-a-plugin)), only the
 NIXL histograms of `metrics.jsonl`. Engine steps, KV events and GPU samples
 have no place in ATIF and stay files of the run. The collection scripts keep only
-trajectories that `harbor.utils.trajectory_validator` accepts.
+trajectories that `harbor.utils.trajectory_validator` accepts. A request
+whose span is lost keeps its trajectory, with `extra.server` null; its
+`metrics` and `extra.serq` come from the client's export, and nothing is
+synthesised.
 
 **`message` holds the text the turn added.** A user step's `message` is
 the user's message or the tool's observation, verbatim; token ids are not
@@ -564,8 +587,9 @@ collection, so that the CPU oracle and the golden read one engine.
 
 - `scripts/fetch_vllm_ref.sh`: `REV` from `0c87a197…` to
   `db9527a46873454610df6dbedf79a36d6bf1a7f6`.
-- Re-read and re-point the 119 citations that say something else at the
-  same lines (all 82 in the scheduler), then `make citations`.
+- Re-read and re-point every citation that says something else at the
+  same lines (122 of 188 at `4ed307c`, all 85 in the scheduler), then
+  `make citations`.
 - Re-read each site that cites `skipped_waiting` against v0.31.0's split
   (*What v0.31.0 restructures* above) and fix it there: `docs/language.md`
   (§3, *Pools*, and the chunked-prefill row of §7's table),
@@ -609,9 +633,9 @@ regenerates `tools/oracle/*.ir.json` and updates `docs/use-cases/vllm.md`.
 The single-turn synchronous records are on Harbor for a first look.
 
 **F4. P1, llm-d P/D on A6000 with the real router (#763).** Needs a paid
-`gpu_4x_a6000` session, approved first, and F2's converters. Before it, find
-the repository that holds `8a2f37d` and `13eebdb` and the release that
-contains them. On the GPU: the NIC (IB or TCP) checked and recorded, then
+`gpu_4x_a6000` session, approved first, and F2's converters. It runs llm-d
+v1.0.0 and the router v1.0.0 its guides deploy (the engines table above).
+On the GPU: the NIC (IB or TCP) checked and recorded, then
 the continuity run (pull 1P1D at 3.0 s, against
 `servingq/a6000-pd-nixl-2026-09`, asynchronous scheduling on, then off),
 then the chat spacings × {1:1, 1:3, 3:1, 2:2} through the llm-d router.
