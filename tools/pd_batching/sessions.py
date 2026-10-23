@@ -134,7 +134,7 @@ def row(mode, workload, x, seed, rep):
         # pods colocated, the prefill pods split
         "prefill_busy": mean([s["prefill_only"] + s["mixed"] for s in pods if (s["name"] == "D") != split]),
         "preemptions_per_s": sum(p["preemptions"] for p in rep["pools"]) / span,
-        "stuck": sum(p["stuck"] for p in rep["pools"]),
+        "preempted_in_recompute": sum(p["preempted_in_recompute"] for p in rep["pools"]),
         # the edits that make the deployment compared
         "edits": json.dumps(edits_of(mode, workload, x)),
     }
@@ -176,7 +176,7 @@ def main():
         f"Mean ± 95 % CI over seeds {SEEDS[0]}–{SEEDS[-1]} (Student t). Times in milliseconds. `x` is sessions per second (open) or users (closed).",
         "`decode` is response − TTFT; `prefill tok` is the prompt tokens a prefill computes (the rest is a prefix hit; a turn's, but for the few run again after a preemption); `ITL` is the decode pods' `mean_itl` weighed by their decode tokens, and the largest `itl_p99`; `prefill busy` is the time the engines that prefill run a prefill or a mixed batch. A mean ITL above the p99 is the gaps beyond the p99: the prefills a decode rides with.",
         "",
-        "| workload | x | mode | turns/s | live | TTFT | decode | response | prefill tok | ITL | ITL p99 | batch | prefill busy | preempt/s | stuck |",
+        "| workload | x | mode | turns/s | live | TTFT | decode | response | prefill tok | ITL | ITL p99 | batch | prefill busy | preempt/s | preempted in recompute |",
         "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     groups = {}
@@ -187,7 +187,7 @@ def main():
             f"| {workload} | {x} | {mode} | {fmt([r['turns_per_s'] for r in g], 1, 2)} | {fmt([r['live'] for r in g], 1, 1)} | "
             f"{fmt([r['ttft'] for r in g], 1e3, 1)} | {fmt([r['decode'] for r in g], 1e3, 1)} | {fmt([r['response'] for r in g], 1e3, 1)} | "
             f"{fmt([r['prefill_tokens'] for r in g], 1, 0)} | {fmt([r['mean_itl'] for r in g], 1e3)} | {fmt([r['itl_p99'] for r in g], 1e3, 2)} | {fmt([r['batch'] for r in g], 1, 2)} | "
-            f"{fmt([r['prefill_busy'] for r in g], 1, 2)} | {fmt([r['preemptions_per_s'] for r in g], 1, 2)} | {sum(r['stuck'] for r in g)} |"
+            f"{fmt([r['prefill_busy'] for r in g], 1, 2)} | {fmt([r['preemptions_per_s'] for r in g], 1, 2)} | {sum(r['preempted_in_recompute'] for r in g)} |"
         )
     (HERE / "sessions.md").write_text("\n".join(out) + "\n")
 

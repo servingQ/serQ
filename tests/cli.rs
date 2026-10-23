@@ -1,7 +1,7 @@
-//! The binary's exit status. A run whose report counts `stuck` sessions is a
-//! result to read with care, not a failure: `stuck` counts a no-progress
-//! re-preemption once per session and rises under ordinary overload too
-//! (#64 holds the livelock criterion that would change this).
+//! The binary's exit status. A run whose report counts sessions preempted
+//! in recompute is a result to read with care, not a failure: the count
+//! rises under ordinary overload, and a hold that can never fit is counted
+//! once too (#64 holds the livelock criterion that would change this).
 
 mod common;
 
@@ -12,9 +12,9 @@ fn serq() -> Command {
     Command::new(env!("CARGO_BIN_EXE_serq"))
 }
 
-/// The program of `tests/pool_semantics.rs::a_hold_that_can_never_fit_is_reported_stuck`:
+/// The program of `tests/pool_semantics.rs::a_hold_that_can_never_fit_is_counted_preempted_in_recompute`:
 /// a hold that fits at admission and can never grow to what its body needs.
-const STUCK: &str = r#"
+const SELF_PREEMPTING: &str = r#"
         device gpu { kv cap 160; }
         engine llm on gpu {
           reqs cap 4;
@@ -31,8 +31,8 @@ const STUCK: &str = r#"
 
 "#;
 
-/// `STUCK`'s workload.
-const STUCK_WORKLOAD: &str = r#"
+/// `SELF_PREEMPTING`'s workload.
+const SELF_PREEMPTING_WORKLOAD: &str = r#"
         workload { arrive batch(1);
           session { turn;
             end;
@@ -42,13 +42,13 @@ const STUCK_WORKLOAD: &str = r#"
 "#;
 
 #[test]
-fn a_stuck_run_prints_its_report_and_exits_0() {
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("cli-stuck");
+fn a_self_preempting_run_prints_its_report_and_exits_0() {
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("cli-self-preempting");
     std::fs::create_dir_all(&dir).unwrap();
-    let file = dir.join("stuck.sq");
-    std::fs::write(&file, common::main_source(STUCK)).unwrap();
+    let file = dir.join("self_preempting.sq");
+    std::fs::write(&file, common::main_source(SELF_PREEMPTING)).unwrap();
     let workload = dir.join("w.sq");
-    std::fs::write(&workload, STUCK_WORKLOAD).unwrap();
+    std::fs::write(&workload, SELF_PREEMPTING_WORKLOAD).unwrap();
     let out = serq()
         .arg("run")
         .arg(&file)
@@ -59,7 +59,10 @@ fn a_stuck_run_prints_its_report_and_exits_0() {
         .unwrap();
     let text = String::from_utf8_lossy(&out.stdout);
     assert_eq!(out.status.code(), Some(0), "{text}");
-    assert!(text.contains("stuck: 1 session(s)"), "{text}");
+    assert!(
+        text.contains("preempted in recompute: 1 session(s)"),
+        "{text}"
+    );
     let out = serq()
         .arg("run")
         .arg(&file)
@@ -71,7 +74,7 @@ fn a_stuck_run_prints_its_report_and_exits_0() {
         .unwrap();
     let text = String::from_utf8_lossy(&out.stdout);
     assert_eq!(out.status.code(), Some(0), "{text}");
-    assert!(text.contains("\"stuck\":1"), "{text}");
+    assert!(text.contains("\"preempted_in_recompute\":1"), "{text}");
 }
 
 #[test]

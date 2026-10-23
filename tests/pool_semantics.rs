@@ -489,9 +489,9 @@ fn a_hold_larger_than_the_cap_is_refused_or_reported() {
 }
 
 /// Only a step stage's scheduler admits: `admit via` a FIFO, PS or delay
-/// stage linked, and the pool's queue waited forever with nothing counted
-/// stuck (#418). The text can no longer say it (#439: a pool is admitted
-/// by the engine its `on` names), so the IR says it and is refused.
+/// stage linked, and the pool's queue waited forever with no count in the
+/// report to say so (#418). The text can no longer say it (#439: a pool is
+/// admitted by the engine its `on` names), so the IR says it and is refused.
 #[test]
 fn admit_via_names_a_step_stage() {
     for (stage, kind) in [
@@ -529,9 +529,11 @@ fn admit_via_names_a_step_stage() {
 
 /// A request that fits at admission but can never grow to what it needs
 /// preempts itself, re-enters at the head of the queue, and does it again:
-/// a livelock the run would otherwise hide behind a preemption count. The
-/// report counts the session once as `stuck` (preempted again without
-/// passing its position) and says so.
+/// a livelock. The report counts the session once in
+/// `preempted_in_recompute` (preempted again before passing the position of
+/// its previous preemption), with the ordinary preemptions during a
+/// recompute that it cannot tell from this one (`tests/vllm_semantics.rs`),
+/// and says so; the session never ends (`ended` 0).
 ///
 /// On 10 blocks of 16 (160 tokens) with a 1000-token budget: step 1
 /// prefills the 100-token prompt (7 blocks), steps 2..61 decode tokens
@@ -543,7 +545,7 @@ fn admit_via_names_a_step_stage() {
 /// pool, so from step 63 every step re-admits it and its prefill preempts
 /// it at once: 340 preemptions and admissions before the horizon of 400.
 #[test]
-fn a_hold_that_can_never_fit_is_reported_stuck() {
+fn a_hold_that_can_never_fit_is_counted_preempted_in_recompute() {
     let src = r#"
         device gpu { kv cap 160; }
         engine llm on gpu {
@@ -570,8 +572,12 @@ fn a_hold_that_can_never_fit_is_reported_stuck() {
     let kv = r.pool("kv").unwrap();
     assert_eq!(kv.preemptions, 340, "{}", r.text());
     assert_eq!(kv.admissions, 340, "{}", r.text());
-    assert_eq!(kv.stuck, 1, "{}", r.text());
-    assert!(r.text().contains("stuck: 1 session(s)"), "{}", r.text());
+    assert_eq!(kv.preempted_in_recompute, 1, "{}", r.text());
+    assert!(
+        r.text().contains("preempted in recompute: 1 session(s)"),
+        "{}",
+        r.text()
+    );
     assert_eq!(r.ended, 0, "{}", r.text());
     // one step per unit of time, and the step that starts at the horizon
     // is counted when it starts
@@ -613,7 +619,7 @@ fn a_zero_cost_preempting_step_does_not_hang() {
     let r = run(src, workload, &common::horizon(400.0));
     let kv = r.pool("kv").unwrap();
     assert_eq!(kv.preemptions, 2, "{}", r.text());
-    assert_eq!(kv.stuck, 1, "{}", r.text());
+    assert_eq!(kv.preempted_in_recompute, 1, "{}", r.text());
 }
 
 /// An `if` guard is a test, 0 or 1. A computed fraction used to be drawn

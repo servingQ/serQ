@@ -21,7 +21,7 @@ One pool's report row. Obtain it from [`Report.pool`](report.md#pool),
 | `preemptions` | `int` | Preemptions counted by this pool. |
 | `spills` | `int` | Spills of evicted prefixes to another pool. |
 | `rejected` | `int` | Requests rejected because static demand could never fit. |
-| `stuck` | `int` | Repeated preemptions without progress past the previous preemption. |
+| `preempted_in_recompute` | `int` | Sessions preempted again before passing the position of their previous preemption here, while recomputing what it dropped; once per session. Ordinary under overload: the session may still finish. |
 | `over_cap` | `tuple[str, float]` or `None` | At run end, the waiting queue name and demand exceeding this pool's capacity; `None` when absent. |
 | `growing_at_end` | `int` | Holds waiting to grow in this pool when the run ends. |
 | `growing_stalled` | `bool` | Every session with an allocation in this pool waits to grow in it: none will free room. |

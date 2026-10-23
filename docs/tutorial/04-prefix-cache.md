@@ -72,9 +72,9 @@ stage   number   util   done    thru    wait  service  iters
 engine   0.158  0.140  44889  2.4938  0.0074   0.0560      0
 tool     5.985  0.998  35986  1.9992  0.0000   2.9932      0
 
-pool   used   cached  queue  holders    wait  admits  evict(n)  evict(u)  preempt  spill  rej  stuck
-----  -----  -------  -----  -------  ------  ------  --------  --------  -------  -----  ---  -----
-kv    796.3  30195.3  0.000    0.158  0.0000   49906         0         0        0      0    0      0
+pool   used   cached  queue  holders    wait  admits  evict(n)  evict(u)  preempt  spill  rej  preempted in recompute
+----  -----  -------  -----  -------  ------  ------  --------  --------  -------  -----  ---  ----------------------
+kv    796.3  30195.3  0.000    0.158  0.0000   49906         0         0        0      0    0                       0
 ```
 
 Every turn after a session's first is a hit, and the response time falls

@@ -371,7 +371,7 @@ At the defaults (seed 1, horizon 2 000 s, warm-up 200 s), the run gives:
 | Mean TTFT | 27.3 ms |
 | Mean response | 69.9 ms |
 | Mean source lease | 12.9 ms |
-| Rejected / stuck sessions | 0 / 0 |
+| Rejected sessions / preempted in recompute | 0 / 0 |
 
 These are simulation observations, not hardware measurements or intervals
 across seeds. The lease includes waiting for decoder capacity and the

@@ -218,8 +218,10 @@ A program can rely on the following invariants. Each one says what holds it:
 6. **A loop lets time pass.** Every path through a `loop` or `while` reaches
    a `run` with work, a `hold` whose body does, or `end`. A schedule that can
    neither advance nor admit does not link. What the linker cannot see is
-   reported at run time: `stuck` sessions and `idle: engine …`
-   ([the report](reference/cli.md)). *Linker and run-time check.*
+   reported at run time: `idle: engine …`, and a hold that preempts itself
+   for ever is counted in `preempted in recompute`, among the ordinary
+   preemptions during a recompute ([the report](reference/cli.md)).
+   *Linker and run-time check.*
 
 ### Resources
 

@@ -436,9 +436,10 @@ struct Session<'p> {
     /// Per pool, the position the session's hold had reached on that pool
     /// when it was last preempted for it; cleared when a hold completes. A
     /// second preemption for the same pool at the same or a lower position
-    /// is no progress there: the session is `stuck`.
+    /// comes while the hold recomputes what the first dropped: the session
+    /// is counted in that pool's `preempted_in_recompute`, once in the run.
     preempt_pos: HashMap<usize, f64>,
-    stuck: bool,
+    preempted_in_recompute: bool,
     /// Per pool, the chain along which the session or one of its legs last
     /// cached there: the key `cachedin` reads the pool by when no hold of
     /// the session names it (#595: a `prefix` keys only the pools its hold
@@ -608,9 +609,12 @@ struct PoolState {
     preemptions: u64,
     spills: u64,
     rejected: u64,
-    /// Sessions preempted again without having advanced past the position
-    /// of their previous preemption (a self-preemption livelock, typically).
-    stuck: u64,
+    /// Sessions preempted again here before passing the position of their
+    /// previous preemption here, i.e. while recomputing what it dropped.
+    /// vLLM's recompute does this under ordinary overload, and a hold that
+    /// can never fit does it for ever; each session once in the run, at the
+    /// first pool.
+    preempted_in_recompute: u64,
 }
 
 // ------------------------------------------------------------ stages ----
@@ -1022,7 +1026,7 @@ impl<'p> Interp<'p> {
                 preemptions: 0,
                 spills: 0,
                 rejected: 0,
-                stuck: 0,
+                preempted_in_recompute: 0,
             })
             .collect();
         let shared = p
@@ -1676,7 +1680,7 @@ impl<'p> Interp<'p> {
             adm_seq: u64::MAX,
             preempt_pos: HashMap::new(),
             cached_chain: HashMap::new(),
-            stuck: false,
+            preempted_in_recompute: false,
             leases: vec![],
             last_token: None,
             client: None,
@@ -1997,7 +2001,7 @@ impl<'p> Interp<'p> {
             adm_seq: u64::MAX,
             preempt_pos: HashMap::new(),
             cached_chain: HashMap::new(),
-            stuck: false,
+            preempted_in_recompute: false,
             leases: vec![],
             last_token: None,
             client: None,
@@ -4481,14 +4485,17 @@ impl<'p> Interp<'p> {
             .expect("victim holds the pool");
         // what the hold has computed on this pool: its position there, which
         // starts at the cached prefix it consumed and advances with its
-        // `growing` runs. Not the allocation: a holder preempted before its
-        // first iteration has computed nothing of what it was allocated
-        // (vLLM: `num_computed_tokens` is 0 for it, and it has no output)
+        // `growing` runs and `load`s (on a pool neither advances, a second
+        // preemption is counted below with nothing recomputed: the count
+        // reads the position, not a recompute). Not the allocation: a holder
+        // preempted before its first iteration has computed nothing of what
+        // it was allocated (vLLM: `num_computed_tokens` is 0 for it, and it
+        // has no output)
         let computed = self.sessions[victim].holds[hi].pools[k].pos;
         if let Some(&prev) = self.sessions[victim].preempt_pos.get(&pl) {
-            if computed <= prev + EPS && !self.sessions[victim].stuck {
-                self.sessions[victim].stuck = true;
-                self.pools[pl].stuck += 1;
+            if computed <= prev + EPS && !self.sessions[victim].preempted_in_recompute {
+                self.sessions[victim].preempted_in_recompute = true;
+                self.pools[pl].preempted_in_recompute += 1;
             }
         }
         self.sessions[victim].preempt_pos.insert(pl, computed);
@@ -6623,7 +6630,7 @@ impl<'p> Interp<'p> {
                 preemptions: pl.preemptions,
                 spills: pl.spills,
                 rejected: pl.rejected,
-                stuck: pl.stuck,
+                preempted_in_recompute: pl.preempted_in_recompute,
                 over_cap: over
                     .iter()
                     .find(|(asked, _, _)| *asked == i)

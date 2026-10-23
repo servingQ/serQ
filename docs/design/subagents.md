@@ -84,7 +84,7 @@ Two kernel statements and a few session attributes.
   the child's.
 - Statistics need tree-level observations: recording the root session
   number with each `observe` lets them be combined outside.
-- The `stuck` check ([IR v4](ir-v4.md) §7) must include the state where a
+- The livelock check ([IR v4](ir-v4.md) §7, #64) must include the state where a
   joining session's children are all blocked in a queue that is not moving.
 
 ## How a program reads

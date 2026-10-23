@@ -405,7 +405,10 @@ while holding a finite pool", and if the linker rejects a `Join` inside a
 **Outcome.** The cheap half landed as the `stuck` count: a session
 preempted again without passing the position of its previous preemption is
 counted per pool and written in the report (#43). It does not fail a run
-yet (#64). The theorem is open.
+yet (#64). The theorem is open. Since report version 2 the count is
+`preempted_in_recompute`: vLLM's own recompute is preempted that way under
+ordinary overload, so the count alone is not a livelock
+([Preempted in recompute](preempted-in-recompute.md)).
 
 ## Value and cost
 
