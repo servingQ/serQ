@@ -1149,7 +1149,8 @@ would too: it adds a prefilling request at the end, and a request decodes
 in the place its admission gave it (`Serve.shape_append_prefill`, not yet
 a theorem of `Exec`). A cap
 breaks it (`chunk_cap_breaks_fill_shape`), and so does an engine whose
-requests hold no memory: none is admitted, so they are served in the order
+requests hold nothing (Dai et al.'s, `examples/papers/dai_sarathi.sq`):
+none is admitted, so they are served in the order
 their runs started, and a request's decode waits behind the prompts that
 arrived while it prefilled (`SerqLang.Papers.DaiChain.absSlot_leaves_shape`).
 
