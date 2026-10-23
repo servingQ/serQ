@@ -326,8 +326,9 @@ fn the_newer_constructs_are_refused_and_vllms_schedule_taken() {
 /// as the procedure too but not `running.preempted < 1`, so the target took
 /// or refused one program by how its gate was written. Every other spelling
 /// is now a body of the program's own, which the target refuses with the
-/// spelling, the body that writes the procedure out among them (#350 took
-/// it as vLLM's).
+/// gate it read and the spelling, the body that writes the procedure out
+/// among them (#350 took it as vLLM's). The spelling is the gate's once each
+/// `def` is written out, so a `def` that writes it is the procedure.
 #[test]
 fn vllms_schedule_is_spelt_one_way() {
     use serq::ir::{CExpr, CIter, CStageKind, CtxVar, Program, UnOp};
@@ -343,9 +344,17 @@ fn vllms_schedule_is_spelt_one_way() {
     let src = std::fs::read_to_string(root().join(VLLM)).unwrap();
     let gate = "(running.preempted == 0)";
     assert!(src.contains(gate), "the program's gate moved");
-    let p = compile_vllm(&common::main_source(&src), &common::horizon(10.0)).unwrap();
-    assert_eq!(iteration(&p), None);
-    serq::target::vllm(&p).unwrap();
+    let named = src
+        .replace(
+            "fn main() {",
+            "def none_preempted() { running.preempted == 0 }\n\nfn main() {",
+        )
+        .replace(gate, "(none_preempted())");
+    for src in [&src, &named] {
+        let p = compile_vllm(&common::main_source(src), &common::horizon(10.0)).unwrap();
+        assert_eq!(iteration(&p), None);
+        serq::target::vllm(&p).unwrap();
+    }
     for spelt in [
         "(!running.preempted)",
         "(0 == running.preempted)",
@@ -376,9 +385,10 @@ fn vllms_schedule_is_spelt_one_way() {
             );
         }
         let e = serq::target::vllm(&p).unwrap_err();
+        let read = &spelt[1..spelt.len() - 1];
         assert!(
-            e.contains("`vllm` has its own schedule")
-                && e.contains("admit waiting while (running.preempted == 0);`"),
+            e.contains(&format!("`vllm` has its own schedule, gated by `{read}`;"))
+                && e.contains("admit waiting while (running.preempted == 0);`, its gate spelt so"),
             "{spelt}: {e}"
         );
     }

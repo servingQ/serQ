@@ -1183,19 +1183,26 @@ engine e2 on gpu {{ tokens cap 4; scheduler {{ advance running; }} worker {{ for
         &engine("if (running.size > 0) { advance running; }"),
         "`running` has `count`",
     );
-    refused(
-        &engine("exclusive prefill; if (running.count == 0) { admit waiting; }"),
-        "takes back decodes already chosen",
+    let gated = ", its gate spelt `running.preempted == 0`: a gate written otherwise makes \
+                 the schedule a body";
+    let e = error(&engine(
+        "exclusive prefill; if (running.count == 0) { admit waiting; }",
+    ));
+    assert!(
+        e.contains("takes back decodes already chosen") && !e.contains(gated),
+        "{e}"
     );
     // the exclusive rule's schedule has the procedure's one spelling: a gate
     // written otherwise makes it a body, which cannot take decodes back
-    // (#721), and the refusal names the spelling
+    // (#721), and the refusal names the spelling and says the gate differs
     let e = error(&engine(
         "exclusive prefill; admit waiting while (!running.preempted);",
     ));
     assert!(
         e.contains("takes back decodes already chosen")
-            && e.contains("`exclusive prefill; admit waiting while (running.preempted == 0);`"),
+            && e.contains(&format!(
+                "`exclusive prefill; admit waiting while (running.preempted == 0);`{gated}"
+            )),
         "{e}"
     );
     // one engine per device, and a family of them a queue family (#539)

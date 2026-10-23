@@ -115,47 +115,6 @@ fn growth_preempts_the_last_admitted_request() {
     assert!(done[1] > 20.0, "{done:?}");
 }
 
-/// scheduler.py:869: vLLM admits the waiting only if the step preempted
-/// none (`if not preempted_reqs`). The procedure is spelt
-/// `running.preempted == 0` (#721); a gate that computes the same written
-/// otherwise is a body of the program's own, and runs alike. Two requests
-/// of 40 tokens and 60 out on 8 blocks of 16 cannot both finish resident,
-/// so the gate decides: whether a request preempted in a step is taken back
-/// in that step.
-#[test]
-fn the_gates_spellings_run_alike_where_the_gate_matters() {
-    let run_with = |gate: &str| {
-        let schedule = format!("advance running; admit waiting {gate};");
-        run(
-            &engine(2, "40", "60", 8, 16, 40, 16, &schedule),
-            &common::horizon(2000.0),
-        )
-    };
-    let procedure = run_with("while (running.preempted == 0)");
-    assert_eq!(
-        procedure.pool("kv").unwrap().preemptions,
-        9,
-        "{}",
-        procedure.text()
-    );
-    for gate in [
-        "while (!running.preempted)",
-        "while (0 == running.preempted)",
-        "while (running.preempted < 1)",
-    ] {
-        assert_eq!(run_with(gate).text(), procedure.text(), "{gate}");
-    }
-    // with no gate, the step that preempted a request may take it back: the
-    // run is another, so the spellings above were tested where they matter
-    let ungated = run_with("");
-    assert_eq!(
-        ungated.pool("kv").unwrap().preemptions,
-        17,
-        "{}",
-        ungated.text()
-    );
-}
-
 /// scheduler.py:1560-1561: `_preempt_request` resets `num_computed_tokens`
 /// and keeps the request's output tokens, so a request preempted during
 /// decode is rescheduled with `num_tokens = prompt + outputs`

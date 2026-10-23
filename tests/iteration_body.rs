@@ -346,6 +346,63 @@ fn the_vllm_body_is_the_procedure_under_keys_and_preemption() {
     }
 }
 
+/// vLLM's procedure is spelt `running.preempted == 0` (#721); a gate that
+/// computes the same written otherwise (`!`, `0 ==`, `< 1`) makes the
+/// schedule a body, which runs as the procedure does. The examples preempt
+/// nothing, so the gate is tested here, where it decides: two requests of
+/// 40 tokens and 60 out on 8 blocks of 16 cannot both finish resident, so
+/// requests are preempted, and with no gate a step may take back the request
+/// it preempted, which makes the run another (scheduler.py:869). The claim
+/// is that the reports are equal, not what they count.
+#[test]
+fn the_gates_spellings_run_as_the_procedure() {
+    let run_with = |gate: &str| {
+        let src = format!(
+            r#"
+        device gpu {{ kv cap 8 * 16; }}
+        engine llm on gpu {{
+          reqs cap 16;
+          tokens cap 40;
+          scheduler {{
+            advance running;
+            admit waiting {gate} taking reqs (1), kv (min(request.input, 40));
+          }}
+          worker {{ forward (1); }}
+        }}
+        pool kv on gpu {{ block 16; evict lru; preempt lifo; }}
+        pool reqs on llm {{ }}
+        server {{ llm (40, 60); }}
+
+"#
+        );
+        run(
+            &src,
+            &sessions(
+                "batch(2)",
+                Overrides {
+                    warmup: Some(0.0),
+                    seed: Some(1),
+                    ..common::horizon(2000.0)
+                },
+            ),
+        )
+    };
+    let procedure = run_with("while (running.preempted == 0)");
+    assert!(
+        procedure.pool("kv").unwrap().preemptions > 0,
+        "{}",
+        procedure.text()
+    );
+    assert_ne!(run_with("").text(), procedure.text(), "the gate decides");
+    for gate in [
+        "while (!running.preempted)",
+        "while (0 == running.preempted)",
+        "while (running.preempted < 1)",
+    ] {
+        assert_eq!(run_with(gate).text(), procedure.text(), "{gate}");
+    }
+}
+
 /// A schedule whose `advance running` and `admit waiting` share an `only
 /// (p)` lowers to the body `[Serve only p, Admit only p while !preempted]`.
 /// That the body runs as the shared `only` ran before it was lowered to one

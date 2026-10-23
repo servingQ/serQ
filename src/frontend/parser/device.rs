@@ -122,6 +122,12 @@ pub const ENGINE_VALUES: [(&str, &str, &[&str]); 20] = [
     ("request.preempted", "request.preempted", &["taking"]),
 ];
 
+/// The gate of vLLM's procedure, as the frontend recognises it and the
+/// refusals that name it write it (#721): `advance running; admit waiting
+/// while (running.preempted == 0);` is the procedure, and the same with
+/// `exclusive prefill` first the `ExclusivePrefill` order.
+pub const VLLM_GATE: &str = "running.preempted == 0";
+
 /// Apply `f` to every pool or stage reference of an engine's admission.
 fn qualify_request(r: &mut RequestSpec, f: &dyn Fn(&mut Ref)) {
     fn expr(e: &mut Expr, f: &dyn Fn(&mut Ref)) {
@@ -1069,8 +1075,9 @@ impl Parser {
 
     /// Write a schedule as the kernel's step: vLLM's procedure and the
     /// stage-level forms as no body, anything else as the body. The
-    /// procedure is recognised as spelt, its gate `running.preempted == 0`
-    /// (`vllm_gate`), not by what a gate computes (#721).
+    /// procedure is recognised by its gate's spelling, `VLLM_GATE` once each
+    /// `def` is written out (`vllm_gate`), not by what a gate computes
+    /// (#721).
     fn write_schedule(&self, at: usize, s: &mut StepSpec, body: Vec<SStmt>) -> PResult<()> {
         if let [
             first,
@@ -1106,11 +1113,33 @@ impl Parser {
             exclusive |= matches!(st, SStmt::Exclusive { .. })
         });
         if exclusive {
+            // the rule's own form with another gate: the gate is what differs
+            let gated = matches!(
+                &body[..],
+                [
+                    SStmt::Exclusive { .. },
+                    SStmt::Admit {
+                        only: None,
+                        gate: Some(_),
+                        ..
+                    },
+                ]
+            );
             return self.err_at(
                 at,
-                "`exclusive prefill` takes back decodes already chosen, which a body cannot \
-                 write: its schedule is `exclusive prefill; admit waiting while \
-                 (running.preempted == 0);`",
+                format!(
+                    "`exclusive prefill` takes back decodes already chosen, which a body cannot \
+                     write: its schedule is `exclusive prefill; admit waiting while \
+                     ({VLLM_GATE});`{}",
+                    if gated {
+                        format!(
+                            ", its gate spelt `{VLLM_GATE}`: a gate written otherwise makes \
+                             the schedule a body"
+                        )
+                    } else {
+                        String::new()
+                    }
+                ),
             );
         }
         s.schedule = Schedule::Body(kernel(body));
@@ -1649,15 +1678,15 @@ fn pool_on_as_written(cap: &str, owner: &str) -> String {
     }
 }
 
-/// `running.preempted == 0`, as written: vLLM's procedure has one spelling
-/// (#721). A gate that computes the same otherwise (`!running.preempted`,
-/// `0 == running.preempted`, `running.preempted < 1`) makes the schedule a
-/// body of the program's own, which runs alike.
+/// The gate `VLLM_GATE`, once each `def` is written out: vLLM's procedure
+/// has one spelling (#721). A gate that computes the same written otherwise
+/// (`!running.preempted`, `0 == running.preempted`, `running.preempted <
+/// 1`) makes the schedule a body of the program's own, which runs alike.
 fn vllm_gate(e: &Expr) -> bool {
     matches!(
         strip(e),
         Expr::Binary(BinOp::Eq, a, b)
-            if matches!(strip(a), Expr::Var(n) if n == "preempted")
+            if matches!(strip(a), Expr::Var(n) if n == crate::ir::CtxVar::Preempted.name())
                 && matches!(strip(b), Expr::Num(z) if *z == 0.0)
     )
 }

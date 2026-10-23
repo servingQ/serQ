@@ -81,7 +81,7 @@ mod device;
 mod request;
 
 pub(crate) use device::tokens_cap_name;
-pub use device::{ENGINE_VALUES, engine_name};
+pub use device::{ENGINE_VALUES, VLLM_GATE, engine_name};
 
 #[derive(Debug, Clone)]
 pub struct ParseError {

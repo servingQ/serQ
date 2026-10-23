@@ -14,7 +14,10 @@
 
 use serde_json::{Value, json};
 
-use crate::ir::{BinOp, CEvict, CExpr, CRef, CServe, CStageKind, CStmt, CtxVar, Preempt, Program};
+use crate::frontend::parser::{VLLM_GATE, engine_name};
+use crate::ir::{
+    BinOp, CEvict, CExpr, CIter, CRef, CServe, CStageKind, CStmt, CtxVar, Preempt, Program,
+};
 
 fn number(p: &Program, e: &CExpr, what: &str) -> Result<f64, String> {
     match e {
@@ -79,13 +82,35 @@ pub fn vllm(p: &Program) -> Result<Value, String> {
     // vLLM's `schedule()`: the running first, then the waiting while the
     // step has not preempted (scheduler.py:624-823, 868-1128), which is the
     // engine whose schedule lowers to no body. A body is the program's own
-    // even where it computes vLLM's: the procedure has one spelling (#721)
-    if step.iteration.is_some() {
-        return refuse(format!(
-            "`{}` has its own schedule; vLLM's is `advance running; admit waiting while \
-             (running.preempted == 0);`",
-            engine.name
-        ));
+    // even where it computes vLLM's: the procedure has one spelling (#721).
+    // A body of vLLM's form with another gate names the gate, in the
+    // scheduler's words, since it is all that differs
+    if let Some(body) = &step.iteration {
+        let gate = match body.as_slice() {
+            [
+                CIter::Serve { only: None, .. },
+                CIter::Admit {
+                    only: None,
+                    gate: Some(g),
+                },
+            ] => Some(p.show_expr_with(g, |v| {
+                engine_name(v.name(), "scheduler").unwrap_or(v.name())
+            }))
+            .filter(|g| g != VLLM_GATE),
+            _ => None,
+        };
+        return refuse(match gate {
+            Some(g) => format!(
+                "`{}` has its own schedule, gated by `{g}`; vLLM's is `advance running; admit \
+                 waiting while ({VLLM_GATE});`, its gate spelt so",
+                engine.name
+            ),
+            None => format!(
+                "`{}` has its own schedule; vLLM's is `advance running; admit waiting while \
+                 ({VLLM_GATE});`",
+                engine.name
+            ),
+        });
     }
     if p.blocks
         .iter()

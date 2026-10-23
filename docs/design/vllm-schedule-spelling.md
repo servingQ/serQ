@@ -11,9 +11,10 @@ scheduler { advance running; admit waiting while (running.preempted == 0); }
 which the frontend lowers to the step with no iteration body: the
 engine's built-in procedure, the form the Lean fragment and the oracle
 read, and the one `serq target` takes. Since #721 the frontend recognises
-it by that spelling alone. Before, it took three spellings of the gate
-and refused the fourth one would write, so the same program had two IRs
-and two verdicts.
+it by that spelling alone, once each `def` is written out. Before, it
+took three spellings of the gate as the procedure and lowered a fourth,
+`running.preempted < 1`, to a body that `serq target` refused, so the
+same program had two IRs and two verdicts.
 
 ## The finding
 
@@ -36,20 +37,25 @@ gates mean the same, and the target's verdict depended on how one was
 written.
 
 The run of an example does not exercise the gate: nothing in it is
-preempted. `tests/vllm_semantics.rs`,
-`the_gates_spellings_run_alike_where_the_gate_matters`, runs two
-requests of 40 tokens and 60 out on 8 blocks of 16, where they cannot
-both finish resident. With the gate the run preempts 9 times, without it
-17; each of the four spellings gives the same report as the others,
-before this change and after it.
+preempted. `tests/iteration_body.rs`,
+`the_gates_spellings_run_as_the_procedure`, runs two requests of 40
+tokens and 60 out on 8 blocks of 16, where they cannot both finish
+resident: the run preempts, and without the gate it is another run. Each
+of the four spellings gives the same report as the others, before this
+change and after it. The test does not pin what the reports count: its
+claim is that they are equal, and a change to preemption that moves the
+counts is not this one's to catch.
 
 ## The change
 
-The procedure has one spelling, `running.preempted == 0`, as written.
-`vllm_gate` (the old `not_preempted`) accepts only that: the variable on
-the left, the number 0 on the right. Every other gate, whatever it
-computes, makes the schedule a body of the program's own. On the
-branch:
+The procedure has one spelling, `running.preempted == 0`, read once each
+`def` is written out (the parser expands a `def` where it is used, so
+`def none_preempted() { running.preempted == 0 }` and `while
+(none_preempted())` is the procedure). `vllm_gate` (the old
+`not_preempted`) accepts only that: the variable on the left, the number
+0 on the right. Every other gate makes the schedule a body of the
+program's own, which runs as the procedure does when the gate computes
+the same. On the branch:
 
 | gate | the step's IR | `serq target` |
 |---|---|---|
@@ -58,9 +64,18 @@ branch:
 | `0 == running.preempted` | `iteration: [Serve, Admit {gate: Eq(0, Preempted)}]` | refused |
 | `running.preempted < 1` | `iteration: [Serve, Admit {gate: Lt(Preempted, 1)}]` | refused |
 
-The refusal names the spelling: `` `vllm` has its own schedule; vLLM's
-is `advance running; admit waiting while (running.preempted == 0);` ``.
-The reports are unchanged.
+The refusal names the gate it read, in the scheduler's words, and the
+spelling: `` `vllm` has its own schedule, gated by `!running.preempted`;
+vLLM's is `advance running; admit waiting while (running.preempted ==
+0);`, its gate spelt so ``. The `exclusive prefill` refusal of the same
+form says the gate is what differs: `` …: its schedule is `exclusive
+prefill; admit waiting while (running.preempted == 0);`, its gate spelt
+`running.preempted == 0`: a gate written otherwise makes the schedule a
+body ``. The frontend cannot print the gate as the target does, since it
+has no printer of its own expressions; the error points at the
+`scheduler` the gate is in. Both refusals and the recogniser read the
+spelling from one constant, `VLLM_GATE`, and the recogniser reads the
+variable's name from `CtxVar::Preempted`. The reports are unchanged.
 
 Why `== 0`: every example, tutorial, document and companion program
 already writes it, and so do the target's refusal and the `exclusive
@@ -96,7 +111,11 @@ which does not change.
 What a program sees: a schedule spelt `!running.preempted` or `0 ==
 running.preempted` runs as it did, as a body, and `serq target` refuses
 it. `exclusive prefill; admit waiting while (!running.preempted);` no
-longer links, with the refusal that names the rule's one schedule.
+longer links, with the refusal that names the rule's one schedule. And
+one program that did not link now does: `state k = 0;` with no `set k`
+and a gate spelt `!running.preempted` or `0 == running.preempted`,
+refused before (`src/frontend/link.rs:770`, "is set by nothing"), now
+links as a body (#746).
 
 ## The two questions
 
@@ -108,8 +127,9 @@ was kept in `src/target.rs` (`is_vllm_iteration`), fixed here. One more
 rule lives on the procedure's path alone: the linker refuses a register
 that nothing sets only for the procedure (`src/frontend/link.rs`, "is
 set by nothing"), so a body with `state k = 0;` and no `set k` links.
-That gap was there for `< 1` and every other body before this change;
-it is a separate rule, left to its own issue.
+That gap was there for `< 1` and every other body before this change,
+which widens it to `!` and `0 ==` (§The price); it is a separate rule,
+left to #746.
 
 **Should the language have refused the program?** No. `!`, `0 ==` and
 `< 1` are correct programs that run as the procedure does. Only the
