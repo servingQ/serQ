@@ -225,6 +225,62 @@ fn spill_to_a_tier_and_fetch_back() {
     assert_eq!(r.stage("link").unwrap().completed, 3);
 }
 
+/// A spill's copy is a job no session owns, with no tokens and no mode:
+/// it goes over a stage, not an engine, whose iteration serves a request's
+/// prefill or decode. Spilled via an engine, the run panicked at the
+/// engine's first iteration after the spill (`give`: `RunMode::Plain =>
+/// unreachable!()`, #733); it does not link. Over a stage: B's prompt of
+/// 4 does not fit beside A's cached prompt of 2 (its one output token is
+/// the prefill's, with no KV) in a `kv` of 5, so B's admission evicts A's
+/// entry, 2 units, which spills: one spill, one copy done on `link`.
+#[test]
+fn a_spill_goes_over_a_stage_not_an_engine() {
+    let program = |via: &str, link: &str| {
+        format!(
+            "device gpu {{ kv cap 5; }}
+        engine llm on gpu {{
+          tokens cap 8;
+          scheduler {{ advance running; admit waiting while (running.preempted == 0) taking kv (request.input) cache (100); }}
+          worker {{ forward (1); }}
+        }}
+        pool l2 {{ cap 100; }}{link}
+        pool kv on gpu {{ evict lru; spill l2 via {via} (3) when (1); }}
+        server (prompt) {{ llm (prompt, 1); }}"
+        )
+    };
+    let workload =
+        "workload { arrive batch(2); init { set prompt = serial == 0 ? 2 : 4; } send (prompt);
+          session { turn; end; }
+        }";
+    let Err(error) = common::compile(
+        &common::main_source(&program("llm", "")),
+        workload,
+        &common::horizon(20.0),
+    ) else {
+        panic!("a spill via an engine links");
+    };
+    assert!(
+        error.contains(
+            "pool `kv`: `spill l2 via llm`: `llm` is an engine, whose iteration serves \
+             requests' prefill and decode tokens, and a spill's copy is no request's"
+        ),
+        "{error}"
+    );
+    let r = run(
+        &program("link", " stage link : delay;"),
+        workload,
+        &common::horizon(20.0),
+    );
+    let kv = r.pool("kv").unwrap();
+    assert_eq!(
+        (kv.evicted_entries, kv.evicted_units, kv.spills),
+        (1, 2.0, 1),
+        "{}",
+        r.text()
+    );
+    assert_eq!(r.stage("link").unwrap().completed, 1, "{}", r.text());
+}
+
 /// A spill predicate sees `waiting`, as the spec lists for it (the wait
 /// channel: spill the prefix of a session that is waiting to come back).
 /// s0 caches 6 and later queues for 20 behind s1's 24; s2, ahead of s0 by

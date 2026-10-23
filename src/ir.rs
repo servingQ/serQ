@@ -2468,6 +2468,17 @@ impl Program {
             if let Some(s) = &p.spill {
                 v.pool(s.to)?;
                 v.stage(s.via)?;
+                // the copy is a `Plain` job no session owns, and an engine's
+                // iteration serves only a request's prefill or decode (#733)
+                let via = &self.stages[s.via];
+                if matches!(via.kind, CStageKind::Step(_)) {
+                    return Err(at(format!(
+                        "`spill {} via {}`: `{}` is an engine, whose iteration serves requests' \
+                         prefill and decode tokens, and a spill's copy is no request's: it goes \
+                         over a stage (`stage link : delay;`)",
+                        self.pools[s.to].name, via.name, via.name
+                    )));
+                }
                 v.expr(&s.work, Moment::Evict).map_err(at)?;
                 v.expr(&s.when, Moment::Evict).map_err(at)?;
             }

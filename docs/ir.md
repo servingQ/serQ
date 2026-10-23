@@ -310,8 +310,10 @@ text and directly constructed IR meet the same rules. Validation covers:
   positive and finite. `Closed` and `Batch` populations lie between 1 and
   `MAX_SESSIONS`.
 - **Stages and flows.** A run uses `Prefill` or `Decode` exactly on step
-  stages, and `growing` only there. Every stage family named by a
-  multi-stage run is a `Ps` with constant capacity; all runs on such a
+  stages, and `growing` only there. A pool's spill `via` is not a step
+  stage: its copy is a `Plain` job no session owns, and a step stage's
+  iteration serves a request's prefill or decode. Every stage family
+  named by a multi-stage run is a `Ps` with constant capacity; all runs on such a
   shared stage are `Plain`, without `growing`. A run names each family
   once, and has a `share` exactly when its `also` is nonempty. The stages
   runs join, however indirectly, are one fabric, and the runs of a fabric

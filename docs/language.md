@@ -862,7 +862,11 @@ workload's own is dropped by `drop POOL;` before `end;`. Eviction takes leaves o
 trie of segments, so no cached suffix outlives its prefix, and never one a
 live hold reads; it is per leaf, or per block from the tail of the leaf when
 the pool has `block b`; `evict lru` orders by release time and then release
-order, `evict by (k₁, …)` by the keys and then release order. With every
+order, `evict by (k₁, …)` by the keys and then release order. `spill T
+via L (w) when (c)` writes an evicted entry for which `c` holds to the
+tier `T`, a copy of work `w` on `L` that no session waits for; `L` is a
+stage, not an engine, whose iteration serves requests' tokens, and the
+copy is no request's. With every
 chain `(serial: ∞)` a leaf is a session's entry. A request that can never fit — its units, or its
 `reserve` when that is larger, above the cap, as they evaluate when the
 session joins the queue — is rejected: the session ends, and the report
