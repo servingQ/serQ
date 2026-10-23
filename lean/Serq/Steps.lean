@@ -11,7 +11,8 @@ the program, in five sections:
 * `readyAll`: the events that ready a request, a delay's end
   (`handle_delay_end`) and an iteration's end (`readyAll`), and which event
   comes next (`nextEvent_of_delays`, `not_pending`);
-* batch shares: the tokens a batch gives a request (`shareOf`);
+* batch shares: the tokens a batch gives a request (`shareOf`), and the
+  greedy fill job by job (`shareOf_fillIter_split`);
 * lists and finsets: facts about `List` and `Finset` the proofs use.
 -/
 import Serq.Claim
@@ -278,6 +279,68 @@ theorem shareOf_fillIter (D : Deployment) : ∀ (js : List Job) (B o : ℕ),
       by_cases h1 : B - min (wantOf D j) B = 0
       · rw [if_pos h1]; exact key _ (min_le_left _ _) [] (by simp [shareOf])
       · rw [if_neg h1]; exact key _ (min_le_left _ _) _ (ih _ o)
+
+/-- A request with no job in the list takes nothing of its fill. -/
+theorem shareOf_fillIter_out (D : Deployment) (js : List Job) (B o : ℕ) (h : o ∉ js.map (·.owner)) :
+    shareOf (fillIter D js B) o = 0 := by
+  have h1 := shareOf_fillIter D js B o
+  rw [List.filter_eq_nil_iff.mpr fun x hx => by simpa using fun he => h (List.mem_map.mpr ⟨x, hx, he⟩)] at h1
+  simpa using h1
+
+/-- No budget, no batch. -/
+theorem fillIter_zero (D : Deployment) : ∀ js : List Job, fillIter D js 0 = []
+  | [] => rfl
+  | j :: js => by unfold fillIter; simp [fillIter_zero D js]
+
+/-- **The greedy fill, job by job.** With distinct owners, each job's share
+of the greedy fill of the jobs `q` lets in is its entry in a greedy split `S`
+of the budget, `w` being what the fill lets each job take. A chain on job
+lists states its batch this way: `π` is what the chain keeps of a job, and
+`f` what it makes of a job and its share. -/
+theorem shareOf_fillIter_split (D : Deployment) {α β : Type} (q : Job → Bool) (π : Job → α) (w : α → ℕ)
+    (S : List α → ℕ → List ℕ) (hS : ∀ a as B, S (a :: as) B = min (w a) B :: S as (B - min (w a) B))
+    (f : α → ℕ → β) : ∀ js : List Job, (js.map (·.owner)).Nodup →
+    (∀ j ∈ js, (if q j then wantOf D j else 0) = w (π j)) → ∀ B,
+    js.map (fun j => f (π j) (shareOf (fillIter D (js.filter q) B) j.owner)) =
+      List.zipWith f (js.map π) (S (js.map π) B)
+  | [], _, _, _ => rfl
+  | j :: js, hn, hw, B => by
+    simp only [List.map_cons, List.nodup_cons] at hn
+    have hnot : j.owner ∉ (js.filter q).map (·.owner) := fun h => by
+      obtain ⟨x, hx, he⟩ := List.mem_map.mp h
+      exact hn.1 (he ▸ List.mem_map.mpr ⟨x, (List.mem_filter.mp hx).1, rfl⟩)
+    have hout : ∀ B', shareOf (fillIter D (js.filter q) B') j.owner = 0 :=
+      fun B' => shareOf_fillIter_out D _ B' _ hnot
+    have hne : ∀ x ∈ js, j.owner ≠ x.owner := fun x hx he => hn.1 (he ▸ List.mem_map.mpr ⟨x, hx, rfl⟩)
+    have ih := shareOf_fillIter_split D q π w S hS f js hn.2 fun x hx => hw x (List.mem_cons_of_mem _ hx)
+    have hwj := hw j List.mem_cons_self
+    simp only [List.map_cons, hS, List.zipWith_cons_cons]
+    rw [← hwj]
+    by_cases hq : q j = true
+    · rw [if_pos hq] at hwj ⊢
+      rw [List.filter_cons_of_pos hq]
+      have hfill : fillIter D (j :: js.filter q) B =
+          if min (wantOf D j) B = 0 then fillIter D (js.filter q) B
+          else if B - min (wantOf D j) B = 0 then [(j.owner, min (wantOf D j) B)]
+          else (j.owner, min (wantOf D j) B) :: fillIter D (js.filter q) (B - min (wantOf D j) B) := by
+        rw [fillIter]
+      rw [hfill]
+      by_cases h0 : min (wantOf D j) B = 0
+      · rw [if_pos h0, hout, h0, Nat.sub_zero, ← ih B]
+      · rw [if_neg h0]
+        by_cases h1 : B - min (wantOf D j) B = 0
+        · rw [if_pos h1, h1, ← ih 0, fillIter_zero]
+          congr 1
+          · simp [shareOf_cons, shareOf_nil]
+          · refine List.map_congr_left fun x hx => ?_
+            simp [shareOf_cons, hne x hx, shareOf_nil]
+        · rw [if_neg h1, ← ih (B - min (wantOf D j) B)]
+          congr 1
+          · simp [shareOf_cons, hout]
+          · refine List.map_congr_left fun x hx => ?_
+            simp [shareOf_cons, hne x hx]
+    · rw [if_neg hq]
+      rw [List.filter_cons_of_neg hq, hout, Nat.zero_min, Nat.sub_zero, ← ih B]
 
 theorem sum_shareOf (n : ℕ) : ∀ L : List (ℕ × ℕ), (∀ e ∈ L, e.1 < n) →
     ∑ i ∈ Finset.range n, shareOf L i = tokSum L
