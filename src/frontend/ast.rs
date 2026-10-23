@@ -80,6 +80,14 @@ impl Arg {
         }
     }
 
+    /// `Expr::any_written` in a call's argument: a reference's index.
+    pub fn any_written(&self, f: &impl Fn(&Expr) -> bool) -> bool {
+        match self {
+            Arg::Expr(x) => x.any_written(f),
+            Arg::Ref(r) => r.index.as_ref().is_some_and(|i| i.any_written(f)),
+        }
+    }
+
     /// `Expr::for_each_mut` in a call's argument: a reference's index.
     pub fn for_each_mut(&mut self, f: &mut impl FnMut(&mut Expr)) {
         match self {
@@ -191,6 +199,17 @@ impl Expr {
                 Expr::Binary(_, a, b) | Expr::Over(_, _, a, b) => a.any(f) || b.any(f),
                 Expr::Cond(c, a, b) => c.any(f) || a.any(f) || b.any(f),
             }
+    }
+
+    /// `any`, and in the arguments a call does not read too
+    /// (`Expr::Unread`): what is written, evaluated or not. A question
+    /// about the text, such as whether an aggregate's index is a name of
+    /// its own, is this walk's; one about the value, such as whether it
+    /// draws, is `any`'s.
+    pub fn any_written(&self, f: &impl Fn(&Expr) -> bool) -> bool {
+        self.any(&|x| {
+            f(x) || matches!(x, Expr::Unread(args, _) if args.iter().any(|a| a.any_written(f)))
+        })
     }
 
     /// `f` on this expression, then on each one in it that `any` visits,
@@ -842,6 +861,11 @@ pub struct Program {
     /// Composite Cost names and resource fields; source-only namespace data.
     pub cost_records: Vec<(String, Vec<String>)>,
     pub lets: Vec<(String, Expr)>,
+    /// The constants the parser folds and keeps no expression of (an array
+    /// size, a relation's `ttl`) that hold an aggregate. The value is the
+    /// parser's; the linker asks each aggregate's index of the whole
+    /// program, as it does in an expression (#561).
+    pub folded: Vec<Expr>,
     pub pools: Vec<PoolDecl>,
     pub stages: Vec<StageDecl>,
     pub workload: Option<Workload>,
@@ -959,6 +983,7 @@ pub(crate) fn without_locations(mut p: Program) -> Program {
     for (_, e) in &mut p.lets {
         expr(e);
     }
+    p.folded.iter_mut().for_each(expr);
     for d in &mut p.pools {
         d.span = None;
         expr(&mut d.cap);

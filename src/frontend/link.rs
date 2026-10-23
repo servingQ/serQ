@@ -576,6 +576,13 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
         })?;
         lk.consts.insert(name.clone(), v);
     }
+    // An array size or a relation's `ttl` is folded by the parser, which
+    // knew only the `let`s above it, and reaches here as a number: its
+    // aggregates' indices are asked of the whole program, as an
+    // expression's are (#561).
+    for e in &prog.folded {
+        lk.own_indices(e)?;
+    }
     // An attribute would shadow a constant of the same name everywhere
     // (a stage's cost has no session, so the constant would read as NaN).
     for (name, _) in &prog.lets {
@@ -2144,10 +2151,13 @@ impl Linker<'_> {
         Ok(match e {
             Expr::Located(s, a) => self.per_run_cap(a, stage, Some(*s))?,
             // a condition known once linked chooses its branch here, so the
-            // other may be vLLM's 0 for none: `c > 0 ? c : inf`
+            // other may be vLLM's 0 for none: `c > 0 ? c : inf`; its
+            // indices are still its own, as in `eval_const` (#561)
             Expr::Cond(k, a, b) => match self.eval_const(k) {
                 Ok(c) if !c.is_nan() => {
-                    self.per_run_cap(if c != 0.0 { a } else { b }, stage, span)?
+                    let (taken, other) = if c != 0.0 { (a, b) } else { (b, a) };
+                    self.own_indices(other)?;
+                    self.per_run_cap(taken, stage, span)?
                 }
                 _ => CExpr::Cond(
                     Box::new(self.expr(k)?),
@@ -3032,7 +3042,9 @@ impl Linker<'_> {
 /// What a constant expression may name. The one constant evaluator,
 /// `eval_const`, and the aggregates' `over_terms` read it: the linker's
 /// knows the whole program, the parser's (`Lets`) only the `let`s folded so
-/// far, with which it sizes an array the linker never sees.
+/// far, with which it sizes an array the linker sees as a number. The
+/// linker asks the indices of what the parser folded through
+/// `Program::folded` (#561).
 pub(crate) trait Constants {
     /// The value of the constant `name`, or why there is none.
     fn constant(&self, name: &str) -> LResult<f64>;
@@ -3042,6 +3054,40 @@ pub(crate) trait Constants {
     fn resolve_unread(&self, a: &Arg) -> LResult<()>;
     /// What else an aggregate's index `j` names, if anything.
     fn index_clash(&self, j: &str) -> Option<&'static str>;
+    /// Whether `j`, the index of an aggregate `agg`, is a name of its own:
+    /// one that also named something else would leave the body saying two
+    /// things.
+    fn own_index(&self, agg: Agg, j: &str) -> LResult<()> {
+        match self.index_clash(j) {
+            Some(c) => Err(LinkError::new(format!(
+                "`{} {j} in`: `{j}` is also {c}\nhelp: give the index a name of its own",
+                agg.name()
+            ))),
+            None => Ok(()),
+        }
+    }
+    /// [`Self::own_index`] of every aggregate in `e`, refused at the
+    /// aggregate, where `e` is not evaluated: a constant the parser folded
+    /// (an array size, a `ttl`, whose value is the parser's) or a branch a
+    /// constant condition does not take. Either is the program's, and its
+    /// indices are asked as an expression's are (#561), in an argument a
+    /// call does not read as well (`Expr::any_written`). The parser
+    /// wraps every aggregate in its place (`Expr::Located`).
+    fn own_indices(&self, e: &Expr) -> LResult<()> {
+        let refused = Cell::new(None);
+        e.any_written(&|x| {
+            let Expr::Located(span, inner) = x else {
+                return false;
+            };
+            let Expr::Over(agg, j, ..) = &**inner else {
+                return false;
+            };
+            let own = self.own_index(*agg, j);
+            own.map_err(|e| refused.set(Some(e.at(Some(*span)))))
+                .is_err()
+        });
+        refused.into_inner().map_or(Ok(()), Err)
+    }
     /// The terms aggregates have written out so far, against `MAX_OVER`.
     fn terms_written(&self) -> &Cell<usize>;
 
@@ -3067,11 +3113,15 @@ pub(crate) trait Constants {
             }
             Expr::Binary(op, a, b) => binop(*op, self.eval_const(a)?, self.eval_const(b)?),
             Expr::Cond(c, a, b) => {
-                if self.eval_const(c)? != 0.0 {
-                    self.eval_const(a)?
+                let (taken, other) = if self.eval_const(c)? != 0.0 {
+                    (a, b)
                 } else {
-                    self.eval_const(b)?
-                }
+                    (b, a)
+                };
+                // the branch not taken is not evaluated, but it is the
+                // program's: its indices are its own (#561)
+                self.own_indices(other)?;
+                self.eval_const(taken)?
             }
             Expr::Call(f, _) if f == "blocksize" => {
                 return Err(LinkError::new(
@@ -3156,12 +3206,8 @@ pub(crate) trait Constants {
     /// own: a constant, an attribute, a pool, a stage or a context variable
     /// of the same name would leave the body saying two things.
     fn over_terms(&self, agg: Agg, j: &str, n: &Expr, body: &Expr) -> LResult<Vec<Expr>> {
+        self.own_index(agg, j)?;
         let what = format!("`{} {j} in`", agg.name());
-        if let Some(c) = self.index_clash(j) {
-            return Err(LinkError::new(format!(
-                "{what}: `{j}` is also {c}\nhelp: give the index a name of its own"
-            )));
-        }
         let count = self.eval_const_named(n, &format!("{what}'s count"))?;
         if !(count >= 1.0 && count.fract() == 0.0 && count.is_finite()) {
             return Err(LinkError::new(format!(

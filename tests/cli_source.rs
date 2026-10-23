@@ -182,7 +182,7 @@ fn an_argument_its_definition_does_not_read_is_still_resolved() {
         assert!(err.contains("`engine.prefill` reads `zz`"), "{err}");
     }
     // in a constant it is resolved and never evaluated, so it need not be a
-    // constant; an array size, which the linker never sees, knows constants
+    // constant; an array size, which the parser folds, knows constants
     // only
     let constant = |arg: &str, size: &str| {
         let src = format!(
